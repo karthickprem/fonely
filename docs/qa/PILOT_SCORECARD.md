@@ -1,8 +1,6 @@
 # Pilot Scorecard
 
-Measurable metrics for the Fonely pilot phase (5-10 businesses). All targets
-are hypotheses based on assumptions about user behavior and system capability.
-They will be revised based on actual pilot data.
+Measurable metrics for a future Fonely pilot (initially approximately 3-5 design partners, expandable to 5-10 after stability). No pilot measurements have been collected. All targets are hypotheses based on assumptions about user behavior and system capability and must be revised from actual pilot data.
 
 ---
 
@@ -68,8 +66,7 @@ misrecognized patterns.
 
 ### 3. Correct Tool Selection Rate
 
-**Definition:** Percentage of LLM tool calls where the correct tool was selected
-(e.g., `check_stock` vs `place_order` vs `book_appointment`).
+**Definition:** Percentage of model tool calls where the correct lifecycle-safe tool was selected (for example, `check_inventory` versus `create_pending_order` versus `confirm_pending_order`, or `check_availability` versus appointment proposal/confirmation tools). Proposal and confirmation are scored separately.
 
 **Data source:** Manual review of call transcripts. For each tool call in the
 transcript, verify the tool name matches what a human would have selected.
@@ -249,8 +246,7 @@ calls), or unmet expectations (feature gaps).
 **Definition:** Percentage of trial users who indicate they would pay for the
 service after the trial period.
 
-**Data source:** WhatsApp survey at end of trial: "Would you pay Rs 499/month
-to continue using this service? Reply YES or NO."
+**Data source:** Founder-approved pricing experiment at the end of trial. Ask whether the owner will continue at the explicitly tested price; do not hard-code an unvalidated price in the durable scorecard.
 
 **Formula:** `yes_responses / total_responses * 100`
 

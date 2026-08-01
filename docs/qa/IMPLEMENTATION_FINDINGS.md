@@ -320,9 +320,9 @@ backend/.venv/bin/python scripts/validate-evals.py
 backend/.venv/bin/python scripts/report-eval-coverage.py --profile chennai-pilot
 ```
 
-**Suggested owner:** Dev1 / dependency and CI owner
+**Suggested owners:** Dev1 owns the backend dependency/lockfile; Dev2 owns CI and QA-gate execution.
 
-**Blocking phase:** Resolved for structural QA automation; first real GitHub Actions execution remains to be observed.
+**Blocking phase:** Resolved for structural QA automation. GitHub Actions runs `30685195177` and `30686343063` executed and passed both QA gates.
 
 ---
 
@@ -338,4 +338,22 @@ backend/.venv/bin/python scripts/report-eval-coverage.py --profile chennai-pilot
 | 6 | P2 | core/config.py:27-28 | Database URL defaults to unauthenticated local connection | Stage 2 |
 | 7 | P2 | models/schema.py:478-520 | No index on (business_id, initiated_by) for future query patterns | None |
 | 8 | P1 | domain/payloads.py:61-72 | Payload registry missing APPOINTMENT and owner management envelopes | D, E |
-| 9 | Resolved | pyproject.toml, uv.lock, backend-ci.yml | jsonschema declared/locked and QA commands added to CI | Observe first CI run |
+| 9 | Resolved | pyproject.toml, uv.lock, backend-ci.yml | jsonschema declared/locked; QA gates passed in observed CI | None |
+
+---
+
+## Finding 10
+
+**Severity:** Resolved CI verification finding
+
+**File:** `backend/tests/integration/postgres/test_pending_actions_postgres.py`
+
+**Original finding:** After Dev2 corrected async fixture loop ownership, run `30686343063` passed 22 PostgreSQL contracts but one stale test expected Alembic head `0002` instead of implemented head `0003`.
+
+**Resolution:** Commit `40e3fbb` renamed the test to describe its observable invariant and asserted current head `0003`. Independent review found no issues.
+
+**Verification:** GitHub Actions run `30687004089` passed all 23 PostgreSQL contracts plus workflow migration downgrade and re-upgrade.
+
+**Suggested owner:** Dev2
+
+**Blocking phase:** Resolved for the backend foundation gate.

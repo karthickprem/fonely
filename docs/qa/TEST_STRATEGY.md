@@ -4,6 +4,8 @@ This document defines the testing pyramid for the Fonely platform: the levels of
 verification, what each level proves, and what it deliberately leaves to levels
 above it.
 
+> **Current evidence:** QA.3 structural validation passes for 211 cases and 377 turns with zero tool-contract mismatches. The latest inspected PostgreSQL CI run executed 23 contracts with 22 passes and one stale migration-head expectation failure. Provider, voice, telephony, load, and pilot levels below are future verification layers unless explicitly cited in `docs/STATUS.md`.
+
 ---
 
 ## 1. Pure Domain Unit Tests
@@ -63,12 +65,9 @@ Docker container) to verify behavior that only the database can enforce.
 
 ### Guidelines
 
-- Each test runs inside a transaction that is rolled back, or uses a fresh
-  schema, to guarantee isolation.
-- Use explicit savepoints when testing rollback scenarios (multi-item
-  reservation failure).
-- Tag these tests so they can be excluded from the fast feedback loop when
-  developers only change domain code.
+- The current suite applies migrations once per session and truncates all application tables between tests; it does not claim that every test runs in a rollback-only transaction or fresh schema.
+- Use explicit savepoints when testing rollback scenarios (multi-item reservation failure).
+- Keep tests marked `postgres` so they can be excluded from the fast feedback loop while remaining mandatory in CI.
 
 ---
 
@@ -104,8 +103,7 @@ TTS providers without making real network calls.
 
 - Re-record fixtures periodically (at least once per provider API version
   bump) to catch schema drift.
-- One fixture set per provider (Sarvam STT, Sarvam TTS, Fish Audio TTS,
-  DeepSeek, Qwen, Llama, etc.).
+- One fixture set per approved provider adapter. Named providers remain candidates until selected and contract-tested.
 
 ---
 
@@ -122,19 +120,20 @@ compliance using a curated JSONL eval corpus.
   arguments.
 - Structured output compliance: the LLM response parses into the expected
   schema without post-processing hacks.
-- Cross-provider parity: the same eval corpus runs against Sarvam, DeepSeek,
-  Qwen, Llama, and any new provider to produce a comparable scorecard.
+- Future cross-provider parity: after a benchmark runner and human-reviewed subsets exist, the same corpus can compare approved provider candidates under one scoring contract.
 
 ### Eval corpus format
 
-Each line in the JSONL file contains:
+Each JSONL record follows schema version 2 and contains case context plus one or more turns. Per-turn scoring fields include:
 
-- `input`: the caller utterance (text or transcript).
-- `expected_intent`: the correct intent label.
-- `expected_tool_calls`: the expected tool name(s) and argument(s).
-- `expected_output_schema`: a JSON Schema the response must validate against.
-- `language`: the language/dialect tag.
-- `tags`: optional tags for slicing results (domain, edge case, ambiguity).
+- `expected_intent`: canonical label from the intent contract.
+- `expected_tool_policy`: required, optional, or forbidden.
+- `expected_tool` and strict `expected_arguments`.
+- `expected_outcome` and optional machine-readable error code.
+- `expected_write_policy` and tagged database effect.
+- Positive response constraints and forbidden behaviors.
+
+Case-level fields record domain/category/risk, locale, caller role, coverage tags, and separate language/domain/pilot review provenance. See `evals/schema/eval-case.schema.json`, `evals/tool-contract.v1.json`, and `evals/intent-contract.v1.json`.
 
 ### Metrics
 
@@ -184,14 +183,13 @@ Evaluation of the audio pipeline independent of conversation logic.
 
 - Maintain a labeled audio corpus per supported language.
 - Run MOS evaluations with a panel of at least 3 native speakers per language.
-- Log latency percentiles in CI so regressions are caught before deployment.
+- Log latency percentiles in a future provider/voice evaluation pipeline; the current backend CI does not run real provider latency tests.
 
 ---
 
 ## 6. End-to-End Telephony Tests
 
-Tests that exercise the full call path through the Exotel AgentStream
-integration.
+Future tests that exercise the full call path through the founder-approved telephony integration. Exotel AgentStream is the current candidate/prototype path, not a production-verified dependency.
 
 ### What they prove
 

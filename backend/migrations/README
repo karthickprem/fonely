@@ -1,1 +1,7 @@
-Generic single-database configuration.
+# Fonely Alembic migrations
+
+This directory contains the versioned PostgreSQL migration chain for the Fonely backend. The current implemented head is `0003`.
+
+Run migration commands from `backend/` with an explicitly configured database URL. PostgreSQL integration migrations are destructive against the approved test database; follow `docs/testing/POSTGRESQL.md` and never target staging or production.
+
+Authoritative model/migration parity is checked by the backend migration tests and `scripts/check-migrations.sh`. Never rewrite an applied revision; add a new migration for later schema changes.

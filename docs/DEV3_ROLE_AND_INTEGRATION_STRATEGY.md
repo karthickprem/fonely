@@ -1,32 +1,32 @@
-# Dev3 Role and Integration Strategy
+# Dev3 Implementation Role and Integration Boundaries
 
 ## Authority
 
-`docs/TEAM_AND_OPERATING_MODEL.md` is the authoritative source for Dev3's role, phase gates, and ownership. If this perspective document conflicts with the operating model, the operating model takes precedence.
+`docs/TEAM_AND_OPERATING_MODEL.md` is authoritative. `docs/STATUS.md` contains the current assignment and phase gate.
 
 ## Role
 
-Dev3 serves as **Principal Integration and Voice Platform Developer**.
+Dev3 is Fonely's **Principal Integration and Voice Platform Developer**.
 
-Dev3 is a senior implementation developer and independent product-integration reviewer. Dev3 begins with read-only specification work while shared interfaces are unstable. After explicit phase approval, Dev3 owns the non-overlapping provider, public-tool, and conversation-integration workstream and may later own the Phase D appointment engine.
+Dev3 is an implementation developer only. Dev3 does not independently review other developers, approve readiness, define engineering phase gates, or own product decisions. The AI cofounder owns requirements, specifications, acceptance criteria, independent review, and phase approval; the founder retains final business authority.
 
-## Responsibilities
+## Implementation responsibilities
 
-- Determine whether the components form a usable product.
-- Challenge unnecessary abstraction and overengineering.
-- Specify and implement the thinnest valuable end-to-end vertical slice.
-- Design and implement provider-independent STT, LLM, and TTS adapters.
-- Implement the strict public-tool dispatcher after domain contracts stabilize.
-- Implement conversation orchestration, latency controls, interruption handling, and failure recovery.
-- Review latency, resilience, observability, and pilot failure handling.
-- Validate demo and pilot readiness.
-- Later own the Phase D appointment engine after shared contracts stabilize and its phase gate is approved.
-- Ensure architecture decisions map to customer value.
-- Independently verify plausible prototype findings before turning them into implementation tasks.
+After explicit assignment and approval, Dev3 may implement:
 
-## Implementation Ownership
+- Provider-independent STT, model, and TTS interfaces/adapters.
+- The strict lifecycle-safe public-tool registry and dispatcher.
+- Conversation orchestration and typed provider/tool results.
+- Timeout, cancellation, low-confidence clarification, barge-in, disconnect recovery, and no-success-before-commit behavior.
+- PII-safe logging, trace correlation, usage accounting, and pilot observability.
+- One approved thin end-to-end vertical slice.
+- Later, the deterministic appointment engine under a separately approved Phase D specification.
 
-After explicit phase approval, Dev3 owns:
+Dev3 self-tests and reports evidence. Independent acceptance remains with the AI cofounder.
+
+## Possible implementation ownership
+
+Only after explicit transfer:
 
 ```text
 backend/src/fonely/providers/**
@@ -37,7 +37,7 @@ backend/tests/unit/conversation/**
 backend/tests/unit/tooling/**
 ```
 
-Later Phase D ownership may include:
+Possible later Phase D ownership:
 
 ```text
 backend/src/fonely/domain/appointments/**
@@ -46,150 +46,46 @@ backend/src/fonely/services/appointments.py
 appointment-specific migrations and tests
 ```
 
-Dev3 must not modify Dev1- or Dev2-owned implementation areas unless ownership is explicitly transferred.
+Dev3 must not modify Dev1- or Dev2-owned areas unless ownership is explicitly transferred for a bounded task.
 
-## Team Structure
+## Non-responsibilities
 
-### Karthick
+Dev3 does not:
 
-Founder responsibilities:
+- Decide the first vertical, pricing, spending, deployment, or customer policy.
+- Write or approve its own acceptance criteria.
+- Serve as an independent product/architecture reviewer.
+- Approve Phase C, Phase D, provider readiness, or pilot readiness.
+- Connect the voice prototype directly to internal commit operations.
+- Implement tools whose deterministic backend service does not exist and then simulate success.
 
-- Customers and design partners
-- Pricing
-- Product priorities
-- Final decisions
+## Required integration invariants
 
-### Primary AI Cofounder
+Any Dev3 implementation must preserve:
 
-- Product architecture
-- Work allocation
-- Independent phase gates
+1. Tenant and verified actor context is injected by the application, never supplied by the model.
+2. Public operations are allowlisted from the lifecycle-safe contract.
+3. `begin_commit`, `complete_commit`, `fail_commit`, `internal_get`, and `internal_get_active` are never public or LLM-callable.
+4. Stock, price, schedule, duration, and availability come from deterministic services and PostgreSQL.
+5. The caller hears success only after the database transaction commits.
+6. Provider failures do not fabricate transaction success.
+7. Retries use stable identifiers and idempotency policies.
+8. PII and credentials are not stored in prompts, logs, or conversation state beyond approved needs.
 
-### Dev1
+## Current state
 
-- Domain transactions
-- Backend correctness
-- Deterministic business engines
+PostgreSQL CI is green as of run `30687004089`, but Dev3 still has no approved implementation workstream. The first deterministic transaction engine has not been selected or authorized. Dev3 should wait for an explicit implementation assignment based on an AI-cofounder-approved specification and stable domain ports.
 
-### Dev2
-
-- Infrastructure and CI
-- QA corpus
-- Provider evaluations
-
-### Dev3
-
-- Provider-independent voice platform implementation
-- Public-tool dispatch and conversation orchestration
-- Thin vertical-slice specification and implementation
-- Pilot-readiness and principal product-integration review
-- Later appointment-engine ownership after explicit approval
-
-File ownership should remain non-overlapping wherever possible.
-
-## Current Assessment
-
-The backend foundation is unusually strong, but product risk has moved to connecting the real caller experience to deterministic transactions.
-
-The central product milestone is:
+## Future sequence
 
 ```text
-Caller speaks
-→ model chooses a safe public tool
-→ pending transaction is created
-→ caller confirms
-→ deterministic engine commits exactly once
-→ owner receives the result
+Green PostgreSQL CI
+→ credible design-partner/vertical decision
+→ one deterministic engine implemented and approved
+→ Dev3 receives approved provider/tool/conversation specification
+→ Dev3 implements integration against stable domain ports
+→ independent review
+→ one monitored thin vertical slice
 ```
 
-This is the point at which Fonely becomes a product rather than disconnected infrastructure and a feasibility prototype.
-
-## Agreed Sequence
-
-### Immediate
-
-1. Finish the final QA.2 corrections.
-2. Add and lock the reproducible `jsonschema` dependency.
-3. Initialize and push a private Git repository.
-4. Run GitHub Actions, including the PostgreSQL integration contracts.
-5. Fix CI until it is fully green.
-
-### Select the first vertical
-
-Choose the first vertical using a concrete design-partner commitment rather than architecture preference.
-
-- If two clinic design partners commit promptly, prefer the appointment slice.
-- Otherwise, build for whichever real pilot customer commits first.
-
-### Build one deterministic engine
-
-If the selected customer is appointment-based:
-
-```text
-Service duration
-→ staff/resource eligibility
-→ availability
-→ hold
-→ confirmation
-→ database-enforced non-overlap
-→ appointment
-```
-
-If the selected customer is order-based:
-
-```text
-Stock lookup
-→ pending order
-→ confirmation
-→ atomic reservation
-→ order
-```
-
-### Build the thin end-to-end slice
-
-```text
-Browser or phone utterance
-→ STT
-→ structured public tool
-→ deterministic engine
-→ committed result
-→ TTS
-→ owner notification
-```
-
-The first pilot slice should intentionally support only:
-
-- One business
-- One vertical
-- One language
-- One provider
-- Manual monitoring
-
-## Integration Gates
-
-Dev3 remains implementation-specification focused until PostgreSQL CI is green. Provider, tooling, conversation, or appointment implementation begins only when the corresponding workstream receives explicit phase approval.
-
-Full voice/backend vertical-slice integration requires:
-
-1. PostgreSQL CI is green.
-2. One deterministic transaction engine exists.
-3. QA contracts align with the implemented public tools.
-
-These gates should not become an excuse for indefinite foundational work. Once they are satisfied, the next major priority is the end-to-end pilot path.
-
-## Pre-Pilot Scope Discipline
-
-Do not build the following before validating the first pilot:
-
-- Every vertical
-- Every language
-- Every provider
-- Full multi-region scaling
-- A general-purpose workflow DSL
-- A large administration dashboard
-
-Preserve the backend quality bar while prioritizing the shortest safe path to real customer value.
-
-## Guiding Principle
-
-> Our goal is not to win at backend architecture. Our goal is to answer a real call and safely create real business value.
+See `docs/STATUS.md` for the current evidence and next gate.

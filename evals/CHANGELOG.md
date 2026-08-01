@@ -1,5 +1,12 @@
 # Evaluation Corpus Changelog
 
+## CI verification snapshot
+
+- QA.3 baseline remains 211 cases and 377 turns with zero tool-contract mismatches.
+- GitHub Actions runs `30685195177`, `30686343063`, and green foundation run `30687004089` executed and passed strict corpus/tool/intent validation and the Chennai-pilot coverage profile.
+- PostgreSQL failures in the first two runs were unrelated to evaluation-contract compatibility; run `30687004089` passed the complete foundation workflow.
+- The corpus remains synthetic, domain-unreviewed, and pilot-untested unless individual provenance fields state otherwise.
+
 ## QA.3 — Caller outcome completeness
 
 - Added explicit `information_presented`, `authorization_denied`, `validation_rejected`, `runtime_recovered`, and `provider_recovered` outcomes.
@@ -23,7 +30,7 @@ Audit artifacts:
 - Added `intent-contract.v1.json` and its self-schema.
 - Migrated 168 historical intent labels across 317 turns to 21 canonical exact-scoring labels.
 - Added recursive decimal/unit/ID validation and selector consistency checks.
-- Recorded the `jsonschema` dependency/CI integration handoff; Dev1 subsequently declared and locked the dependency and added QA workflow steps. First real CI execution remains unobserved.
+- Recorded the `jsonschema` dependency/CI integration handoff; Dev1 subsequently declared and locked the dependency and the required QA workflow steps were added. Later CI runs executed those gates successfully.
 
 Audit artifacts:
 

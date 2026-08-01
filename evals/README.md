@@ -2,7 +2,7 @@
 
 ## Status
 
-This is a synthetic adversarial requirements corpus. It is not a production acceptance gate and is not eligible for automated provider scoring until language/domain review and reproducible QA dependencies are complete.
+This is a synthetic adversarial requirements corpus. QA.3 is structurally complete at 211 cases, 377 turns, and zero tool-contract mismatches. It is not a production acceptance gate or proof of provider/language quality; human language, domain, clinical, and pilot review remain required.
 
 ## Files
 
@@ -99,7 +99,7 @@ Normal validation uses the locked project environment:
 backend/.venv/bin/python scripts/validate-evals.py
 ```
 
-The CI steps are written but still require their first observed GitHub Actions run.
+The QA steps ran successfully in GitHub Actions runs `30685195177`, `30686343063`, and the green foundation run `30687004089`: strict corpus/tool/intent validation and the Chennai-pilot coverage profile passed.
 
 ## Coverage profiles
 
@@ -130,4 +130,4 @@ A future adapter must:
 5. Evaluate spoken constraints separately.
 6. Store results outside corpus files.
 
-Do not build the provider benchmark runner until QA.2 dependency and human-review gates are approved.
+A provider benchmark runner may use this corpus for structural conformance after independent approval, but results must remain clearly separated from native-language, clinical, domain, real-call, and pilot quality claims until those reviews are complete.

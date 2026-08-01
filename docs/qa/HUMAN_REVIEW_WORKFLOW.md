@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Synthetic cases are requirements drafts, not scoring truth. A case becomes eligible for an automated provider-quality gate only after its language and domain expectations are reviewed independently. Pilot validation is a third, separate status.
+Synthetic cases are requirements drafts, not scoring truth. QA.3 currently contains 211 structurally valid cases and 377 turns, but the cases remain language-synthetic, domain-unreviewed, and pilot-untested unless their provenance fields state otherwise. A case becomes eligible for a provider-quality gate only after its language and domain expectations are reviewed independently. Pilot validation is a third, separate status.
 
 ## Review status fields
 

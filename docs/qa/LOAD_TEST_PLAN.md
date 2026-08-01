@@ -1,15 +1,14 @@
 # Load Test Plan
 
-Load testing strategy for Fonely. This document defines workload models at each
-scale tier and the tests to be implemented.
+Load testing strategy for Fonely. This document defines hypothetical workload models and future tests at each scale tier. No load or soak test has run, and no provider capacity limit is verified. Phase C/D transaction engines and the production voice path are not yet implemented.
 
 ---
 
 ## Workload Models
 
-### Tier 1: 10 Pilot Businesses
+### Tier 1: Up to 10 Pilot Businesses
 
-Assumptions: 10 businesses onboarded, all active during pilot.
+Assumption model: begin with approximately 3-5 design partners and use 10 active businesses as the upper pilot-capacity test model after initial stability.
 
 | Metric | Estimate | Notes |
 |--------|----------|-------|

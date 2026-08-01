@@ -1,92 +1,77 @@
-# PostgreSQL Findings
+# PostgreSQL Findings Register
 
-Defects discovered in existing source, migration, or test files that Dev2 is not permitted to edit. Each finding includes the file, line, failure scenario, recommended fix, and whether it blocks PostgreSQL execution.
+This register preserves discovered PostgreSQL test-infrastructure defects and their resolution status. Historical findings are not deleted when fixed.
 
----
+## Finding 1 — Destructive fixture lacked explicit opt-in
 
-## Finding 1 — Test fixture performs destructive operations without checking FONELY_ALLOW_DESTRUCTIVE_TEST_DB
+- **Severity:** P1 safety
+- **Status:** Resolved
+- **Area:** `backend/tests/integration/postgres/conftest.py`
+- **Original risk:** Direct marked pytest execution could downgrade/truncate a database without `FONELY_ALLOW_DESTRUCTIVE_TEST_DB=1`.
+- **Resolution:** `_test_database_url()` now requires exact opt-in before destructive setup.
+- **Current invariant:** No PostgreSQL contract may run without the explicit opt-in.
 
-**Severity:** P1
+## Finding 2 — Alembic uses DATABASE_URL while tests use FONELY_TEST_DATABASE_URL
 
-**File:** `backend/tests/integration/postgres/conftest.py:46-74`
+- **Severity:** P1 safety/design
+- **Status:** Resolved and documented
+- **Area:** PostgreSQL session fixture and Alembic configuration
+- **Original risk:** The two environment variable names could target different databases.
+- **Resolution:** The fixture validates `FONELY_TEST_DATABASE_URL` and explicitly assigns that same approved URL to `DATABASE_URL` in the Alembic subprocess environment.
+- **Current invariant:** Migration subprocesses receive the validated test URL; unrelated ambient `DATABASE_URL` does not select the migration target.
 
-**Reproduction/failure scenario:**
+## Finding 3 — Database-name validation was too weak
 
-The `migrated_postgres` session fixture automatically runs `alembic downgrade base` (line 52-58) and `alembic upgrade head` (line 59-65) at session start, and `alembic downgrade base` again at session end (line 67-73). These are destructive operations that drop all tables. The fixture does not check whether `FONELY_ALLOW_DESTRUCTIVE_TEST_DB=1` is set, so any invocation of `pytest -m postgres` with a valid `FONELY_TEST_DATABASE_URL` will immediately destroy the target database's schema without explicit opt-in.
+- **Severity:** P2 safety
+- **Status:** Resolved
+- **Area:** `backend/tests/integration/postgres/conftest.py`
+- **Original risk:** A substring check accepted names such as `my_test_production`.
+- **Resolution:** The fixture requires `fonely_test` or `fonely_test_<lowercase_suffix>`, a dedicated username containing `test`, and a loopback host.
 
-**Recommended fix:**
+## Finding 4 — Reproducible lockfile was absent
 
-Add a check at the top of `migrated_postgres` (or in `_test_database_url()`) that reads `os.environ.get("FONELY_ALLOW_DESTRUCTIVE_TEST_DB")` and calls `pytest.fail()` if it is not `"1"`. This ensures the destructive opt-in is propagated from the test script into the fixture.
+- **Severity:** P2 reproducibility
+- **Status:** Resolved
+- **Area:** `backend/pyproject.toml`, `backend/uv.lock`, CI
+- **Resolution:** The lockfile is committed, `jsonschema==4.26.0` is resolved for QA, and CI uses `uv sync --frozen --all-extras`.
 
-```python
-def _test_database_url() -> str:
-    url = os.environ.get("FONELY_TEST_DATABASE_URL", "")
-    if not url:
-        pytest.skip("FONELY_TEST_DATABASE_URL not set — PostgreSQL tests skipped")
-    if os.environ.get("FONELY_ALLOW_DESTRUCTIVE_TEST_DB") != "1":
-        pytest.fail(
-            "FONELY_ALLOW_DESTRUCTIVE_TEST_DB=1 is required for PostgreSQL tests "
-            "(the fixture performs downgrade/upgrade/truncate)"
-        )
-    # ... existing validation ...
+## Finding 5 — Deprecated cache action blocked job setup
+
+- **Severity:** P0 CI execution
+- **Status:** Resolved on Dev2 branch by `8d75733`
+- **Area:** `.github/workflows/backend-ci.yml`
+- **Observed evidence:** Initial main runs failed during setup before project steps executed.
+- **Resolution:** Pin `actions/cache` v4.2.4 at `0400d5f644dc74513175e3cd8d07132dd4860809`.
+- **Verification:** Run `30685195177` passed setup and reached project checks.
+
+## Finding 6 — Session async engine crossed pytest event loops
+
+- **Severity:** P0 PostgreSQL verification
+- **Status:** Resolved on Dev2 branch by `b5d7312`; verified in CI
+- **Area:** pytest-asyncio configuration and PostgreSQL fixtures
+- **Observed evidence:** Run `30685195177` produced 22 failures with `Future attached to a different loop` and `Event loop is closed`.
+- **Resolution:** Use session loop scope for the session engine and compatible async fixtures/tests.
+- **Verification:** Run `30686343063` removed the cross-loop errors and produced 22 PostgreSQL passes.
+
+## Finding 7 — Migration-head contract expected 0002
+
+- **Severity:** P1 CI correctness
+- **Status:** Resolved by `40e3fbb`; independently reviewed
+- **File:** `backend/tests/integration/postgres/test_pending_actions_postgres.py`
+- **Observed evidence:** Run `30686343063` expected `0002` but Alembic correctly reported `0003`.
+- **Resolution:** Rename the misleading post-session-downgrade test to assert the observable invariant: the session fixture keeps the database at current head `0003` during tests.
+- **Verification:** Run `30687004089` passed all 23 contracts and workflow downgrade/re-upgrade.
+- **Owner:** Dev2.
+
+## Current PostgreSQL gate
+
+```text
+Latest inspected run: 30687004089
+PostgreSQL contracts: 23 passed
+Cross-event-loop defect: resolved
+Migration head contract: resolved
+Final downgrade/re-upgrade: passed
+Foundation PostgreSQL CI gate: green
 ```
 
-**Blocks PostgreSQL execution:** No — tests will run, but without the safety check.
-
----
-
-## Finding 2 — Test fixture passes DATABASE_URL to Alembic, not FONELY_TEST_DATABASE_URL
-
-**Severity:** P1
-
-**File:** `backend/tests/integration/postgres/conftest.py:49`
-
-**Reproduction/failure scenario:**
-
-The fixture sets `env["DATABASE_URL"] = postgres_database_url` (line 49) when calling Alembic as a subprocess. However, Alembic's `env.py` (line 20) uses `settings.database_url` from `fonely.core.config`. If `Settings.database_url` reads from `DATABASE_URL` rather than `FONELY_TEST_DATABASE_URL`, the fixture works. But if the application settings model reads a different env var, or if `DATABASE_URL` is already set in the environment to a production URL, the fixture could target the wrong database. The naming inconsistency between the test env var (`FONELY_TEST_DATABASE_URL`) and the Alembic env var (`DATABASE_URL`) is a latent safety risk.
-
-**Recommended fix:**
-
-Verify that `fonely.core.config.Settings.database_url` reads from `DATABASE_URL` (not from `FONELY_TEST_DATABASE_URL`), and document this coupling. Alternatively, have the fixture explicitly set both `DATABASE_URL` and unset any conflicting env vars before calling Alembic.
-
-**Blocks PostgreSQL execution:** No — but risk of targeting the wrong database if `DATABASE_URL` is pre-set.
-
----
-
-## Finding 3 — Test fixture database name validation uses substring "test" only
-
-**Severity:** P2
-
-**File:** `backend/tests/integration/postgres/conftest.py:35`
-
-**Reproduction/failure scenario:**
-
-The `_test_database_url()` function checks `if "test" not in database_name` (line 35). This permits database names like `my_test_production` or `contest_db`. While the test script (`scripts/test-postgres.sh`) applies stricter validation (rejecting known production names), the fixture itself does not. If a developer runs pytest directly without the test script, the weaker validation applies.
-
-**Recommended fix:**
-
-Add the same blocked-name list from the test script to the fixture, or extract shared validation into a utility that both the fixture and the script can use (noting Dev2 cannot create that utility since it would live in `backend/tests/`).
-
-**Blocks PostgreSQL execution:** No.
-
----
-
-## Finding 4 — No uv lockfile exists for reproducible CI builds
-
-**Severity:** P2
-
-**File:** `backend/pyproject.toml` (project root)
-
-**Reproduction/failure scenario:**
-
-The CI workflow runs `uv sync --all-extras` but there is no `uv.lock` file in the repository. This means CI builds are not reproducible — dependency versions may differ between runs. This is not a code defect but an infrastructure gap.
-
-**Recommended fix:**
-
-Run `uv lock` to generate `uv.lock` and commit it to version control. Until then, CI reproducibility is incomplete.
-
-**Blocks PostgreSQL execution:** No.
-
----
-
-*No additional findings at this time. This file will be updated if further defects are discovered during validation.*
+No production or staging database may be used for these tests.

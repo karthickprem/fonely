@@ -1,8 +1,6 @@
 # Voice and Language Evaluation Framework
 
-This document defines how Fonely evaluates voice quality, language accuracy,
-and conversational latency across supported languages, providers, and
-deployment conditions.
+This document defines how Fonely will evaluate voice quality, language accuracy, and conversational latency across approved languages, provider candidates, and deployment conditions. No native-speaker voice panel, provider comparison, telephone-quality benchmark, or real-call latency evaluation has been completed. Blank matrices and thresholds are future gates, not observed results.
 
 ---
 
@@ -150,8 +148,7 @@ Turn latency = STT duration + LLM inference duration + TTS synthesis duration
 - **P95 target**: < 3.0 seconds.
 - Measured end-to-end in the production (or staging) environment, not in
   isolated benchmarks.
-- Broken down by provider combination (e.g., Sarvam STT + DeepSeek LLM +
-  Fish Audio TTS) to identify bottlenecks.
+- Broken down by approved provider combination after adapters are implemented and measured. Any named combination is a candidate, not a current result.
 
 ---
 
@@ -198,24 +195,23 @@ Turn latency = STT duration + LLM inference duration + TTS synthesis duration
 
 ## Provider Comparison Matrix
 
-Each provider combination is evaluated across all dimensions defined in this
-document. Results are recorded in a comparison matrix.
+Each approved provider combination will be evaluated across the dimensions defined in this document. Candidate names do not imply selection, integration, or verification.
 
-| Dimension               | Sarvam STT | Sarvam TTS | Fish Audio TTS | DeepSeek | Qwen   | Llama  |
-|-------------------------|------------|------------|----------------|----------|--------|--------|
-| WER (Tamil, 8 kHz)      |            |            | --             |          |        |        |
-| WER (Hindi, 8 kHz)      |            |            | --             |          |        |        |
-| IER (Tamil)             |            |            | --             |          |        |        |
-| IER (Hindi)             |            |            | --             |          |        |        |
-| MOS (Tamil)             | --         |            |                | --       | --     | --     |
-| MOS (Hindi)             | --         |            |                | --       | --     | --     |
-| TTFA P50 (ms)           |            |            |                |          |        |        |
-| Turn latency P95 (ms)   |            |            |                |          |        |        |
-| Cost per turn (INR)     |            |            |                |          |        |        |
+| Dimension | STT candidate A | STT candidate B | TTS candidate A | TTS candidate B | Model candidate A | Model candidate B |
+|-----------|-----------------|-----------------|-----------------|-----------------|-------------------|-------------------|
+| WER (Tamil, 8 kHz) | | | -- | -- | -- | -- |
+| WER (Hindi, 8 kHz) | | | -- | -- | -- | -- |
+| IER (Tamil) | | | -- | -- | | |
+| IER (Hindi) | | | -- | -- | | |
+| MOS (Tamil) | -- | -- | | | -- | -- |
+| MOS (Hindi) | -- | -- | | | -- | -- |
+| TTFA P50 (ms) | | | | | | |
+| Turn latency P95 (ms) | | | | | | |
+| Cost per turn (INR) | | | | | | |
 
-- Cells marked `--` are not applicable (e.g., WER for a TTS-only provider).
-- The matrix is regenerated after every provider upgrade or configuration
-  change.
+- Cells marked `--` are not applicable.
+- Record provider name, API/model version, configuration, test date, and authoritative pricing source with every result.
+- Regenerate the matrix after every provider upgrade or configuration change.
 
 ---
 
@@ -231,7 +227,7 @@ Cost per call = SUM(cost per turn for all turns) + telephony cost (per-minute)
 - Costs are tracked per provider and per language.
 - The eval framework logs estimated cost alongside quality metrics so that
   cost-quality tradeoffs are visible.
-- Telephony cost (Exotel per-minute rate) is included in the per-call total.
+- Include the founder-approved telephony provider's measured per-minute cost, with billing date/source, in the per-call total.
 
 ---
 

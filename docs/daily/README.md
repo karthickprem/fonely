@@ -11,7 +11,9 @@ docs/daily/
 ├── README.md
 ├── 2026-07-31/
 │   └── STATUS.md
-└── 2026-08-01/
+├── 2026-08-01/
+│   └── STATUS.md
+└── 2026-08-02/
     └── STATUS.md
 ```
 
@@ -24,6 +26,10 @@ Each `STATUS.md` should record:
 5. **Pending work** — prioritized next tasks.
 6. **Blockers/decisions** — external dependencies and founder decisions.
 7. **Next-day objective** — one bounded deliverable.
+
+## Historical and current status policy
+
+Daily logs are append-only chronological evidence. Earlier counts, blockers, and statements should not be silently rewritten when later work supersedes them. Append a dated correction/supersession note when necessary and link to `docs/STATUS.md`, which is the authoritative current-state document.
 
 ## Reporting rules
 

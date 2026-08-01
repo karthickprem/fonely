@@ -3,6 +3,8 @@
 Staged readiness criteria for Fonely. Each stage must be fully satisfied before
 advancing to the next. Items are grouped by category within each stage.
 
+> **Current snapshot:** GitHub Actions run `30687004089` is green: frozen dependency installation, QA/static/migration gates, 281 non-PostgreSQL tests, all 23 PostgreSQL contracts, migration downgrade, and migration re-upgrade passed. This establishes the backend foundation CI gate only. No provider, telephony, load, soak, pilot, or production readiness is established.
+
 ---
 
 ## Stage 1 -- Developer-Ready

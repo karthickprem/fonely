@@ -115,6 +115,7 @@ Responsibilities:
 - Maintain Compose configuration and test scripts.
 - Maintain migration smoke checks.
 - Maintain GitHub Actions CI.
+- Maintain the evaluation corpus, contracts, validation/reporting scripts, and QA automation.
 - Document local and CI testing procedures.
 - Identify infrastructure and database-test defects without overwriting Dev1’s in-progress domain work.
 - Keep destructive test operations isolated to explicit test databases.
@@ -126,7 +127,9 @@ Primary ownership areas:
 .github/workflows/**
 infra/**
 scripts/**
+evals/**
 docs/testing/**
+docs/qa/**
 ```
 
 Dev2 may append its own section to daily status documents.
@@ -135,30 +138,23 @@ Dev2 must not modify Dev1-owned domain files unless a later task explicitly tran
 
 ### Dev3 — Principal integration and voice platform developer
 
-Dev3 is a senior implementation developer and product-integration reviewer. Dev3 initially works read-only on specifications while shared interfaces are unstable, then owns non-overlapping integration and appointment workstreams after their gates open.
+Dev3 is an implementation developer only. Dev3 does not perform independent project review, approve phases, or act as a gatekeeper; those duties belong to the AI cofounder. Dev3 owns explicitly assigned, non-overlapping integration implementation after the corresponding gate opens.
 
-Responsibilities:
+Responsibilities after assignment and phase approval:
 
-- Determine whether the components form a usable product.
-- Challenge unnecessary abstraction and overengineering.
-- Define and implement the thinnest valuable end-to-end vertical slice.
+- Implement the thinnest valuable end-to-end vertical slice.
 - Design and implement provider-independent STT, LLM, and TTS adapters.
 - Implement the strict public tool dispatcher after domain contracts stabilize.
 - Implement conversation orchestration, latency controls, interruption handling, and failure recovery.
-- Review and later own the Phase D appointment engine after Phase C stabilizes or the founder explicitly selects appointments first.
-- Inspect latency, resilience, observability, and pilot failure handling.
-- Validate demo and pilot readiness.
-- Keep engineering decisions connected to customer value.
-- Independently verify plausible prototype findings before turning them into tasks.
+- Implement latency, resilience, observability, and pilot failure handling.
+- Later implement the Phase D appointment engine after Phase C stabilizes or the founder explicitly selects appointments first.
+- Keep implementation connected to the approved product requirements and acceptance criteria.
 
 Current ownership areas:
 
 ```text
-docs/integration/**
-docs/specs/phase-c/**
-docs/specs/phase-d/**
-docs/product/**
-Read-only review across the repository
+Explicitly assigned implementation specifications and technical design artifacts only
+No independent review or phase-approval authority
 ```
 
 Future implementation ownership, only after explicit phase approval:
@@ -235,7 +231,7 @@ Karthick defines intent and priorities
         ↓
 AI cofounder converts intent into requirements and acceptance criteria
         ↓
-AI cofounder assigns non-overlapping work to Dev1 and/or Dev2
+AI cofounder assigns non-overlapping work to Dev1, Dev2, and/or Dev3
         ↓
 Developer implements and self-verifies
         ↓
@@ -256,55 +252,35 @@ Completion reports are evidence to review, not proof of completion by themselves
 
 ## Current workstream ownership
 
+Volatile assignment and CI state are maintained in `docs/STATUS.md`. At this snapshot:
+
 ### Dev1 current assignment
 
-Final pre-CI dependency integration:
-
-1. Add `jsonschema>=4.26,<5` to the reproducible development/QA dependencies.
-2. Regenerate and verify `backend/uv.lock`.
-3. Add QA validator and Chennai-profile coverage commands to CI in coordination with Dev2 ownership.
-4. Preserve the approved Phase B.1 and migration `0003` behavior.
-5. Do not begin Phase C until PostgreSQL CI is green.
+1. Harden the repository audit in the isolated `dev1/harden-pre-push-audit` worktree.
+2. Scan actual staged/range Git blobs, strengthen credential detection, and add regression tests.
+3. Do not edit Dev2 CI/PostgreSQL files or begin Phase C.
 
 ### Dev2 current assignment
 
-QA.2 final contract correction:
-
-1. Enforce strict decimal-string schemas for structured quantities and prices.
-2. Move units out of quantity strings into explicit `unit` fields.
-3. Align external ID types with the backend MVP decision.
-4. Add or formalize an intent vocabulary contract.
-5. Maintain zero tool-contract mismatches.
-6. Keep Chennai-pilot thresholds blocking and future all-India gaps reporting-only.
-7. Do not modify domain code.
+The PostgreSQL CI correction is complete and independently verified in run `30687004089`: all 23 contracts and migration downgrade/re-upgrade passed. Dev2 awaits the next separately approved CI, QA, or infrastructure assignment and must not begin Phase C domain work.
 
 ### Dev3 current assignment
 
-Principal implementation specification and integration preparation:
-
-1. Produce implementation-ready Phase C and Phase D specifications without modifying application code.
-2. Define transaction contracts, migrations, tests, and review gates for inventory/orders and appointments.
-3. Define the provider-independent voice/backend contract and failure matrix.
-4. Define the thinnest valuable end-to-end vertical slice after the first pilot commitment.
-5. Challenge additional foundation work that does not reduce pilot risk.
-6. Remain read-only in Dev1/Dev2 areas until PostgreSQL CI is green and an implementation workstream is explicitly assigned.
-7. After approval, become the implementation owner for provider/tool/conversation modules and later the Phase D appointment engine.
+Dev3 currently has no approved implementation workstream. Dev3 is a developer only and waits for an explicit implementation assignment. The AI cofounder owns specifications and acceptance criteria.
 
 ### AI cofounder current assignment
 
-1. Independently review Dev1 and Dev2 output.
-2. Maintain project and daily status documentation.
-3. Prevent Phase C from starting before Phase B.1 and PostgreSQL CI pass.
-4. Prepare the Phase C specification after approval.
-5. Continue pricing, provider, and customer-validation guidance.
+1. Maintain requirements, specifications, assignments, durable status, and independent reviews.
+2. Review Dev1 and Dev2 output and inspect the next CI run.
+3. Prevent Phase C or Dev3 integration implementation from starting before the applicable gate passes.
+4. Keep provider, pricing, and customer hypotheses clearly separated from verified evidence.
 
 ### Founder current assignment
 
-1. Preserve the private GitHub repository.
-2. Rotate exposed credentials.
-3. Prepare customer interviews and design-partner outreach.
-4. Obtain Exotel production pricing and AgentStream enablement.
-5. Keep startup work and accounts under founder control.
+1. Keep repository publication/access and credentials under founder control.
+2. Recruit credible design partners and decide the first vertical.
+3. Obtain authoritative provider pricing/enablement information before spending or committing.
+4. Make final product, pricing, legal, deployment, and customer-data decisions.
 
 ---
 
@@ -323,12 +299,14 @@ A phase advances only after:
 Current gate:
 
 ```text
-Phase A: approved offline; live PostgreSQL verification pending
+Phase A: implemented; PostgreSQL CI gate passed
 Phase B/B.1: locally approved through migration 0003
-QA.2: structurally improved; dependency and numeric-contract fixes pending
-PostgreSQL infrastructure: approved; first CI execution pending
-Phase C: not authorized until PostgreSQL CI is green
+QA.3: mechanically approved as a structural conformance gate; human reviews pending
+Latest PostgreSQL CI: green — 23/23 contracts plus downgrade/re-upgrade passed
+Phase C: technically eligible for founder authorization after vertical selection and approved bounded specification
 ```
+
+See `docs/STATUS.md` for run `30687004089`, exact evidence, and current assignments.
 
 ---
 
@@ -339,8 +317,14 @@ Phase C: not authorized until PostgreSQL CI is green
 Use durable documents for information that remains relevant across days:
 
 ```text
+README.md
+    Repository entry point and verification vocabulary.
+
+docs/STATUS.md
+    Authoritative current evidence, assignments, and active gate.
+
 docs/PLAN.md
-    Product and implementation plan.
+    Durable product strategy and A-I engineering roadmap.
 
 docs/TEAM_AND_OPERATING_MODEL.md
     Team roles, authority, ownership, and workflow.
@@ -348,6 +332,8 @@ docs/TEAM_AND_OPERATING_MODEL.md
 docs/testing/POSTGRESQL.md
     PostgreSQL and CI testing process.
 ```
+
+Volatile counts and run results belong in `docs/STATUS.md`; durable role and process documents should link to it instead of maintaining competing current-state narratives.
 
 ### Daily documents
 

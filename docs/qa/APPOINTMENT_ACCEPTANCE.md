@@ -1,8 +1,6 @@
 # Appointment Engine -- Acceptance Criteria
 
-This document defines the exact acceptance criteria for the Fonely appointment
-scheduling engine. Every criterion listed here must be covered by at least one
-automated test (unit, integration, or end-to-end).
+This document defines the exact acceptance criteria for the future Fonely appointment scheduling engine. Phase D is not implemented or authorized. The existing appointment table and B-tree lookup index do not enforce non-overlap. Every criterion listed here must be covered by at least one automated test (unit, PostgreSQL integration, or end-to-end) before appointment functionality is pilot-enabled.
 
 ---
 

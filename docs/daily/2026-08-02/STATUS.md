@@ -1001,3 +1001,282 @@ Handoff to the AI cofounder:
 2. Observe and repair the first GitHub Actions/PostgreSQL run.
 3. Confirm all 23 PostgreSQL contracts execute successfully.
 4. Do not authorize Phase C until CI and all PostgreSQL contracts are green.
+
+---
+
+## AI cofounder — First PostgreSQL CI execution and Dev2 handoff
+
+### Repository and workflow state
+
+The reviewed baseline and status commits are present on `main`:
+
+```text
+5c4725b  chore: initialize Fonely platform foundation
+231cabb  docs: record initial repository push
+```
+
+A focused Dev2 branch contains:
+
+```text
+8d75733  ci: update cache action pin
+branch: dev2/fix-actions-cache-pin
+```
+
+The branch changes only `.github/workflows/backend-ci.yml`, replacing the deprecated `actions/cache` v4.1.2 SHA with the official pinned v4.2.4 SHA `0400d5f644dc74513175e3cd8d07132dd4860809`.
+
+### First real GitHub Actions result
+
+GitHub Actions run:
+
+```text
+Run:    30685195177
+URL:    https://github.com/karthickprem/fonely/actions/runs/30685195177
+Commit: 8d75733
+Result: failure at PostgreSQL integration tests
+```
+
+The cache correction succeeded: job setup and all preceding gates ran instead of failing during setup.
+
+Verified passing steps:
+
+- PostgreSQL 16 service startup and health check.
+- Checkout, Python 3.12, uv installation, and cache restoration.
+- `uv sync --frozen --all-extras`.
+- Evaluation schema/tool/intent validation.
+- Chennai-pilot coverage profile.
+- Package import.
+- Ruff check and format check.
+- Strict MyPy.
+- Alembic upgrade to `0003`.
+- `alembic check`.
+- 280 non-PostgreSQL tests.
+
+PostgreSQL integration result:
+
+```text
+23 contracts executed
+1 passed
+22 failed
+280 deselected
+```
+
+All 22 failures share the same infrastructure signature:
+
+```text
+RuntimeError: Future ... attached to a different loop
+RuntimeError: Event loop is closed
+```
+
+The current fixture creates a session-scoped async SQLAlchemy engine while function-scoped async tests/cleanup may run on different pytest-asyncio loops. The failures therefore do not yet prove that pending-action transaction behavior is incorrect. They prove that the real PostgreSQL suite is blocked by async fixture/event-loop ownership.
+
+### Dev2 assignment — PostgreSQL async fixture correction
+
+Dev2 owns this correction because Dev2 owns CI, PostgreSQL verification, and test infrastructure.
+
+Dev2 must:
+
+1. Preserve commit `8d75733` and the pinned `actions/cache` v4.2.4 SHA.
+2. Reproduce and explain the fixture/event-loop mismatch using the CI traceback and current pytest-asyncio configuration.
+3. Make engine lifetime and pytest event-loop lifetime compatible. Evaluate a session-scoped loop for session-scoped engine resources versus function-scoped engines; choose the smallest correct design and document why.
+4. Ensure `pg_engine`, `pg_session_factory`, `clean_database`, `pg_session`, and every PostgreSQL test use compatible loop ownership.
+5. Ensure engine disposal occurs on the same live loop that owns the async engine/pool.
+6. Preserve `migrated_postgres` upgrade-before-suite and downgrade-after-suite behavior.
+7. Preserve all destructive-test protections: explicit opt-in, strict test database name, dedicated test username, and loopback-only host.
+8. Preserve all 23 PostgreSQL tests. Do not skip, xfail, delete, weaken, or replace them with mocks.
+9. Preserve true concurrency tests; do not serialize races merely to make CI green.
+10. Add a focused regression assertion/configuration test for the chosen async loop scope where practical.
+11. Run local frozen sync, Ruff, format, MyPy, non-PostgreSQL tests, PostgreSQL collection, migration checks, QA validation, and Chennai coverage.
+12. Push only a focused Dev2 CI/test-infrastructure correction and trigger a new GitHub Actions run.
+13. Report the exact new PostgreSQL count. Separate fixture/infrastructure failures from genuine transaction/domain failures.
+14. If genuine domain failures remain after fixture repair, stop and return them to Dev1 with exact test names and traces; do not modify Dev1-owned domain code.
+15. Do not begin Phase C or modify eval, provider, voice, or appointment implementation.
+
+Likely files in scope:
+
+```text
+backend/tests/integration/postgres/conftest.py
+backend/pyproject.toml                       # pytest-asyncio loop-scope config only if required
+backend/tests/test_pre_ci_configuration.py   # only for a focused regression guard
+.github/workflows/backend-ci.yml             # preserve cache fix; change only if CI invocation must be corrected
+```
+
+### Acceptance criteria for Dev2
+
+- No `Future attached to a different loop` failure.
+- No `Event loop is closed` teardown failure.
+- All 23 PostgreSQL contracts execute rather than skip.
+- Session cleanup and engine disposal complete without unraisable coroutine warnings.
+- Migration upgrade, PostgreSQL tests, downgrade, and re-upgrade all execute.
+- Static, non-PostgreSQL, QA, and Chennai-profile gates remain green.
+- No domain code, migrations, evaluation corpus, or provider code changes.
+- The new CI run URL and exact step/test results are reported.
+
+### Independent review and phase gate
+
+After Dev2 reports completion, the AI cofounder will inspect the exact diff, rerun available local gates, and inspect the new GitHub Actions logs. Phase C remains blocked until all PostgreSQL contracts pass and any genuine behavioral failures have been resolved and independently reviewed.
+
+---
+
+## Supersession note — latest independently inspected state
+
+Earlier sections in this file are chronological checkpoints and remain unchanged as historical evidence. For current project truth, use `docs/STATUS.md`.
+
+A second Dev2 CI correction was committed as:
+
+```text
+b5d7312  test(postgres): align async fixture loop scope
+```
+
+GitHub Actions run:
+
+```text
+Run:    30686343063
+URL:    https://github.com/karthickprem/fonely/actions/runs/30686343063
+Commit: b5d7312
+```
+
+Observed result:
+
+- All setup, dependency, QA, Chennai coverage, package import, Ruff, formatting, MyPy, migration-upgrade/check, and non-PostgreSQL steps passed.
+- The async cross-event-loop failures were resolved.
+- PostgreSQL contracts: 22 passed, 1 failed.
+- The sole failure expected migration head `0002`; the actual implemented head is `0003`.
+- Final workflow downgrade/re-upgrade steps were skipped because the PostgreSQL step failed.
+
+Current assignment:
+
+- Dev2 updates only the stale migration-head contract, preserves all 23 tests, and reruns CI through downgrade/re-upgrade.
+- Dev1 hardens the repository audit in an isolated worktree.
+- Dev3 is a developer only and has no active implementation assignment until a gate opens.
+- The AI cofounder owns specifications, independent review, and phase gates.
+
+Phase C remains unauthorized until CI is fully green and independently reviewed.
+
+---
+
+## Dev2 — PostgreSQL CI event-loop correction
+
+### Root cause and selected design
+
+The original suite combined a session-scoped SQLAlchemy async engine and asyncpg pool with pytest-asyncio's function-scoped test loops. Pooled connections and futures created on one loop were then reused or finalized on another, producing `Future ... attached to a different loop`, `Event loop is closed`, and cancellation-cleanup failures.
+
+Dev2 selected Option A: one supported session-scoped pytest-asyncio loop for the intentionally shared session engine and for every async fixture and async test that uses it. `pg_engine` explicitly uses `loop_scope="session"` for creation and disposal; function-scoped `clean_database` and `pg_session` retain per-test fixture isolation while executing on that same live loop. The default async fixture and test loop scopes are both configured as `session`. No deprecated custom `event_loop` fixture was added.
+
+Fixture lifetimes are now:
+
+- pytest async event loop: session scope.
+- `migrated_postgres`: synchronous session-scoped autouse fixture; downgrade/upgrade before the suite and downgrade after dependent async fixture teardown.
+- `pg_engine`: session fixture and session loop; creates and disposes the engine.
+- `pg_session_factory`: synchronous session fixture backed by `pg_engine`.
+- `clean_database`: function fixture on the session loop; truncates after every test.
+- `pg_session`: function fixture on the session loop; rolls back before its context exits.
+- async PostgreSQL tests: function test items executed on the configured session loop.
+
+Concurrency semantics remain valid: the two race contracts still create genuinely separate `AsyncSession` instances, acquire independent pooled connections, and execute concurrently through `asyncio.gather`. No concurrency test was serialized and pooling was not disabled.
+
+### Files changed and regression protection
+
+Commit `b5d7312a36948c08653e88af8340d6faa4502775` changes only:
+
+- `backend/pyproject.toml`: session defaults for pytest-asyncio fixture and test loops.
+- `backend/tests/integration/postgres/conftest.py`: explicit session loop scope on `pg_engine`, `clean_database`, and `pg_session`.
+- `backend/tests/test_pre_ci_configuration.py`: guards the session-loop configuration, explicit fixture declarations, absence of a custom deprecated event-loop fixture, approved cache SHA, and PostgreSQL CI invocation.
+
+The earlier approved cache commit `8d75733` remains in branch history. No workflow change was needed for the loop correction.
+
+### Local checks
+
+Passed locally:
+
+- Frozen dependency sync: 51 packages checked.
+- Package import.
+- Ruff check and Ruff format check.
+- Strict MyPy: 27 source files.
+- Non-PostgreSQL tests: `281 passed, 23 deselected`.
+- PostgreSQL collection: all 23 contracts collected.
+- Full suite without a configured PostgreSQL instance: `281 passed, 23 skipped`; this was not treated as PostgreSQL execution.
+- Alembic history and single head `0003`.
+- Evaluation validator: 211 cases and 377 turns valid.
+- Chennai-pilot coverage: blocking thresholds met.
+- Migration script checks.
+- Pre-push audit and `git diff --check`.
+
+PostgreSQL did not run locally because no safe local instance was configured. Real execution occurred only in GitHub Actions.
+
+### GitHub Actions result and ownership classification
+
+Branch: `dev2/fix-actions-cache-pin`
+
+Run: https://github.com/karthickprem/fonely/actions/runs/30686343063
+
+The run passed job setup, PostgreSQL 16 container initialization/health, checkout, Python 3.12, uv, cache, lockfile check, frozen dependency installation, eval validation, Chennai coverage, package import, Ruff, formatting, MyPy, migration upgrade through `0003`, Alembic check, and all 281 non-PostgreSQL tests.
+
+PostgreSQL result:
+
+```text
+23 contracts executed
+22 passed
+1 failed
+281 deselected
+```
+
+The loop-lifecycle correction succeeded. The complete logs contain none of:
+
+- `Future ... attached to a different loop`
+- `Event loop is closed`
+- `coroutine ... was never awaited`
+- `unclosed connection`
+- `unclosed transport`
+
+The sole remaining failure is:
+
+```text
+test_migration_downgrade_contract_is_owned_by_session_fixture
+AssertionError: assert '0003' == '0002'
+```
+
+Classification: **test expectation / migration-contract ownership**, not fixture infrastructure, repository behavior, or service/domain behavior. Migration `0003` is the current head and the same suite independently asserts that migrations through `0003` are applied. A test body cannot observe the session fixture's post-suite downgrade. Dev2 did not modify this out-of-scope PostgreSQL contract. It should be returned to the AI cofounder for independent assignment/review.
+
+Because that selected test failed, GitHub Actions fail-fast skipped the later workflow-level `Migration downgrade to base` and `Migration upgrade to head (verify re-upgrade)` steps. The session fixture's teardown downgrade completed without a teardown error, but the skipped workflow steps mean the full acceptance criterion is not yet met.
+
+No tests were skipped, removed, xfailed, serialized, weakened, retried, or replaced with mocks. No domain, migration, eval, provider, voice, or appointment code changed. All destructive database guards and per-test cleanup remain intact.
+
+### Final test-contract correction and green CI
+
+After independent approval of the event-loop patch, Dev2 corrected only the stale migration-head contract in:
+
+```text
+40e3fbb  test(postgres): align migration head contract
+```
+
+The misleading post-session-downgrade test name and docstring were reframed to assert the observable responsibility: the session fixture keeps the database at current head `0003` during the suite. No other test changed.
+
+Final GitHub Actions run:
+
+```text
+Run:    30687004089
+URL:    https://github.com/karthickprem/fonely/actions/runs/30687004089
+Commit: 40e3fbbae0b8d406032d7156817d5ce2defac615
+Result: success
+```
+
+Every required step passed: setup, PostgreSQL service health, checkout, Python, uv, cache, frozen sync, eval validation, Chennai coverage, package import, Ruff, format, MyPy, migration upgrade, Alembic check, non-PostgreSQL tests, PostgreSQL tests, migration downgrade, and migration re-upgrade.
+
+Exact test results:
+
+```text
+Non-PostgreSQL: 281 passed, 23 deselected
+PostgreSQL:      23 passed, 281 deselected
+```
+
+The workflow-level downgrade to base passed, followed by successful re-upgrade through `0001`, `0002`, and `0003`. Complete logs contain none of the cross-loop, closed-loop, never-awaited coroutine, unclosed connection, or unclosed transport signatures.
+
+No test was skipped, removed, xfailed, serialized, weakened, retried, or replaced with a mock. No domain, migration, eval, provider, voice, or appointment code changed.
+
+### Phase status and next action
+
+The PostgreSQL infrastructure gate is green. Phase C was not started by Dev2. It is now technically eligible for founder authorization after the first vertical/design-partner decision and an AI-cofounder-approved bounded specification.
+
+A non-blocking post-job warning reported that the configured uv cache path did not exist, so no cache was saved. Dependency installation and every required gate passed; cache-path alignment may be handled later as a separate CI-efficiency task.
+
+Dev3 remains a developer only and receives no implementation assignment until stable domain ports and an approved integration specification exist.

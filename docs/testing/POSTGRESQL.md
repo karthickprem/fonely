@@ -102,7 +102,7 @@ Rejected examples:
 - `fonely_test_UPPER` — uppercase not permitted.
 - `test` — does not start with `fonely_test`.
 
-The test fixture in `conftest.py` uses a weaker check (substring `"test"`). Until Dev1 hardens it to match the script's policy, running `pytest -m postgres` directly bypasses the stricter validation. Always use `scripts/test-postgres.sh` for safety.
+The pytest fixture independently enforces the same core protections: explicit destructive opt-in, the strict `fonely_test` name pattern, a dedicated test-role username containing `test`, and a loopback-only host. The wrapper remains recommended because it also performs operational health and migration checks.
 
 ### Destructive opt-in
 
@@ -130,8 +130,8 @@ The test script parses URLs with Python's `urllib.parse`, not Bash string operat
 
 PostgreSQL integration tests are marked with `@pytest.mark.postgres` in `backend/tests/integration/postgres/`.
 
-- When `FONELY_TEST_DATABASE_URL` is **not set**: all 17 tests are collected but **skipped**.
-- When `FONELY_TEST_DATABASE_URL` is set to a valid test URL: tests run against the live database.
+- When `FONELY_TEST_DATABASE_URL` is **not set**: all 23 tests are collected but **skipped**.
+- When `FONELY_TEST_DATABASE_URL` is set to a valid approved test URL and destructive opt-in is enabled: tests run against the real disposable PostgreSQL database.
 
 The test session fixture (`migrated_postgres`) automatically:
 
@@ -167,7 +167,7 @@ cd backend
 .venv/bin/pytest -m postgres -q
 ```
 
-Note: direct pytest bypasses the test script's stricter database name validation. Use the test script when possible.
+Direct pytest enforces the core database-target guards, but the wrapper is still the recommended entry point because it standardizes validation and migration-cycle checks.
 
 ### Full suite (unit + PostgreSQL)
 
@@ -294,14 +294,13 @@ The GitHub Actions workflow (`.github/workflows/backend-ci.yml`):
 2. Starts a PostgreSQL 16 service container with test-only credentials.
 3. Requires `backend/uv.lock` to exist — fails immediately if missing.
 4. Installs Python 3.12 and dependencies via `uv sync --frozen --all-extras`.
-5. Runs package import verification.
-6. Runs Ruff lint and format checks.
-7. Runs mypy type checking.
-8. Runs `alembic upgrade head`.
-9. Runs `alembic check`.
-10. Runs non-PostgreSQL unit tests.
-11. Runs PostgreSQL integration tests.
-12. Runs migration downgrade to base and re-upgrade to head.
+5. Validates the evaluation corpus/tool/intent contracts.
+6. Enforces the Chennai-pilot coverage profile.
+7. Runs package import, Ruff lint/format, and MyPy.
+8. Runs `alembic upgrade head` and `alembic check`.
+9. Runs non-PostgreSQL tests.
+10. Runs all 23 PostgreSQL integration contracts.
+11. Runs migration downgrade to base and re-upgrade to head after the test step passes.
 
 CI uses `FONELY_ALLOW_DESTRUCTIVE_TEST_DB=1` because the service container is disposable.
 
@@ -312,20 +311,46 @@ Third-party actions are pinned to verified commit SHAs for supply-chain security
 | `actions/checkout` | v4.2.2 | `11bd7190...` |
 | `actions/setup-python` | v5.3.0 | `0b93645e...` |
 | `astral-sh/setup-uv` | v4.2.0 | `38f3f104...` |
-| `actions/cache` | v4.1.2 | `6849a648...` |
+| `actions/cache` | v4.2.4 | `0400d5f6...` |
 
 No production credentials or repository secrets are used for the CI test database.
 
 ### Lockfile requirement
 
-CI requires `backend/uv.lock`. Generate it with:
+`backend/uv.lock` is present and CI consumes it with `uv sync --frozen --all-extras`. Dev1 owns backend dependency declarations and lockfile regeneration when those declarations change; Dev2 owns CI consumption and verification.
 
 ```bash
 cd backend
-uv lock
+uv lock --check
+uv sync --frozen --all-extras
 ```
 
-This is Dev1's responsibility since `pyproject.toml` is in Dev1's ownership boundary. CI will fail until the lockfile is committed.
+---
+
+## Observed GitHub Actions evidence
+
+### Run 30685195177
+
+The cache-pin correction allowed the workflow to reach the PostgreSQL suite. All preceding QA, static, migration, and non-PostgreSQL gates passed. PostgreSQL executed 23 contracts: 1 passed and 22 failed due to incompatible async event-loop fixture ownership.
+
+### Run 30686343063
+
+The session loop-scope correction removed the cross-loop failure. PostgreSQL executed 23 contracts: 22 passed and one failed because the contract expected migration head `0002` while the implemented head was `0003`.
+
+### Run 30687004089 — green foundation gate
+
+Commit `40e3fbb` aligned the current-head test to `0003` and clarified its observable responsibility. The complete workflow passed:
+
+```text
+Non-PostgreSQL tests:        281 passed, 23 deselected
+PostgreSQL contracts:         23 passed, 281 deselected
+Migration downgrade to base:  passed
+Migration re-upgrade to 0003: passed
+```
+
+QA validation, Chennai coverage, package import, Ruff, formatting, MyPy, initial migration upgrade, and Alembic check also passed. This verifies the disposable PostgreSQL foundation and migration cycle; it does not verify future Phase C/D engines or production readiness.
+
+A cache post-step reported that its configured path did not exist, so no cache was saved. This is non-blocking but may be optimized later by aligning the cached path with setup-uv's actual cache directory.
 
 ---
 

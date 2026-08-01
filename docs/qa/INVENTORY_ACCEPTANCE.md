@@ -1,8 +1,6 @@
 # Inventory Engine -- Acceptance Criteria
 
-This document defines the exact acceptance criteria for the Fonely inventory
-and order management system. Every criterion listed here must be covered by at
-least one automated test (unit, integration, or end-to-end).
+This document defines the exact acceptance criteria for the future Fonely inventory and order engine. Phase C is not implemented or authorized; existing inventory/order tables are foundation schema, not proof of transactional behavior. Every criterion listed here must be covered by at least one automated test (unit, PostgreSQL integration, or end-to-end) before inventory/order functionality is pilot-enabled.
 
 ---
 

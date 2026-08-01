@@ -15,6 +15,8 @@ class StrictCommand(BaseModel):
 class ActorContext(StrictCommand):
     """Verified caller context constructed by the application, never an LLM."""
 
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
     business_id: Annotated[int, Field(gt=0)]
     normalized_phone: E164PhoneNumber
     verified_role: CallerRole
@@ -59,7 +61,7 @@ class BeginCommitCommand(StrictCommand):
 
 class CompleteCommitCommand(StrictCommand):
     context: CommitResultContext
-    committed_entity_type: Literal["order", "appointment", "inventory_update"]
+    committed_entity_type: Literal["order", "appointment", "appointment_commit", "inventory_update"]
     committed_entity_id: Annotated[int, Field(gt=0)]
 
 

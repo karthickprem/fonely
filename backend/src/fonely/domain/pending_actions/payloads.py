@@ -1,10 +1,21 @@
 """Strict, versioned PendingAction payload envelopes."""
 
+from datetime import timedelta
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from fonely.core.validators import AwareDatetime, E164PhoneNumber, ISODate, Quantity
+from fonely.core.validators import (
+    AwareDatetime,
+    E164PhoneNumber,
+    IANATimezone,
+    INRAmount,
+    ISODate,
+    PositiveIntegerId,
+    PositiveIntegerVersion,
+    Quantity,
+)
+from fonely.domain.appointments.datetimes import add_elapsed, instant, validate_business_local
 from fonely.domain.pending_actions.errors import UnsupportedPayloadSchemaError
 from fonely.models.enums import PendingActionType
 
@@ -13,6 +24,10 @@ PAYLOAD_SCHEMA_VERSION = 1
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
+
+
+class FrozenStrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
 
 
 class PendingOrderLine(StrictModel):
@@ -44,6 +59,107 @@ class OwnerStockUpdateData(StrictModel):
     note: Annotated[str | None, Field(default=None, max_length=500)]
 
 
+class AppointmentFacts(FrozenStrictModel):
+    service_id: PositiveIntegerId
+    service_name: Annotated[str, Field(min_length=1, max_length=200)]
+    resource_id: PositiveIntegerId
+    resource_name: Annotated[str, Field(min_length=1, max_length=200)]
+    start_at: AwareDatetime
+    end_at: AwareDatetime
+    effective_start_at: AwareDatetime
+    effective_end_at: AwareDatetime
+    duration_minutes: Annotated[int, Field(gt=0, le=720)]
+    buffer_before_minutes: Annotated[int, Field(ge=0, le=240)] = 0
+    buffer_after_minutes: Annotated[int, Field(ge=0, le=240)] = 0
+    price: INRAmount | None = None
+    business_timezone: IANATimezone
+
+    @model_validator(mode="after")
+    def validate_derived_bounds(self) -> "AppointmentFacts":
+        for label, value in (
+            ("Appointment start", self.start_at),
+            ("Appointment end", self.end_at),
+            ("Effective start", self.effective_start_at),
+            ("Effective end", self.effective_end_at),
+        ):
+            validate_business_local(value, self.business_timezone, label=label)
+        expected_end = add_elapsed(self.start_at, timedelta(minutes=self.duration_minutes))
+        expected_effective_start = add_elapsed(
+            self.start_at, -timedelta(minutes=self.buffer_before_minutes)
+        )
+        expected_effective_end = add_elapsed(
+            expected_end, timedelta(minutes=self.buffer_after_minutes)
+        )
+        if instant(self.end_at) != instant(expected_end):
+            raise ValueError("Appointment end does not match duration")
+        if instant(self.effective_start_at) != instant(expected_effective_start):
+            raise ValueError("Effective start does not match before buffer")
+        if instant(self.effective_end_at) != instant(expected_effective_end):
+            raise ValueError("Effective end does not match after buffer")
+        return self
+
+
+class CreateAppointmentData(FrozenStrictModel):
+    operation: Literal["create"] = "create"
+    facts: AppointmentFacts
+    customer_name: Annotated[str | None, Field(default=None, max_length=200)]
+    customer_phone: E164PhoneNumber
+    reason: Annotated[str | None, Field(default=None, max_length=500)]
+    call_id: Annotated[PositiveIntegerId | None, Field(default=None)]
+
+
+class CancelAppointmentData(FrozenStrictModel):
+    operation: Literal["cancel"] = "cancel"
+    target_appointment_id: PositiveIntegerId
+    target_expected_version: PositiveIntegerVersion
+    current_facts: AppointmentFacts
+    reason_code: Annotated[str | None, Field(default=None, pattern=r"^[a-z][a-z0-9_]{1,49}$")]
+
+
+class RescheduleAppointmentData(FrozenStrictModel):
+    operation: Literal["reschedule"] = "reschedule"
+    target_appointment_id: PositiveIntegerId
+    target_expected_version: PositiveIntegerVersion
+    old_facts: AppointmentFacts
+    new_facts: AppointmentFacts
+
+    _SCHEDULING_FIELDS = (
+        "service_id",
+        "resource_id",
+        "start_at",
+        "end_at",
+        "effective_start_at",
+        "effective_end_at",
+        "duration_minutes",
+        "buffer_before_minutes",
+        "buffer_after_minutes",
+    )
+    _INSTANT_FIELDS = frozenset(("start_at", "end_at", "effective_start_at", "effective_end_at"))
+
+    @model_validator(mode="after")
+    def reject_no_op(self) -> "RescheduleAppointmentData":
+        old_d = self.old_facts.model_dump(mode="python")
+        new_d = self.new_facts.model_dump(mode="python")
+        for field in self._SCHEDULING_FIELDS:
+            old_v = instant(old_d[field]) if field in self._INSTANT_FIELDS else old_d[field]
+            new_v = instant(new_d[field]) if field in self._INSTANT_FIELDS else new_d[field]
+            if old_v != new_v:
+                return self
+        raise ValueError("Reschedule must change at least one scheduling fact")
+
+
+AppointmentOperationData = Annotated[
+    CreateAppointmentData | CancelAppointmentData | RescheduleAppointmentData,
+    Field(discriminator="operation"),
+]
+
+
+class PendingAppointmentEnvelope(FrozenStrictModel):
+    schema_version: Literal[1] = 1
+    action_type: Literal[PendingActionType.APPOINTMENT] = PendingActionType.APPOINTMENT
+    data: AppointmentOperationData
+
+
 class PendingOrderEnvelope(StrictModel):
     schema_version: Literal[1] = 1
     action_type: Literal[PendingActionType.ORDER] = PendingActionType.ORDER
@@ -58,13 +174,15 @@ class OwnerStockUpdateEnvelope(StrictModel):
     data: OwnerStockUpdateData
 
 
-type PayloadEnvelope = PendingOrderEnvelope | OwnerStockUpdateEnvelope
+type PayloadEnvelope = PendingOrderEnvelope | PendingAppointmentEnvelope | OwnerStockUpdateEnvelope
 type PayloadEnvelopeAdapter = Annotated[PayloadEnvelope, Field(discriminator="action_type")]
 
 _PAYLOAD_REGISTRY: dict[
-    tuple[PendingActionType, int], type[PendingOrderEnvelope] | type[OwnerStockUpdateEnvelope]
+    tuple[PendingActionType, int],
+    type[PendingOrderEnvelope] | type[PendingAppointmentEnvelope] | type[OwnerStockUpdateEnvelope],
 ] = {
     (PendingActionType.ORDER, PAYLOAD_SCHEMA_VERSION): PendingOrderEnvelope,
+    (PendingActionType.APPOINTMENT, PAYLOAD_SCHEMA_VERSION): PendingAppointmentEnvelope,
     (
         PendingActionType.OWNER_STOCK_UPDATE,
         PAYLOAD_SCHEMA_VERSION,

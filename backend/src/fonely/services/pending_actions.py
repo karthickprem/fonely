@@ -1,12 +1,16 @@
 """Application service for the deterministic PendingAction lifecycle."""
 
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fonely.core.validators import utcnow
+from fonely.domain.appointments.validation import AppointmentValidationPort
 from fonely.domain.pending_actions.commands import (
+    ActorContext,
     BeginCommitCommand,
     BulkExpirePendingActionsCommand,
     CancelPendingActionCommand,
@@ -35,6 +39,7 @@ from fonely.domain.pending_actions.errors import (
 from fonely.domain.pending_actions.payloads import (
     OwnerStockUpdateEnvelope,
     PayloadEnvelope,
+    PendingAppointmentEnvelope,
     PendingOrderEnvelope,
     validate_payload,
 )
@@ -51,6 +56,7 @@ from fonely.domain.pending_actions.transitions import (
 from fonely.models.enums import PendingActionStatus, PendingActionType
 from fonely.models.schema import (
     Appointment,
+    AppointmentCommit,
     Business,
     InventoryMovement,
     Order,
@@ -65,11 +71,12 @@ from fonely.services.authorization import (
 
 MAX_EXPIRY_HORIZON = timedelta(hours=24)
 
-_COMMIT_POLICY: dict[
-    PendingActionType, tuple[str, str, type[Order] | type[Appointment] | type[InventoryMovement]]
-] = {
+type CommitEntityModel = (
+    type[Order] | type[Appointment] | type[AppointmentCommit] | type[InventoryMovement]
+)
+
+_COMMIT_POLICY: dict[PendingActionType, tuple[str, str, CommitEntityModel]] = {
     PendingActionType.ORDER: ("order_engine", "order", Order),
-    PendingActionType.APPOINTMENT: ("appointment_engine", "appointment", Appointment),
     PendingActionType.OWNER_STOCK_UPDATE: (
         "inventory_engine",
         "inventory_update",
@@ -89,38 +96,51 @@ _SAFE_COMMIT_MESSAGES: dict[str, str] = {
 class PendingActionService:
     """Orchestrates PendingAction domain rules within a caller-owned transaction."""
 
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        appointment_validation: AppointmentValidationPort | None = None,
+    ) -> None:
         self._session = session
         self._repo = PendingActionRepository(session)
+        self._appointment_validation = appointment_validation
 
     async def create(self, command: CreatePendingActionCommand) -> PendingActionResult:
         await self._require_business(command.actor.business_id)
         await require_action_permission(self._session, command.actor, command.action_type)
-        payload = validate_payload(
+        proposed_payload = validate_payload(
             command.action_type,
             command.payload_schema_version,
             command.payload,
         )
-        digest = payload_digest(payload)
         existing = await self._repo.get_by_idempotency_key(
             command.actor.business_id,
             command.idempotency_key,
         )
         if existing is not None:
+            stored_payload = self._validated_stored_payload(existing)
+            await self._validate_idempotent_retry(
+                command.actor,
+                proposed_payload,
+                stored_payload,
+            )
             self._assert_idempotent_equivalence(
                 existing,
                 action_type=command.action_type,
                 schema_version=command.payload_schema_version,
-                digest=digest,
+                digest=payload_digest(stored_payload),
                 expires_at=command.expires_at,
                 session_id=command.actor.session_id,
             )
             await self._validate_stored_payload_ownership(
                 command.actor.business_id,
-                self._validated_stored_payload(existing),
+                stored_payload,
             )
             return self._to_result(existing)
 
+        payload = await self._validate_actor_appointment_payload(command.actor, proposed_payload)
+        digest = payload_digest(payload)
         self._validate_expiry(command.expires_at, utcnow())
         await self._validate_new_payload_products(command.actor.business_id, payload)
         create_values = {
@@ -154,11 +174,17 @@ class PendingActionService:
             raise PendingActionConcurrencyError(
                 "Conflicting pending action was not visible after insert"
             )
+        stored_payload = self._validated_stored_payload(existing)
+        await self._validate_idempotent_retry(
+            command.actor,
+            proposed_payload,
+            stored_payload,
+        )
         self._assert_idempotent_equivalence(
             existing,
             action_type=command.action_type,
             schema_version=command.payload_schema_version,
-            digest=digest,
+            digest=payload_digest(stored_payload),
             expires_at=command.expires_at,
             session_id=command.actor.session_id,
         )
@@ -179,10 +205,12 @@ class PendingActionService:
         if action is None:
             return None
         await require_existing_action_permission(self._session, query.actor, action)
-        await self._validate_stored_payload_ownership(
-            query.actor.business_id,
+        payload = await self._validate_actor_appointment_payload(
+            query.actor,
             self._validated_stored_payload(action),
         )
+        self._assert_authoritative_payload_unchanged(action, payload)
+        await self._validate_stored_payload_ownership(query.actor.business_id, payload)
         return self._to_result(action)
 
     async def internal_get(self, query: InternalGetPendingActionQuery) -> PendingActionResult:
@@ -200,14 +228,19 @@ class PendingActionService:
         )
         if action is None:
             return None
-        await self._validate_stored_payload_ownership(
+        payload = await self._validate_stored_appointment_payload(
             query.business_id,
             self._validated_stored_payload(action),
         )
+        self._assert_authoritative_payload_unchanged(action, payload)
+        await self._validate_stored_payload_ownership(query.business_id, payload)
         return self._to_result(action)
 
     async def revise(self, command: RevisePendingActionCommand) -> PendingActionResult:
-        action = await self._require_action(command.actor.business_id, command.action_id)
+        action = await self._require_action_without_appointment_revalidation(
+            command.actor.business_id,
+            command.action_id,
+        )
         await require_existing_action_permission(self._session, command.actor, action)
         assert_revision_allowed(PendingActionStatus(action.status))
         action_type = PendingActionType(action.action_type)
@@ -216,6 +249,7 @@ class PendingActionService:
             command.payload_schema_version,
             command.payload,
         )
+        payload = await self._validate_actor_appointment_payload(command.actor, payload)
         await self._validate_new_payload_products(command.actor.business_id, payload)
         updated = await self._repo.conditional_update(
             business_id=command.actor.business_id,
@@ -259,6 +293,11 @@ class PendingActionService:
             PendingActionStatus.AWAITING_CONFIRMATION,
         )
         payload = self._validated_stored_payload(action)
+        payload = await self._validate_actor_appointment_payload(command.actor, payload)
+        if payload_digest(payload) != action.payload_digest:
+            raise PendingActionIdempotencyConflictError(
+                "Authoritative appointment facts changed; revise the proposal"
+            )
         await self._validate_new_payload_products(command.actor.business_id, payload)
         updated = await self._repo.conditional_update(
             business_id=command.actor.business_id,
@@ -285,13 +324,18 @@ class PendingActionService:
         context = command.context
         action = await self._require_action(context.business_id, context.pending_action_id)
         self._assert_trusted_engine(action, context)
-        await self._validate_new_payload_products(
+        payload = await self._validate_stored_appointment_payload(
             context.business_id,
             self._validated_stored_payload(action),
         )
+        if payload_digest(payload) != action.payload_digest:
+            raise PendingActionIdempotencyConflictError(
+                "Authoritative appointment facts changed; revise the proposal"
+            )
+        await self._validate_new_payload_products(context.business_id, payload)
         now = utcnow()
         self._assert_not_expired(action, now)
-        if not action.confirmation_snapshot:
+        if action.confirmation_snapshot != confirmation_snapshot(payload):
             raise InvalidStateTransitionError(
                 PendingActionStatus(action.status),
                 PendingActionStatus.COMMITTING,
@@ -325,16 +369,14 @@ class PendingActionService:
 
     async def complete_commit(self, command: CompleteCommitCommand) -> PendingActionResult:
         context = command.context
-        action = await self._require_action(context.business_id, context.pending_action_id)
+        action = await self._require_action_without_appointment_revalidation(
+            context.business_id,
+            context.pending_action_id,
+        )
+        payload = self._validated_stored_payload(action)
         expected_entity_type, entity_model = self._assert_trusted_engine(action, context)
         if command.committed_entity_type != expected_entity_type:
             raise TrustedCommitContextError("Committed entity type does not match action type")
-        await self._require_committed_entity(
-            entity_model,
-            context.business_id,
-            command.committed_entity_id,
-            context.pending_action_id,
-        )
         if action.status == PendingActionStatus.CONFIRMED.value:
             if (
                 action.committed_entity_type == command.committed_entity_type
@@ -342,6 +384,18 @@ class PendingActionService:
             ):
                 return self._to_result(action)
             raise CommitEntityConflictError("Action already confirmed with a different entity")
+        await self._require_committed_entity(
+            entity_model,
+            context.business_id,
+            command.committed_entity_id,
+            context.pending_action_id,
+        )
+        await self._validate_completion_evidence(
+            context.business_id,
+            payload,
+            command.committed_entity_type,
+            command.committed_entity_id,
+        )
         assert_transition_allowed(
             PendingActionStatus(action.status),
             PendingActionStatus.CONFIRMED,
@@ -363,18 +417,22 @@ class PendingActionService:
             },
         )
         return self._to_result(
-            await self._resolve_update(
+            await self._resolve_complete_commit(
                 updated,
                 context.business_id,
                 action,
                 context.expected_version,
-                PendingActionStatus.CONFIRMED,
+                command.committed_entity_type,
+                command.committed_entity_id,
             )
         )
 
     async def fail_commit(self, command: FailCommitCommand) -> PendingActionResult:
         context = command.context
-        action = await self._require_action(context.business_id, context.pending_action_id)
+        action = await self._require_action_without_appointment_revalidation(
+            context.business_id,
+            context.pending_action_id,
+        )
         self._assert_trusted_engine(action, context)
         requested = (
             PendingActionStatus.AWAITING_CONFIRMATION
@@ -405,7 +463,10 @@ class PendingActionService:
         )
 
     async def reject(self, command: RejectPendingActionCommand) -> PendingActionResult:
-        action = await self._require_action(command.actor.business_id, command.action_id)
+        action = await self._require_action_without_appointment_revalidation(
+            command.actor.business_id,
+            command.action_id,
+        )
         await require_existing_action_permission(self._session, command.actor, action)
         assert_transition_allowed(
             PendingActionStatus(action.status),
@@ -432,7 +493,10 @@ class PendingActionService:
         )
 
     async def cancel(self, command: CancelPendingActionCommand) -> PendingActionResult:
-        action = await self._require_action(command.actor.business_id, command.action_id)
+        action = await self._require_action_without_appointment_revalidation(
+            command.actor.business_id,
+            command.action_id,
+        )
         await require_existing_action_permission(self._session, command.actor, action)
         if action.status == PendingActionStatus.CANCELLED.value:
             return self._to_result(action)
@@ -458,7 +522,10 @@ class PendingActionService:
         )
 
     async def expire(self, command: ExpirePendingActionCommand) -> PendingActionResult:
-        action = await self._require_action(command.business_id, command.action_id)
+        action = await self._require_action_without_appointment_revalidation(
+            command.business_id,
+            command.action_id,
+        )
         if action.status == PendingActionStatus.EXPIRED.value:
             return self._to_result(action)
         if action.expires_at > command.now:
@@ -497,6 +564,22 @@ class PendingActionService:
             raise PendingActionNotFoundError("Business not found")
 
     async def _require_action(self, business_id: int, action_id: int) -> PendingAction:
+        action = await self._require_action_without_appointment_revalidation(business_id, action_id)
+        if action.status in ("confirmed", "rejected", "cancelled", "expired"):
+            return action
+        payload = await self._validate_stored_appointment_payload(
+            business_id,
+            self._validated_stored_payload(action),
+        )
+        self._assert_authoritative_payload_unchanged(action, payload)
+        await self._validate_stored_payload_ownership(business_id, payload)
+        return action
+
+    async def _require_action_without_appointment_revalidation(
+        self,
+        business_id: int,
+        action_id: int,
+    ) -> PendingAction:
         action = await self._repo.get_by_id(business_id, action_id)
         if action is None:
             raise PendingActionNotFoundError("Pending action not found")
@@ -550,9 +633,18 @@ class PendingActionService:
         self,
         action: PendingAction,
         context: CommitResultContext,
-    ) -> tuple[str, type[Order] | type[Appointment] | type[InventoryMovement]]:
+    ) -> tuple[str, CommitEntityModel]:
         action_type = PendingActionType(action.action_type)
-        policy = _COMMIT_POLICY.get(action_type)
+        policy: tuple[str, str, CommitEntityModel] | None
+        if action_type == PendingActionType.APPOINTMENT:
+            payload = self._validated_stored_payload(action)
+            assert isinstance(payload, PendingAppointmentEnvelope)
+            if payload.data.operation == "create":
+                policy = ("appointment_engine", "appointment", Appointment)
+            else:
+                policy = ("appointment_engine", "appointment_commit", AppointmentCommit)
+        else:
+            policy = _COMMIT_POLICY.get(action_type)
         if policy is None:
             raise TrustedCommitContextError("No commit engine is implemented for this action type")
         expected_engine, entity_type, entity_model = policy
@@ -562,7 +654,7 @@ class PendingActionService:
 
     async def _require_committed_entity(
         self,
-        entity_model: type[Order] | type[Appointment] | type[InventoryMovement],
+        entity_model: CommitEntityModel,
         business_id: int,
         entity_id: int,
         pending_action_id: int,
@@ -574,6 +666,112 @@ class PendingActionService:
         )
         if await self._session.scalar(statement) is None:
             raise TrustedCommitContextError("Committed entity was not found")
+
+    async def _validate_actor_appointment_payload(
+        self,
+        actor: ActorContext,
+        payload: PayloadEnvelope,
+    ) -> PayloadEnvelope:
+        if not isinstance(payload, PendingAppointmentEnvelope):
+            return payload
+        if self._appointment_validation is None:
+            raise TrustedCommitContextError("Appointment validation port is not configured")
+        validated = await self._appointment_validation.validate_for_actor(actor, payload)
+        reconstructed = self._revalidate_appointment_envelope(validated)
+        return self._assert_authoritative_appointment_payload(actor.business_id, reconstructed)
+
+    async def _validate_stored_appointment_payload(
+        self,
+        business_id: int,
+        payload: PayloadEnvelope,
+    ) -> PayloadEnvelope:
+        if not isinstance(payload, PendingAppointmentEnvelope):
+            return payload
+        if self._appointment_validation is None:
+            raise TrustedCommitContextError("Appointment validation port is not configured")
+        validated = await self._appointment_validation.validate_stored(business_id, payload)
+        reconstructed = self._revalidate_appointment_envelope(validated)
+        return self._assert_authoritative_appointment_payload(business_id, reconstructed)
+
+    @staticmethod
+    def _revalidate_appointment_envelope(
+        payload: object,
+    ) -> PendingAppointmentEnvelope:
+        try:
+            raw_payload = getattr(payload, "__dict__", None)
+            if isinstance(raw_payload, Mapping):
+                candidate = dict(raw_payload)
+            elif isinstance(payload, Mapping):
+                candidate = dict(payload)
+            else:
+                raise TypeError("Appointment validation port returned an invalid payload")
+            return PendingAppointmentEnvelope.model_validate(candidate)
+        except (TypeError, ValidationError) as error:
+            raise TrustedCommitContextError(
+                "Appointment validation port returned an invalid payload"
+            ) from error
+
+    async def _validate_idempotent_retry(
+        self,
+        actor: ActorContext,
+        proposed: PayloadEnvelope,
+        stored: PayloadEnvelope,
+    ) -> None:
+        if not isinstance(stored, PendingAppointmentEnvelope):
+            if payload_digest(proposed) != payload_digest(stored):
+                raise PendingActionIdempotencyConflictError(
+                    "Idempotency key already used for a different action"
+                )
+            return
+        if not isinstance(proposed, PendingAppointmentEnvelope):
+            raise PendingActionIdempotencyConflictError(
+                "Idempotency key already used for a different action"
+            )
+        if self._appointment_validation is None:
+            raise TrustedCommitContextError("Appointment validation port is not configured")
+        validated_proposed = self._revalidate_appointment_envelope(proposed)
+        validated_stored = self._revalidate_appointment_envelope(stored)
+        await self._appointment_validation.validate_idempotent_retry(
+            actor, validated_proposed, validated_stored
+        )
+
+    async def _validate_completion_evidence(
+        self,
+        business_id: int,
+        payload: PayloadEnvelope,
+        entity_type: str,
+        entity_id: int,
+    ) -> None:
+        if not isinstance(payload, PendingAppointmentEnvelope):
+            return
+        if self._appointment_validation is None:
+            raise TrustedCommitContextError("Appointment validation port is not configured")
+        validated = self._revalidate_appointment_envelope(payload)
+        await self._appointment_validation.validate_completion_evidence(
+            business_id,
+            validated,
+            entity_type,
+            entity_id,
+        )
+
+    @staticmethod
+    def _assert_authoritative_appointment_payload(
+        business_id: int,
+        payload: PendingAppointmentEnvelope,
+    ) -> PendingAppointmentEnvelope:
+        if business_id <= 0 or payload.action_type != PendingActionType.APPOINTMENT:
+            raise TrustedCommitContextError("Invalid authoritative appointment payload")
+        return payload
+
+    @staticmethod
+    def _assert_authoritative_payload_unchanged(
+        action: PendingAction,
+        payload: PayloadEnvelope,
+    ) -> None:
+        if payload_digest(payload) != action.payload_digest:
+            raise PendingActionIdempotencyConflictError(
+                "Authoritative appointment facts changed; revise the proposal"
+            )
 
     def _validated_stored_payload(self, action: PendingAction) -> PayloadEnvelope:
         action_type = PendingActionType(action.action_type)
@@ -621,6 +819,34 @@ class PendingActionService:
     def _assert_not_expired(action: PendingAction, now: datetime) -> None:
         if action.expires_at <= now:
             raise PendingActionExpiredError("Pending action has expired")
+
+    async def _resolve_complete_commit(
+        self,
+        updated: PendingAction | None,
+        business_id: int,
+        prior: PendingAction,
+        expected_version: int,
+        committed_entity_type: str,
+        committed_entity_id: int,
+    ) -> PendingAction:
+        if updated is not None:
+            return updated
+        current = await self._repo.get_by_id(business_id, prior.id)
+        if current is None:
+            raise PendingActionNotFoundError("Pending action not found")
+        if current.status == PendingActionStatus.CONFIRMED.value:
+            if (
+                current.committed_entity_type == committed_entity_type
+                and current.committed_entity_id == committed_entity_id
+            ):
+                return current
+            raise CommitEntityConflictError("Action already confirmed with a different entity")
+        if current.version != expected_version:
+            raise PendingActionConcurrencyError("Pending action version is stale")
+        raise InvalidStateTransitionError(
+            PendingActionStatus(current.status),
+            PendingActionStatus.CONFIRMED,
+        )
 
     async def _resolve_update(
         self,

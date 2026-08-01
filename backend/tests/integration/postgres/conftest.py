@@ -103,19 +103,35 @@ def pg_session_factory(
 @pytest_asyncio.fixture(autouse=True, loop_scope="session")
 async def clean_database(
     pg_engine: AsyncEngine,
+    postgres_database_url: str,
 ) -> AsyncGenerator[None, None]:
-    yield
-    async with pg_engine.begin() as connection:
-        await connection.execute(
-            text(
-                "TRUNCATE TABLE owner_audit_log, appointments, inventory_movements, "
-                "inventory_reservations, order_line_items, orders, inventory_balances, "
-                "calls, pending_actions, resources, services, products, "
-                "schedule_exceptions, operating_schedules, business_users, "
-                "business_locales, business_capabilities, businesses "
-                "RESTART IDENTITY CASCADE"
-            )
+    try:
+        yield
+    finally:
+        # Migration tests can fail while parked on an older revision. Restore the
+        # full table set first so cleanup itself never masks the original failure.
+        env = os.environ.copy()
+        env["DATABASE_URL"] = postgres_database_url
+        subprocess.run(
+            [str(BACKEND_ROOT / ".venv" / "bin" / "alembic"), "upgrade", "head"],
+            cwd=BACKEND_ROOT,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
         )
+        async with pg_engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "TRUNCATE TABLE owner_audit_log, appointment_commits, resource_allocations, "
+                    "appointments, service_resource_eligibility, inventory_movements, "
+                    "inventory_reservations, order_line_items, orders, inventory_balances, "
+                    "calls, pending_actions, resources, services, products, "
+                    "schedule_exceptions, operating_schedules, business_users, "
+                    "business_locales, business_capabilities, businesses "
+                    "RESTART IDENTITY CASCADE"
+                )
+            )
 
 
 @pytest_asyncio.fixture(loop_scope="session")

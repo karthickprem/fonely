@@ -18,7 +18,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Annotated
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import AfterValidator, BeforeValidator
+from pydantic import AfterValidator, BeforeValidator, Field
 
 # --- Phone ---
 
@@ -56,6 +56,13 @@ IndianMobileNumber = Annotated[str, AfterValidator(_validate_indian_mobile)]
 E164PhoneNumber = Annotated[str, AfterValidator(_validate_e164)]
 
 
+# --- PostgreSQL INTEGER identities and revisions ---
+
+POSTGRES_INTEGER_MAX = 2_147_483_647
+PositiveIntegerId = Annotated[int, Field(gt=0, le=POSTGRES_INTEGER_MAX)]
+PositiveIntegerVersion = Annotated[int, Field(gt=0, le=POSTGRES_INTEGER_MAX)]
+
+
 # --- Locale ---
 
 SUPPORTED_FONELY_LOCALES = frozenset(
@@ -91,6 +98,9 @@ FonelyLocale = Annotated[str, AfterValidator(_validate_fonely_locale)]
 
 
 def _validate_iana_timezone(v: str) -> str:
+    if v in {"Factory", "localtime", "posixrules"} or v.startswith(("posix/", "right/")):
+        msg = f"Invalid timezone: {v}"
+        raise ValueError(msg)
     try:
         ZoneInfo(v)
     except (ZoneInfoNotFoundError, KeyError) as exc:
@@ -217,7 +227,7 @@ def _parse_iso_datetime(v: object) -> datetime:
 
 
 def _validate_aware_datetime(v: datetime) -> datetime:
-    if v.tzinfo is None:
+    if v.tzinfo is None or v.utcoffset() is None:
         msg = "Datetime must be timezone-aware"
         raise ValueError(msg)
     return v

@@ -13,13 +13,42 @@ from fonely.services.pending_actions import PendingActionService
 
 
 def action(action_type: PendingActionType) -> PendingAction:
+    proposed_payload: dict[str, object] = {}
+    digest = "0" * 64
+    if action_type == PendingActionType.APPOINTMENT:
+        from fonely.domain.pending_actions.payloads import validate_payload
+        from fonely.domain.pending_actions.snapshots import canonical_payload_dict, payload_digest
+
+        proposed_payload = {
+            "schema_version": 1,
+            "action_type": "appointment",
+            "data": {
+                "operation": "create",
+                "facts": {
+                    "service_id": 1,
+                    "service_name": "Haircut",
+                    "resource_id": 1,
+                    "resource_name": "Priya",
+                    "start_at": "2026-08-02T10:00:00Z",
+                    "end_at": "2026-08-02T10:30:00Z",
+                    "effective_start_at": "2026-08-02T10:00:00Z",
+                    "effective_end_at": "2026-08-02T10:30:00Z",
+                    "duration_minutes": 30,
+                    "business_timezone": "Asia/Kolkata",
+                },
+                "customer_phone": "+919123456789",
+            },
+        }
+        validated = validate_payload(action_type, 1, proposed_payload)
+        proposed_payload = canonical_payload_dict(validated)
+        digest = payload_digest(validated)
     return PendingAction(
         id=10,
         business_id=1,
         action_type=action_type.value,
         payload_schema_version=1,
-        proposed_payload={},
-        payload_digest="0" * 64,
+        proposed_payload=proposed_payload,
+        payload_digest=digest,
         expires_at=datetime(2026, 8, 1, 10, 0, tzinfo=UTC),
         idempotency_key="key",
         version=1,

@@ -1,6 +1,6 @@
 """Tests for domain validators — phones, locales, timezones, decimals, money."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 from decimal import Decimal
 
 import pytest
@@ -204,6 +204,13 @@ class TestIANATimezone:
         with pytest.raises(ValidationError):
             TzModel(tz="")
 
+    @pytest.mark.parametrize(
+        "timezone_key", ["localtime", "Factory", "posixrules", "posix/UTC", "right/UTC"]
+    )
+    def test_reject_unstable_special_keys(self, timezone_key: str) -> None:
+        with pytest.raises(ValidationError, match="Invalid timezone"):
+            TzModel(tz=timezone_key)
+
 
 # === INRAmount ===
 
@@ -322,6 +329,17 @@ class TestPositiveDecimal:
 # === AwareDatetime ===
 
 
+class IneffectiveTimezone(tzinfo):
+    def utcoffset(self, dt: datetime | None) -> None:
+        return None
+
+    def dst(self, dt: datetime | None) -> None:
+        return None
+
+    def tzname(self, dt: datetime | None) -> str:
+        return "Ineffective"
+
+
 class TestAwareDatetime:
     def test_valid_utc(self) -> None:
         dt = datetime(2026, 1, 1, tzinfo=UTC)
@@ -331,6 +349,10 @@ class TestAwareDatetime:
     def test_reject_naive(self) -> None:
         with pytest.raises(ValidationError):
             DtModel(ts=datetime(2026, 1, 1))
+
+    def test_reject_tzinfo_without_utc_offset(self) -> None:
+        with pytest.raises(ValidationError, match="timezone-aware"):
+            DtModel(ts=datetime(2026, 1, 1, tzinfo=IneffectiveTimezone()))
 
 
 # === quantize_inr ===

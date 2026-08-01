@@ -8,6 +8,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
+from fonely.domain.appointments.datetimes import require_aware
 from fonely.domain.pending_actions.payloads import PayloadEnvelope
 
 
@@ -30,8 +31,7 @@ def _canonical_value(value: Any) -> Any:
         normalized = value.normalize()
         return format(normalized, "f")
     if isinstance(value, datetime):
-        if value.tzinfo is None:
-            raise ValueError("Cannot canonicalize naive datetime")
+        require_aware(value, label="Canonical datetime")
         return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
     if isinstance(value, date):
         return value.isoformat()
@@ -71,10 +71,48 @@ def idempotency_matches(
 
 def confirmation_snapshot(payload: PayloadEnvelope) -> str:
     canonical = canonical_payload_dict(payload)
+    facts = canonical["data"]
+    if str(payload.action_type) == "appointment":
+        operation = facts["operation"]
+        if operation == "create":
+            appointment_facts = facts["facts"]
+        elif operation == "cancel":
+            appointment_facts = facts["current_facts"]
+        else:
+            appointment_facts = facts["new_facts"]
+        facts = {
+            "operation": operation,
+            "service_id": appointment_facts["service_id"],
+            "service_name": appointment_facts["service_name"],
+            "resource_id": appointment_facts["resource_id"],
+            "resource_name": appointment_facts["resource_name"],
+            "start_at": appointment_facts["start_at"],
+            "end_at": appointment_facts["end_at"],
+            "duration_minutes": appointment_facts["duration_minutes"],
+            "price": appointment_facts["price"],
+            "business_timezone": appointment_facts["business_timezone"],
+        }
+        if operation in {"cancel", "reschedule"}:
+            facts["target_appointment_id"] = canonical["data"]["target_appointment_id"]
+        if operation == "cancel":
+            facts["reason_code"] = canonical["data"]["reason_code"]
+        elif operation == "reschedule":
+            old_facts = canonical["data"]["old_facts"]
+            facts["old_facts"] = {
+                "service_id": old_facts["service_id"],
+                "service_name": old_facts["service_name"],
+                "resource_id": old_facts["resource_id"],
+                "resource_name": old_facts["resource_name"],
+                "start_at": old_facts["start_at"],
+                "end_at": old_facts["end_at"],
+                "duration_minutes": old_facts["duration_minutes"],
+                "price": old_facts["price"],
+                "business_timezone": old_facts["business_timezone"],
+            }
     snapshot = ConfirmationSnapshot(
         schema_version=payload.schema_version,
         action_type=str(payload.action_type),
-        facts=canonical["data"],
+        facts=facts,
     )
     return json.dumps(
         _canonical_value(snapshot),

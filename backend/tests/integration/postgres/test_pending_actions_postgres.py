@@ -221,9 +221,150 @@ async def test_0002_migrates_populated_0001_database(
     assert nullable == "NO"
 
 
-async def test_migrations_through_0003_are_applied(pg_session: AsyncSession) -> None:
+async def test_migrations_through_0004_are_applied(pg_session: AsyncSession) -> None:
     revision = await pg_session.scalar(text("SELECT version_num FROM alembic_version"))
-    assert revision == "0003"
+    assert revision == "0004"
+
+
+@pytest.mark.parametrize(
+    ("column", "valid", "low", "high"),
+    [
+        ("appointment_booking_horizon_days", 90, 0, 366),
+        ("appointment_minimum_notice_minutes", 0, -1, 10081),
+        ("appointment_slot_interval_minutes", 15, 4, 121),
+    ],
+)
+async def test_appointment_policy_bounds_are_enforced(
+    pg_session: AsyncSession,
+    column: str,
+    valid: int,
+    low: int,
+    high: int,
+) -> None:
+    await _seed_business(pg_session, 1)
+    await pg_session.execute(
+        text(f"UPDATE businesses SET {column} = :value WHERE id = 1"), {"value": valid}
+    )
+    for invalid in (low, high):
+        with pytest.raises(IntegrityError):
+            await pg_session.execute(
+                text(f"UPDATE businesses SET {column} = :value WHERE id = 1"),
+                {"value": invalid},
+            )
+        await pg_session.rollback()
+        await _seed_business(pg_session, 1)
+
+
+async def _seed_appointment_catalog(session: AsyncSession) -> None:
+    await _seed_business(session, 1)
+    await session.execute(
+        text(
+            "INSERT INTO services (id, business_id, name, duration_minutes, price, is_active) "
+            "VALUES (1, 1, 'Haircut', 30, 500.00, true)"
+        )
+    )
+    await session.execute(
+        text(
+            "INSERT INTO resources (id, business_id, name, resource_type, is_active) "
+            "VALUES (1, 1, 'Priya', 'staff', true)"
+        )
+    )
+
+
+async def _insert_confirmed_appointment(
+    session: AsyncSession,
+    appointment_id: int = 1,
+    *,
+    status: str = "confirmed",
+) -> None:
+    start = datetime(2026, 8, 3, 10, tzinfo=utcnow().tzinfo)
+    end = start + timedelta(minutes=30)
+    await session.execute(
+        text(
+            "INSERT INTO appointments "
+            "(id, business_id, resource_id, service_id, customer_phone, start_at, end_at, "
+            "effective_start_at, effective_end_at, service_name_snapshot, "
+            "resource_name_snapshot, duration_minutes_snapshot, "
+            "buffer_before_minutes_snapshot, buffer_after_minutes_snapshot, "
+            "business_timezone_snapshot, status, cancelled_at, source, "
+            "idempotency_key, version, created_at, updated_at) "
+            "VALUES (:id, 1, 1, 1, '+919123456789', :start, :end, :start, :end, "
+            "'Haircut', 'Priya', 30, 0, 0, 'Asia/Kolkata', :status, "
+            "CASE WHEN :status = 'cancelled' THEN now() ELSE NULL END, "
+            "'owner_manual', :key, 1, now(), now())"
+        ),
+        {
+            "id": appointment_id,
+            "start": start,
+            "end": end,
+            "status": status,
+            "key": f"appt-{appointment_id}",
+        },
+    )
+
+
+async def test_confirmed_appointment_requires_allocation_at_deferred_boundary(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with pg_session_factory() as session:
+        await _seed_appointment_catalog(session)
+        await _insert_confirmed_appointment(session)
+        with pytest.raises(IntegrityError) as error:
+            await session.commit()
+        assert getattr(error.value.orig, "sqlstate", None) == "23514"
+        assert (
+            getattr(error.value.orig, "constraint_name", None)
+            == "ck_confirmed_appointment_active_allocation"
+        )
+
+
+async def test_same_transaction_confirmed_appointment_and_matching_allocation_succeeds(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with pg_session_factory() as session:
+        await _seed_appointment_catalog(session)
+        await _insert_confirmed_appointment(session)
+        appointment = (
+            await session.execute(
+                text("SELECT effective_start_at, effective_end_at FROM appointments WHERE id = 1")
+            )
+        ).one()
+        await session.execute(
+            text(
+                "INSERT INTO resource_allocations "
+                "(business_id, resource_id, appointment_id, allocation_type, status, source, "
+                "effective_start_at, effective_end_at, idempotency_key, version) "
+                "VALUES (1, 1, 1, 'manual_appointment', 'active', 'owner_manual', "
+                ":start, :end, 'allocation-1', 1)"
+            ),
+            {"start": appointment.effective_start_at, "end": appointment.effective_end_at},
+        )
+        await session.commit()
+
+
+async def test_cancelled_appointment_does_not_require_active_allocation(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with pg_session_factory() as session:
+        await _seed_appointment_catalog(session)
+        await _insert_confirmed_appointment(session, status="cancelled")
+        await session.commit()
+
+
+@pytest.mark.parametrize("status", ["completed", "no_show"])
+async def test_terminal_appointment_without_allocation_is_rejected(
+    pg_session_factory: async_sessionmaker[AsyncSession], status: str
+) -> None:
+    async with pg_session_factory() as session:
+        await _seed_appointment_catalog(session)
+        await _insert_confirmed_appointment(session)
+        await session.execute(
+            text("UPDATE appointments SET status = :status, version = version + 1 WHERE id = 1"),
+            {"status": status},
+        )
+        with pytest.raises(IntegrityError):
+            await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        await session.rollback()
 
 
 async def test_same_business_equivalent_create_returns_one_action(pg_session: AsyncSession) -> None:
@@ -438,7 +579,7 @@ async def test_session_fixture_keeps_database_at_current_head(
 ) -> None:
     """Session fixture keeps the database at the current head during tests."""
     revision = await pg_session.scalar(text("SELECT version_num FROM alembic_version"))
-    assert revision == "0003"
+    assert revision == "0004"
 
 
 async def test_retry_after_idempotency_is_tenant_scoped(pg_session: AsyncSession) -> None:

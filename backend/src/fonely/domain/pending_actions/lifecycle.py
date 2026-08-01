@@ -3,6 +3,7 @@
 from dataclasses import dataclass, replace
 from datetime import datetime
 
+from fonely.domain.appointments.datetimes import instant, require_aware
 from fonely.domain.pending_actions.errors import PendingActionExpiredError
 from fonely.domain.pending_actions.transitions import (
     assert_revision_allowed,
@@ -25,9 +26,14 @@ class PendingActionState:
     commit_error_message: str | None = None
     rejection_reason_code: str | None = None
 
+    def __post_init__(self) -> None:
+        require_aware(self.expires_at, label="Pending action expiry")
+        if self.confirmed_at is not None:
+            require_aware(self.confirmed_at, label="Confirmation timestamp")
+
 
 def assert_not_expired(state: PendingActionState, now: datetime) -> None:
-    if state.expires_at <= now:
+    if instant(state.expires_at) <= instant(now):
         raise PendingActionExpiredError("Pending action has expired")
 
 
@@ -123,7 +129,7 @@ def fail_commit_state(
 def expire_state(state: PendingActionState, now: datetime) -> PendingActionState:
     if state.status == PendingActionStatus.EXPIRED:
         return state
-    if state.expires_at > now:
+    if instant(state.expires_at) > instant(now):
         raise PendingActionExpiredError("Action has not reached its expiry time")
     assert_transition_allowed(state.status, PendingActionStatus.EXPIRED)
     return replace(

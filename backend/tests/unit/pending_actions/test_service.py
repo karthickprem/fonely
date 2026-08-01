@@ -208,8 +208,9 @@ async def test_mark_awaiting_generates_internal_snapshot(service_factory: Any) -
 
 
 async def test_begin_commit_uses_expected_version_and_state(service_factory: Any) -> None:
+    snapshot = confirmation_snapshot(validate_payload(PendingActionType.ORDER, 1, payload()))
     service, repo = service_factory(
-        action(PendingActionStatus.AWAITING_CONFIRMATION, snapshot="snapshot")
+        action(PendingActionStatus.AWAITING_CONFIRMATION, snapshot=snapshot)
     )
     with patch("fonely.services.pending_actions.utcnow", return_value=NOW):
         result = await service.begin_commit(BeginCommitCommand(context=commit_context()))
@@ -220,7 +221,8 @@ async def test_begin_commit_uses_expected_version_and_state(service_factory: Any
 
 
 async def test_stale_version_raises_concurrency_error(service_factory: Any) -> None:
-    current = action(PendingActionStatus.AWAITING_CONFIRMATION, version=2, snapshot="snapshot")
+    snapshot = confirmation_snapshot(validate_payload(PendingActionType.ORDER, 1, payload()))
+    current = action(PendingActionStatus.AWAITING_CONFIRMATION, version=2, snapshot=snapshot)
     service, _ = service_factory(current)
     with (
         patch("fonely.services.pending_actions.utcnow", return_value=NOW),
@@ -234,15 +236,69 @@ async def test_complete_commit_idempotent_same_entity(service_factory: Any) -> N
     current.committed_entity_type = "order"
     current.committed_entity_id = 88
     service, _ = service_factory(current)
+    entity_lookup = AsyncMock(side_effect=AssertionError("confirmed retry revalidated entity"))
+    with patch.object(service, "_require_committed_entity", new=entity_lookup):
+        result = await service.complete_commit(
+            CompleteCommitCommand(
+                context=commit_context(version=4),
+                committed_entity_type="order",
+                committed_entity_id=88,
+            )
+        )
+    assert result.status == PendingActionStatus.CONFIRMED
+    assert result.committed_entity_id == 88
+    entity_lookup.assert_not_awaited()
+
+
+async def test_complete_commit_failed_cas_resolves_same_confirmed_entity(
+    service_factory: Any,
+) -> None:
+    current = action(PendingActionStatus.COMMITTING, snapshot="snapshot")
+    service, repo = service_factory(current)
+
+    async def lose_to_identical_completion(**kwargs: Any) -> None:
+        current.status = PendingActionStatus.CONFIRMED.value
+        current.committed_entity_type = "order"
+        current.committed_entity_id = 88
+        current.version += 1
+        return None
+
+    repo.conditional_update = lose_to_identical_completion
     result = await service.complete_commit(
         CompleteCommitCommand(
-            context=commit_context(version=4),
+            context=commit_context(),
             committed_entity_type="order",
             committed_entity_id=88,
         )
     )
+
     assert result.status == PendingActionStatus.CONFIRMED
     assert result.committed_entity_id == 88
+    assert result.version == 2
+
+
+async def test_complete_commit_failed_cas_conflicts_different_confirmed_entity(
+    service_factory: Any,
+) -> None:
+    current = action(PendingActionStatus.COMMITTING, snapshot="snapshot")
+    service, repo = service_factory(current)
+
+    async def lose_to_different_completion(**kwargs: Any) -> None:
+        current.status = PendingActionStatus.CONFIRMED.value
+        current.committed_entity_type = "order"
+        current.committed_entity_id = 89
+        current.version += 1
+        return None
+
+    repo.conditional_update = lose_to_different_completion
+    with pytest.raises(CommitEntityConflictError):
+        await service.complete_commit(
+            CompleteCommitCommand(
+                context=commit_context(),
+                committed_entity_type="order",
+                committed_entity_id=88,
+            )
+        )
 
 
 async def test_complete_commit_conflicts_different_entity(service_factory: Any) -> None:
@@ -250,7 +306,11 @@ async def test_complete_commit_conflicts_different_entity(service_factory: Any) 
     current.committed_entity_type = "order"
     current.committed_entity_id = 88
     service, _ = service_factory(current)
-    with pytest.raises(CommitEntityConflictError):
+    entity_lookup = AsyncMock(side_effect=AssertionError("confirmed retry revalidated entity"))
+    with (
+        patch.object(service, "_require_committed_entity", new=entity_lookup),
+        pytest.raises(CommitEntityConflictError),
+    ):
         await service.complete_commit(
             CompleteCommitCommand(
                 context=commit_context(version=4),
@@ -258,6 +318,7 @@ async def test_complete_commit_conflicts_different_entity(service_factory: Any) 
                 committed_entity_id=89,
             )
         )
+    entity_lookup.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

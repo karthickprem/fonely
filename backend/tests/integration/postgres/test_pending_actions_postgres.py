@@ -433,11 +433,12 @@ async def test_transaction_rollback_leaves_no_partial_action(pg_session: AsyncSe
     assert count == 0
 
 
-async def test_migration_downgrade_contract_is_owned_by_session_fixture(
+async def test_session_fixture_keeps_database_at_current_head(
     pg_session: AsyncSession,
 ) -> None:
-    """Session fixture downgrades to base after all PostgreSQL tests."""
-    assert await pg_session.scalar(text("SELECT version_num FROM alembic_version")) == "0002"
+    """Session fixture keeps the database at the current head during tests."""
+    revision = await pg_session.scalar(text("SELECT version_num FROM alembic_version"))
+    assert revision == "0003"
 
 
 async def test_retry_after_idempotency_is_tenant_scoped(pg_session: AsyncSession) -> None:

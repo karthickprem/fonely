@@ -1,0 +1,29 @@
+{
+  "old_unique_labels": 168,
+  "old_non_null_turns": 317,
+  "canonical_unique_labels_used": 21,
+  "canonical_counts": {
+    "appointment_cancel": 3,
+    "appointment_confirm": 11,
+    "appointment_create": 16,
+    "appointment_reschedule": 2,
+    "authorization_denied": 28,
+    "availability_query": 57,
+    "business_information_query": 19,
+    "clarification_request": 16,
+    "escalation_request": 14,
+    "internal_system_event": 10,
+    "inventory_query": 16,
+    "order_cancel": 4,
+    "order_confirm": 15,
+    "order_create": 33,
+    "order_revise": 5,
+    "price_update_propose": 1,
+    "provider_recovery": 5,
+    "response_presented": 32,
+    "runtime_recovery": 14,
+    "stock_update_propose": 9,
+    "validation_rejected": 7
+  },
+  "alias_count": 168
+}

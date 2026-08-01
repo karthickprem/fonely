@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fonely.dev/evals/schema/tool-contract.schema.json",
+  "title": "Fonely tool-contract registry schema",
+  "type": "object",
+  "required": [
+    "contract_version",
+    "public_tools",
+    "internal_operations",
+    "outcomes",
+    "write_policies"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "$id": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "contract_version": {
+      "const": 1
+    },
+    "public_tools": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/tool"
+      }
+    },
+    "internal_operations": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "$ref": "#/$defs/internalOperation"
+      }
+    },
+    "outcomes": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "write_policies": {
+      "type": "object",
+      "required": [
+        "none",
+        "pending_only",
+        "commit"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "none": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pending_only": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commit": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "$defs": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object"
+      }
+    }
+  },
+  "$defs": {
+    "tool": {
+      "type": "object",
+      "required": [
+        "description",
+        "arguments",
+        "allowed_outcomes",
+        "allowed_write_policies"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "arguments": {
+          "type": "object"
+        },
+        "allowed_outcomes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          }
+        },
+        "allowed_write_policies": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "none",
+              "pending_only",
+              "commit"
+            ]
+          }
+        }
+      }
+    },
+    "internalOperation": {
+      "type": "object",
+      "required": [
+        "description",
+        "llm_callable"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "llm_callable": {
+          "const": false
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fonely.dev/evals/schema/intent-contract.schema.json",
+  "title": "Fonely intent contract registry schema",
+  "type": "object",
+  "required": ["contract_version", "intents", "aliases"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {"type": "string"},
+    "$id": {"type": "string"},
+    "title": {"type": "string"},
+    "description": {"type": "string"},
+    "contract_version": {"const": 1},
+    "intents": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["description", "scoring"],
+        "additionalProperties": false,
+        "properties": {
+          "description": {"type": "string", "minLength": 1},
+          "scoring": {"const": "exact"}
+        }
+      }
+    },
+    "aliases": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    }
+  }
+}

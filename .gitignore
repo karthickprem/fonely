@@ -1,0 +1,44 @@
+# Secrets
+**/.env
+**/.env.*
+!**/.env.example
+
+# Python
+**/.venv/
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/*.egg-info/
+**/.coverage
+**/htmlcov/
+
+# JavaScript
+**/node_modules/
+**/dist/
+
+# Local data and generated outputs
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+**/*.log
+**/test_output/
+**/voice_samples/
+**/demo_audio/
+**/evals/results/
+**/*.wav
+**/*.mp3
+**/*.raw
+**/*.pcm
+
+# Secrets and keys
+**/*.pem
+**/*.key
+**/id_ed25519*
+**/.ssh/
+
+# Editors and OS
+.DS_Store
+.vscode/
+.idea/

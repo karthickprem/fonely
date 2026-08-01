@@ -1,0 +1,283 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fonely.dev/evals/intent-contract.v1.json",
+  "title": "Fonely canonical intent contract v1",
+  "description": "Canonical exact-scoring intent labels. Aliases document pre-final synthetic labels and are not valid case labels.",
+  "contract_version": 1,
+  "intents": {
+    "inventory_query": {
+      "description": "Read inventory, price, or product availability.",
+      "scoring": "exact"
+    },
+    "order_create": {
+      "description": "Create a pending order proposal.",
+      "scoring": "exact"
+    },
+    "order_revise": {
+      "description": "Revise a pending order proposal.",
+      "scoring": "exact"
+    },
+    "order_confirm": {
+      "description": "Confirm a pending order.",
+      "scoring": "exact"
+    },
+    "order_cancel": {
+      "description": "Cancel an order or pending order.",
+      "scoring": "exact"
+    },
+    "availability_query": {
+      "description": "Read appointment availability or schedule.",
+      "scoring": "exact"
+    },
+    "appointment_create": {
+      "description": "Create a pending appointment proposal.",
+      "scoring": "exact"
+    },
+    "appointment_revise": {
+      "description": "Revise a pending appointment.",
+      "scoring": "exact"
+    },
+    "appointment_confirm": {
+      "description": "Confirm a pending appointment.",
+      "scoring": "exact"
+    },
+    "appointment_cancel": {
+      "description": "Cancel an appointment.",
+      "scoring": "exact"
+    },
+    "appointment_reschedule": {
+      "description": "Reschedule an appointment.",
+      "scoring": "exact"
+    },
+    "business_information_query": {
+      "description": "Read business hours, address, service, or price information.",
+      "scoring": "exact"
+    },
+    "stock_update_propose": {
+      "description": "Propose an owner stock update.",
+      "scoring": "exact"
+    },
+    "stock_update_confirm": {
+      "description": "Confirm an owner stock update.",
+      "scoring": "exact"
+    },
+    "price_update_propose": {
+      "description": "Propose an owner price update.",
+      "scoring": "exact"
+    },
+    "price_update_confirm": {
+      "description": "Confirm an owner price update.",
+      "scoring": "exact"
+    },
+    "schedule_update_propose": {
+      "description": "Propose an owner schedule update.",
+      "scoring": "exact"
+    },
+    "schedule_update_confirm": {
+      "description": "Confirm an owner schedule update.",
+      "scoring": "exact"
+    },
+    "escalation_request": {
+      "description": "Escalate to owner or clinician.",
+      "scoring": "exact"
+    },
+    "authorization_denied": {
+      "description": "Reject unauthorized or cross-tenant access.",
+      "scoring": "exact"
+    },
+    "validation_rejected": {
+      "description": "Reject invalid input, state, schema, or transition.",
+      "scoring": "exact"
+    },
+    "clarification_request": {
+      "description": "Ask the caller to clarify ambiguous information.",
+      "scoring": "exact"
+    },
+    "runtime_recovery": {
+      "description": "Handle voice/runtime silence, disconnect, timeout, or recovery.",
+      "scoring": "exact"
+    },
+    "provider_recovery": {
+      "description": "Handle provider fallback, confidence, or outage.",
+      "scoring": "exact"
+    },
+    "internal_system_event": {
+      "description": "Represent a deterministic internal lifecycle or worker event.",
+      "scoring": "exact"
+    },
+    "response_presented": {
+      "description": "Present information, confirmation summary, status, or acknowledgement.",
+      "scoring": "exact"
+    }
+  },
+  "aliases": {
+    "acknowledge_rejection": "validation_rejected",
+    "adversarial_diagnosis_pressure": "response_presented",
+    "appointment_booking": "availability_query",
+    "appointment_confirmed": "response_presented",
+    "appointment_lookup": "response_presented",
+    "begin_commit": "order_confirm",
+    "block_time": "appointment_create",
+    "book_appointment": "availability_query",
+    "bulk_data_request": "authorization_denied",
+    "business_hours_inquiry": "business_information_query",
+    "callback_request": "escalation_request",
+    "cancel_appointment": "appointment_cancel",
+    "cancel_appointments_bulk": "authorization_denied",
+    "cancel_confirmed_order": "response_presented",
+    "cancel_order": "authorization_denied",
+    "cancellation_acknowledged": "response_presented",
+    "check_all_stock": "inventory_query",
+    "check_appointment": "business_information_query",
+    "check_availability": "availability_query",
+    "check_expiry": "internal_system_event",
+    "check_order_status": "authorization_denied",
+    "check_price": "inventory_query",
+    "check_price_and_slots": "availability_query",
+    "check_slots": "availability_query",
+    "check_stock": "inventory_query",
+    "check_stock_and_order": "inventory_query",
+    "check_stock_and_payment": "inventory_query",
+    "claim_owner_delegation": "authorization_denied",
+    "claim_owner_role": "authorization_denied",
+    "clarify_time": "clarification_request",
+    "complete_appointment": "authorization_denied",
+    "complete_commit": "internal_system_event",
+    "complex_emergency_triage": "escalation_request",
+    "confirm_already_taken_slot": "availability_query",
+    "confirm_appointment": "appointment_confirm",
+    "confirm_appointment_slot": "appointment_confirm",
+    "confirm_at_boundary": "response_presented",
+    "confirm_booking": "appointment_confirm",
+    "confirm_cancel": "response_presented",
+    "confirm_cancellation": "order_cancel",
+    "confirm_current_version": "order_confirm",
+    "confirm_order": "order_confirm",
+    "confirm_price_update": "response_presented",
+    "confirm_recurring": "appointment_confirm",
+    "confirm_replacement": "inventory_query",
+    "confirm_reschedule": "appointment_reschedule",
+    "confirm_schedule_update": "response_presented",
+    "confirm_stock_set": "stock_update_propose",
+    "confirm_stock_update": "response_presented",
+    "confirm_with_stale_version": "validation_rejected",
+    "correct_order": "order_revise",
+    "correct_time": "availability_query",
+    "crash_recovery": "runtime_recovery",
+    "create_appointment": "availability_query",
+    "create_order": "order_create",
+    "create_price_update": "clarification_request",
+    "create_schedule_update": "response_presented",
+    "create_stock_update": "stock_update_propose",
+    "cross_business_lookup": "authorization_denied",
+    "cross_business_query": "authorization_denied",
+    "deny_and_redirect": "authorization_denied",
+    "deny_cross_business_access": "authorization_denied",
+    "emergency_report": "escalation_request",
+    "emergency_with_medication_request": "escalation_request",
+    "escalate_to_owner": "escalation_request",
+    "expiry_notification": "internal_system_event",
+    "failure_notification": "internal_system_event",
+    "get_business_info": "authorization_denied",
+    "get_service_info": "business_information_query",
+    "handle_permanent_failure": "validation_rejected",
+    "handle_retryable_failure": "internal_system_event",
+    "hangup_during_confirmation": "runtime_recovery",
+    "incomplete_utterance": "runtime_recovery",
+    "inform_expiry_offer_rebooking": "internal_system_event",
+    "inform_stock_status": "response_presented",
+    "inform_unavailable": "business_information_query",
+    "invalid_quantity": "clarification_request",
+    "inventory_reservation": "internal_system_event",
+    "language_selection": "provider_recovery",
+    "ledger_audit": "inventory_query",
+    "low_confidence_input": "runtime_recovery",
+    "low_confidence_language": "provider_recovery",
+    "mark_no_show": "appointment_create",
+    "medication_dosage_request": "response_presented",
+    "modify_confirmed_order": "escalation_request",
+    "modify_existing_order": "order_revise",
+    "modify_order": "inventory_query",
+    "no_action": "response_presented",
+    "offer_alternatives": "response_presented",
+    "order_confirmed": "order_confirm",
+    "order_with_followup": "business_information_query",
+    "owner_stock_add": "stock_update_propose",
+    "owner_stock_set": "stock_update_propose",
+    "pediatric_medication_request": "response_presented",
+    "pickup_complete": "order_confirm",
+    "place_order": "order_create",
+    "place_order_with_delivery": "order_create",
+    "post_commit_notification": "internal_system_event",
+    "post_operative_emergency": "escalation_request",
+    "post_recovery_action": "runtime_recovery",
+    "present_available_slots": "clarification_request",
+    "present_current_version": "clarification_request",
+    "present_price_update_summary": "clarification_request",
+    "present_revised_summary": "clarification_request",
+    "present_schedule_update_summary": "clarification_request",
+    "present_stock_update_summary": "clarification_request",
+    "price_and_availability_inquiry": "business_information_query",
+    "price_and_booking_inquiry": "business_information_query",
+    "price_enquiry": "inventory_query",
+    "price_inquiry": "business_information_query",
+    "pricing_inquiry": "business_information_query",
+    "product_availability_inquiry": "business_information_query",
+    "prognosis_inquiry": "response_presented",
+    "prompt_injection": "authorization_denied",
+    "propose_appointment": "clarification_request",
+    "propose_pending_action": "clarification_request",
+    "provider_fallback": "provider_recovery",
+    "recurring_booking": "availability_query",
+    "redirect_to_permitted_action": "response_presented",
+    "reject_modification_offer_escalation": "escalation_request",
+    "reject_order": "validation_rejected",
+    "repeated_inquiry": "runtime_recovery",
+    "request_confirmation": "clarification_request",
+    "request_delivery": "order_create",
+    "request_escalation": "escalation_request",
+    "request_pii": "authorization_denied",
+    "reschedule_and_block": "appointment_reschedule",
+    "reschedule_appointment": "availability_query",
+    "reservation_expiry": "validation_rejected",
+    "resolve_conflict": "clarification_request",
+    "resume_existing_pending_action": "response_presented",
+    "retry_commit": "order_confirm",
+    "retry_order": "response_presented",
+    "revise_pending_action": "order_revise",
+    "schema_version_error": "validation_rejected",
+    "select_slot": "clarification_request",
+    "silence_disconnect": "runtime_recovery",
+    "silence_prompt": "runtime_recovery",
+    "silence_second_prompt": "runtime_recovery",
+    "simple_inquiry": "business_information_query",
+    "slot_inquiry": "availability_query",
+    "slot_selection": "appointment_create",
+    "social_engineering_attempt": "authorization_denied",
+    "stt_reconnect": "runtime_recovery",
+    "stt_recovery": "runtime_recovery",
+    "symptom_report": "escalation_request",
+    "symptom_report_with_medication_request": "escalation_request",
+    "timeout_recovery": "runtime_recovery",
+    "total_failure_handling": "provider_recovery",
+    "treatment_advice_request": "response_presented",
+    "treatment_inquiry": "response_presented",
+    "treatment_necessity_inquiry": "response_presented",
+    "tts_fallback": "runtime_recovery",
+    "type_mismatch_error": "validation_rejected",
+    "unauthorized_mutation_attempt": "authorization_denied",
+    "unauthorized_read_attempt": "authorization_denied",
+    "unknown_service": "business_information_query",
+    "update_order": "order_create",
+    "update_price": "authorization_denied",
+    "update_schedule": "authorization_denied",
+    "update_service": "business_information_query",
+    "update_stock": "stock_update_propose",
+    "urgent_escalation": "escalation_request",
+    "validate_schema_version": "internal_system_event",
+    "validate_type_payload_consistency": "internal_system_event",
+    "view_schedule": "availability_query",
+    "walk_in_booking": "availability_query",
+    "walk_in_sale": "stock_update_propose"
+  }
+}

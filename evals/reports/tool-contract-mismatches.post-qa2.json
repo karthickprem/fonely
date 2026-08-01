@@ -1,0 +1,12 @@
+{
+  "report_version": 1,
+  "phase": "qa2_validation",
+  "total_cases": 211,
+  "total_turns": 377,
+  "failing_turns": 0,
+  "individual_mismatches": 0,
+  "by_category": {},
+  "by_tool": {},
+  "by_validator": {},
+  "mismatches": []
+}

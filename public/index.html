@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Fonely — AI Receptionist Demo</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background: #0a0a0a;
+  color: #fff;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.header {
+  text-align: center;
+  padding: 20px 16px 10px;
+}
+.header h1 {
+  font-size: 24px;
+  font-weight: 700;
+  background: linear-gradient(135deg, #6366f1, #a78bfa);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.header p {
+  color: #888;
+  font-size: 13px;
+  margin-top: 4px;
+}
+.business-card {
+  margin: 10px 16px;
+  padding: 14px 18px;
+  background: #1a1a2e;
+  border-radius: 14px;
+  border: 1px solid #2a2a4a;
+}
+.business-card h2 {
+  font-size: 16px;
+  color: #a78bfa;
+}
+.business-card p {
+  font-size: 12px;
+  color: #777;
+  margin-top: 4px;
+}
+.chat {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.msg {
+  max-width: 85%;
+  padding: 10px 14px;
+  border-radius: 16px;
+  font-size: 14px;
+  line-height: 1.4;
+  animation: fadeIn 0.3s ease;
+}
+.msg.ai {
+  background: #1e1e3a;
+  border: 1px solid #333;
+  align-self: flex-start;
+  border-bottom-left-radius: 4px;
+}
+.msg.user {
+  background: #6366f1;
+  align-self: flex-end;
+  border-bottom-right-radius: 4px;
+}
+.msg.status {
+  align-self: center;
+  background: none;
+  color: #666;
+  font-size: 12px;
+  padding: 4px;
+}
+.controls {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  background: #111;
+  border-top: 1px solid #222;
+}
+.mic-btn {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  border: 3px solid #6366f1;
+  background: #1a1a2e;
+  color: #6366f1;
+  font-size: 28px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  -webkit-tap-highlight-color: transparent;
+}
+.mic-btn:active, .mic-btn.recording {
+  background: #6366f1;
+  color: #fff;
+  transform: scale(1.1);
+}
+.mic-btn.recording {
+  animation: pulse 1.5s infinite;
+  border-color: #ef4444;
+  background: #ef4444;
+}
+.mic-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.hint {
+  color: #555;
+  font-size: 12px;
+}
+.text-input-row {
+  display: flex;
+  width: 100%;
+  gap: 8px;
+}
+.text-input-row input {
+  flex: 1;
+  padding: 12px 16px;
+  border-radius: 24px;
+  border: 1px solid #333;
+  background: #1a1a2e;
+  color: #fff;
+  font-size: 14px;
+  outline: none;
+}
+.text-input-row input:focus {
+  border-color: #6366f1;
+}
+.text-input-row button {
+  padding: 12px 18px;
+  border-radius: 24px;
+  border: none;
+  background: #6366f1;
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
+}
+.text-input-row button:disabled {
+  opacity: 0.3;
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+  50% { box-shadow: 0 0 0 16px rgba(239, 68, 68, 0); }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Fonely</h1>
+  <p>AI Receptionist Demo</p>
+</div>
+
+<div class="business-card">
+  <h2>Dr. Priya's Dental Clinic</h2>
+  <p>42 Anna Nagar, Chennai | Mon-Sat 10am-1pm, 5pm-8pm</p>
+</div>
+
+<div class="chat" id="chat"></div>
+
+<div class="controls">
+  <div class="text-input-row">
+    <input type="text" id="textInput" placeholder="Or type here in any language..." disabled>
+    <button id="sendBtn" disabled>➤</button>
+  </div>
+  <button class="mic-btn" id="micBtn" disabled>🎤</button>
+  <div class="hint" id="hint">Connecting...</div>
+</div>
+
+<script>
+const chat = document.getElementById('chat');
+const micBtn = document.getElementById('micBtn');
+const hint = document.getElementById('hint');
+
+let ws;
+let mediaRecorder;
+let audioChunks = [];
+let isRecording = false;
+let audioContext;
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(`${proto}//${location.host}/demo-ws`);
+
+  ws.onopen = () => {
+    hint.textContent = 'Hold mic to speak, or type below';
+    micBtn.disabled = false;
+    textInput.disabled = false;
+    sendBtn.disabled = false;
+    ws.send(JSON.stringify({ type: 'greeting' }));
+  };
+
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+
+    if (msg.type === 'transcript') {
+      addMessage(msg.text, msg.role === 'user' ? 'user' : 'ai');
+    }
+
+    if (msg.type === 'status') {
+      addMessage(msg.text, 'status');
+    }
+
+    if (msg.type === 'audio') {
+      playAudio(msg.audio, msg.sampleRate || 8000);
+    }
+
+    if (msg.type === 'audio_chunk') {
+      queueAudioChunk(msg.audio, msg.sampleRate || 8000);
+    }
+
+    if (msg.type === 'audio_done') {
+      flushAudioQueue();
+    }
+
+    if (msg.type === 'error') {
+      addMessage('Error: ' + msg.text, 'status');
+      micBtn.disabled = false;
+      textInput.disabled = false;
+      sendBtn.disabled = false;
+      hint.textContent = 'Hold mic to speak, or type below';
+    }
+  };
+
+  ws.onclose = () => {
+    hint.textContent = 'Disconnected. Refreshing...';
+    setTimeout(connect, 2000);
+  };
+}
+
+function addMessage(text, role) {
+  // Remove previous status messages
+  if (role === 'status') {
+    document.querySelectorAll('.msg.status').forEach(el => el.remove());
+  }
+  const div = document.createElement('div');
+  div.className = `msg ${role}`;
+  div.textContent = text;
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+// --- Recording ---
+
+async function startRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+    audioChunks = [];
+
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunks.push(e.data);
+    };
+
+    mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(audioChunks, { type: 'audio/webm' });
+      const base64 = await blobToBase64(blob);
+      micBtn.disabled = true;
+      hint.textContent = 'Processing...';
+      ws.send(JSON.stringify({ type: 'audio', audio: base64, mimeType: 'audio/webm' }));
+    };
+
+    mediaRecorder.start();
+    isRecording = true;
+    micBtn.classList.add('recording');
+    hint.textContent = 'Listening... Release to send';
+  } catch (err) {
+    hint.textContent = 'Mic permission denied';
+  }
+}
+
+function stopRecording() {
+  if (mediaRecorder && isRecording) {
+    mediaRecorder.stop();
+    isRecording = false;
+    micBtn.classList.remove('recording');
+  }
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result.split(',')[1]);
+    reader.readAsDataURL(blob);
+  });
+}
+
+// --- Streaming Playback ---
+
+let streamBuffer = [];
+let isPlaying = false;
+
+function queueAudioChunk(base64, sampleRate) {
+  if (!audioContext) {
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  streamBuffer.push({ base64, sampleRate });
+  if (!isPlaying) playNextChunk();
+}
+
+function playNextChunk() {
+  if (streamBuffer.length === 0) {
+    isPlaying = false;
+    return;
+  }
+  isPlaying = true;
+  const { base64, sampleRate } = streamBuffer.shift();
+  const float32 = decodeBase64PCM(base64);
+  const buffer = audioContext.createBuffer(1, float32.length, sampleRate);
+  buffer.getChannelData(0).set(float32);
+  const source = audioContext.createBufferSource();
+  source.buffer = buffer;
+  source.connect(audioContext.destination);
+  source.onended = () => playNextChunk();
+  source.start();
+  document.querySelectorAll('.msg.status').forEach(el => el.remove());
+}
+
+function flushAudioQueue() {
+  // After all chunks received, re-enable input when playback finishes
+  const checkDone = setInterval(() => {
+    if (!isPlaying && streamBuffer.length === 0) {
+      clearInterval(checkDone);
+      micBtn.disabled = false;
+      textInput.disabled = false;
+      sendBtn.disabled = false;
+      hint.textContent = 'Hold mic to speak, or type below';
+    }
+  }, 200);
+}
+
+function decodeBase64PCM(base64) {
+  const raw = atob(base64);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+  const samples = bytes.length / 2;
+  const float32 = new Float32Array(samples);
+  const view = new DataView(bytes.buffer);
+  for (let i = 0; i < samples; i++) {
+    float32[i] = view.getInt16(i * 2, true) / 32768;
+  }
+  return float32;
+}
+
+// --- Full Audio Playback (fallback) ---
+
+function playAudio(base64, sampleRate) {
+  if (!audioContext) {
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  }
+
+  const raw = atob(base64);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
+
+  // PCM 16-bit signed LE to float32
+  const samples = bytes.length / 2;
+  const float32 = new Float32Array(samples);
+  const view = new DataView(bytes.buffer);
+  for (let i = 0; i < samples; i++) {
+    float32[i] = view.getInt16(i * 2, true) / 32768;
+  }
+
+  const buffer = audioContext.createBuffer(1, float32.length, sampleRate);
+  buffer.getChannelData(0).set(float32);
+
+  const source = audioContext.createBufferSource();
+  source.buffer = buffer;
+  source.connect(audioContext.destination);
+  source.onended = () => {
+    micBtn.disabled = false;
+    hint.textContent = 'Tap and hold to speak';
+  };
+  source.start();
+
+  document.querySelectorAll('.msg.status').forEach(el => el.remove());
+}
+
+// --- Touch/Mouse Events ---
+
+micBtn.addEventListener('mousedown', (e) => { e.preventDefault(); startRecording(); });
+micBtn.addEventListener('mouseup', (e) => { e.preventDefault(); stopRecording(); });
+micBtn.addEventListener('mouseleave', (e) => { if (isRecording) stopRecording(); });
+
+micBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startRecording(); });
+micBtn.addEventListener('touchend', (e) => { e.preventDefault(); stopRecording(); });
+micBtn.addEventListener('touchcancel', (e) => { if (isRecording) stopRecording(); });
+
+// Text input
+const textInput = document.getElementById('textInput');
+const sendBtn = document.getElementById('sendBtn');
+
+sendBtn.addEventListener('click', sendText);
+textInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') sendText();
+});
+
+function sendText() {
+  const text = textInput.value.trim();
+  if (!text || !ws || ws.readyState !== 1) return;
+  addMessage(text, 'user');
+  ws.send(JSON.stringify({ type: 'text', text }));
+  textInput.value = '';
+  textInput.disabled = true;
+  sendBtn.disabled = true;
+  micBtn.disabled = true;
+}
+
+connect();
+</script>
+</body>
+</html>

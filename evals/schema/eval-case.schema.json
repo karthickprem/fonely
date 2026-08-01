@@ -1,0 +1,346 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fonely.dev/evals/schema/eval-case.schema.json",
+  "title": "Fonely Evaluation Case v2",
+  "description": "Schema for a single Fonely evaluation case. Version 2 adds machine-readable outcome/error/write policies and split review provenance.",
+  "type": "object",
+  "required": [
+    "case_id",
+    "schema_version",
+    "title",
+    "domain",
+    "category",
+    "risk_level",
+    "locale",
+    "input_mode",
+    "caller_role",
+    "business_context",
+    "existing_state",
+    "turns",
+    "verification_tags",
+    "notes",
+    "language_review_status",
+    "domain_review_status",
+    "pilot_validation_status"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "case_id": {
+      "type": "string",
+      "pattern": "^[A-Z]{2,4}-\\d{3,4}$"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 2
+    },
+    "title": {
+      "type": "string"
+    },
+    "domain": {
+      "type": "string",
+      "enum": [
+        "pending_action",
+        "inventory",
+        "appointment",
+        "authorization",
+        "multilingual",
+        "medical_safety",
+        "voice_runtime",
+        "provider_routing"
+      ]
+    },
+    "category": {
+      "type": "string"
+    },
+    "risk_level": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ]
+    },
+    "locale": {
+      "type": "string",
+      "pattern": "^[a-z]{2,3}-[A-Z]{2}$"
+    },
+    "input_mode": {
+      "type": "string",
+      "enum": [
+        "text",
+        "romanized_text",
+        "native_script",
+        "voice_future"
+      ]
+    },
+    "caller_role": {
+      "type": "string",
+      "enum": [
+        "customer",
+        "owner",
+        "manager",
+        "system"
+      ]
+    },
+    "business_context": {
+      "type": "object",
+      "required": [
+        "business_type",
+        "capabilities"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "business_type": {
+          "type": "string"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "existing_state": {
+      "type": "object"
+    },
+    "turns": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "speaker",
+          "utterance",
+          "expected_intent",
+          "expected_tool",
+          "expected_tool_policy",
+          "expected_arguments",
+          "expected_outcome",
+          "expected_error_code",
+          "expected_write_policy",
+          "expected_database_effect",
+          "expected_response_constraints",
+          "forbidden_behaviors"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "speaker": {
+            "type": "string",
+            "enum": [
+              "caller",
+              "agent",
+              "system"
+            ]
+          },
+          "utterance": {
+            "type": "string"
+          },
+          "expected_intent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expected_tool": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expected_tool_policy": {
+            "type": "string",
+            "enum": [
+              "required",
+              "forbidden",
+              "optional"
+            ],
+            "description": "Whether a tool call is required, forbidden, or optional for this turn."
+          },
+          "expected_arguments": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "expected_outcome": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Machine-readable expected outcome from tool-contract.v1.json outcomes."
+          },
+          "expected_error_code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stable error code when expected_outcome is an error."
+          },
+          "expected_write_policy": {
+            "type": "string",
+            "enum": [
+              "none",
+              "pending_only",
+              "commit"
+            ],
+            "description": "Whether a database write should occur on this turn."
+          },
+          "expected_database_effect": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "operation"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "operation": {
+                    "type": "string",
+                    "enum": [
+                      "no_write",
+                      "read_only",
+                      "pending_action_created",
+                      "pending_action_revised",
+                      "pending_action_cancelled",
+                      "pending_action_expired",
+                      "temporary_hold_created",
+                      "temporary_hold_released",
+                      "order_confirmed",
+                      "order_cancelled",
+                      "order_completed",
+                      "appointment_confirmed",
+                      "appointment_cancelled",
+                      "appointment_rescheduled",
+                      "stock_update_confirmed",
+                      "price_update_confirmed",
+                      "schedule_update_confirmed",
+                      "escalation_recorded"
+                    ]
+                  },
+                  "action_id": {
+                    "type": [
+                      "string",
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "entity_id": {
+                    "type": [
+                      "string",
+                      "integer",
+                      "null"
+                    ]
+                  },
+                  "entity_type": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "status": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "expected_version": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 1
+                  },
+                  "description": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "expected_response_constraints": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "forbidden_behaviors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "verification_tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "notes": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "language_review_status": {
+      "type": "string",
+      "enum": [
+        "synthetic",
+        "native_reviewed"
+      ],
+      "description": "Whether the language/phrasing has been reviewed by a native speaker."
+    },
+    "domain_review_status": {
+      "type": "string",
+      "enum": [
+        "unreviewed",
+        "product_reviewed",
+        "clinician_reviewed"
+      ],
+      "description": "Whether the domain expectations have been reviewed by a domain expert."
+    },
+    "pilot_validation_status": {
+      "type": "string",
+      "enum": [
+        "untested",
+        "passed",
+        "failed"
+      ],
+      "description": "Whether this case has been validated against real pilot calls."
+    }
+  },
+  "$defs": {
+    "databaseEffectOperations": {
+      "enum": [
+        "no_write",
+        "read_only",
+        "pending_action_created",
+        "pending_action_revised",
+        "pending_action_cancelled",
+        "pending_action_expired",
+        "temporary_hold_created",
+        "temporary_hold_released",
+        "order_confirmed",
+        "order_cancelled",
+        "order_completed",
+        "appointment_confirmed",
+        "appointment_cancelled",
+        "appointment_rescheduled",
+        "stock_update_confirmed",
+        "price_update_confirmed",
+        "schedule_update_confirmed",
+        "escalation_recorded"
+      ]
+    }
+  }
+}

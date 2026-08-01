@@ -1,0 +1,38 @@
+# Fonely local PostgreSQL test database.
+#
+# Start:
+#   docker compose -f infra/postgres/compose.yaml up -d
+#   podman compose -f infra/postgres/compose.yaml up -d
+#
+# Stop:
+#   docker compose -f infra/postgres/compose.yaml down
+#
+# Remove volume (destroys all test data):
+#   docker compose -f infra/postgres/compose.yaml down -v
+#   podman compose -f infra/postgres/compose.yaml down -v
+#
+# Connection URL for tests:
+#   postgresql+asyncpg://fonely_test:fonely_test_local_only@localhost:55432/fonely_test
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: fonely-test-postgres
+    environment:
+      POSTGRES_DB: fonely_test
+      POSTGRES_USER: fonely_test
+      POSTGRES_PASSWORD: fonely_test_local_only
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - fonely_test_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fonely_test -d fonely_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  fonely_test_data:

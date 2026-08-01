@@ -1,0 +1,1133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fonely.dev/evals/tool-contract.v1.json",
+  "title": "Fonely lifecycle-safe public tool contract v1",
+  "description": "Canonical LLM-callable tools. Tenant identity and verified caller context are injected by the application and are never tool arguments.",
+  "contract_version": 1,
+  "public_tools": {
+    "check_inventory": {
+      "description": "Read current inventory for one, several, or all active products.",
+      "arguments": {
+        "type": "object",
+        "required": [],
+        "properties": {
+          "product_id": {
+            "$ref": "#/$defs/nullablePositiveIntegerId"
+          },
+          "product_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "product_ids": {
+            "oneOf": [
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/positiveIntegerId"
+                },
+                "minItems": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "product_names": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "business_date": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "list_all": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "allowed_outcomes": [
+        "authorization_denied",
+        "information_presented",
+        "not_found",
+        "success",
+        "unauthorized",
+        "validation_error",
+        "validation_rejected"
+      ],
+      "allowed_write_policies": [
+        "none"
+      ]
+    },
+    "create_pending_order": {
+      "description": "Create an order proposal only; no order or reservation is committed.",
+      "arguments": {
+        "type": "object",
+        "required": [
+          "lines"
+        ],
+        "properties": {
+          "lines": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "quantity",
+                "unit"
+              ],
+              "properties": {
+                "product_id": {
+                  "$ref": "#/$defs/nullablePositiveIntegerId"
+                },
+                "product_name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "quantity": {
+                  "$ref": "#/$defs/positiveDecimalString"
+                },
+                "unit": {
+                  "$ref": "#/$defs/unit"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "pickup_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "customer_note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "idempotency_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "allowed_outcomes": [
+        "authorization_denied",
+        "clarification_needed",
+        "insufficient_stock",
+        "not_found",
+        "success",
+        "unauthorized",
+        "validation_error",
+        "validation_rejected"
+      ],
+      "allowed_write_policies": [
+        "none",
+        "pending_only"
+      ]
+    },
+    "revise_pending_order": {
+      "description": "Revise an existing pending order proposal and require reconfirmation.",
+      "arguments": {
+        "type": "object",
+        "required": [
+          "action_id"
+        ],
+        "properties": {
+          "action_id": {
+            "$ref": "#/$defs/positiveIntegerId"
+          },
+          "expected_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "lines": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "object",
+              "required": [
+                "quantity",
+                "unit"
+              ],
+              "properties": {
+                "product_id": {
+                  "$ref": "#/$defs/nullablePositiveIntegerId"
+                },
+                "product_name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "quantity": {
+                  "$ref": "#/$defs/positiveDecimalString"
+                },
+                "unit": {
+                  "$ref": "#/$defs/unit"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "pickup_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "customer_note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "allowed_outcomes": [
+        "authorization_denied",
+        "expired",
+        "not_found",
+        "stale_version",
+        "success",
+        "unauthorized",
+        "validation_error",
+        "validation_rejected"
+      ],
+      "allowed_write_policies": [
+        "none",
+        "pending_only"
+      ]
+    },
+    "confirm_pending_order": {
+      "description": "Confirm a pending order proposal; deterministic order engine performs the commit.",
+      "arguments": {
+        "type": "object",
+        "required": [
+          "action_id"
+        ],
+        "properties": {
+          "action_id": {
+            "$ref": "#/$defs/positiveIntegerId"
+          },
+          "expected_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "allowed_outcomes": [
+        "authorization_denied",
+        "expired",
+        "insufficient_stock",
+        "not_found",
+        "stale_version",
+        "success",
+        "unauthorized",
+        "validation_error",
+        "validation_rejected"
+      ],
+      "allowed_write_policies": [
+        "none",
+        "commit"
+      ]
+    },
+    "cancel_pending_order": {
+      "description": "Cancel a pending or confirmed order owned by the authorized caller.",
+      "arguments": {
+        "type": "object",
+        "required": [
+          "action_id"
+        ],
+        "properties": {
+          "action_id": {
+            "$ref": "#/$defs/positiveIntegerId"
+          },
+          "expected_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "allowed_outcomes": [
+        "authorization_denied",
+        "expired",
+        "not_found",
+        "stale_version",
+        "success",
+        "unauthorized",
+        "validation_error",
+        "validation_rejected"
+      ],
+      "allowed_write_policies": [
+        "none",
+        "pending_only",
+        "commit"
+      ]
+    },
+    "check_availability": {
+      "description": "Read appointment availability for a service/date/resource preference.",
+      "arguments": {
+        "type": "object",
+        "required": [],
+        "properties": {
+          "service_id": {
+            "$ref": "#/$defs/nullablePositiveIntegerId"
+          },
+          "service_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resource_id": {
+            "$ref": "#/$defs/nullablePositiveIntegerId"
+          },
+          "resource_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "time_preference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "allowed_outcomes": [
+        "authorization_denied",
+        "clarification_needed",
+        "information_presented",
+        "not_found",
+        "success",
+        "unauthorized",
+        "validation_error",
+        "validation_rejected"
+      ],
+      "allowed_write_policies": [
+        "none"
+      ]
+    },
+    "create_pending_appointment": {
+      "description": "Create an appointment proposal or temporary hold only; no appointment is confirmed.",
+      "arguments": {
+        "type": "object",
+        "required": [],
+        "properties": {
+          "service_id": {
+            "$ref": "#/$defs/nullablePositiveIntegerId"
+          },
+          "service_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "start_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "end_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resource_id": {
+            "$ref": "#/$defs/nullablePositiveIntegerId"
+          },
+          "resource_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "allowed_outcomes": [
+        "authorization_denied",
+        "clarification_needed",
+        "escalate",
+        "not_found",
+        "slot_conflict",
+        "success",
+        "unauthorized",
+        "validation_error",
+        "validation_rejected"
+      ],
+      "allowed_write_policies": [
+        "none",
+        "pending_only"
+      ]
+    },
+    "revise_pending_appointment": {
+      "description": "Revise an existing pending appointment proposal and require reconfirmation.",
+      "arguments": {
+        "type": "object",
+        "required": [
+          "action_id"
+        ],
+        "properties": {
+          "action_id": {
+            "$ref": "#/$defs/positiveIntegerId"
+          },
+          "expected_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "service_id": {
+            "$ref": "#/$defs/nullablePositiveIntegerId"
+          },
+          "service_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "start_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "end_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resource_id": {
+            "$ref": "#/$defs/nullablePositiveIntegerId"
+          },
+          "resource_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "allowed_outcomes": [
+        "authorization_denied",
+        "expired",
+        "not_found",
+        "slot_conflict",
+        "stale_version",
+        "success",
+        "unauthorized",
+        "validation_error",
+        "validation_rejected"
+      ],
+      "allowed_write_policies": [
+        "none",
+        "pending_only"
+      ]
+    },
+    "confirm_pending_appointment": {
+      "description": "Confirm a pending appointment; deterministic appointment engine performs the commit.",
+      "arguments": {
+        "type": "object",
+        "required": [
+          "action_id"
+        ],
+        "properties": {
+          "action_id": {
+            "$ref": "#/$defs/positiveIntegerId"
+          },
+          "expected_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "allowed_outcomes": [
+        "authorization_denied",
+        "expired",
+        "not_found",
+        "slot_conflict",
+        "stale_version",
+        "success",
+        "unauthorized",
+        "validation_error",
+        "validation_rejected"
+      ],
+      "allowed_write_policies": [
+        "none",
+        "commit"
+      ]
+    },
+    "cancel_pending_appointment": {
+      "description": "Cancel an appointment proposal, hold, or confirmed appointment.",
+      "arguments": {
+        "type": "object",
+        "required": [
+          "action_id"
+        ],
+        "properties": {
+          "action_id": {
+            "$ref": "#/$defs/positiveIntegerId"
+          },
+          "expected_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "allowed_outcomes": [
+        "authorization_denied",
+        "expired",
+        "not_found",
+        "stale_version",
+        "success",
+        "unauthorized",
+        "validation_error",
+        "validation_rejected"
+      ],
+      "allowed_write_policies": [
+        "none",
+        "pending_only",
+        "commit"
+      ]
+    },
+    "reschedule_appointment": {
+      "description": "Atomically propose or commit a new appointment time while preserving the old slot on failure.",
+      "arguments": {
+        "type": "object",
+        "required": [
+          "action_id"
+        ],
+        "properties": {
+          "action_id": {
+            "$ref": "#/$defs/positiveIntegerId"
+          },
+          "expected_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "start_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "end_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resource_id": {
+            "$ref": "#/$defs/nullablePositiveIntegerId"
+          },
+          "resource_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "allowed_outcomes": [
+        "authorization_denied",
+        "expired",
+        "not_found",
+        "slot_conflict",
+        "stale_version",
+        "success",
+        "unauthorized",
+        "validation_error",
+        "validation_rejected"
+      ],
+      "allowed_write_policies": [
+        "none",
+        "pending_only",
+        "commit"
+      ]
+    },
+    "get_business_information": {
+      "description": "Read public business hours, address, services, prices, or general information.",
+      "arguments": {
+        "type": "object",
+        "required": [
+          "query_type"
+        ],
+        "properties": {
+          "query_type": {
+            "type": "string",
+            "enum": [
+              "hours",
+              "address",
+              "services",
+              "prices",
+              "general"
+            ]
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "allowed_outcomes": [
+        "information_presented",
+        "not_found",
+        "success",
+        "validation_error",
+        "validation_rejected"
+      ],
+      "allowed_write_policies": [
+        "none"
+      ]
+    },
+    "escalate_to_owner": {
+      "description": "Escalate a caller request or safety concern to the owner or clinician.",
+      "arguments": {
+        "type": "object",
+        "required": [
+          "reason",
+          "urgency"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "urgency": {
+            "type": "string",
+            "enum": [
+              "normal",
+              "urgent",
+              "emergency"
+            ]
+          },
+          "involves_child": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "allowed_outcomes": [
+        "escalate",
+        "provider_error",
+        "provider_recovered",
+        "success"
+      ],
+      "allowed_write_policies": [
+        "none"
+      ]
+    },
+    "propose_stock_update": {
+      "description": "Create a pending owner stock-update proposal.",
+      "arguments": {
+        "type": "object",
+        "required": [
+          "updates"
+        ],
+        "properties": {
+          "updates": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "operation",
+                "quantity",
+                "unit"
+              ],
+              "properties": {
+                "product_id": {
+                  "$ref": "#/$defs/nullablePositiveIntegerId"
+                },
+                "product_name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "operation": {
+                  "type": "string",
+                  "enum": [
+                    "set",
+                    "add",
+                    "subtract"
+                  ]
+                },
+                "quantity": {
+                  "$ref": "#/$defs/positiveDecimalString"
+                },
+                "unit": {
+                  "$ref": "#/$defs/unit"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "business_date": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "allowed_outcomes": [
+        "authorization_denied",
+        "not_found",
+        "success",
+        "unauthorized",
+        "validation_error",
+        "validation_rejected"
+      ],
+      "allowed_write_policies": [
+        "none",
+        "pending_only"
+      ]
+    },
+    "confirm_stock_update": {
+      "description": "Confirm a pending stock update; deterministic inventory engine commits it.",
+      "arguments": {
+        "type": "object",
+        "required": [
+          "action_id"
+        ],
+        "properties": {
+          "action_id": {
+            "$ref": "#/$defs/positiveIntegerId"
+          },
+          "expected_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "allowed_outcomes": [
+        "authorization_denied",
+        "expired",
+        "not_found",
+        "stale_version",
+        "success",
+        "unauthorized",
+        "validation_error",
+        "validation_rejected"
+      ],
+      "allowed_write_policies": [
+        "none",
+        "commit"
+      ]
+    },
+    "propose_price_update": {
+      "description": "Create a pending owner price-update proposal.",
+      "arguments": {
+        "type": "object",
+        "required": [
+          "new_price"
+        ],
+        "properties": {
+          "product_id": {
+            "$ref": "#/$defs/nullablePositiveIntegerId"
+          },
+          "product_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "new_price": {
+            "$ref": "#/$defs/positiveDecimalString"
+          },
+          "currency": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "allowed_outcomes": [
+        "authorization_denied",
+        "not_found",
+        "success",
+        "unauthorized",
+        "validation_error",
+        "validation_rejected"
+      ],
+      "allowed_write_policies": [
+        "none",
+        "pending_only"
+      ]
+    },
+    "confirm_price_update": {
+      "description": "Confirm a pending price update.",
+      "arguments": {
+        "type": "object",
+        "required": [
+          "action_id"
+        ],
+        "properties": {
+          "action_id": {
+            "$ref": "#/$defs/positiveIntegerId"
+          },
+          "expected_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "allowed_outcomes": [
+        "authorization_denied",
+        "expired",
+        "not_found",
+        "stale_version",
+        "success",
+        "unauthorized",
+        "validation_error",
+        "validation_rejected"
+      ],
+      "allowed_write_policies": [
+        "none",
+        "commit"
+      ]
+    },
+    "propose_schedule_update": {
+      "description": "Create a pending owner schedule-update proposal.",
+      "arguments": {
+        "type": "object",
+        "required": [
+          "change_type"
+        ],
+        "properties": {
+          "change_type": {
+            "type": "string",
+            "enum": [
+              "hours",
+              "closed_day",
+              "exception",
+              "block_time"
+            ]
+          },
+          "date": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "day_of_week": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "open_time": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "close_time": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "start_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "end_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "allowed_outcomes": [
+        "authorization_denied",
+        "not_found",
+        "success",
+        "unauthorized",
+        "validation_error",
+        "validation_rejected"
+      ],
+      "allowed_write_policies": [
+        "none",
+        "pending_only"
+      ]
+    },
+    "confirm_schedule_update": {
+      "description": "Confirm a pending schedule update.",
+      "arguments": {
+        "type": "object",
+        "required": [
+          "action_id"
+        ],
+        "properties": {
+          "action_id": {
+            "$ref": "#/$defs/positiveIntegerId"
+          },
+          "expected_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "allowed_outcomes": [
+        "authorization_denied",
+        "expired",
+        "not_found",
+        "stale_version",
+        "success",
+        "unauthorized",
+        "validation_error",
+        "validation_rejected"
+      ],
+      "allowed_write_policies": [
+        "none",
+        "commit"
+      ]
+    }
+  },
+  "internal_operations": {
+    "begin_commit": {
+      "description": "Internal engine transition from awaiting_confirmation to committing.",
+      "llm_callable": false
+    },
+    "complete_commit": {
+      "description": "Internal engine records a successful deterministic commit.",
+      "llm_callable": false
+    },
+    "fail_commit": {
+      "description": "Internal engine records a retryable or terminal commit failure.",
+      "llm_callable": false
+    },
+    "internal_get": {
+      "description": "Internal tenant-scoped action lookup.",
+      "llm_callable": false
+    },
+    "internal_get_active": {
+      "description": "Internal tenant/session active-action lookup.",
+      "llm_callable": false
+    }
+  },
+  "outcomes": {
+    "success": "Expected operation succeeds.",
+    "unauthorized": "Verified actor lacks permission.",
+    "insufficient_stock": "Requested quantity is unavailable.",
+    "slot_conflict": "Requested resource interval conflicts.",
+    "expired": "Action or hold expired.",
+    "stale_version": "Expected version is stale.",
+    "not_found": "Entity is absent or hidden by tenant scoping.",
+    "validation_error": "Input is invalid.",
+    "no_tool": "No public tool may be called.",
+    "escalate": "Escalation to owner or clinician is required.",
+    "provider_error": "STT, LLM, or TTS provider failed.",
+    "clarification_needed": "Caller input is ambiguous and requires clarification.",
+    "information_presented": "The agent presents requested information, status, or acknowledgement without a public tool call on this turn.",
+    "authorization_denied": "The request is denied by authorization or tenant-isolation policy.",
+    "validation_rejected": "The request is rejected by deterministic validation or state policy.",
+    "runtime_recovered": "The voice/runtime layer recovers or follows an approved failure path.",
+    "provider_recovered": "Provider fallback or recovery completes according to routing policy."
+  },
+  "write_policies": {
+    "none": "No database mutation.",
+    "pending_only": "Only a pending proposal, revision, cancellation, or temporary hold may change.",
+    "commit": "A deterministic engine may commit a confirmed order, appointment, or owner update."
+  },
+  "$defs": {
+    "decimalString": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)(\\.[0-9]{1,2})?$"
+    },
+    "positiveIntegerId": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "nullablePositiveIntegerId": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/positiveIntegerId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "unit": {
+      "type": "string",
+      "enum": [
+        "kg",
+        "gram",
+        "piece",
+        "dozen",
+        "litre",
+        "ml",
+        "packet",
+        "bottle"
+      ]
+    },
+    "nullableUnit": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/unit"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "positiveDecimalString": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/decimalString"
+        },
+        {
+          "not": {
+            "pattern": "^0(?:\\.0{1,2})?$"
+          }
+        }
+      ]
+    }
+  }
+}

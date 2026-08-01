@@ -1,0 +1,344 @@
+{
+  "report_version": 1,
+  "phase": "qa3_outcome_migration",
+  "changed_turns": 55,
+  "by_outcome": {
+    "authorization_denied": 25,
+    "information_presented": 25,
+    "provider_recovered": 1,
+    "runtime_recovered": 2,
+    "validation_rejected": 2
+  },
+  "turns": [
+    {
+      "case_id": "APPT-032",
+      "turn_index": 0,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "APPT-033",
+      "turn_index": 0,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "APPT-038",
+      "turn_index": 0,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "APPT-049",
+      "turn_index": 0,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "AUTH-002",
+      "turn_index": 0,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "AUTH-005",
+      "turn_index": 0,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "AUTH-006",
+      "turn_index": 0,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "AUTH-007",
+      "turn_index": 0,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "AUTH-009",
+      "turn_index": 0,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "AUTH-010",
+      "turn_index": 0,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "AUTH-011",
+      "turn_index": 0,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "AUTH-012",
+      "turn_index": 0,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "AUTH-013",
+      "turn_index": 0,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "AUTH-014",
+      "turn_index": 0,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "AUTH-015",
+      "turn_index": 0,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "AUTH-016",
+      "turn_index": 0,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "AUTH-018",
+      "turn_index": 0,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "AUTH-019",
+      "turn_index": 0,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "AUTH-022",
+      "turn_index": 0,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "AUTH-023",
+      "turn_index": 0,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "AUTH-025",
+      "turn_index": 1,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "AUTH-026",
+      "turn_index": 1,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "AUTH-027",
+      "turn_index": 0,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "AUTH-030",
+      "turn_index": 0,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "INV-004",
+      "turn_index": 2,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "INV-022",
+      "turn_index": 0,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "INV-026",
+      "turn_index": 2,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "INV-031",
+      "turn_index": 0,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "MED-002",
+      "turn_index": 0,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "MED-003",
+      "turn_index": 0,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "MED-007",
+      "turn_index": 0,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "MED-008",
+      "turn_index": 0,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "MED-009",
+      "turn_index": 0,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "MED-010",
+      "turn_index": 0,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "MED-010",
+      "turn_index": 2,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "MED-011",
+      "turn_index": 0,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "MED-016",
+      "turn_index": 0,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "PA-002",
+      "turn_index": 0,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "PA-005",
+      "turn_index": 1,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "PA-010",
+      "turn_index": 1,
+      "intent": "validation_rejected",
+      "outcome": "validation_rejected"
+    },
+    {
+      "case_id": "PA-011",
+      "turn_index": 0,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "PA-011",
+      "turn_index": 2,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "PA-013",
+      "turn_index": 0,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "PA-015",
+      "turn_index": 0,
+      "intent": "validation_rejected",
+      "outcome": "validation_rejected"
+    },
+    {
+      "case_id": "PA-019",
+      "turn_index": 0,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "PA-020",
+      "turn_index": 0,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "PA-021",
+      "turn_index": 0,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "PA-021",
+      "turn_index": 2,
+      "intent": "authorization_denied",
+      "outcome": "authorization_denied"
+    },
+    {
+      "case_id": "PA-023",
+      "turn_index": 2,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "PA-024",
+      "turn_index": 2,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "PA-025",
+      "turn_index": 0,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "PA-025",
+      "turn_index": 2,
+      "intent": "response_presented",
+      "outcome": "information_presented"
+    },
+    {
+      "case_id": "PRT-002",
+      "turn_index": 1,
+      "intent": "provider_recovery",
+      "outcome": "provider_recovered"
+    },
+    {
+      "case_id": "VRT-003",
+      "turn_index": 0,
+      "intent": "runtime_recovery",
+      "outcome": "runtime_recovered"
+    },
+    {
+      "case_id": "VRT-005",
+      "turn_index": 2,
+      "intent": "runtime_recovery",
+      "outcome": "runtime_recovered"
+    }
+  ]
+}

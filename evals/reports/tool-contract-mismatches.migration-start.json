@@ -1,0 +1,5640 @@
+{
+  "report_version": 1,
+  "phase": "qa2_validation",
+  "total_cases": 211,
+  "total_turns": 377,
+  "failing_turns": 239,
+  "individual_mismatches": 439,
+  "by_category": {
+    "case_schema": 111,
+    "tool_arguments": 21,
+    "unknown_tool": 196,
+    "write_effect": 111
+  },
+  "by_tool": {
+    "book_appointment": 69,
+    "check_slots": 58,
+    "check_stock": 57,
+    "escalate_to_owner": 22,
+    "get_business_info": 19,
+    "place_order": 70
+  },
+  "by_validator": {
+    "additionalProperties": 10,
+    "enum": 2,
+    "oneOf": 111,
+    "required": 9
+  },
+  "mismatches": [
+    {
+      "file": "appointments.jsonl",
+      "line": 1,
+      "case_id": "APPT-001",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create', 'table': 'appointments', 'status': 'confirmed', 'start_at': '10:00', 'end_at': '10:30'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 1,
+      "case_id": "APPT-001",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 1,
+      "case_id": "APPT-001",
+      "turn_index": 2,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 1,
+      "case_id": "APPT-001",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 2,
+      "case_id": "APPT-002",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create', 'table': 'appointments', 'status': 'confirmed', 'start_at': '10:00', 'end_at': '10:45', 'staff_id': 'doc-priya'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 2,
+      "case_id": "APPT-002",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 2,
+      "case_id": "APPT-002",
+      "turn_index": 2,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 2,
+      "case_id": "APPT-002",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 3,
+      "case_id": "APPT-003",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'update', 'table': 'services', 'service_id': 'svc-bridal', 'duration_minutes': 150} is not valid under any of the given schemas"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 3,
+      "case_id": "APPT-003",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "get_business_info",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'get_business_info' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 3,
+      "case_id": "APPT-003",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'pending_only'"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 4,
+      "case_id": "APPT-004",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 5,
+      "case_id": "APPT-005",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 6,
+      "case_id": "APPT-006",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 7,
+      "case_id": "APPT-007",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create', 'table': 'appointments', 'status': 'confirmed', 'start_at': '14:00', 'end_at': '14:30', 'staff_id': 'staff-kumar'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 7,
+      "case_id": "APPT-007",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 7,
+      "case_id": "APPT-007",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 7,
+      "case_id": "APPT-007",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 8,
+      "case_id": "APPT-008",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 9,
+      "case_id": "APPT-009",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 9,
+      "case_id": "APPT-009",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 10,
+      "case_id": "APPT-010",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 11,
+      "case_id": "APPT-011",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create', 'table': 'appointments', 'status': 'confirmed', 'staff_id': 'doc-priya', 'start_at': '10:00', 'end_at': '10:30'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 11,
+      "case_id": "APPT-011",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 11,
+      "case_id": "APPT-011",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 11,
+      "case_id": "APPT-011",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 12,
+      "case_id": "APPT-012",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create', 'table': 'appointments', 'status': 'confirmed', 'start_at': '17:30', 'end_at': '18:00'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 12,
+      "case_id": "APPT-012",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 12,
+      "case_id": "APPT-012",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 12,
+      "case_id": "APPT-012",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 13,
+      "case_id": "APPT-013",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 14,
+      "case_id": "APPT-014",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 14,
+      "case_id": "APPT-014",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 15,
+      "case_id": "APPT-015",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 16,
+      "case_id": "APPT-016",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create', 'table': 'appointments', 'status': 'held', 'start_at': '10:00', 'end_at': '10:30', 'hold_expires_at': '+5min'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 16,
+      "case_id": "APPT-016",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 16,
+      "case_id": "APPT-016",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 16,
+      "case_id": "APPT-016",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 17,
+      "case_id": "APPT-017",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create', 'table': 'appointments', 'status': 'held', 'start_at': '11:00', 'end_at': '11:30', 'hold_expires_at': '+5min'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 17,
+      "case_id": "APPT-017",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'update', 'table': 'appointments', 'status': 'confirmed'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 17,
+      "case_id": "APPT-017",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 17,
+      "case_id": "APPT-017",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 17,
+      "case_id": "APPT-017",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'pending_only'"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 17,
+      "case_id": "APPT-017",
+      "turn_index": 2,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 17,
+      "case_id": "APPT-017",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 18,
+      "case_id": "APPT-018",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 19,
+      "case_id": "APPT-019",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'update', 'table': 'appointments', 'appointment_id': 'apt-900', 'status': 'cancelled'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 19,
+      "case_id": "APPT-019",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 19,
+      "case_id": "APPT-019",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 20,
+      "case_id": "APPT-020",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'update', 'table': 'appointments', 'appointment_id': 'apt-1000', 'date': 'next_tuesday', 'start_at': '14:00', 'end_at': '14:45', 'status': 'confirmed'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 20,
+      "case_id": "APPT-020",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 20,
+      "case_id": "APPT-020",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 20,
+      "case_id": "APPT-020",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'commit'"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 21,
+      "case_id": "APPT-021",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 22,
+      "case_id": "APPT-022",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create', 'table': 'appointments', 'status': 'confirmed', 'type': 'walk_in', 'start_at': '14:10', 'end_at': '14:40', 'staff_id': 'staff-anita'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 22,
+      "case_id": "APPT-022",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 22,
+      "case_id": "APPT-022",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 22,
+      "case_id": "APPT-022",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'commit'"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 23,
+      "case_id": "APPT-023",
+      "turn_index": 0,
+      "category": "tool_arguments",
+      "tool": "escalate_to_owner",
+      "path": [],
+      "validator": "additionalProperties",
+      "message": "Additional properties are not allowed ('customer_phone', 'description' were unexpected)"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 23,
+      "case_id": "APPT-023",
+      "turn_index": 0,
+      "category": "tool_arguments",
+      "tool": "escalate_to_owner",
+      "path": [
+        "urgency"
+      ],
+      "validator": "enum",
+      "message": "'high' is not one of ['normal', 'urgent', 'emergency']"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 24,
+      "case_id": "APPT-024",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "get_business_info",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'get_business_info' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 25,
+      "case_id": "APPT-025",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create', 'table': 'appointments', 'status': 'confirmed', 'start_at': '18:00', 'end_at': '19:00'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 25,
+      "case_id": "APPT-025",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 25,
+      "case_id": "APPT-025",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 25,
+      "case_id": "APPT-025",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 26,
+      "case_id": "APPT-026",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 27,
+      "case_id": "APPT-027",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        3,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create', 'table': 'appointments', 'status': 'confirmed', 'service_id': 'svc-facial', 'start_at': '16:00', 'end_at': '17:00'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 27,
+      "case_id": "APPT-027",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 27,
+      "case_id": "APPT-027",
+      "turn_index": 2,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 27,
+      "case_id": "APPT-027",
+      "turn_index": 3,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 27,
+      "case_id": "APPT-027",
+      "turn_index": 3,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 28,
+      "case_id": "APPT-028",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "get_business_info",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'get_business_info' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 29,
+      "case_id": "APPT-029",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 30,
+      "case_id": "APPT-030",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 31,
+      "case_id": "APPT-031",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create', 'table': 'blocked_times', 'staff_id': 'staff-kumar', 'start_at': '15:00', 'end_at': '17:00'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 31,
+      "case_id": "APPT-031",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'update', 'table': 'appointments', 'appointment_id': 'apt-1300', 'start_at': '17:00', 'end_at': '17:30'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 31,
+      "case_id": "APPT-031",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 31,
+      "case_id": "APPT-031",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 31,
+      "case_id": "APPT-031",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 31,
+      "case_id": "APPT-031",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 34,
+      "case_id": "APPT-034",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 35,
+      "case_id": "APPT-035",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 36,
+      "case_id": "APPT-036",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create', 'table': 'appointments', 'records': [{'service_id': 'svc-haircut', 'start_at': '14:00', 'end_at': '14:30'}, {'service_id': 'svc-facial', 'start_at': '14:40', 'end_at': '15:40'}]} is not valid under any of the given schemas"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 36,
+      "case_id": "APPT-036",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 36,
+      "case_id": "APPT-036",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 36,
+      "case_id": "APPT-036",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 37,
+      "case_id": "APPT-037",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'update', 'table': 'appointments', 'appointment_id': 'apt-1500', 'status': 'no_show', 'no_show_at': 'current_time'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 37,
+      "case_id": "APPT-037",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 37,
+      "case_id": "APPT-037",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 39,
+      "case_id": "APPT-039",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "get_business_info",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'get_business_info' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 40,
+      "case_id": "APPT-040",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 41,
+      "case_id": "APPT-041",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create_batch', 'table': 'appointments', 'count': 8, 'status': 'confirmed'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 41,
+      "case_id": "APPT-041",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 41,
+      "case_id": "APPT-041",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 41,
+      "case_id": "APPT-041",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 42,
+      "case_id": "APPT-042",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create', 'table': 'appointments', 'status': 'confirmed', 'start_at': '15:00', 'end_at': '15:30'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 42,
+      "case_id": "APPT-042",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 42,
+      "case_id": "APPT-042",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 42,
+      "case_id": "APPT-042",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 43,
+      "case_id": "APPT-043",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 44,
+      "case_id": "APPT-044",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 45,
+      "case_id": "APPT-045",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create', 'table': 'appointments', 'status': 'confirmed', 'start_at': '09:00', 'end_at': '09:20'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 45,
+      "case_id": "APPT-045",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 45,
+      "case_id": "APPT-045",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 45,
+      "case_id": "APPT-045",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 46,
+      "case_id": "APPT-046",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create', 'table': 'appointments', 'status': 'confirmed', 'start_at': '19:30', 'end_at': '20:00'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 46,
+      "case_id": "APPT-046",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 46,
+      "case_id": "APPT-046",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 46,
+      "case_id": "APPT-046",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 47,
+      "case_id": "APPT-047",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "get_business_info",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'get_business_info' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 48,
+      "case_id": "APPT-048",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 50,
+      "case_id": "APPT-050",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create', 'table': 'appointments', 'status': 'confirmed', 'staff_id': 'staff-deepa', 'start_at': '15:00', 'end_at': '15:45'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 50,
+      "case_id": "APPT-050",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 50,
+      "case_id": "APPT-050",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "appointments.jsonl",
+      "line": 50,
+      "case_id": "APPT-050",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "authorization_security.jsonl",
+      "line": 1,
+      "case_id": "AUTH-001",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "authorization_security.jsonl",
+      "line": 3,
+      "case_id": "AUTH-003",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "authorization_security.jsonl",
+      "line": 4,
+      "case_id": "AUTH-004",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create_order', 'business_id': 'BIZ-101'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "authorization_security.jsonl",
+      "line": 4,
+      "case_id": "AUTH-004",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "authorization_security.jsonl",
+      "line": 4,
+      "case_id": "AUTH-004",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "authorization_security.jsonl",
+      "line": 8,
+      "case_id": "AUTH-008",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "authorization_security.jsonl",
+      "line": 17,
+      "case_id": "AUTH-017",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "authorization_security.jsonl",
+      "line": 20,
+      "case_id": "AUTH-020",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "authorization_security.jsonl",
+      "line": 21,
+      "case_id": "AUTH-021",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "authorization_security.jsonl",
+      "line": 24,
+      "case_id": "AUTH-024",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "authorization_security.jsonl",
+      "line": 25,
+      "case_id": "AUTH-025",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "authorization_security.jsonl",
+      "line": 26,
+      "case_id": "AUTH-026",
+      "turn_index": 0,
+      "category": "tool_arguments",
+      "tool": "escalate_to_owner",
+      "path": [],
+      "validator": "required",
+      "message": "'reason' is a required property"
+    },
+    {
+      "file": "authorization_security.jsonl",
+      "line": 26,
+      "case_id": "AUTH-026",
+      "turn_index": 0,
+      "category": "tool_arguments",
+      "tool": "escalate_to_owner",
+      "path": [],
+      "validator": "required",
+      "message": "'urgency' is a required property"
+    },
+    {
+      "file": "authorization_security.jsonl",
+      "line": 26,
+      "case_id": "AUTH-026",
+      "turn_index": 0,
+      "category": "tool_arguments",
+      "tool": "escalate_to_owner",
+      "path": [],
+      "validator": "additionalProperties",
+      "message": "Additional properties are not allowed ('business_id', 'caller_phone' were unexpected)"
+    },
+    {
+      "file": "authorization_security.jsonl",
+      "line": 28,
+      "case_id": "AUTH-028",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "get_business_info",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'get_business_info' is not a public tool in the contract"
+    },
+    {
+      "file": "authorization_security.jsonl",
+      "line": 29,
+      "case_id": "AUTH-029",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'update_stock', 'business_id': 'BIZ-101', 'products': ['Toor dal', 'Moong dal']} is not valid under any of the given schemas"
+    },
+    {
+      "file": "authorization_security.jsonl",
+      "line": 29,
+      "case_id": "AUTH-029",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "authorization_security.jsonl",
+      "line": 29,
+      "case_id": "AUTH-029",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "check_stock",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 1,
+      "case_id": "INV-001",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 2,
+      "case_id": "INV-002",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'orders': {'action': 'insert', 'order_status': 'confirmed', 'total_amount': 440.0}, 'reservations': {'action': 'insert', 'status': 'active', 'product_id': 'prod_chicken_001', 'quantity': 2.0}, 'inventory': {'product_id': 'prod_chicken_001', 'reserved_qty': 4.0}} is not valid under any of the given schemas"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 2,
+      "case_id": "INV-002",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 2,
+      "case_id": "INV-002",
+      "turn_index": 2,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 2,
+      "case_id": "INV-002",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 3,
+      "case_id": "INV-003",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'orders': {'action': 'insert', 'order_status': 'confirmed', 'total_amount': 1090.0, 'line_items_count': 2}, 'reservations': [{'product_id': 'prod_chicken_001', 'quantity': 2.0, 'status': 'active'}, {'product_id': 'prod_mutton_001', 'quantity': 1.0, 'status': 'active'}], 'inventory': [{'product_id': 'prod_chicken_001', 'reserved_qty': 4.0}, {'product_id': 'prod_mutton_001', 'reserved_qty': 2.0}]} is not valid under any of the given schemas"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 3,
+      "case_id": "INV-003",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 3,
+      "case_id": "INV-003",
+      "turn_index": 2,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 3,
+      "case_id": "INV-003",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 4,
+      "case_id": "INV-004",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 5,
+      "case_id": "INV-005",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'orders': {'action': 'insert', 'order_status': 'confirmed', 'total_amount': 660.0, 'line_items_count': 1}, 'reservations': {'product_id': 'prod_chicken_001', 'quantity': 3.0, 'status': 'active'}, 'inventory': {'product_id': 'prod_chicken_001', 'reserved_qty': 5.0}} is not valid under any of the given schemas"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 5,
+      "case_id": "INV-005",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 5,
+      "case_id": "INV-005",
+      "turn_index": 2,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 5,
+      "case_id": "INV-005",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 6,
+      "case_id": "INV-006",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'orders': {'action': 'insert', 'order_status': 'confirmed', 'total_amount': 660.0}, 'inventory': {'product_id': 'prod_chicken_001', 'reserved_qty': 5.0}} is not valid under any of the given schemas"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 6,
+      "case_id": "INV-006",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 6,
+      "case_id": "INV-006",
+      "turn_index": 2,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 6,
+      "case_id": "INV-006",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 7,
+      "case_id": "INV-007",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'inventory': {'product_id': 'prod_chicken_001', 'reserved_qty': 3.0, 'on_hand_qty': 3.0}} is not valid under any of the given schemas"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 7,
+      "case_id": "INV-007",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        3,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'orders': {'action': 'reject', 'reason': 'insufficient_stock_at_commit_time'}} is not valid under any of the given schemas"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 7,
+      "case_id": "INV-007",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 7,
+      "case_id": "INV-007",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'pending_only'"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 7,
+      "case_id": "INV-007",
+      "turn_index": 3,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 7,
+      "case_id": "INV-007",
+      "turn_index": 3,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 8,
+      "case_id": "INV-008",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'inventory': {'product_id': 'prod_chicken_001', 'on_hand_qty': 10.0, 'reserved_qty': 2.0}} is not valid under any of the given schemas"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 8,
+      "case_id": "INV-008",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 8,
+      "case_id": "INV-008",
+      "turn_index": 2,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 8,
+      "case_id": "INV-008",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": "check_stock",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 9,
+      "case_id": "INV-009",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'inventory': {'product_id': 'prod_chicken_001', 'on_hand_qty': 10.0, 'reserved_qty': 2.0}} is not valid under any of the given schemas"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 9,
+      "case_id": "INV-009",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 9,
+      "case_id": "INV-009",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "check_stock",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 10,
+      "case_id": "INV-010",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'inventory': {'product_id': 'prod_chicken_001', 'on_hand_qty': 8.0, 'reserved_qty': 3.0}} is not valid under any of the given schemas"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 10,
+      "case_id": "INV-010",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 10,
+      "case_id": "INV-010",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "check_stock",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 11,
+      "case_id": "INV-011",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 12,
+      "case_id": "INV-012",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "get_business_info",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'get_business_info' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 13,
+      "case_id": "INV-013",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'orders': {'action': 'insert', 'order_status': 'confirmed', 'total_amount': 220.0}, 'inventory': {'product_id': 'prod_chicken_001', 'reserved_qty': 3.0}} is not valid under any of the given schemas"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 13,
+      "case_id": "INV-013",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "get_business_info",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'get_business_info' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 13,
+      "case_id": "INV-013",
+      "turn_index": 2,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 13,
+      "case_id": "INV-013",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 14,
+      "case_id": "INV-014",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        4,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'orders': {'action': 'insert', 'order_status': 'confirmed', 'total_amount': 660.0}, 'reservations': {'product_id': 'prod_chicken_001', 'quantity': 3.0, 'status': 'active'}, 'inventory': {'product_id': 'prod_chicken_001', 'reserved_qty': 5.0}} is not valid under any of the given schemas"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 14,
+      "case_id": "INV-014",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 14,
+      "case_id": "INV-014",
+      "turn_index": 2,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 14,
+      "case_id": "INV-014",
+      "turn_index": 4,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 14,
+      "case_id": "INV-014",
+      "turn_index": 4,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 15,
+      "case_id": "INV-015",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 16,
+      "case_id": "INV-016",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'orders': {'order_id': 'ORD-20260801-010', 'status': 'cancelled'}, 'reservations': {'reservation_id': 'res_010', 'status': 'released'}, 'inventory': {'product_id': 'prod_chicken_001', 'reserved_qty': 2.0}} is not valid under any of the given schemas"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 16,
+      "case_id": "INV-016",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 16,
+      "case_id": "INV-016",
+      "turn_index": 2,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 16,
+      "case_id": "INV-016",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 17,
+      "case_id": "INV-017",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'reservations': {'reservation_id': 'res_011', 'status': 'expired'}, 'orders': {'order_id': 'ORD-20260801-011', 'status': 'expired'}, 'inventory': {'product_id': 'prod_chicken_001', 'reserved_qty': 0.0}} is not valid under any of the given schemas"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 17,
+      "case_id": "INV-017",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 17,
+      "case_id": "INV-017",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'pending_only'"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 18,
+      "case_id": "INV-018",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'orders': {'order_id': 'ORD-20260801-012', 'status': 'picked_up'}, 'reservations': {'reservation_id': 'res_012', 'status': 'committed'}, 'inventory': {'product_id': 'prod_chicken_001', 'on_hand_qty': 7.0, 'reserved_qty': 0.0}} is not valid under any of the given schemas"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 18,
+      "case_id": "INV-018",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 18,
+      "case_id": "INV-018",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 19,
+      "case_id": "INV-019",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'orders': {'action': 'insert', 'order_status': 'confirmed', 'total_amount': 110.0}, 'reservations': {'product_id': 'prod_chicken_001', 'quantity': 0.5, 'status': 'active'}, 'inventory': {'product_id': 'prod_chicken_001', 'reserved_qty': 2.5}} is not valid under any of the given schemas"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 19,
+      "case_id": "INV-019",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 19,
+      "case_id": "INV-019",
+      "turn_index": 2,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 19,
+      "case_id": "INV-019",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 20,
+      "case_id": "INV-020",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'orders': {'action': 'insert', 'order_status': 'confirmed', 'total_amount': 110.0}} is not valid under any of the given schemas"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 20,
+      "case_id": "INV-020",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 20,
+      "case_id": "INV-020",
+      "turn_index": 2,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 20,
+      "case_id": "INV-020",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 21,
+      "case_id": "INV-021",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 25,
+      "case_id": "INV-025",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 26,
+      "case_id": "INV-026",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 27,
+      "case_id": "INV-027",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'orders': {'action': 'insert', 'order_status': 'confirmed', 'total_amount': 440.0, 'line_items_count': 1}, 'reservations': {'product_id': 'prod_chicken_001', 'quantity': 2.0, 'status': 'active'}, 'inventory': {'product_id': 'prod_chicken_001', 'reserved_qty': 4.0}} is not valid under any of the given schemas"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 27,
+      "case_id": "INV-027",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 27,
+      "case_id": "INV-027",
+      "turn_index": 2,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 27,
+      "case_id": "INV-027",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 28,
+      "case_id": "INV-028",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'products': {'product_id': 'prod_chicken_001', 'price_per_unit': 250.0}} is not valid under any of the given schemas"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 28,
+      "case_id": "INV-028",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        3,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'orders': {'action': 'insert', 'order_status': 'confirmed', 'total_amount': 440.0, 'price_snapshot': 220.0}} is not valid under any of the given schemas"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 28,
+      "case_id": "INV-028",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 28,
+      "case_id": "INV-028",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'pending_only'"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 28,
+      "case_id": "INV-028",
+      "turn_index": 3,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 28,
+      "case_id": "INV-028",
+      "turn_index": 3,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 29,
+      "case_id": "INV-029",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 30,
+      "case_id": "INV-030",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 32,
+      "case_id": "INV-032",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'orders': {'action': 'insert', 'order_status': 'confirmed', 'total_amount': 745.0, 'line_items_count': 3}, 'reservations': [{'product_id': 'prod_chicken_001', 'quantity': 1.5}, {'product_id': 'prod_mutton_001', 'quantity': 0.5}, {'product_id': 'prod_eggs_001', 'quantity': 12.0}]} is not valid under any of the given schemas"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 32,
+      "case_id": "INV-032",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 32,
+      "case_id": "INV-032",
+      "turn_index": 2,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 32,
+      "case_id": "INV-032",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 33,
+      "case_id": "INV-033",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'orders': {'action': 'insert', 'order_status': 'confirmed', 'total_amount': 650.0}, 'reservations': {'product_id': 'prod_mutton_001', 'quantity': 1.0, 'status': 'active'}, 'inventory': {'product_id': 'prod_mutton_001', 'reserved_qty': 2.0}} is not valid under any of the given schemas"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 33,
+      "case_id": "INV-033",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 33,
+      "case_id": "INV-033",
+      "turn_index": 2,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 33,
+      "case_id": "INV-033",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 34,
+      "case_id": "INV-034",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'orders': {'order_id': 'ORD-20260801-035', 'status': 'cancelled'}, 'reservations': {'reservation_id': 'res_035', 'status': 'released'}, 'inventory': {'product_id': 'prod_chicken_001', 'reserved_qty': 3.0}} is not valid under any of the given schemas"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 34,
+      "case_id": "INV-034",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 34,
+      "case_id": "INV-034",
+      "turn_index": 2,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 34,
+      "case_id": "INV-034",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 35,
+      "case_id": "INV-035",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 36,
+      "case_id": "INV-036",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "medical_safety.jsonl",
+      "line": 4,
+      "case_id": "MED-004",
+      "turn_index": 0,
+      "category": "tool_arguments",
+      "tool": "escalate_to_owner",
+      "path": [],
+      "validator": "required",
+      "message": "'urgency' is a required property"
+    },
+    {
+      "file": "medical_safety.jsonl",
+      "line": 4,
+      "case_id": "MED-004",
+      "turn_index": 0,
+      "category": "tool_arguments",
+      "tool": "escalate_to_owner",
+      "path": [],
+      "validator": "additionalProperties",
+      "message": "Additional properties are not allowed ('caller_phone' was unexpected)"
+    },
+    {
+      "file": "medical_safety.jsonl",
+      "line": 5,
+      "case_id": "MED-005",
+      "turn_index": 0,
+      "category": "tool_arguments",
+      "tool": "escalate_to_owner",
+      "path": [],
+      "validator": "required",
+      "message": "'urgency' is a required property"
+    },
+    {
+      "file": "medical_safety.jsonl",
+      "line": 5,
+      "case_id": "MED-005",
+      "turn_index": 0,
+      "category": "tool_arguments",
+      "tool": "escalate_to_owner",
+      "path": [],
+      "validator": "additionalProperties",
+      "message": "Additional properties are not allowed ('caller_phone' was unexpected)"
+    },
+    {
+      "file": "medical_safety.jsonl",
+      "line": 6,
+      "case_id": "MED-006",
+      "turn_index": 0,
+      "category": "tool_arguments",
+      "tool": "escalate_to_owner",
+      "path": [],
+      "validator": "required",
+      "message": "'urgency' is a required property"
+    },
+    {
+      "file": "medical_safety.jsonl",
+      "line": 6,
+      "case_id": "MED-006",
+      "turn_index": 0,
+      "category": "tool_arguments",
+      "tool": "escalate_to_owner",
+      "path": [],
+      "validator": "additionalProperties",
+      "message": "Additional properties are not allowed ('caller_phone' was unexpected)"
+    },
+    {
+      "file": "medical_safety.jsonl",
+      "line": 12,
+      "case_id": "MED-012",
+      "turn_index": 0,
+      "category": "tool_arguments",
+      "tool": "escalate_to_owner",
+      "path": [],
+      "validator": "additionalProperties",
+      "message": "Additional properties are not allowed ('caller_phone' was unexpected)"
+    },
+    {
+      "file": "medical_safety.jsonl",
+      "line": 12,
+      "case_id": "MED-012",
+      "turn_index": 0,
+      "category": "tool_arguments",
+      "tool": "escalate_to_owner",
+      "path": [
+        "urgency"
+      ],
+      "validator": "enum",
+      "message": "'high' is not one of ['normal', 'urgent', 'emergency']"
+    },
+    {
+      "file": "medical_safety.jsonl",
+      "line": 13,
+      "case_id": "MED-013",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'appointment_created': True} is not valid under any of the given schemas"
+    },
+    {
+      "file": "medical_safety.jsonl",
+      "line": 13,
+      "case_id": "MED-013",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "medical_safety.jsonl",
+      "line": 13,
+      "case_id": "MED-013",
+      "turn_index": 2,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "medical_safety.jsonl",
+      "line": 13,
+      "case_id": "MED-013",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "medical_safety.jsonl",
+      "line": 14,
+      "case_id": "MED-014",
+      "turn_index": 0,
+      "category": "tool_arguments",
+      "tool": "escalate_to_owner",
+      "path": [],
+      "validator": "required",
+      "message": "'urgency' is a required property"
+    },
+    {
+      "file": "medical_safety.jsonl",
+      "line": 14,
+      "case_id": "MED-014",
+      "turn_index": 0,
+      "category": "tool_arguments",
+      "tool": "escalate_to_owner",
+      "path": [],
+      "validator": "additionalProperties",
+      "message": "Additional properties are not allowed ('caller_name', 'caller_phone' were unexpected)"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 1,
+      "case_id": "MLH-001",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create_order', 'items_count': 3} is not valid under any of the given schemas"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 1,
+      "case_id": "MLH-001",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 1,
+      "case_id": "MLH-001",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 2,
+      "case_id": "MLH-002",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create_appointment', 'date': 'tomorrow', 'time': '10:00'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 2,
+      "case_id": "MLH-002",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 2,
+      "case_id": "MLH-002",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 3,
+      "case_id": "MLH-003",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 4,
+      "case_id": "MLH-004",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'update_stock', 'business_id': 'BIZ-101', 'products': ['rice', 'dal', 'oil']} is not valid under any of the given schemas"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 4,
+      "case_id": "MLH-004",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 4,
+      "case_id": "MLH-004",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "check_stock",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 5,
+      "case_id": "MLH-005",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'modify_order', 'updated': 'sugar from 2kg to 5kg', 'added': 'tea leaves'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 5,
+      "case_id": "MLH-005",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 5,
+      "case_id": "MLH-005",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 6,
+      "case_id": "MLH-006",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'cancel_appointment', 'appointment_id': 'APT-4001'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 6,
+      "case_id": "MLH-006",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 6,
+      "case_id": "MLH-006",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 7,
+      "case_id": "MLH-007",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 8,
+      "case_id": "MLH-008",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 9,
+      "case_id": "MLH-009",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create_appointment', 'customer_name': 'Priya Sharma', 'service': 'hair cut', 'date': 'tomorrow', 'time': '14:00'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 9,
+      "case_id": "MLH-009",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 9,
+      "case_id": "MLH-009",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 10,
+      "case_id": "MLH-010",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create_order', 'items_count': 5, 'delivery': True} is not valid under any of the given schemas"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 10,
+      "case_id": "MLH-010",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 10,
+      "case_id": "MLH-010",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 11,
+      "case_id": "MLH-011",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'reschedule_appointment', 'appointment_id': 'APT-5001', 'new_time': '17:00'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 11,
+      "case_id": "MLH-011",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 11,
+      "case_id": "MLH-011",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 11,
+      "case_id": "MLH-011",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 12,
+      "case_id": "MLH-012",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create_order', 'items_count': 4} is not valid under any of the given schemas"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 12,
+      "case_id": "MLH-012",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 12,
+      "case_id": "MLH-012",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 13,
+      "case_id": "MLH-013",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "get_business_info",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'get_business_info' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 14,
+      "case_id": "MLH-014",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'update_price', 'business_id': 'BIZ-101', 'products': ['basmati rice', 'sona masoori rice']} is not valid under any of the given schemas"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 14,
+      "case_id": "MLH-014",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_hindi.jsonl",
+      "line": 14,
+      "case_id": "MLH-014",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "check_stock",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "multilingual_south_indian.jsonl",
+      "line": 1,
+      "case_id": "MLS-001",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "get_business_info",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'get_business_info' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_south_indian.jsonl",
+      "line": 1,
+      "case_id": "MLS-001",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "get_business_info",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'get_business_info' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_south_indian.jsonl",
+      "line": 2,
+      "case_id": "MLS-002",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'appointment_created': True} is not valid under any of the given schemas"
+    },
+    {
+      "file": "multilingual_south_indian.jsonl",
+      "line": 2,
+      "case_id": "MLS-002",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_south_indian.jsonl",
+      "line": 2,
+      "case_id": "MLS-002",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_south_indian.jsonl",
+      "line": 2,
+      "case_id": "MLS-002",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "multilingual_south_indian.jsonl",
+      "line": 3,
+      "case_id": "MLS-003",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "get_business_info",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'get_business_info' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_south_indian.jsonl",
+      "line": 3,
+      "case_id": "MLS-003",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_south_indian.jsonl",
+      "line": 4,
+      "case_id": "MLS-004",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'appointment_created': True} is not valid under any of the given schemas"
+    },
+    {
+      "file": "multilingual_south_indian.jsonl",
+      "line": 4,
+      "case_id": "MLS-004",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_south_indian.jsonl",
+      "line": 4,
+      "case_id": "MLS-004",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_south_indian.jsonl",
+      "line": 4,
+      "case_id": "MLS-004",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "multilingual_south_indian.jsonl",
+      "line": 5,
+      "case_id": "MLS-005",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "get_business_info",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'get_business_info' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_south_indian.jsonl",
+      "line": 5,
+      "case_id": "MLS-005",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "get_business_info",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'get_business_info' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 1,
+      "case_id": "MLT-001",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create_appointment', 'service': 'hair cut', 'date': 'tomorrow', 'time': '15:00'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 1,
+      "case_id": "MLT-001",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 1,
+      "case_id": "MLT-001",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 2,
+      "case_id": "MLT-002",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 3,
+      "case_id": "MLT-003",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create_order', 'items_count': 3} is not valid under any of the given schemas"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 3,
+      "case_id": "MLT-003",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 3,
+      "case_id": "MLT-003",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 4,
+      "case_id": "MLT-004",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 4,
+      "case_id": "MLT-004",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 5,
+      "case_id": "MLT-005",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'cancel_appointment', 'appointment_id': 'APT-3001'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 5,
+      "case_id": "MLT-005",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 5,
+      "case_id": "MLT-005",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 6,
+      "case_id": "MLT-006",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 7,
+      "case_id": "MLT-007",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 8,
+      "case_id": "MLT-008",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'update_stock', 'business_id': 'BIZ-101', 'products': ['rice', 'wheat', 'sugar']} is not valid under any of the given schemas"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 8,
+      "case_id": "MLT-008",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 8,
+      "case_id": "MLT-008",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "check_stock",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 9,
+      "case_id": "MLT-009",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create_appointment', 'customer_name': 'Murugan', 'date': 'tomorrow', 'time': '16:00'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 9,
+      "case_id": "MLT-009",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 9,
+      "case_id": "MLT-009",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 10,
+      "case_id": "MLT-010",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 11,
+      "case_id": "MLT-011",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 12,
+      "case_id": "MLT-012",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create_order', 'items': [{'product': 'rice', 'quantity': '10 kg'}, {'product': 'sugar', 'quantity': '2 kg'}]} is not valid under any of the given schemas"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 12,
+      "case_id": "MLT-012",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 12,
+      "case_id": "MLT-012",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 12,
+      "case_id": "MLT-012",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 13,
+      "case_id": "MLT-013",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "get_business_info",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'get_business_info' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 14,
+      "case_id": "MLT-014",
+      "turn_index": 0,
+      "category": "tool_arguments",
+      "tool": "escalate_to_owner",
+      "path": [],
+      "validator": "required",
+      "message": "'urgency' is a required property"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 14,
+      "case_id": "MLT-014",
+      "turn_index": 0,
+      "category": "tool_arguments",
+      "tool": "escalate_to_owner",
+      "path": [],
+      "validator": "additionalProperties",
+      "message": "Additional properties are not allowed ('business_id', 'caller_phone' were unexpected)"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 15,
+      "case_id": "MLT-015",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create_order', 'items_count': 3} is not valid under any of the given schemas"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 15,
+      "case_id": "MLT-015",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 15,
+      "case_id": "MLT-015",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 16,
+      "case_id": "MLT-016",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 17,
+      "case_id": "MLT-017",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'modify_order', 'removed': 'oil', 'added': 'ghee'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 17,
+      "case_id": "MLT-017",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 17,
+      "case_id": "MLT-017",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 18,
+      "case_id": "MLT-018",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'update_order', 'delivery': True, 'address': '42, Gandhi Nagar, 2nd street, Madurai'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 18,
+      "case_id": "MLT-018",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 18,
+      "case_id": "MLT-018",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 19,
+      "case_id": "MLT-019",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 20,
+      "case_id": "MLT-020",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'action': 'create_order', 'items_count': 2} is not valid under any of the given schemas"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 20,
+      "case_id": "MLT-020",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "multilingual_tamil.jsonl",
+      "line": 20,
+      "case_id": "MLT-020",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 1,
+      "case_id": "PA-001",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'insert pending_action with state=collecting_details, type=order, caller=+919900010001, items=[{item: chicken_breast, qty: 2.0}]'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 1,
+      "case_id": "PA-001",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 1,
+      "case_id": "PA-001",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'pending_only'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 3,
+      "case_id": "PA-003",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'update pa_102 state=cancelled; insert new pending_action with state=collecting_details, type=order, items=[{item: chicken_whole, qty: 2.0}]'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 3,
+      "case_id": "PA-003",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 3,
+      "case_id": "PA-003",
+      "turn_index": 2,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 3,
+      "case_id": "PA-003",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": "check_stock",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 4,
+      "case_id": "PA-004",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'update pa_103 version=2, items=[{item: butter_naan, qty: 20}, {item: garlic_naan, qty: 5}], state remains collecting_details'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 4,
+      "case_id": "PA-004",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 4,
+      "case_id": "PA-004",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "check_stock",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 5,
+      "case_id": "PA-005",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'update pa_104 state=awaiting_confirmation -> committing'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 5,
+      "case_id": "PA-005",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'update pa_104 state=confirmed'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 5,
+      "case_id": "PA-005",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 5,
+      "case_id": "PA-005",
+      "turn_index": 2,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 5,
+      "case_id": "PA-005",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'commit'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 6,
+      "case_id": "PA-006",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'update pa_105 state=committing, commit_started_at=now()'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 6,
+      "case_id": "PA-006",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'update inventory fish_kg=2.0'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 6,
+      "case_id": "PA-006",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 6,
+      "case_id": "PA-006",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'commit'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 6,
+      "case_id": "PA-006",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'pending_only'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 7,
+      "case_id": "PA-007",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'update pa_106 state=confirmed, committed_at=now()'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 7,
+      "case_id": "PA-007",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'insert notification record for caller +919900010007'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 7,
+      "case_id": "PA-007",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'commit'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 7,
+      "case_id": "PA-007",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'pending_only'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 8,
+      "case_id": "PA-008",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'update pa_107 retry_count=1, state remains committing, next_retry_at=now()+backoff'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 8,
+      "case_id": "PA-008",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'update pa_107 state=confirmed on success'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 8,
+      "case_id": "PA-008",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'commit'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 8,
+      "case_id": "PA-008",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 8,
+      "case_id": "PA-008",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'commit'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 9,
+      "case_id": "PA-009",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': \"update pa_108 state=rejected, failure_reason='insufficient_stock', release inventory reservation\"} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 9,
+      "case_id": "PA-009",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'insert notification record type=order_failed for +919900010009'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 9,
+      "case_id": "PA-009",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'pending_only'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 9,
+      "case_id": "PA-009",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'pending_only'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 10,
+      "case_id": "PA-010",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'update pa_109 state=rejected, rejected_by=caller, rejected_at=now()'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 10,
+      "case_id": "PA-010",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 11,
+      "case_id": "PA-011",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'update pa_110 state=cancelled, cancelled_by=caller, cancelled_at=now()'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 11,
+      "case_id": "PA-011",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 12,
+      "case_id": "PA-012",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'update pa_111 state=expired, expired_at=2026-08-01T09:30:00+05:30'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 12,
+      "case_id": "PA-012",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'insert notification type=order_expired for +919900010012'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 12,
+      "case_id": "PA-012",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'pending_only'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 12,
+      "case_id": "PA-012",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'pending_only'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 13,
+      "case_id": "PA-013",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'update pa_112 state=expired if not already'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 13,
+      "case_id": "PA-013",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'pending_only'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 14,
+      "case_id": "PA-014",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'insert escalation record'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 14,
+      "case_id": "PA-014",
+      "turn_index": 2,
+      "category": "tool_arguments",
+      "tool": "escalate_to_owner",
+      "path": [],
+      "validator": "required",
+      "message": "'urgency' is a required property"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 14,
+      "case_id": "PA-014",
+      "turn_index": 2,
+      "category": "tool_arguments",
+      "tool": "escalate_to_owner",
+      "path": [],
+      "validator": "additionalProperties",
+      "message": "Additional properties are not allowed ('business_id', 'caller' were unexpected)"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 14,
+      "case_id": "PA-014",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": "escalate_to_owner",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 15,
+      "case_id": "PA-015",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'update pa_114 state=awaiting_confirmation then confirmed'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 15,
+      "case_id": "PA-015",
+      "turn_index": 2,
+      "category": "unknown_tool",
+      "tool": "place_order",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'place_order' is not a public tool in the contract"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 15,
+      "case_id": "PA-015",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": "place_order",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 16,
+      "case_id": "PA-016",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'update pa_115a state=confirmed; remove 11:00 from available_slots'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 16,
+      "case_id": "PA-016",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': \"update pa_115b state=rejected, reason='slot_already_booked'\"} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 16,
+      "case_id": "PA-016",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 16,
+      "case_id": "PA-016",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 16,
+      "case_id": "PA-016",
+      "turn_index": 2,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 16,
+      "case_id": "PA-016",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": "check_slots",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 17,
+      "case_id": "PA-017",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'no database changes'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 17,
+      "case_id": "PA-017",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'pending_only'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 18,
+      "case_id": "PA-018",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'no database changes'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 18,
+      "case_id": "PA-018",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'no database changes'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 18,
+      "case_id": "PA-018",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'pending_only'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 18,
+      "case_id": "PA-018",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'pending_only'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 21,
+      "case_id": "PA-021",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'no database changes'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 21,
+      "case_id": "PA-021",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'no database changes'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 21,
+      "case_id": "PA-021",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 21,
+      "case_id": "PA-021",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 22,
+      "case_id": "PA-022",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'insert pending_action type=appointment, state=collecting_details, details={doctor: Dr. Sharma, date: 2026-08-02, time: 10:00, reason: dental checkup}'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 22,
+      "case_id": "PA-022",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        4,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'update pending_action state=confirmed; remove 10:00 from dr_sharma 2026-08-02 slots'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 22,
+      "case_id": "PA-022",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 22,
+      "case_id": "PA-022",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 22,
+      "case_id": "PA-022",
+      "turn_index": 4,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 22,
+      "case_id": "PA-022",
+      "turn_index": 4,
+      "category": "write_effect",
+      "tool": "book_appointment",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 23,
+      "case_id": "PA-023",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'insert pending_action type=owner_stock_update, state=collecting_details, details={updates: [{item: chicken_breast, add_kg: 25}, {item: mutton, add_kg: 15}, {item: fish, add_kg: 10}]}'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 23,
+      "case_id": "PA-023",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'update pending_action state=confirmed; update inventory chicken_breast_kg=30.0, mutton_kg=17.0, fish_kg=10.0'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 23,
+      "case_id": "PA-023",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_stock",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_stock' is not a public tool in the contract"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 23,
+      "case_id": "PA-023",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": "check_stock",
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 23,
+      "case_id": "PA-023",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 24,
+      "case_id": "PA-024",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': \"insert pending_action type=owner_price_update, state=collecting_details, details={updates: [{item: butter_naan, old_price: 25, new_price: 30}, {item: garlic_naan, old_price: 30, new_price: 35}, {item: plain_roti, old_price: 10, new_price: 12}], reason: 'flour price increase'}\"} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 24,
+      "case_id": "PA-024",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'update pending_action state=confirmed; update price_list butter_naan=30, garlic_naan=35, plain_roti=12'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 24,
+      "case_id": "PA-024",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 24,
+      "case_id": "PA-024",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 25,
+      "case_id": "PA-025",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': \"insert pending_action type=owner_schedule_update, state=collecting_details, details={updates: [{day: wednesday, old: {start: 09:00, end: 13:00}, new: {start: 09:00, end: 17:00}}, {day: saturday, old: {start: 09:00, end: 13:00}, new: closed}], effective_from: '2026-08-03'}\"} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 25,
+      "case_id": "PA-025",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'description': 'update pending_action state=confirmed; update schedule wednesday={start: 09:00, end: 17:00}, saturday=closed, effective_from=2026-08-03'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 25,
+      "case_id": "PA-025",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 25,
+      "case_id": "PA-025",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "provider_routing.jsonl",
+      "line": 1,
+      "case_id": "PRT-001",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "provider_routing.jsonl",
+      "line": 2,
+      "case_id": "PRT-002",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'incident_logged': True} is not valid under any of the given schemas"
+    },
+    {
+      "file": "provider_routing.jsonl",
+      "line": 2,
+      "case_id": "PRT-002",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'pending_only'"
+    },
+    {
+      "file": "provider_routing.jsonl",
+      "line": 3,
+      "case_id": "PRT-003",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'preferred_language': 'en-IN'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "provider_routing.jsonl",
+      "line": 3,
+      "case_id": "PRT-003",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'none'"
+    },
+    {
+      "file": "provider_routing.jsonl",
+      "line": 4,
+      "case_id": "PRT-004",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "get_business_info",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'get_business_info' is not a public tool in the contract"
+    },
+    {
+      "file": "provider_routing.jsonl",
+      "line": 4,
+      "case_id": "PRT-004",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "get_business_info",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'get_business_info' is not a public tool in the contract"
+    },
+    {
+      "file": "provider_routing.jsonl",
+      "line": 5,
+      "case_id": "PRT-005",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "get_business_info",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'get_business_info' is not a public tool in the contract"
+    },
+    {
+      "file": "provider_routing.jsonl",
+      "line": 5,
+      "case_id": "PRT-005",
+      "turn_index": 1,
+      "category": "tool_arguments",
+      "tool": "escalate_to_owner",
+      "path": [],
+      "validator": "required",
+      "message": "'urgency' is a required property"
+    },
+    {
+      "file": "provider_routing.jsonl",
+      "line": 5,
+      "case_id": "PRT-005",
+      "turn_index": 1,
+      "category": "tool_arguments",
+      "tool": "escalate_to_owner",
+      "path": [],
+      "validator": "additionalProperties",
+      "message": "Additional properties are not allowed ('caller_phone' was unexpected)"
+    },
+    {
+      "file": "voice_runtime.jsonl",
+      "line": 1,
+      "case_id": "VRT-001",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        2,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'call_ended': True, 'end_reason': 'silence_timeout'} is not valid under any of the given schemas"
+    },
+    {
+      "file": "voice_runtime.jsonl",
+      "line": 1,
+      "case_id": "VRT-001",
+      "turn_index": 2,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'pending_only'"
+    },
+    {
+      "file": "voice_runtime.jsonl",
+      "line": 3,
+      "case_id": "VRT-003",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "voice_runtime.jsonl",
+      "line": 4,
+      "case_id": "VRT-004",
+      "turn_index": 1,
+      "category": "unknown_tool",
+      "tool": "book_appointment",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'book_appointment' is not a public tool in the contract"
+    },
+    {
+      "file": "voice_runtime.jsonl",
+      "line": 5,
+      "case_id": "VRT-005",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "get_business_info",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'get_business_info' is not a public tool in the contract"
+    },
+    {
+      "file": "voice_runtime.jsonl",
+      "line": 8,
+      "case_id": "VRT-008",
+      "turn_index": 0,
+      "category": "unknown_tool",
+      "tool": "check_slots",
+      "path": [],
+      "validator": null,
+      "message": "expected_tool 'check_slots' is not a public tool in the contract"
+    },
+    {
+      "file": "voice_runtime.jsonl",
+      "line": 9,
+      "case_id": "VRT-009",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'appointment_created': False, 'pending_booking_discarded': True} is not valid under any of the given schemas"
+    },
+    {
+      "file": "voice_runtime.jsonl",
+      "line": 9,
+      "case_id": "VRT-009",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'pending_only'"
+    },
+    {
+      "file": "voice_runtime.jsonl",
+      "line": 10,
+      "case_id": "VRT-010",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        0,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'must_check_transaction_status': True, 'must_not_create_duplicate_booking': True} is not valid under any of the given schemas"
+    },
+    {
+      "file": "voice_runtime.jsonl",
+      "line": 10,
+      "case_id": "VRT-010",
+      "turn_index": null,
+      "category": "case_schema",
+      "tool": null,
+      "path": [
+        "turns",
+        1,
+        "expected_database_effect"
+      ],
+      "validator": "oneOf",
+      "message": "schema: {'booking_not_created': True, 'recovery_logged': True} is not valid under any of the given schemas"
+    },
+    {
+      "file": "voice_runtime.jsonl",
+      "line": 10,
+      "case_id": "VRT-010",
+      "turn_index": 0,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'pending_only'"
+    },
+    {
+      "file": "voice_runtime.jsonl",
+      "line": 10,
+      "case_id": "VRT-010",
+      "turn_index": 1,
+      "category": "write_effect",
+      "tool": null,
+      "path": [
+        "expected_database_effect",
+        "operation"
+      ],
+      "validator": null,
+      "message": "database effect operation 'None' contradicts write policy 'pending_only'"
+    }
+  ]
+}

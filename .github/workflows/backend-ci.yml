@@ -1,0 +1,116 @@
+name: Backend CI
+
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: backend-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: fonely_test
+          POSTGRES_USER: fonely_test
+          POSTGRES_PASSWORD: fonely_test_ci_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fonely_test -d fonely_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+          --health-start-period 10s
+
+    env:
+      FONELY_TEST_DATABASE_URL: postgresql+asyncpg://fonely_test:fonely_test_ci_only@localhost:5432/fonely_test
+      DATABASE_URL: postgresql+asyncpg://fonely_test:fonely_test_ci_only@localhost:5432/fonely_test
+      FONELY_ALLOW_DESTRUCTIVE_TEST_DB: "1"
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      # actions/checkout v4.2.2
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      # actions/setup-python v5.3.0
+      - name: Install Python 3.12
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with:
+          python-version: "3.12"
+
+      # astral-sh/setup-uv v4.2.0
+      - name: Install uv
+        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a
+
+      - name: Cache uv packages
+        uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a  # v4.1.2
+        with:
+          path: ~/.cache/uv
+          key: uv-${{ runner.os }}-py3.12-${{ hashFiles('backend/pyproject.toml', 'backend/uv.lock') }}
+          restore-keys: |
+            uv-${{ runner.os }}-py3.12-
+
+      - name: Require lockfile
+        run: |
+          if [ ! -f uv.lock ]; then
+            echo "ERROR: backend/uv.lock not found. Run 'uv lock' locally and commit the lockfile."
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-extras
+
+      - name: Validate evaluation corpus and tool contracts
+        working-directory: .
+        run: >-
+          backend/.venv/bin/python scripts/validate-evals.py
+          --tool-mismatch-report "${{ runner.temp }}/tool-contract-mismatches.ci.json"
+
+      - name: Verify Chennai pilot evaluation coverage
+        working-directory: .
+        run: >-
+          backend/.venv/bin/python scripts/report-eval-coverage.py
+          --profile chennai-pilot
+
+      - name: Verify package import
+        run: .venv/bin/python -c "import fonely; print(fonely.__file__)"
+
+      - name: Ruff check
+        run: .venv/bin/ruff check .
+
+      - name: Ruff format check
+        run: .venv/bin/ruff format --check .
+
+      - name: Mypy
+        run: .venv/bin/mypy src
+
+      - name: Migration upgrade to head
+        run: .venv/bin/alembic upgrade head
+
+      - name: Alembic check
+        run: .venv/bin/alembic check
+
+      - name: Unit and non-PostgreSQL tests
+        run: .venv/bin/pytest -m "not postgres" -q
+
+      - name: PostgreSQL integration tests
+        run: .venv/bin/pytest -m postgres -q
+
+      - name: Migration downgrade to base
+        run: .venv/bin/alembic downgrade base
+
+      - name: Migration upgrade to head (verify re-upgrade)
+        run: .venv/bin/alembic upgrade head

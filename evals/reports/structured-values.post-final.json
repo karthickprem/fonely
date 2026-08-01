@@ -1,0 +1,51 @@
+{
+  "report_version": 1,
+  "phase": "post_final_scalar_id_intent_migration",
+  "total_numeric_fields": 113,
+  "numeric_by_python_type": {
+    "str": 113
+  },
+  "invalid_numeric_fields": 0,
+  "unit_bearing_numeric_strings": 0,
+  "quantity_fields_missing_unit": 0,
+  "total_id_fields": 557,
+  "id_by_field_and_type": {
+    "action_id:int": 61,
+    "appointment_id:int": 5,
+    "business_id:int": 142,
+    "order_id:int": 11,
+    "product_id:NoneType": 60,
+    "product_id:int": 93,
+    "reservation_id:int": 5,
+    "resource_id:NoneType": 45,
+    "resource_id:int": 32,
+    "service_id:NoneType": 31,
+    "service_id:int": 72
+  },
+  "invalid_id_fields": 0,
+  "unique_intent_labels": 21,
+  "non_null_intent_turns": 317,
+  "intent_counts": {
+    "appointment_cancel": 3,
+    "appointment_confirm": 11,
+    "appointment_create": 15,
+    "appointment_reschedule": 2,
+    "authorization_denied": 28,
+    "availability_query": 57,
+    "business_information_query": 19,
+    "clarification_request": 16,
+    "escalation_request": 14,
+    "internal_system_event": 11,
+    "inventory_query": 16,
+    "order_cancel": 4,
+    "order_confirm": 15,
+    "order_create": 33,
+    "order_revise": 5,
+    "price_update_propose": 1,
+    "provider_recovery": 5,
+    "response_presented": 32,
+    "runtime_recovery": 14,
+    "stock_update_propose": 9,
+    "validation_rejected": 7
+  }
+}

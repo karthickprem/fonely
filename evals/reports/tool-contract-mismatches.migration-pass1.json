@@ -1,0 +1,40 @@
+{
+  "report_version": 1,
+  "phase": "qa2_validation",
+  "total_cases": 211,
+  "total_turns": 377,
+  "failing_turns": 2,
+  "individual_mismatches": 2,
+  "by_category": {
+    "tool_outcome": 2
+  },
+  "by_tool": {
+    "check_inventory": 1,
+    "create_pending_order": 1
+  },
+  "by_validator": {},
+  "mismatches": [
+    {
+      "file": "inventory_orders.jsonl",
+      "line": 17,
+      "case_id": "INV-017",
+      "turn_index": 0,
+      "category": "tool_outcome",
+      "tool": "create_pending_order",
+      "path": [],
+      "validator": null,
+      "message": "tool 'create_pending_order' does not allow outcome 'expired'"
+    },
+    {
+      "file": "pending_actions.jsonl",
+      "line": 4,
+      "case_id": "PA-004",
+      "turn_index": 0,
+      "category": "tool_outcome",
+      "tool": "check_inventory",
+      "path": [],
+      "validator": null,
+      "message": "tool 'check_inventory' does not allow outcome 'stale_version'"
+    }
+  ]
+}

@@ -256,8 +256,7 @@ def _sql_argument(call: ast.Call, filename: str, sink: tuple[str, ...]) -> ast.A
     maximum_positional = 1 if sink == ("op", "execute") else 2
     if (
         unknown
-        or not call.args
-        and not call.keywords
+        or (not call.args and not call.keywords)
         or len(call.args) > maximum_positional
     ):
         raise PolicyError(f"{filename}: malformed database execution call")
@@ -336,10 +335,11 @@ def _aliases_and_constants(
         for target, value in assignments:
             value_name = _call_name(value)
             if (
-                value_name == ("op", "get_bind()")
-                and isinstance(value, ast.Call)
-                or isinstance(value, ast.Name)
-                and value.id in bindings
+                (
+                    value_name == ("op", "get_bind()")
+                    and isinstance(value, ast.Call)
+                )
+                or (isinstance(value, ast.Name) and value.id in bindings)
             ):
                 if target.id not in bindings:
                     bindings.add(target.id)

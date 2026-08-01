@@ -13,10 +13,16 @@ def test_jsonschema_is_declared_in_dev_dependencies() -> None:
     assert "jsonschema>=4.26,<5" in dev_dependencies
 
 
-def test_lockfile_contains_jsonschema() -> None:
-    lock_text = (BACKEND_ROOT / "uv.lock").read_text()
-    assert 'name = "jsonschema"' in lock_text
-    assert 'version = "4.26.0"' in lock_text
+def test_lockfile_contains_resolved_jsonschema_dependency() -> None:
+    lock = tomllib.loads((BACKEND_ROOT / "uv.lock").read_text())
+    package = next(item for item in lock["package"] if item["name"] == "jsonschema")
+    assert package["version"] == "4.26.0"
+
+    fonely = next(item for item in lock["package"] if item["name"] == "fonely")
+    requirements = fonely["metadata"]["requires-dist"]
+    jsonschema_requirement = next(item for item in requirements if item["name"] == "jsonschema")
+    assert jsonschema_requirement["specifier"] == ">=4.26,<5"
+    assert jsonschema_requirement["marker"] == "extra == 'dev'"
 
 
 def test_ci_uses_frozen_sync_and_required_root_qa_gates() -> None:

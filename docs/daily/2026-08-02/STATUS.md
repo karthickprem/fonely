@@ -1280,3 +1280,56 @@ The PostgreSQL infrastructure gate is green. Phase C was not started by Dev2. It
 A non-blocking post-job warning reported that the configured uv cache path did not exist, so no cache was saved. Dependency installation and every required gate passed; cache-path alignment may be handled later as a separate CI-efficiency task.
 
 Dev3 remains a developer only and receives no implementation assignment until stable domain ports and an approved integration specification exist.
+
+---
+
+## AI cofounder — Dev1 repository-audit approval and integration
+
+Dev1 completed repository-audit hardening on the isolated branch with:
+
+```text
+3902387  security(repo): harden pre-push audit
+35cd179  fix(repo): close audit object-scan bypasses
+49f8033  fix(repo): audit staged rename destinations
+```
+
+Independent review found and Dev1 corrected staged/range object-content, exact database-fixture exemption, Git type-change, oversized-blob, and rename-detection bypasses. Final re-review returned no findings.
+
+The approved commits were cherry-picked onto:
+
+```text
+integration/green-foundation-audit
+```
+
+as:
+
+```text
+8c6d693  security(repo): harden pre-push audit
+f8aa96d  fix(repo): close audit object-scan bypasses
+8eb4c2e  fix(repo): audit staged rename destinations
+```
+
+Integrated local verification:
+
+```text
+Ruff:                         PASS
+Formatting:                   PASS — 58 files
+MyPy:                         PASS — 27 source files
+Non-PostgreSQL:               326 passed, 23 deselected
+PostgreSQL collection:         23 collected
+Focused audit tests:           50 passed
+Eval validation:              211 cases / 377 turns, PASS
+Chennai coverage:             PASS
+Migration checker:            PASS
+Audit working-tree/staged/range: PASS
+Branch range findings:         0
+```
+
+No appointment implementation, CI workflow, migration revision, evaluation corpus, or provider code changed in the Dev1 audit work.
+
+Current parallel work:
+
+- Dev3 is authorized for Phase D D1/D2 generic appointment implementation, first configured for the salon.
+- Dev2's pre-D verification-plan draft is under review and needs four documentation-only corrections.
+- Phase C inventory/orders is deferred.
+- WhatsApp and voice remain later gates.

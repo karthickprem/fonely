@@ -256,17 +256,15 @@ Volatile assignment and CI state are maintained in `docs/STATUS.md`. At this sna
 
 ### Dev1 current assignment
 
-1. Harden the repository audit in the isolated `dev1/harden-pre-push-audit` worktree.
-2. Scan actual staged/range Git blobs, strengthen credential detection, and add regression tests.
-3. Do not edit Dev2 CI/PostgreSQL files or begin Phase C.
+Repository-audit hardening is complete, independently approved, and integrated locally. Dev1 waits for a new bounded assignment and must not edit Dev3 appointment files.
 
 ### Dev2 current assignment
 
-The PostgreSQL CI correction is complete and independently verified in run `30687004089`: all 23 contracts and migration downgrade/re-upgrade passed. Dev2 awaits the next separately approved CI, QA, or infrastructure assignment and must not begin Phase C domain work.
+The PostgreSQL foundation is green. Dev2 is designing independent Phase D traceability, migration verification, and future PostgreSQL contracts. Dev2 must not patch Dev3 appointment implementation; findings return to Dev3 through the AI cofounder.
 
 ### Dev3 current assignment
 
-Dev3 currently has no approved implementation workstream. Dev3 is a developer only and waits for an explicit implementation assignment. The AI cofounder owns specifications and acceptance criteria.
+Dev3 is explicitly assigned Phase D D1/D2 implementation for the generic appointment capability, first configured for a salon. Dev3 owns appointment-specific migration `0004`, ORM/enums, ResourceAllocation capacity schema, pure appointment contracts/rules, appointment PendingAction payloads, and unit/parity tests. Dev3 stops before D3 repository/service transactions for independent review.
 
 ### AI cofounder current assignment
 
@@ -303,7 +301,7 @@ Phase A: implemented; PostgreSQL CI gate passed
 Phase B/B.1: locally approved through migration 0003
 QA.3: mechanically approved as a structural conformance gate; human reviews pending
 Latest PostgreSQL CI: green — 23/23 contracts plus downgrade/re-upgrade passed
-Phase C: technically eligible for founder authorization after vertical selection and approved bounded specification
+Phase D D1/D2: authorized for Dev3 after salon selection; Phase C inventory/orders deferred
 ```
 
 See `docs/STATUS.md` for run `30687004089`, exact evidence, and current assignments.

@@ -106,20 +106,21 @@ Every case remains language-synthetic, domain-unreviewed, and pilot-untested unl
 ### Dev1 — developer
 
 - Owns domain/backend implementation and backend dependency correctness.
-- Current isolated assignment: harden the repository audit on `dev1/harden-pre-push-audit`.
-- Must not modify Dev2's CI/PostgreSQL work or begin Phase C.
+- Repository-audit hardening is complete and independently approved through commits `3902387`, `35cd179`, and `49f8033`; it is integrated on `integration/green-foundation-audit`.
+- Dev1 awaits the next separately approved domain assignment and must not edit Dev3's appointment work.
 
 ### Dev2 — developer
 
 - Owns CI, PostgreSQL verification infrastructure, QA tooling/corpus maintenance, and operational test tooling.
-- PostgreSQL CI correction is complete: cache pin, async loop scope, migration-head contract, 23 contracts, and downgrade/re-upgrade are verified green.
-- Next assignment should remain a separately approved CI/QA/infrastructure task; Dev2 must not begin domain Phase C work.
+- PostgreSQL CI correction is complete and green.
+- Current assignment: pre-D appointment verification traceability and PostgreSQL-test blueprint. The first draft is under review and needs four documentation corrections before approval; Dev2 does not edit Dev3 implementation.
 
 ### Dev3 — developer only
 
 - Has no independent review, specification-approval, or phase-gate authority.
-- Future approved scope: provider adapters, public-tool dispatch, conversation orchestration, thin-slice integration, and later the appointment engine.
-- Implementation begins only after an explicit assignment against an AI-cofounder-approved specification.
+- Explicitly assigned Phase D D1/D2 for the generic appointment capability, configured first for the nearby salon.
+- Current authorized scope: migration `0004`, appointment-specific ORM/enums, ResourceAllocation capacity design, pure appointment domain, appointment PendingAction payloads, and unit/parity tests.
+- D3 repository/service transactions, WhatsApp, voice, providers, and public tooling remain gated.
 
 ### AI cofounder
 
@@ -131,16 +132,16 @@ Every case remains language-synthetic, domain-unreviewed, and pilot-untested unl
 
 ## Immediate next gate
 
-The PostgreSQL gate is complete. The next decisions are product and integration gates:
+The founder selected salon appointments, so Phase D is brought forward while Phase C inventory/orders is deferred.
 
-1. Review Dev1's isolated repository-audit hardening separately.
-2. Integrate the focused Dev2 commits and this documentation update through reviewed Git history.
-3. Secure or confirm a credible design-partner commitment and select the first deterministic engine.
-4. AI cofounder finalizes its implementation specification and acceptance traceability.
-5. Founder authorizes the selected Phase C/D implementation priority.
-6. Assign non-overlapping implementation work to Dev1 and, only when stable ports exist, Dev3.
+1. Dev1 audit hardening is approved and integrated locally; run CI after publishing/integrating the branch.
+2. Dev3 implements only D1/D2 appointment schema/pure-domain work and stops for independent review.
+3. Dev2 corrects and finalizes the independent appointment verification blueprint without editing Dev3 code.
+4. The AI cofounder reviews migration `0004`, ResourceAllocation capacity semantics, create-versus-mutation commit linkage, payloads, and tests.
+5. Dev2 implements live PostgreSQL appointment contracts only after Dev3's interfaces stabilize.
+6. WhatsApp setup and voice integration remain later gates.
 
-Phase C code has not started. Green CI makes it technically eligible for authorization; customer/vertical selection and an approved bounded specification remain required.
+Phase C inventory/order code has not started and is intentionally deferred.
 
 ## Explicit non-claims
 

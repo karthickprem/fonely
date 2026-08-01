@@ -182,11 +182,7 @@ def _labels(value: Any, filename: str) -> tuple[str, ...]:
         raise PolicyError(f"{filename}: invalid branch_labels metadata type")
     labels: list[str] = []
     for label in value:
-        if (
-            not isinstance(label, str)
-            or not LABEL_RE.fullmatch(label)
-            or label.lower() in RESERVED
-        ):
+        if not isinstance(label, str) or not LABEL_RE.fullmatch(label) or label.lower() in RESERVED:
             raise PolicyError(f"{filename}: invalid branch label")
         labels.append(label)
     if len(labels) != len(set(labels)):
@@ -224,9 +220,7 @@ def _call_name(node: ast.AST) -> tuple[str, ...]:
     return ()
 
 
-def _execution_sink(
-    call: ast.Call, aliases: dict[str, tuple[str, ...]]
-) -> tuple[str, ...] | None:
+def _execution_sink(call: ast.Call, aliases: dict[str, tuple[str, ...]]) -> tuple[str, ...] | None:
     name = _call_name(call.func)
     if len(name) == 1 and name[0] in aliases:
         name = aliases[name[0]]
@@ -254,15 +248,9 @@ def _sql_argument(call: ast.Call, filename: str, sink: tuple[str, ...]) -> ast.A
     supported = {"sqltext"}
     unknown = [keyword.arg for keyword in call.keywords if keyword.arg not in supported]
     maximum_positional = 1 if sink == ("op", "execute") else 2
-    if (
-        unknown
-        or (not call.args and not call.keywords)
-        or len(call.args) > maximum_positional
-    ):
+    if unknown or (not call.args and not call.keywords) or len(call.args) > maximum_positional:
         raise PolicyError(f"{filename}: malformed database execution call")
-    keyword_values = [
-        keyword.value for keyword in call.keywords if keyword.arg == "sqltext"
-    ]
+    keyword_values = [keyword.value for keyword in call.keywords if keyword.arg == "sqltext"]
     if (1 if call.args else 0) + len(keyword_values) != 1:
         raise PolicyError(f"{filename}: malformed database execution call")
     return call.args[0] if call.args else keyword_values[0]
@@ -334,12 +322,8 @@ def _aliases_and_constants(
         changed = False
         for target, value in assignments:
             value_name = _call_name(value)
-            if (
-                (
-                    value_name == ("op", "get_bind()")
-                    and isinstance(value, ast.Call)
-                )
-                or (isinstance(value, ast.Name) and value.id in bindings)
+            if (value_name == ("op", "get_bind()") and isinstance(value, ast.Call)) or (
+                isinstance(value, ast.Name) and value.id in bindings
             ):
                 if target.id not in bindings:
                     bindings.add(target.id)
@@ -401,9 +385,7 @@ def _bind_helper_call(function: ast.FunctionDef, call: ast.Call) -> dict[str, as
         raise PolicyError("unsupported helper call binding")
     if len(call.args) > len(parameter_names):
         raise PolicyError("unsupported helper call binding")
-    bound = {
-        parameter_names[index]: argument for index, argument in enumerate(call.args)
-    }
+    bound = {parameter_names[index]: argument for index, argument in enumerate(call.args)}
     if any(name in bound for name in keyword_map):
         raise PolicyError("unsupported helper call binding")
     bound.update(keyword_map)
@@ -501,8 +483,7 @@ def _resolve_parameter_values(
                                 for node in enclosing.body
                                 if isinstance(node, ast.Assign)
                                 for target in node.targets
-                                if isinstance(target, ast.Name)
-                                and node.value is assigned_value
+                                if isinstance(target, ast.Name) and node.value is assigned_value
                             )
                         ).elts
                     )
@@ -532,9 +513,9 @@ def _resolve_parameter_values(
                     if isinstance(item, ast.Name) and item.id == argument.id
                 )
                 for item in assigned_loop_source.elts:
-                    if not isinstance(
-                        item, (ast.Tuple, ast.List)
-                    ) or target_index >= len(item.elts):
+                    if not isinstance(item, (ast.Tuple, ast.List)) or target_index >= len(
+                        item.elts
+                    ):
                         raise PolicyError("unresolved database execution")
                     value, _ = _static_sql(item.elts[target_index], {})
                     if value is None:
@@ -573,8 +554,7 @@ def _statement_level_extension(
     if direction != "upgrade":
         return False
     return any(
-        isinstance(statement, ast.Expr) and statement.value is call
-        for statement in function.body
+        isinstance(statement, ast.Expr) and statement.value is call for statement in function.body
     )
 
 
@@ -586,9 +566,7 @@ def source_info(path: Path) -> SourceInfo:
     except (OSError, UnicodeError, SyntaxError) as exc:
         raise PolicyError(f"{filename}: source parse/read failure") from exc
     assignments = _assignment_map(tree, filename)
-    revision = _safe_revision(
-        _literal(assignments["revision"], filename), filename, "revision"
-    )
+    revision = _safe_revision(_literal(assignments["revision"], filename), filename, "revision")
     parents = _references(
         _literal(assignments["down_revision"], filename), filename, "down_revision"
     )
@@ -599,8 +577,7 @@ def source_info(path: Path) -> SourceInfo:
     functions = _function_map(tree, filename)
     merge = len(parents) > 1
     if not merge and (
-        not _meaningful(functions["upgrade"].body)
-        or not _meaningful(functions["downgrade"].body)
+        not _meaningful(functions["upgrade"].body) or not _meaningful(functions["downgrade"].body)
     ):
         raise PolicyError(f"{filename}: ordinary migration body is empty")
 
@@ -632,8 +609,7 @@ def source_info(path: Path) -> SourceInfo:
                 parameter_name = argument.id
             elif (
                 isinstance(argument, ast.Call)
-                and _call_name(argument.func)
-                in {("sa", "text"), ("sqlalchemy", "text")}
+                and _call_name(argument.func) in {("sa", "text"), ("sqlalchemy", "text")}
                 and len(argument.args) == 1
                 and isinstance(argument.args[0], ast.Name)
             ):
@@ -647,12 +623,8 @@ def source_info(path: Path) -> SourceInfo:
                 sql_values = (sql,) if sql is not None else ()
             if not sql_values:
                 if direction == "helper" and not sensitive:
-                    parameter_names = {
-                        parameter.arg for parameter in function.args.args
-                    }
-                    if parameter_name in parameter_names or isinstance(
-                        argument, ast.JoinedStr
-                    ):
+                    parameter_names = {parameter.arg for parameter in function.args.args}
+                    if parameter_name in parameter_names or isinstance(argument, ast.JoinedStr):
                         continue
                 category = (
                     "ambiguous extension-sensitive execution"
@@ -661,16 +633,12 @@ def source_info(path: Path) -> SourceInfo:
                 )
                 raise PolicyError(f"{filename}:{node.lineno}: {category}")
             evidences = [inspect_sql(value, procedural=False) for value in sql_values]
-            extension_evidence = [
-                evidence for evidence in evidences if evidence.extensions
-            ]
+            extension_evidence = [evidence for evidence in evidences if evidence.extensions]
             if not extension_evidence:
                 continue
             evidence = extension_evidence[0]
             if len(extension_evidence) != 1:
-                raise PolicyError(
-                    f"{filename}:{node.lineno}: unsupported extension source"
-                )
+                raise PolicyError(f"{filename}:{node.lineno}: unsupported extension source")
             if (
                 sink != ("op", "execute")
                 or _call_name(node.func) != ("op", "execute")
@@ -684,14 +652,10 @@ def source_info(path: Path) -> SourceInfo:
                     f"{filename}:{node.lineno}: extension execution has no direct upgrade owner"
                 )
             if len(evidence.extensions) != 1:
-                raise PolicyError(
-                    f"{filename}:{node.lineno}: unsupported extension source"
-                )
+                raise PolicyError(f"{filename}:{node.lineno}: unsupported extension source")
             operation = evidence.extensions[0]
             if operation.operation != "CREATE" or operation.name != ALLOWED_EXTENSION:
-                raise PolicyError(
-                    f"{filename}:{node.lineno}: forbidden extension source"
-                )
+                raise PolicyError(f"{filename}:{node.lineno}: forbidden extension source")
             extensions.append(SourceExtension(direction, node.lineno, operation.name))
 
     for node in ast.walk(tree):
@@ -704,12 +668,8 @@ def source_info(path: Path) -> SourceInfo:
         )
         normalized_fragments = re.sub(r"(?s)/\*.*?\*/|\s+", "", fragments)
         if re.search(r"(?i)(?:create|drop|alter)extension", normalized_fragments):
-            raise PolicyError(
-                f"{filename}:{node.lineno}: unowned extension-sensitive call"
-            )
-    return SourceInfo(
-        revision, parents, labels, dependencies, path, merge, tuple(extensions)
-    )
+            raise PolicyError(f"{filename}:{node.lineno}: unowned extension-sensitive call")
+    return SourceInfo(revision, parents, labels, dependencies, path, merge, tuple(extensions))
 
 
 def sql_tokens(sql: str) -> tuple[SqlToken, ...]:
@@ -853,11 +813,7 @@ def _procedural_bodies(statement: tuple[SqlToken, ...]) -> tuple[str, ...]:
 
 
 def _extension_statement(statement: tuple[SqlToken, ...]) -> ExtensionOperation | None:
-    if (
-        len(statement) >= 2
-        and statement[0].kind == "word"
-        and _word(statement[1], "EXTENSION")
-    ):
+    if len(statement) >= 2 and statement[0].kind == "word" and _word(statement[1], "EXTENSION"):
         operation = statement[0].value.upper()
         if operation not in {"CREATE", "ALTER", "DROP"}:
             return None
@@ -876,30 +832,17 @@ def _extension_statement(statement: tuple[SqlToken, ...]) -> ExtensionOperation 
         }:
             return ExtensionOperation("UNSUPPORTED", None, statement[0].position)
         name_token = remainder[cursor]
-        if (
-            name_token.kind == "identifier"
-            and name_token.value != name_token.value.lower()
-        ):
+        if name_token.kind == "identifier" and name_token.value != name_token.value.lower():
             return ExtensionOperation("UNSUPPORTED", None, statement[0].position)
-        return ExtensionOperation(
-            "CREATE", name_token.value.lower(), statement[0].position
-        )
+        return ExtensionOperation("CREATE", name_token.value.lower(), statement[0].position)
     words = tuple(token.value.upper() for token in statement if token.kind == "word")
     if (
         any(words[: len(prefix)] == prefix for prefix in EXTENSION_OBJECT_PREFIXES)
         or any(
-            len(words) >= 3
-            and words[0] == prefix[0]
-            and "ON" in words
-            and "EXTENSION" in words
+            len(words) >= 3 and words[0] == prefix[0] and "ON" in words and "EXTENSION" in words
             for prefix in EXTENSION_OBJECT_INFIXES
         )
-        or (
-            words
-            and words[0] == "ALTER"
-            and "DEPENDS" in words
-            and "EXTENSION" in words
-        )
+        or (words and words[0] == "ALTER" and "DEPENDS" in words and "EXTENSION" in words)
     ):
         return ExtensionOperation("OBJECT", None, statement[0].position)
     if "EXTENSION" in words:
@@ -955,12 +898,7 @@ def _exclusion_create(
     if not statement or not _word(statement[0], "ALTER"):
         return None
     words = [token.value.upper() for token in statement if token.kind == "word"]
-    if (
-        len(words) < 7
-        or words[1] != "TABLE"
-        or "ADD" not in words
-        or "CONSTRAINT" not in words
-    ):
+    if len(words) < 7 or words[1] != "TABLE" or "ADD" not in words or "CONSTRAINT" not in words:
         return None
     for index in range(len(statement) - 2):
         if (
@@ -969,11 +907,7 @@ def _exclusion_create(
             and _word(statement[index + 2], "GIST")
         ):
             constraint_index = next(
-                (
-                    offset
-                    for offset, token in enumerate(statement)
-                    if _word(token, "CONSTRAINT")
-                ),
+                (offset for offset, token in enumerate(statement) if _word(token, "CONSTRAINT")),
                 -1,
             )
             if constraint_index < 0 or constraint_index + 1 >= len(statement):
@@ -998,11 +932,7 @@ def _exclusion_drop(
     ):
         return None
     index = next(
-        (
-            offset
-            for offset, token in enumerate(statement)
-            if _word(token, "CONSTRAINT")
-        ),
+        (offset for offset, token in enumerate(statement) if _word(token, "CONSTRAINT")),
         -1,
     )
     if index < 0 or index + 1 >= len(statement):
@@ -1026,11 +956,7 @@ def _exclusion_drop(
 def _dropped_relation(
     statement: tuple[SqlToken, ...],
 ) -> tuple[RelationKey, int] | None:
-    if (
-        len(statement) < 3
-        or not _word(statement[0], "DROP")
-        or not _word(statement[1], "TABLE")
-    ):
+    if len(statement) < 3 or not _word(statement[0], "DROP") or not _word(statement[1], "TABLE"):
         return None
     index = 2
     if (
@@ -1144,11 +1070,7 @@ def inspect_sql(sql: str, *, procedural: bool = True) -> SqlEvidence:
                     )
                     if re.search(r"(?i)\b(?:EXECUTE|PERFORM|CALL)\b", residual):
                         reviewed_internal_perform = False
-                if (
-                    unsupported_execution
-                    and not reviewed_lock
-                    and not reviewed_internal_perform
-                ):
+                if unsupported_execution and not reviewed_lock and not reviewed_internal_perform:
                     raise PolicyError("unsupported procedural SQL")
                 if extension_sensitive:
                     raise PolicyError("procedural extension behavior is forbidden")
@@ -1183,9 +1105,7 @@ def discover_graph(
     candidates = _candidate_files(versions_dir)
     if not candidates:
         raise PolicyError("revision graph contains no migrations")
-    sources = {
-        info.revision: info for info in (source_info(path) for path in candidates)
-    }
+    sources = {info.revision: info for info in (source_info(path) for path in candidates)}
     if len(sources) != len(candidates):
         raise PolicyError("duplicate revision metadata")
     capture_out, capture_err = io.StringIO(), io.StringIO()
@@ -1324,9 +1244,7 @@ def _render(
 def _apply_sql_policy(evidence: SqlEvidence, direction: str) -> None:
     for operation in evidence.extensions:
         if direction != "upgrade":
-            raise PolicyError(
-                f"cumulative {direction}: extension state mutation is forbidden"
-            )
+            raise PolicyError(f"cumulative {direction}: extension state mutation is forbidden")
         if operation.operation != "CREATE" or operation.name != ALLOWED_EXTENSION:
             raise PolicyError("cumulative upgrade: forbidden extension operation")
 
@@ -1355,12 +1273,8 @@ def check_repository(
 ) -> dict[str, object]:
     graph, sources = discover_graph(config_path, versions_dir)
     head = graph.heads[0]
-    upgrade = _render(
-        alembic, config_path, backend_root, "upgrade", "base:heads", timeout
-    )
-    downgrade = _render(
-        alembic, config_path, backend_root, "downgrade", "heads:base", timeout
-    )
+    upgrade = _render(alembic, config_path, backend_root, "upgrade", "base:heads", timeout)
+    downgrade = _render(alembic, config_path, backend_root, "downgrade", "heads:base", timeout)
     if not upgrade.ok:
         raise PolicyError("cumulative upgrade render failure")
     if not downgrade.ok:
@@ -1386,10 +1300,7 @@ def check_repository(
     active_exclusions: dict[ConstraintKey, int] = {}
     exclusion_events = (
         [(position, "create", name) for name, position in upgrade_evidence.exclusions]
-        + [
-            (position, "drop", name)
-            for name, position in upgrade_evidence.dropped_exclusions
-        ]
+        + [(position, "drop", name) for name, position in upgrade_evidence.dropped_exclusions]
         + [
             (position, "drop_relation", relation)
             for relation, position in upgrade_evidence.dropped_relations
@@ -1402,29 +1313,19 @@ def check_repository(
             active_exclusions.pop(name, None)
         else:
             active_exclusions = {
-                key: created
-                for key, created in active_exclusions.items()
-                if key.relation != name
+                key: created for key, created in active_exclusions.items() if key.relation != name
             }
     for relation, _ in upgrade_evidence.renamed_relations:
         if any(key.relation == relation for key in active_exclusions):
             raise PolicyError("tracked exclusion relation rename is unsupported")
     if active_exclusions and len(rendered_extensions) != 1:
-        raise PolicyError(
-            "surviving GiST exclusion requires approved extension ownership"
-        )
+        raise PolicyError("surviving GiST exclusion requires approved extension ownership")
     if rendered_extensions:
         extension_position = rendered_extensions[0].position
         if not active_exclusions:
-            raise PolicyError(
-                "approved extension has no surviving later GiST exclusion"
-            )
-        if any(
-            position < extension_position for position in active_exclusions.values()
-        ):
-            raise PolicyError(
-                "surviving GiST exclusion precedes extension installation"
-            )
+            raise PolicyError("approved extension has no surviving later GiST exclusion")
+        if any(position < extension_position for position in active_exclusions.values()):
+            raise PolicyError("surviving GiST exclusion precedes extension installation")
 
     # Exact ranges are additional evidence only where dependency attribution is unambiguous.
     for revision in graph.revisions:
@@ -1456,8 +1357,7 @@ def check_repository(
             exact_creates = [
                 operation
                 for operation in exact_up_evidence.extensions
-                if operation.operation == "CREATE"
-                and operation.name == ALLOWED_EXTENSION
+                if operation.operation == "CREATE" and operation.name == ALLOWED_EXTENSION
             ]
             if len(exact_creates) != len(source.extensions):
                 raise PolicyError(

@@ -127,7 +127,6 @@ import tempfile
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from urllib.parse import urlparse
 
 ROOT = Path(os.environ["FONELY_AUDIT_ROOT"])
 MODE = os.environ["FONELY_AUDIT_MODE"]
@@ -281,24 +280,27 @@ APPROVED_DATABASE_URLS: dict[str, set[str]] = {
     "scripts/test-postgres.sh": {
         "postgresql+asyncpg://fonely_test:fonely_test_local_only@localhost:55432/fonely_test",
     },
+    "backend/tests/unit/pending_actions/test_postgres_safety.py": {
+        "postgresql+asyncpg://fonely_test_user:secret@localhost:5432/fonely_test_run1",
+        "postgresql+asyncpg://fonely_test_user:secret@localhost:5432/{database_name}",
+        "postgresql+asyncpg://fonely_test_user:secret@{hostname}:5432/fonely_test",
+        "postgresql+asyncpg://app_user:secret@localhost:5432/fonely_test",
+    },
     "scripts/pre-push-audit.sh": {
         "postgresql+asyncpg://user:password@localhost:5432/fonely",
         "postgresql+asyncpg://fonely_test:fonely_test_ci_only@localhost:5432/fonely_test",
         "postgresql+asyncpg://fonely_test:fonely_test_local_only@localhost:55432/fonely_test",
         "postgresql+asyncpg://fake_test_user:fake_test_password@localhost:55432/fonely_test",
-    },
-}
-
-APPROVED_DATABASE_CREDENTIALS_BY_PATH: dict[str, set[tuple[str, str]]] = {
-    "backend/tests/unit/pending_actions/test_postgres_safety.py": {
-        ("fonely_test_user", "secret"),
-        ("app_user", "secret"),
+        "postgresql+asyncpg://fonely_test_user:secret@localhost:5432/fonely_test_run1",
+        "postgresql+asyncpg://fonely_test_user:secret@localhost:5432/{database_name}",
+        "postgresql+asyncpg://fonely_test_user:secret@{hostname}:5432/fonely_test",
+        "postgresql+asyncpg://app_user:secret@localhost:5432/fonely_test",
     },
 }
 
 
 def normalize_database_match(value: str) -> str:
-    return value.rstrip("),.;]}")
+    return value.rstrip("),.;]")
 
 
 def is_exact_placeholder(value: str) -> bool:
@@ -307,14 +309,7 @@ def is_exact_placeholder(value: str) -> bool:
 
 def approved_database(path: str, value: str) -> bool:
     normalized = normalize_database_match(value)
-    if normalized in APPROVED_DATABASE_URLS.get(path, set()):
-        return True
-    try:
-        parsed = urlparse(normalized.replace("+asyncpg", ""))
-    except ValueError:
-        return False
-    credentials = ((parsed.username or ""), (parsed.password or ""))
-    return credentials in APPROVED_DATABASE_CREDENTIALS_BY_PATH.get(path, set())
+    return normalized in APPROVED_DATABASE_URLS.get(path, set())
 
 
 def scan_text(path: str, text: str) -> set[str]:
@@ -388,14 +383,14 @@ def staged_candidates() -> list[Candidate]:
         "--cached",
         "--ita-visible-in-index",
         "--name-only",
-        "--diff-filter=AM",
+        "--diff-filter=AMT",
         "-z",
     )
     normal_raw = git(
         "diff",
         "--cached",
         "--name-only",
-        "--diff-filter=AM",
+        "--diff-filter=AMT",
         "-z",
     )
     changed = {
@@ -452,7 +447,7 @@ def range_candidates() -> list[Candidate]:
                 "diff-tree",
                 "--no-commit-id",
                 "--no-renames",
-                "--diff-filter=AM",
+                "--diff-filter=AMT",
                 "-r",
                 "--name-only",
                 "-z",
@@ -583,10 +578,11 @@ for oid, associations in blob_associations.items():
         continue
     scanned_blobs.add(oid)
     size = blob_size(oid)
-    data = read_blob(oid)
-    for candidate in associations:
-        if size > MAX_BYTES:
+    if size > MAX_BYTES:
+        for candidate in associations:
             findings.add(Finding("file-over-10MiB", candidate.path, candidate.commit))
+        continue
+    data = read_blob(oid)
     if not is_text(data):
         continue
     text = data.decode("utf-8")

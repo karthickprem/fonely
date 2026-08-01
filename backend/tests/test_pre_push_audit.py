@@ -47,10 +47,13 @@ def run_audit(
     repo: Path,
     *args: str,
     path: str | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     if path is not None:
         env["PATH"] = path
+    if extra_env is not None:
+        env.update(extra_env)
     return subprocess.run(
         [str(repo / "scripts" / "pre-push-audit.sh"), *args],
         cwd=repo,
@@ -162,16 +165,41 @@ def test_exact_approved_local_test_database_fixture_is_allowed(tmp_path: Path) -
     assert result.returncode == 0
 
 
-def test_similar_unapproved_database_credential_is_rejected(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "value",
+    [
+        "postgresql+asyncpg:/" + "/app_user:secret" + "@production.example.com:5432/customer_prod",
+        "postgresql+asyncpg:/"
+        + "/fonely_test_user:secret"
+        + "@production.example.com:5432/fonely_test",
+        "postgresql+asyncpg:/" + "/fonely_test_user:secret" + "@localhost:5432/customer_prod",
+        "postgresql+asyncpg:/"
+        + "/fonely_test_user:secret"
+        + "@localhost:5432/fonely_test?ssl=require",
+        "postgresql+asyncpg:/" + "/fonely_test_user:secret" + "@localhost:5432/fonely_test#unsafe",
+        "postgresql+asyncpg:/" + "/fonely_test_user:not_approved" + "@localhost:5432/fonely_test",
+    ],
+)
+def test_unsafe_database_fixture_variants_are_rejected(
+    tmp_path: Path,
+    value: str,
+) -> None:
     repo = create_repo(tmp_path)
-    value = (
-        "postgresql+asyncpg:/" + "/fonely_test_user:not_approved" + "@localhost:5432/fonely_test"
-    )
     stage_file(
         repo,
         "backend/tests/unit/pending_actions/test_postgres_safety.py",
         f'URL = "{value}"\n',
     )
+    result = run_audit(repo, "--staged")
+    assert result.returncode == 1
+    assert "credentialed-database-url" in result.stderr
+    assert_secret_not_printed(result, value)
+
+
+def test_approved_database_fixture_in_unapproved_path_is_rejected(tmp_path: Path) -> None:
+    repo = create_repo(tmp_path)
+    value = "postgresql+asyncpg:/" + "/fonely_test_user:secret" + "@localhost:5432/fonely_test_run1"
+    stage_file(repo, "other_test.py", f'URL = "{value}"\n')
     result = run_audit(repo, "--staged")
     assert result.returncode == 1
     assert "credentialed-database-url" in result.stderr
@@ -211,6 +239,53 @@ def test_oversized_working_tree_file_is_rejected(tmp_path: Path) -> None:
     result = run_audit(repo, "--working-tree")
     assert result.returncode == 1
     assert "file-over-10MiB" in result.stderr
+
+
+@pytest.mark.parametrize("mode", ["staged", "range"])
+def test_oversized_git_blob_is_rejected_without_retrieving_content(
+    tmp_path: Path,
+    mode: str,
+) -> None:
+    repo = create_repo(tmp_path, initial_commit=True)
+    base = git(repo, "rev-parse", "HEAD").stdout.strip()
+    oversized = repo / "large.txt"
+    with oversized.open("wb") as file_obj:
+        file_obj.truncate(10 * 1024 * 1024 + 1)
+    git(repo, "add", "large.txt")
+    oid = git(repo, "rev-parse", ":large.txt").stdout.strip()
+    args = ("--staged",)
+    if mode == "range":
+        git(repo, "commit", "-qm", "add oversized blob")
+        args = ("--range", f"{base}..HEAD")
+
+    real_git = shutil.which("git")
+    assert real_git is not None
+    wrapper_dir = tmp_path / "wrapper-bin"
+    wrapper_dir.mkdir()
+    wrapper = wrapper_dir / "git"
+    wrapper.write_text(
+        "#!/usr/bin/env bash\n"
+        'printf "%s\\n" "$*" >> "$GIT_CALL_LOG"\n'
+        'if [[ "$3" == "cat-file" && "$4" == "blob" && "$5" == "$BLOCKED_OID" ]]; then\n'
+        "  exit 97\n"
+        "fi\n"
+        'exec "$REAL_GIT" "$@"\n'
+    )
+    wrapper.chmod(0o755)
+    call_log = tmp_path / "git-calls.log"
+    result = run_audit(
+        repo,
+        *args,
+        path=f"{wrapper_dir}{os.pathsep}{os.environ['PATH']}",
+        extra_env={
+            "BLOCKED_OID": oid,
+            "GIT_CALL_LOG": str(call_log),
+            "REAL_GIT": real_git,
+        },
+    )
+    assert result.returncode == 1
+    assert "file-over-10MiB" in result.stderr
+    assert f"cat-file blob {oid}" not in call_log.read_text()
 
 
 def test_binary_file_is_not_scanned_as_text(tmp_path: Path) -> None:
@@ -334,6 +409,100 @@ def test_intent_to_add_is_rejected_as_unscannable(tmp_path: Path) -> None:
     result = run_audit(repo, "--staged")
     assert result.returncode == 1
     assert "unscannable-intent-to-add" in result.stderr
+
+
+def test_staged_regular_file_to_secret_symlink_type_change_is_rejected(
+    tmp_path: Path,
+) -> None:
+    repo = create_repo(tmp_path, initial_commit=True)
+    stage_file(repo, "type-change.txt", "clean")
+    git(repo, "commit", "-qm", "add regular file")
+    (repo / "type-change.txt").unlink()
+    secret = classic_pat()
+    (repo / "type-change.txt").symlink_to(secret)
+    git(repo, "add", "type-change.txt")
+    result = run_audit(repo, "--staged")
+    assert result.returncode == 1
+    assert "github-classic-pat" in result.stderr
+    assert_secret_not_printed(result, secret)
+
+
+def test_range_regular_file_to_secret_symlink_type_change_is_rejected(
+    tmp_path: Path,
+) -> None:
+    repo = create_repo(tmp_path, initial_commit=True)
+    stage_file(repo, "type-change.txt", "clean")
+    git(repo, "commit", "-qm", "add regular file")
+    base = git(repo, "rev-parse", "HEAD").stdout.strip()
+    (repo / "type-change.txt").unlink()
+    secret = classic_pat()
+    (repo / "type-change.txt").symlink_to(secret)
+    git(repo, "add", "type-change.txt")
+    git(repo, "commit", "-qm", "change regular file to symlink")
+    result = run_audit(repo, "--range", f"{base}..HEAD")
+    assert result.returncode == 1
+    assert "github-classic-pat" in result.stderr
+    assert_secret_not_printed(result, secret)
+
+
+def test_staged_symlink_to_secret_regular_file_type_change_is_rejected(
+    tmp_path: Path,
+) -> None:
+    repo = create_repo(tmp_path, initial_commit=True)
+    (repo / "type-change.txt").symlink_to("clean-target")
+    git(repo, "add", "type-change.txt")
+    git(repo, "commit", "-qm", "add symlink")
+    (repo / "type-change.txt").unlink()
+    secret = classic_pat()
+    (repo / "type-change.txt").write_text(secret)
+    git(repo, "add", "type-change.txt")
+    result = run_audit(repo, "--staged")
+    assert result.returncode == 1
+    assert "github-classic-pat" in result.stderr
+    assert_secret_not_printed(result, secret)
+
+
+def test_clean_staged_type_change_is_allowed(tmp_path: Path) -> None:
+    repo = create_repo(tmp_path, initial_commit=True)
+    stage_file(repo, "type-change.txt", "clean")
+    git(repo, "commit", "-qm", "add regular file")
+    (repo / "type-change.txt").unlink()
+    (repo / "type-change.txt").symlink_to("clean-target")
+    git(repo, "add", "type-change.txt")
+    result = run_audit(repo, "--staged")
+    assert result.returncode == 0
+
+
+def test_clean_range_type_change_is_allowed(tmp_path: Path) -> None:
+    repo = create_repo(tmp_path, initial_commit=True)
+    stage_file(repo, "type-change.txt", "clean")
+    git(repo, "commit", "-qm", "add regular file")
+    base = git(repo, "rev-parse", "HEAD").stdout.strip()
+    (repo / "type-change.txt").unlink()
+    (repo / "type-change.txt").symlink_to("clean-target")
+    git(repo, "add", "type-change.txt")
+    git(repo, "commit", "-qm", "change regular file to symlink")
+    result = run_audit(repo, "--range", f"{base}..HEAD")
+    assert result.returncode == 0
+
+
+def test_range_symlink_to_secret_regular_file_type_change_is_rejected(
+    tmp_path: Path,
+) -> None:
+    repo = create_repo(tmp_path, initial_commit=True)
+    (repo / "type-change.txt").symlink_to("clean-target")
+    git(repo, "add", "type-change.txt")
+    git(repo, "commit", "-qm", "add symlink")
+    base = git(repo, "rev-parse", "HEAD").stdout.strip()
+    (repo / "type-change.txt").unlink()
+    secret = classic_pat()
+    (repo / "type-change.txt").write_text(secret)
+    git(repo, "add", "type-change.txt")
+    git(repo, "commit", "-qm", "change symlink to regular file")
+    result = run_audit(repo, "--range", f"{base}..HEAD")
+    assert result.returncode == 1
+    assert "github-classic-pat" in result.stderr
+    assert_secret_not_printed(result, secret)
 
 
 def test_range_detects_secret_in_root_commit(tmp_path: Path) -> None:

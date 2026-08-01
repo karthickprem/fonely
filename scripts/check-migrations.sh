@@ -14,10 +14,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-BACKEND_ROOT="${PROJECT_ROOT}/backend"
-VENV_BIN="${BACKEND_ROOT}/.venv/bin"
-ALEMBIC="${VENV_BIN}/alembic"
-VERSIONS_DIR="${BACKEND_ROOT}/migrations/versions"
+BACKEND_ROOT="${BACKEND_ROOT:-${PROJECT_ROOT}/backend}"
+VENV_BIN="${VENV_BIN:-${BACKEND_ROOT}/.venv/bin}"
+ALEMBIC="${ALEMBIC:-${VENV_BIN}/alembic}"
+VERSIONS_DIR="${VERSIONS_DIR:-${BACKEND_ROOT}/migrations/versions}"
+
+ALLOWED_EXTENSIONS="btree_gist"
 
 FAKE_URL="postgresql+asyncpg://fake_test_user:fake_test_password@localhost:55432/fonely_test"
 export DATABASE_URL="${FAKE_URL}"
@@ -188,8 +190,6 @@ done
 echo ""
 info "=== Migration source checks ==="
 
-ALLOWED_EXTENSIONS="uuid-ossp"
-
 for f in "${VERSIONS_DIR}"/*.py; do
     [[ "$(basename "${f}")" == "__init__.py" ]] && continue
     BASENAME="$(basename "${f}")"
@@ -241,25 +241,135 @@ CHECK_DOWNGRADE_PY
         error "${BASENAME}: downgrade() body is empty."
     fi
 
-    if grep -qiP 'CREATE\s+EXTENSION' "${f}"; then
-        EXT_NAME=$(grep -oiP 'CREATE\s+EXTENSION[^"]*"([^"]+)"' "${f}" | head -1 | grep -oP '"[^"]+"' | tr -d '"')
-        if [[ -z "${EXT_NAME}" ]]; then
-            EXT_NAME=$(grep -oiP "CREATE\s+EXTENSION[^']*'([^']+)'" "${f}" | head -1 | grep -oP "'[^']+'" | tr -d "'")
-        fi
+    EXTENSION_STATUS=0
+    EXTENSION_SCAN=$(
+        MIGRATION_FILE="${f}" \
+        ALLOWED_EXTENSIONS="${ALLOWED_EXTENSIONS}" \
+        "${VENV_BIN}/python" - <<'CHECK_EXTENSIONS_PY' 2>&1
+import ast
+import os
+import re
+import sys
+from pathlib import Path
 
-        ALLOWED=0
-        for allowed_ext in ${ALLOWED_EXTENSIONS}; do
-            if [[ "${EXT_NAME}" == "${allowed_ext}" ]]; then
-                ALLOWED=1
-                break
-            fi
-        done
+path = Path(os.environ["MIGRATION_FILE"])
+basename = path.name
+allowed = frozenset(os.environ["ALLOWED_EXTENSIONS"].split())
+source = path.read_text()
+tree = ast.parse(source, filename=str(path))
 
-        if [[ ${ALLOWED} -eq 0 ]]; then
-            error "${BASENAME}: CREATE EXTENSION '${EXT_NAME}' is not in the allowlist (${ALLOWED_EXTENSIONS})."
+extension_keyword = re.compile(r"\b(?:CREATE|DROP)\s+EXTENSION\b", re.IGNORECASE)
+create_statement = re.compile(
+    r'^CREATE\s+EXTENSION\s+(?:IF\s+NOT\s+EXISTS\s+)?'
+    r'(?P<name>"[A-Za-z_][A-Za-z0-9_]*"|[A-Za-z_][A-Za-z0-9_]*)\s*;?\s*$',
+    re.IGNORECASE,
+)
+drop_statement = re.compile(r"^DROP\s+EXTENSION\b", re.IGNORECASE)
+extension_fragment = re.compile(r"\b(?:CREATE|DROP)\s+EXTENSION\b[^;]*(?:;|$)", re.IGNORECASE)
+gist_fragment = re.compile(r"\b(?:EXCLUDE\s+USING\s+GIST|ExcludeConstraint\s*\()", re.IGNORECASE)
+
+errors: list[str] = []
+findings: list[str] = []
+literal_statements: list[tuple[int, str]] = []
+dynamic_extension_calls: list[int] = []
+
+
+def is_execute_call(node: ast.Call) -> bool:
+    func = node.func
+    return (
+        isinstance(func, ast.Attribute)
+        and func.attr == "execute"
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "op"
+    )
+
+
+for node in ast.walk(tree):
+    if not isinstance(node, ast.Call) or not is_execute_call(node) or not node.args:
+        continue
+    argument = node.args[0]
+    if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+        literal_statements.append((node.lineno, argument.value))
+        continue
+    segment = ast.get_source_segment(source, argument) or ""
+    if re.search(r"extension", segment, re.IGNORECASE):
+        dynamic_extension_calls.append(node.lineno)
+
+for line in dynamic_extension_calls:
+    errors.append(f"{basename}:{line}: dynamic or non-literal extension SQL is forbidden")
+
+create_lines: list[int] = []
+for line, sql in literal_statements:
+    if not extension_keyword.search(sql):
+        continue
+    fragments = extension_fragment.findall(sql)
+    if not fragments:
+        errors.append(f"{basename}:{line}: extension SQL could not be parsed")
+        continue
+    for fragment in fragments:
+        statement = fragment.strip()
+        if drop_statement.match(statement):
+            errors.append(f"{basename}:{line}: DROP EXTENSION is forbidden")
+            continue
+        match = create_statement.fullmatch(statement)
+        if match is None:
+            errors.append(f"{basename}:{line}: unsupported CREATE EXTENSION statement")
+            continue
+        raw_name = match.group("name")
+        name = raw_name[1:-1] if raw_name.startswith('"') else raw_name
+        name = name.lower()
+        if name not in allowed:
+            errors.append(
+                f"{basename}:{line}: CREATE EXTENSION '{name}' is not allowlisted"
+            )
+            continue
+        create_lines.append(line)
+        findings.append(f"{basename}:{line}: CREATE EXTENSION '{name}' is allowlisted")
+
+# Keyword-like extension source outside literal op.execute arguments is rejected.
+covered_lines: set[int] = set()
+for line, sql in literal_statements:
+    if extension_keyword.search(sql):
+        covered_lines.update(range(line, line + sql.count("\n") + 1))
+for line_number, text in enumerate(source.splitlines(), 1):
+    if extension_keyword.search(text) and line_number not in covered_lines:
+        errors.append(
+            f"{basename}:{line_number}: extension SQL must be a literal op.execute argument"
+        )
+
+if create_lines:
+    first_create = min(create_lines)
+    gist_lines = [
+        line_number
+        for line_number, text in enumerate(source.splitlines(), 1)
+        if gist_fragment.search(text)
+    ]
+    if not gist_lines:
+        errors.append(
+            f"{basename}: btree_gist requires a GiST exclusion constraint in the same migration"
+        )
+    elif min(gist_lines) < first_create:
+        errors.append(
+            f"{basename}: btree_gist must be created before the GiST exclusion constraint"
+        )
+
+for finding in findings:
+    print(f"INFO:   {finding}")
+for message in errors:
+    print(f"ERROR: {message}")
+sys.exit(1 if errors else 0)
+CHECK_EXTENSIONS_PY
+    ) || EXTENSION_STATUS=$?
+    while IFS= read -r line; do
+        [[ -z "${line}" ]] && continue
+        if [[ "${line}" == ERROR:* ]]; then
+            error "${line#ERROR: }"
         else
-            info "  CREATE EXTENSION '${EXT_NAME}' is allowlisted."
+            echo "${line}"
         fi
+    done <<< "${EXTENSION_SCAN}"
+    if [[ ${EXTENSION_STATUS} -ne 0 && "${EXTENSION_SCAN}" != *"ERROR:"* ]]; then
+        error "${BASENAME}: extension source scan failed."
     fi
 done
 

@@ -24,6 +24,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
@@ -31,12 +32,15 @@ from sqlalchemy import (
     Text,
     Time,
     UniqueConstraint,
+    literal_column,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, ExcludeConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from fonely.models.enums import (
+    AppointmentCommitOperation,
+    AppointmentSource,
     AppointmentStatus,
     BusinessUserRole,
     CallerRole,
@@ -50,6 +54,9 @@ from fonely.models.enums import (
     PendingActionStatus,
     PendingActionType,
     ProductUnit,
+    ResourceAllocationSource,
+    ResourceAllocationStatus,
+    ResourceAllocationType,
     SubscriptionStatus,
 )
 
@@ -58,15 +65,25 @@ class Base(DeclarativeBase):
     pass
 
 
-def enum_type(enum_class: type[PythonEnum], name: str) -> Enum:
+def enum_type(
+    enum_class: type[PythonEnum],
+    name: str,
+    *,
+    create_constraint: bool = True,
+    length: int | None = None,
+) -> Enum:
     """Persist StrEnum values as constrained VARCHAR columns."""
+    options: dict[str, Any] = {}
+    if length is not None:
+        options["length"] = length
     return Enum(
         enum_class,
         name=name,
         native_enum=False,
-        create_constraint=True,
+        create_constraint=create_constraint,
         validate_strings=True,
         values_callable=lambda members: [str(member.value) for member in members],
+        **options,
     )
 
 
@@ -86,6 +103,24 @@ class Business(Base):
             "location_lng IS NULL OR (location_lng >= -180 AND location_lng <= 180)",
             name="ck_businesses_lng_range",
         ),
+        CheckConstraint(
+            "timezone NOT IN ('Factory', 'localtime', 'posixrules') "
+            "AND timezone NOT LIKE 'posix/%' AND timezone NOT LIKE 'right/%'",
+            name="ck_businesses_timezone_not_special",
+        ),
+        CheckConstraint(
+            "appointment_booking_horizon_days >= 1 AND appointment_booking_horizon_days <= 365",
+            name="ck_businesses_appointment_horizon",
+        ),
+        CheckConstraint(
+            "appointment_minimum_notice_minutes >= 0 "
+            "AND appointment_minimum_notice_minutes <= 10080",
+            name="ck_businesses_appointment_notice",
+        ),
+        CheckConstraint(
+            "appointment_slot_interval_minutes >= 5 AND appointment_slot_interval_minutes <= 120",
+            name="ck_businesses_appointment_slot_interval",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -97,6 +132,15 @@ class Business(Base):
     location_lat: Mapped[Decimal | None] = mapped_column(Numeric(10, 7))
     location_lng: Mapped[Decimal | None] = mapped_column(Numeric(10, 7))
     timezone: Mapped[str] = mapped_column(String(50), nullable=False, default="Asia/Kolkata")
+    appointment_booking_horizon_days: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=90, server_default="90"
+    )
+    appointment_minimum_notice_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    appointment_slot_interval_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=15, server_default="15"
+    )
     phone_number: Mapped[str | None] = mapped_column(String(20))
     subscription: Mapped[str] = mapped_column(
         enum_type(SubscriptionStatus, "subscription_status"),
@@ -188,12 +232,35 @@ class BusinessUser(Base):
 class OperatingSchedule(Base):
     __tablename__ = "operating_schedules"
     __table_args__ = (
-        UniqueConstraint("business_id", "day_of_week", "open_time"),
         CheckConstraint("day_of_week >= 0 AND day_of_week <= 6", name="ck_schedule_dow"),
+        CheckConstraint("close_time > open_time", name="ck_schedule_time_order"),
+        Index(
+            "uq_schedule_business_scope",
+            "business_id",
+            "day_of_week",
+            "open_time",
+            unique=True,
+            postgresql_where="resource_id IS NULL",
+        ),
+        Index(
+            "uq_schedule_resource_scope",
+            "business_id",
+            "resource_id",
+            "day_of_week",
+            "open_time",
+            unique=True,
+            postgresql_where="resource_id IS NOT NULL",
+        ),
+        ForeignKeyConstraint(
+            ["business_id", "resource_id"],
+            ["resources.business_id", "resources.id"],
+            name="fk_operating_schedule_business_resource",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    resource_id: Mapped[int | None] = mapped_column(Integer)
     day_of_week: Mapped[int] = mapped_column(Integer, nullable=False)
     open_time: Mapped[time] = mapped_column(Time, nullable=False)
     close_time: Mapped[time] = mapped_column(Time, nullable=False)
@@ -204,10 +271,38 @@ class OperatingSchedule(Base):
 
 class ScheduleException(Base):
     __tablename__ = "schedule_exceptions"
-    __table_args__ = (UniqueConstraint("business_id", "exception_date"),)
+    __table_args__ = (
+        CheckConstraint(
+            "(is_closed AND open_time IS NULL AND close_time IS NULL) OR "
+            "(NOT is_closed AND open_time IS NOT NULL AND close_time IS NOT NULL "
+            "AND close_time > open_time)",
+            name="ck_schedule_exception_consistency",
+        ),
+        Index(
+            "uq_exception_business_scope",
+            "business_id",
+            "exception_date",
+            unique=True,
+            postgresql_where="resource_id IS NULL",
+        ),
+        Index(
+            "uq_exception_resource_scope",
+            "business_id",
+            "resource_id",
+            "exception_date",
+            unique=True,
+            postgresql_where="resource_id IS NOT NULL",
+        ),
+        ForeignKeyConstraint(
+            ["business_id", "resource_id"],
+            ["resources.business_id", "resources.id"],
+            name="fk_schedule_exception_business_resource",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    resource_id: Mapped[int | None] = mapped_column(Integer)
     exception_date: Mapped[date] = mapped_column(Date, nullable=False)
     is_closed: Mapped[bool] = mapped_column(Boolean, default=True)
     open_time: Mapped[time | None] = mapped_column(Time)
@@ -247,7 +342,19 @@ class Service(Base):
     __tablename__ = "services"
     __table_args__ = (
         UniqueConstraint("business_id", "name"),
-        CheckConstraint("duration_minutes > 0", name="ck_service_duration"),
+        UniqueConstraint("business_id", "id", name="uq_services_business_id_id"),
+        CheckConstraint(
+            "duration_minutes > 0 AND duration_minutes <= 720",
+            name="ck_service_duration",
+        ),
+        CheckConstraint(
+            "buffer_before_minutes >= 0 AND buffer_before_minutes <= 240",
+            name="ck_service_buffer_before",
+        ),
+        CheckConstraint(
+            "buffer_after_minutes >= 0 AND buffer_after_minutes <= 240",
+            name="ck_service_buffer_after",
+        ),
         CheckConstraint("price IS NULL OR price >= 0", name="ck_service_price"),
     )
 
@@ -255,6 +362,12 @@ class Service(Base):
     business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     duration_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
+    buffer_before_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    buffer_after_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     price: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -263,7 +376,10 @@ class Service(Base):
 
 class Resource(Base):
     __tablename__ = "resources"
-    __table_args__ = (UniqueConstraint("business_id", "name"),)
+    __table_args__ = (
+        UniqueConstraint("business_id", "name"),
+        UniqueConstraint("business_id", "id", name="uq_resources_business_id_id"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
@@ -272,6 +388,47 @@ class Resource(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     business: Mapped["Business"] = relationship(back_populates="resources")
+
+
+class ServiceResourceEligibility(Base):
+    __tablename__ = "service_resource_eligibility"
+    __table_args__ = (
+        UniqueConstraint("service_id", "resource_id", name="uq_service_resource_eligibility"),
+        ForeignKeyConstraint(
+            ["business_id", "service_id"],
+            ["services.business_id", "services.id"],
+            name="fk_eligibility_business_service",
+        ),
+        ForeignKeyConstraint(
+            ["business_id", "resource_id"],
+            ["resources.business_id", "resources.id"],
+            name="fk_eligibility_business_resource",
+        ),
+        Index(
+            "ix_eligibility_business_service_active",
+            "business_id",
+            "service_id",
+            "is_active",
+        ),
+        Index(
+            "ix_eligibility_business_resource_active",
+            "business_id",
+            "resource_id",
+            "is_active",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    service_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    resource_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 # =============================================================================
@@ -430,46 +587,279 @@ class OrderLineItem(Base):
 
 
 class Appointment(Base):
-    """Appointment against a specific resource.
-
-    ix_appointments_resource_lookup is a query acceleration index only.
-    It does NOT prevent time overlap. PostgreSQL exclusion constraint:
-      EXCLUDE USING gist (resource_id WITH =, tstzrange(start_at, end_at) WITH &&)
-      WHERE (status IN ('held', 'confirmed'))
-    will be added in the appointment domain phase.
-    """
+    """Business appointment facts; capacity is enforced by ResourceAllocation."""
 
     __tablename__ = "appointments"
     __table_args__ = (
         UniqueConstraint("business_id", "idempotency_key", name="uq_appt_idempotency"),
+        UniqueConstraint("business_id", "id", name="uq_appointments_business_id_id"),
         UniqueConstraint("pending_action_id", name="uq_appt_pending_action"),
+        UniqueConstraint(
+            "business_id",
+            "id",
+            "pending_action_id",
+            name="uq_appt_pending_provenance",
+        ),
+        ForeignKeyConstraint(
+            ["business_id", "service_id"],
+            ["services.business_id", "services.id"],
+            name="fk_appointment_business_service",
+        ),
+        ForeignKeyConstraint(
+            ["business_id", "resource_id"],
+            ["resources.business_id", "resources.id"],
+            name="fk_appointment_business_resource",
+        ),
+        ForeignKeyConstraint(
+            ["business_id", "pending_action_id"],
+            ["pending_actions.business_id", "pending_actions.id"],
+            name="fk_appointment_business_pending_action",
+        ),
+        ForeignKeyConstraint(
+            ["business_id", "call_id"],
+            ["calls.business_id", "calls.id"],
+            name="fk_appointment_business_call",
+        ),
         CheckConstraint("end_at > start_at", name="ck_appt_time_order"),
+        CheckConstraint(
+            "duration_minutes_snapshot > 0 AND duration_minutes_snapshot <= 720",
+            name="ck_appt_duration_snapshot",
+        ),
+        CheckConstraint(
+            "buffer_before_minutes_snapshot >= 0 AND buffer_before_minutes_snapshot <= 240",
+            name="ck_appt_buffer_before_snapshot",
+        ),
+        CheckConstraint(
+            "buffer_after_minutes_snapshot >= 0 AND buffer_after_minutes_snapshot <= 240",
+            name="ck_appt_buffer_after_snapshot",
+        ),
+        CheckConstraint(
+            "effective_end_at > effective_start_at",
+            name="ck_appt_effective_time_order",
+        ),
+        CheckConstraint(
+            "end_at = start_at + make_interval(mins => duration_minutes_snapshot)",
+            name="ck_appt_duration_arithmetic",
+        ),
+        CheckConstraint(
+            "effective_start_at = start_at - "
+            "make_interval(mins => buffer_before_minutes_snapshot) AND "
+            "effective_end_at = end_at + "
+            "make_interval(mins => buffer_after_minutes_snapshot)",
+            name="ck_appt_effective_arithmetic",
+        ),
+        CheckConstraint(
+            "status IN ('confirmed', 'completed', 'cancelled', 'no_show')",
+            name="appointment_status",
+        ),
+        CheckConstraint(
+            "source IN ('customer_conversation', 'owner_manual', 'walk_in')",
+            name="ck_appointment_source",
+        ),
+        CheckConstraint(
+            "(source = 'customer_conversation' AND pending_action_id IS NOT NULL) OR "
+            "(source IN ('owner_manual', 'walk_in') AND pending_action_id IS NULL)",
+            name="ck_appointment_source_provenance",
+        ),
+        CheckConstraint("version > 0", name="ck_appointment_version"),
+        CheckConstraint(
+            "(status = 'cancelled' AND cancelled_at IS NOT NULL) OR "
+            "(status <> 'cancelled' AND cancelled_at IS NULL)",
+            name="ck_appointment_status_cancelled_at",
+        ),
         Index("ix_appointments_resource_lookup", "resource_id", "start_at", "end_at"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
-    resource_id: Mapped[int] = mapped_column(ForeignKey("resources.id"), nullable=False)
-    service_id: Mapped[int | None] = mapped_column(ForeignKey("services.id"))
+    resource_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    service_id: Mapped[int] = mapped_column(Integer, nullable=False)
     customer_name: Mapped[str | None] = mapped_column(String(200))
     customer_phone: Mapped[str] = mapped_column(String(20), nullable=False)
     start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    effective_start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    effective_end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    service_name_snapshot: Mapped[str] = mapped_column(String(200), nullable=False)
+    resource_name_snapshot: Mapped[str] = mapped_column(String(200), nullable=False)
+    duration_minutes_snapshot: Mapped[int] = mapped_column(Integer, nullable=False)
+    buffer_before_minutes_snapshot: Mapped[int] = mapped_column(Integer, nullable=False)
+    buffer_after_minutes_snapshot: Mapped[int] = mapped_column(Integer, nullable=False)
+    price_snapshot: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    business_timezone_snapshot: Mapped[str] = mapped_column(String(50), nullable=False)
     reason: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(
-        enum_type(AppointmentStatus, "appointment_status"),
+        enum_type(AppointmentStatus, "appointment_status", create_constraint=False),
         nullable=False,
-        default=AppointmentStatus.HELD,
     )
-    held_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source: Mapped[str] = mapped_column(
+        enum_type(
+            AppointmentSource,
+            "appointment_source",
+            create_constraint=False,
+            length=21,
+        ),
+        nullable=False,
+    )
     idempotency_key: Mapped[str] = mapped_column(String(100), nullable=False)
-    pending_action_id: Mapped[int | None] = mapped_column(ForeignKey("pending_actions.id"))
-    call_id: Mapped[int | None] = mapped_column(ForeignKey("calls.id"))
+    pending_action_id: Mapped[int | None] = mapped_column(Integer)
+    call_id: Mapped[int | None] = mapped_column(Integer)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    rescheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
     business: Mapped["Business"] = relationship(back_populates="appointments")
-    resource: Mapped["Resource"] = relationship()
-    service: Mapped["Service | None"] = relationship()
+
+
+class ResourceAllocation(Base):
+    """Single capacity ledger shared by appointments, walk-ins, and owner blocks."""
+
+    __tablename__ = "resource_allocations"
+    __table_args__ = (
+        UniqueConstraint("business_id", "idempotency_key", name="uq_allocation_idempotency"),
+        CheckConstraint(
+            "effective_end_at > effective_start_at",
+            name="ck_allocation_time_order",
+        ),
+        CheckConstraint("version > 0", name="ck_allocation_version"),
+        CheckConstraint(
+            "(allocation_type = 'appointment' AND appointment_id IS NOT NULL "
+            "AND pending_action_id IS NOT NULL AND source = 'customer_conversation') OR "
+            "(allocation_type = 'manual_appointment' AND appointment_id IS NOT NULL "
+            "AND pending_action_id IS NULL AND source = 'owner_manual') OR "
+            "(allocation_type = 'walk_in' AND appointment_id IS NOT NULL "
+            "AND pending_action_id IS NULL AND source = 'walk_in') OR "
+            "(allocation_type = 'owner_block' AND appointment_id IS NULL "
+            "AND pending_action_id IS NULL AND source = 'owner_block')",
+            name="ck_allocation_type_source_link",
+        ),
+        ForeignKeyConstraint(
+            ["business_id", "resource_id"],
+            ["resources.business_id", "resources.id"],
+            name="fk_allocation_business_resource",
+        ),
+        ForeignKeyConstraint(
+            ["business_id", "appointment_id"],
+            ["appointments.business_id", "appointments.id"],
+            name="fk_allocation_business_appointment",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        ForeignKeyConstraint(
+            ["business_id", "appointment_id", "pending_action_id"],
+            [
+                "appointments.business_id",
+                "appointments.id",
+                "appointments.pending_action_id",
+            ],
+            name="fk_allocation_appointment_pending_provenance",
+        ),
+        Index(
+            "uq_allocation_active_appointment",
+            "appointment_id",
+            unique=True,
+            postgresql_where="appointment_id IS NOT NULL AND status = 'active'",
+        ),
+        Index(
+            "ix_allocation_business_resource_time",
+            "business_id",
+            "resource_id",
+            "effective_start_at",
+            "effective_end_at",
+        ),
+        Index(
+            "ix_allocation_business_appointment",
+            "business_id",
+            "appointment_id",
+        ),
+        ExcludeConstraint(
+            ("business_id", "="),
+            ("resource_id", "="),
+            (
+                func.tstzrange(
+                    literal_column("effective_start_at"),
+                    literal_column("effective_end_at"),
+                    "[)",
+                ),
+                "&&",
+            ),
+            where="status = 'active'",
+            name="ex_resource_allocations_active_overlap",
+            using="gist",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    resource_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    appointment_id: Mapped[int | None] = mapped_column(Integer)
+    pending_action_id: Mapped[int | None] = mapped_column(Integer)
+    allocation_type: Mapped[str] = mapped_column(
+        enum_type(ResourceAllocationType, "resource_allocation_type"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        enum_type(ResourceAllocationStatus, "resource_allocation_status"),
+        nullable=False,
+        default=ResourceAllocationStatus.ACTIVE,
+        server_default="active",
+    )
+    source: Mapped[str] = mapped_column(
+        enum_type(ResourceAllocationSource, "resource_allocation_source"), nullable=False
+    )
+    effective_start_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    effective_end_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(500))
+    idempotency_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AppointmentCommit(Base):
+    """Immutable committed cancellation or reschedule linked to one PendingAction."""
+
+    __tablename__ = "appointment_commits"
+    __table_args__ = (
+        UniqueConstraint("pending_action_id", name="uq_appt_commit_pending_action"),
+        ForeignKeyConstraint(
+            ["business_id", "appointment_id"],
+            ["appointments.business_id", "appointments.id"],
+            name="fk_appt_commit_business_appointment",
+        ),
+        ForeignKeyConstraint(
+            ["business_id", "pending_action_id"],
+            ["pending_actions.business_id", "pending_actions.id"],
+            name="fk_appt_commit_business_pending_action",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(before_snapshot) = 'object'",
+            name="ck_appt_commit_before_snapshot_object",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(after_snapshot) = 'object'",
+            name="ck_appt_commit_after_snapshot_object",
+        ),
+        Index("ix_appt_commit_business_appointment", "business_id", "appointment_id"),
+        Index("ix_appt_commit_business_pending_action", "business_id", "pending_action_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    pending_action_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    appointment_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    operation: Mapped[str] = mapped_column(
+        enum_type(AppointmentCommitOperation, "appointment_commit_operation"), nullable=False
+    )
+    before_snapshot: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    after_snapshot: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    reason_code: Mapped[str | None] = mapped_column(String(50))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 # =============================================================================
@@ -487,6 +877,7 @@ class PendingAction(Base):
     __tablename__ = "pending_actions"
     __table_args__ = (
         UniqueConstraint("business_id", "idempotency_key", name="uq_pending_idempotency"),
+        UniqueConstraint("business_id", "id", name="uq_pending_actions_business_id_id"),
         Index("ix_pending_actions_expiry", "status", "expires_at"),
     )
 
@@ -530,6 +921,7 @@ class PendingAction(Base):
 class Call(Base):
     __tablename__ = "calls"
     __table_args__ = (
+        UniqueConstraint("business_id", "id", name="uq_calls_business_id_id"),
         CheckConstraint(
             "language_confidence IS NULL OR "
             "(language_confidence >= 0 AND language_confidence <= 1)",

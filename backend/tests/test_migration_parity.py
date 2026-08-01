@@ -1,9 +1,9 @@
-"""Structural parity checks between ORM metadata and migration 0001.
+"""Structural parity checks between ORM metadata and migrations through head.
 
-The migration is executed against a recording Alembic-op adapter. The captured
-SQLAlchemy tables are compared to ORM metadata for table/column/type/nullability,
-PKs, FKs, uniques, checks, and indexes. This is stronger than source-text tests,
-while a live PostgreSQL ``alembic check`` remains the final integration proof.
+The migrations are executed against a recording Alembic-op adapter. Captured
+SQLAlchemy tables are compared to ORM metadata for columns, types, nullability,
+server defaults, keys, checks, indexes, predicates, and exclusions. A live
+PostgreSQL ``alembic check`` remains the final integration proof.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
+from unittest.mock import Mock
 
 import pytest
 import sqlalchemy as sa
@@ -26,6 +27,7 @@ MIGRATIONS_DIR = Path(__file__).parent.parent / "migrations" / "versions"
 MIGRATION_0001 = MIGRATIONS_DIR / "0001_initial_schema.py"
 MIGRATION_0002 = MIGRATIONS_DIR / "0002_pending_action_state_machine.py"
 MIGRATION_0003 = MIGRATIONS_DIR / "0003_committed_entity_linkage.py"
+MIGRATION_0004 = MIGRATIONS_DIR / "0004_appointment_engine.py"
 
 
 class OperationRecorder:
@@ -33,14 +35,18 @@ class OperationRecorder:
 
     def __init__(self) -> None:
         self.metadata = sa.MetaData()
-        self.indexes: dict[str, set[tuple[str, tuple[str, ...], bool]]] = {}
+        self.indexes: dict[str, set[tuple[str, tuple[str, ...], bool, str | None]]] = {}
         self.dropped_tables: list[str] = []
         self.executed_sql: list[str] = []
+        self.operations: list[tuple[str, str]] = []
 
-    def execute(self, statement: str) -> None:
-        self.executed_sql.append(statement)
+    def execute(self, statement: Any) -> None:
+        rendered = str(statement)
+        self.executed_sql.append(rendered)
+        self.operations.append(("execute", rendered))
 
     def create_table(self, name: str, *elements: Any, **_: Any) -> sa.Table:
+        self.operations.append(("create_table", name))
         return sa.Table(name, self.metadata, *elements)
 
     def create_index(
@@ -49,12 +55,60 @@ class OperationRecorder:
         table_name: str,
         columns: list[str],
         unique: bool = False,
-        **_: Any,
+        **kwargs: Any,
     ) -> None:
-        self.indexes.setdefault(table_name, set()).add((name, tuple(columns), unique))
+        predicate = kwargs.get("postgresql_where")
+        self.indexes.setdefault(table_name, set()).add(
+            (
+                name,
+                tuple(columns),
+                unique,
+                " ".join(str(predicate).split()) if predicate is not None else None,
+            )
+        )
+
+    def create_exclude_constraint(
+        self,
+        name: str,
+        table_name: str,
+        *elements: tuple[Any, str],
+        **kwargs: Any,
+    ) -> None:
+        self.metadata.tables[table_name].append_constraint(
+            postgresql.ExcludeConstraint(*elements, name=name, **kwargs)
+        )
 
     def drop_index(self, name: str, table_name: str, **_: Any) -> None:
-        self.indexes.setdefault(table_name, set()).discard((name, (), False))
+        indexes = self.indexes.setdefault(table_name, set())
+        self.indexes[table_name] = {item for item in indexes if item[0] != name}
+
+    def create_foreign_key(
+        self,
+        name: str,
+        source_table: str,
+        referent_table: str,
+        local_cols: list[str],
+        remote_cols: list[str],
+        **kwargs: Any,
+    ) -> None:
+        table = self.metadata.tables[source_table]
+        table.append_constraint(
+            sa.ForeignKeyConstraint(
+                local_cols,
+                [f"{referent_table}.{column}" for column in remote_cols],
+                name=name,
+                deferrable=kwargs.get("deferrable"),
+                initially=kwargs.get("initially"),
+            )
+        )
+
+    def create_check_constraint(
+        self,
+        name: str,
+        table_name: str,
+        condition: str,
+    ) -> None:
+        self.metadata.tables[table_name].append_constraint(sa.CheckConstraint(condition, name=name))
 
     def create_unique_constraint(
         self,
@@ -72,13 +126,55 @@ class OperationRecorder:
         **_: Any,
     ) -> None:
         table = self.metadata.tables[table_name]
-        constraint = next(item for item in table.constraints if item.name == name)
-        table.constraints.remove(constraint)
+        constraint = next(
+            (
+                item
+                for item in table.constraints
+                if item.name == name
+                or (
+                    name == "operating_schedules_business_id_day_of_week_open_time_key"
+                    and isinstance(item, sa.UniqueConstraint)
+                    and tuple(column.name for column in item.columns)
+                    == ("business_id", "day_of_week", "open_time")
+                )
+                or (
+                    name == "schedule_exceptions_business_id_exception_date_key"
+                    and isinstance(item, sa.UniqueConstraint)
+                    and tuple(column.name for column in item.columns)
+                    == ("business_id", "exception_date")
+                )
+                or (
+                    name == "appointments_service_id_fkey"
+                    and isinstance(item, sa.ForeignKeyConstraint)
+                    and tuple(column.name for column in item.columns) == ("service_id",)
+                )
+                or (
+                    name == "appointments_resource_id_fkey"
+                    and isinstance(item, sa.ForeignKeyConstraint)
+                    and tuple(column.name for column in item.columns) == ("resource_id",)
+                )
+                or (
+                    name == "appointments_pending_action_id_fkey"
+                    and isinstance(item, sa.ForeignKeyConstraint)
+                    and tuple(column.name for column in item.columns) == ("pending_action_id",)
+                )
+                or (
+                    name == "appointments_call_id_fkey"
+                    and isinstance(item, sa.ForeignKeyConstraint)
+                    and tuple(column.name for column in item.columns) == ("call_id",)
+                )
+            ),
+            None,
+        )
+        if constraint is not None:
+            table.constraints.remove(constraint)
 
     def drop_table(self, name: str, **_: Any) -> None:
+        self.operations.append(("drop_table", name))
         self.dropped_tables.append(name)
 
     def add_column(self, table_name: str, column: sa.Column[Any]) -> None:
+        self.operations.append(("add_column", f"{table_name}.{column.name}"))
         self.metadata.tables[table_name].append_column(column)
 
     def alter_column(self, table_name: str, column_name: str, **changes: Any) -> None:
@@ -105,18 +201,35 @@ def _capture_upgrade() -> OperationRecorder:
         (MIGRATION_0001, "fonely_migration_0001"),
         (MIGRATION_0002, "fonely_migration_0002"),
         (MIGRATION_0003, "fonely_migration_0003"),
+        (MIGRATION_0004, "fonely_migration_0004"),
     ):
         module = _load_migration(path, name)
         module.op = recorder
-        if name == "fonely_migration_0002":
+        if name in {"fonely_migration_0002", "fonely_migration_0004"}:
             module.context = SimpleNamespace(is_offline_mode=lambda: True)
         module.upgrade()
+    return recorder
+
+
+def _capture_appointment_upgrade() -> OperationRecorder:
+    recorder = _capture_upgrade()
+    lock_index = next(
+        index
+        for index, operation in enumerate(recorder.operations)
+        if operation[0] == "execute" and "LOCK TABLE" in operation[1]
+    )
+    recorder.operations = recorder.operations[lock_index:]
     return recorder
 
 
 def _capture_downgrade() -> OperationRecorder:
     recorder = _capture_upgrade()
     recorder.dropped_tables.clear()
+    recorder.operations.clear()
+    module_0004 = _load_migration(MIGRATION_0004, "fonely_migration_0004_down")
+    module_0004.op = recorder
+    module_0004.context = SimpleNamespace(is_offline_mode=lambda: True)
+    module_0004.downgrade()
     module_0003 = _load_migration(MIGRATION_0003, "fonely_migration_0003_down")
     module_0003.op = recorder
     module_0003.downgrade()
@@ -134,11 +247,28 @@ def _type_signature(column: sa.Column[Any]) -> str:
 
 
 def _fk_signatures(table: sa.Table) -> set[tuple[tuple[str, ...], tuple[str, ...]]]:
-    return {
+    signatures = {
         (
             tuple(element.parent.name for element in constraint.elements),
             tuple(element.target_fullname for element in constraint.elements),
         )
+        for constraint in table.foreign_key_constraints
+    }
+    composite_local_columns = {
+        column for local, _ in signatures if len(local) > 1 for column in local[1:]
+    }
+    return {
+        signature
+        for signature in signatures
+        if not (len(signature[0]) == 1 and signature[0][0] in composite_local_columns)
+    }
+
+
+def _fk_deferrability_signatures(
+    table: sa.Table,
+) -> set[tuple[str | None, bool | None, str | None]]:
+    return {
+        (constraint.name, constraint.deferrable, constraint.initially)
         for constraint in table.foreign_key_constraints
     }
 
@@ -159,21 +289,49 @@ def _check_signatures(table: sa.Table) -> set[tuple[str | None, str]]:
     }
 
 
-def _orm_index_signatures(table: sa.Table) -> set[tuple[str, tuple[str, ...], bool]]:
+def _orm_index_signatures(
+    table: sa.Table,
+) -> set[tuple[str, tuple[str, ...], bool, str | None]]:
     return {
         (
             index.name or "",
             tuple(expression.name for expression in index.expressions),
             index.unique,
+            (
+                " ".join(str(index.dialect_options["postgresql"]["where"]).split())
+                if index.dialect_options["postgresql"]["where"] is not None
+                else None
+            ),
         )
         for index in table.indexes
     }
 
 
+def _exclude_signatures(table: sa.Table) -> set[tuple[str, str, str, tuple[tuple[str, str], ...]]]:
+    signatures = set()
+    for constraint in table.constraints:
+        if not isinstance(constraint, postgresql.ExcludeConstraint):
+            continue
+        expressions = []
+        for expression, _, operator in constraint._render_exprs:
+            normalized = str(expression).replace(f"{table.name}.", "")
+            normalized = normalized.replace(":tstzrange_1", "'[)'")
+            expressions.append((" ".join(normalized.split()), operator))
+        signatures.add(
+            (
+                constraint.name or "",
+                constraint.using,
+                " ".join(str(constraint.where).split()),
+                tuple(expressions),
+            )
+        )
+    return signatures
+
+
 def test_migration_and_orm_have_identical_application_tables() -> None:
     captured = _capture_upgrade()
     assert set(captured.metadata.tables) == set(Base.metadata.tables)
-    assert len(captured.metadata.tables) == 18
+    assert len(captured.metadata.tables) == 21
 
 
 def test_migration_and_orm_column_parity() -> None:
@@ -189,6 +347,13 @@ def test_migration_and_orm_column_parity() -> None:
                 f"{name}.{column_name}: migration={_type_signature(migration_column)} "
                 f"orm={_type_signature(orm_column)}"
             )
+            migration_default = (
+                str(migration_column.server_default.arg)
+                if migration_column.server_default
+                else None
+            )
+            orm_default = str(orm_column.server_default.arg) if orm_column.server_default else None
+            assert migration_default == orm_default, f"{name}.{column_name} server default"
 
 
 def test_migration_and_orm_constraint_parity() -> None:
@@ -196,6 +361,9 @@ def test_migration_and_orm_constraint_parity() -> None:
     for name, orm_table in Base.metadata.tables.items():
         migration_table = captured.metadata.tables[name]
         assert _fk_signatures(migration_table) == _fk_signatures(orm_table), name
+        assert _fk_deferrability_signatures(migration_table) == _fk_deferrability_signatures(
+            orm_table
+        ), name
         assert _unique_signatures(migration_table) == _unique_signatures(orm_table), name
         assert _check_signatures(migration_table) == _check_signatures(orm_table), name
 
@@ -206,15 +374,402 @@ def test_migration_and_orm_index_parity() -> None:
         assert captured.indexes.get(name, set()) == _orm_index_signatures(orm_table), name
 
 
-def test_migration_downgrade_drops_all_tables_in_reverse_dependency_order() -> None:
+def test_migration_and_orm_exclusion_constraint_parity() -> None:
+    captured = _capture_upgrade()
+    migration = _exclude_signatures(captured.metadata.tables["resource_allocations"])
+    orm = _exclude_signatures(Base.metadata.tables["resource_allocations"])
+    expected = {
+        (
+            "ex_resource_allocations_active_overlap",
+            "gist",
+            "status = 'active'",
+            (
+                ("business_id", "="),
+                ("resource_id", "="),
+                ("tstzrange(effective_start_at, effective_end_at, '[)')", "&&"),
+            ),
+        )
+    }
+    assert migration == orm == expected
+
+
+def test_migration_downgrade_drops_all_application_tables() -> None:
     recorder = _capture_downgrade()
-    expected = [table.name for table in reversed(Base.metadata.sorted_tables)]
-    assert recorder.dropped_tables == expected
+    assert set(recorder.dropped_tables) == set(Base.metadata.tables)
+    assert recorder.dropped_tables[:3] == [
+        "appointment_commits",
+        "resource_allocations",
+        "service_resource_eligibility",
+    ]
 
 
-def test_initial_migration_does_not_create_postgresql_extensions() -> None:
+def test_appointment_migration_installs_btree_gist_without_dropping_it() -> None:
+    upgrade = _capture_upgrade()
+    assert "CREATE EXTENSION IF NOT EXISTS btree_gist" in upgrade.executed_sql
+    downgrade = _capture_downgrade()
+    assert all("DROP EXTENSION" not in statement for statement in downgrade.executed_sql)
+
+
+def test_appointment_upgrade_lock_precedes_preflight_guard_and_ddl() -> None:
+    operations = _capture_appointment_upgrade().operations
+    assert operations[0][0] == "execute"
+    assert "LOCK TABLE" in operations[0][1]
+    assert "SHARE ROW EXCLUSIVE MODE" in operations[0][1]
+    assert "Migration 0004 requires online appointment preflight" in operations[1][1]
+    assert operations.index(("add_column", "services.buffer_before_minutes")) > 1
+    assert operations.index(("create_table", "service_resource_eligibility")) > 1
+
+
+def test_appointment_downgrade_lock_precedes_guard_and_destruction() -> None:
     recorder = _capture_upgrade()
-    assert all("CREATE EXTENSION" not in statement for statement in recorder.executed_sql)
+    recorder.operations.clear()
+    migration = _load_migration(MIGRATION_0004, "fonely_migration_0004_lock_down")
+    migration.op = recorder
+    migration.context = SimpleNamespace(is_offline_mode=lambda: True)
+    migration.downgrade()
+
+    assert "LOCK TABLE" in recorder.operations[0][1]
+    assert "SHARE ROW EXCLUSIVE MODE" in recorder.operations[0][1]
+    assert "online representability preflight" in recorder.operations[1][1]
+    assert recorder.operations.index(("drop_table", "appointment_commits")) > 1
+    assert recorder.operations.index(("drop_table", "resource_allocations")) > 1
+    assert recorder.operations.index(("drop_table", "service_resource_eligibility")) > 1
+
+
+def test_upgrade_and_downgrade_use_one_deterministic_lock_order() -> None:
+    source = MIGRATION_0004.read_text()
+    expected = tuple(
+        sorted(
+            (
+                "appointment_commits",
+                "appointments",
+                "businesses",
+                "calls",
+                "operating_schedules",
+                "pending_actions",
+                "resource_allocations",
+                "resources",
+                "schedule_exceptions",
+                "service_resource_eligibility",
+                "services",
+            )
+        )
+    )
+    migration = _load_migration(MIGRATION_0004, "fonely_migration_0004_lock_order")
+    assert expected == migration._AFFECTED_TABLES
+    assert source.count("_lock_affected_tables()") == 3
+
+
+def test_appointment_preflight_covers_ambiguous_legacy_states() -> None:
+    source = MIGRATION_0004.read_text()
+    preflight = source[
+        source.index("def _preflight_upgrade") : source.index("def _backfill_appointment_facts")
+    ]
+    for condition in (
+        "b.timezone IN ('Factory', 'localtime', 'posixrules')",
+        "pg_timezone_names",
+        "b.timezone LIKE 'posix/%'",
+        "b.timezone LIKE 'right/%'",
+        "pending_action_id IS NULL",
+        "p.business_id IS DISTINCT FROM a.business_id",
+        "p.action_type IS DISTINCT FROM 'appointment'",
+        "operation' IS DISTINCT FROM 'create'",
+        "jsonb_typeof(p.proposed_payload)",
+        "pg_input_is_valid",
+        "start_at' !~* '(Z|[+-][0-9]{2}:[0-9]{2})$'",
+        "end_at' !~* '(Z|[+-][0-9]{2}:[0-9]{2})$'",
+        "effective_start_at' !~* '(Z|[+-][0-9]{2}:[0-9]{2})$'",
+        "effective_end_at' !~* '(Z|[+-][0-9]{2}:[0-9]{2})$'",
+        "status = 'held'",
+        "s.business_id IS DISTINCT FROM a.business_id",
+        "r.business_id IS DISTINCT FROM a.business_id",
+        "p.business_id IS DISTINCT FROM a.business_id",
+        "c.business_id IS DISTINCT FROM a.business_id",
+        "a.end_at <= a.start_at",
+        "close_time <= open_time",
+        "inconsistent schedule exception",
+        "overlapping capacity-bearing legacy appointments",
+    ):
+        assert condition in preflight
+    assert source.index("_preflight_upgrade()") < source.index('op.execute("CREATE EXTENSION')
+    assert source.index("_preflight_upgrade()") < source.index("_backfill_appointment_facts()")
+
+
+def test_capacity_bearing_appointments_receive_allocations_during_backfill() -> None:
+    source = MIGRATION_0004.read_text()
+    allocation = source[source.index("def _backfill_allocations") : source.index("def upgrade")]
+    assert "'confirmed', 'completed', 'no_show'" in allocation
+    assert "cancelled" not in allocation
+
+
+def test_overlap_diagnostic_precedes_allocation_insert_and_exclusion() -> None:
+    source = MIGRATION_0004.read_text()
+    assert (
+        source.index("overlapping capacity-bearing legacy appointments")
+        < source.index("INSERT INTO resource_allocations")
+        < source.index("op.create_exclude_constraint(")
+    )
+
+
+def test_tenant_composite_foreign_key_signatures() -> None:
+    captured = _capture_upgrade().metadata.tables
+    allocation_fks = _fk_signatures(captured["resource_allocations"])
+    assert (("business_id", "call_id"), ("calls.business_id", "calls.id")) in _fk_signatures(
+        captured["appointments"]
+    )
+    assert (
+        ("business_id", "appointment_id"),
+        ("appointments.business_id", "appointments.id"),
+    ) in allocation_fks
+    allocation_fact_fk = next(
+        constraint
+        for constraint in captured["resource_allocations"].foreign_key_constraints
+        if constraint.name == "fk_allocation_business_appointment"
+    )
+    assert allocation_fact_fk.deferrable is True
+    assert allocation_fact_fk.initially == "DEFERRED"
+    assert (
+        ("business_id", "appointment_id", "pending_action_id"),
+        ("appointments.business_id", "appointments.id", "appointments.pending_action_id"),
+    ) in allocation_fks
+    pending_action_fk = (
+        ("business_id", "pending_action_id"),
+        ("pending_actions.business_id", "pending_actions.id"),
+    )
+    assert pending_action_fk in _fk_signatures(captured["appointments"])
+    assert pending_action_fk in _fk_signatures(captured["appointment_commits"])
+
+
+def test_appointment_required_fact_nullability_and_source_check() -> None:
+    table = _capture_upgrade().metadata.tables["appointments"]
+    for column in (
+        "service_id",
+        "effective_start_at",
+        "effective_end_at",
+        "service_name_snapshot",
+        "resource_name_snapshot",
+        "duration_minutes_snapshot",
+        "buffer_before_minutes_snapshot",
+        "buffer_after_minutes_snapshot",
+        "source",
+        "updated_at",
+    ):
+        assert not table.c[column].nullable
+    checks = dict(_check_signatures(table))
+    assert checks["ck_appointment_source"] == (
+        "source IN ('customer_conversation', 'owner_manual', 'walk_in')"
+    )
+    assert "make_interval" in checks["ck_appt_duration_arithmetic"]
+    assert "make_interval" in checks["ck_appt_effective_arithmetic"]
+
+
+def test_downgrade_preflight_precedes_destructive_operations() -> None:
+    source = MIGRATION_0004.read_text()
+    preflight = source.index("_preflight_downgrade()", source.index("def downgrade"))
+    assert preflight < source.index('op.drop_table("appointment_commits")', preflight)
+    for marker in (
+        "resource-specific schedules",
+        "resource-specific exceptions",
+        "service-resource eligibility",
+        "appointment mutation provenance",
+        "modified resource allocations",
+        "canonical appointment-allocation correspondence",
+        "service buffers",
+        "changed appointment facts",
+    ):
+        assert (
+            marker
+            in source[source.index("def _preflight_downgrade") : source.index("def downgrade")]
+        )
+
+
+def test_appointment_creation_provenance_is_validated_before_fk_replacement() -> None:
+    source = MIGRATION_0004.read_text()
+    preflight = source[source.index("def _preflight_upgrade") : source.index("def upgrade")]
+    for evidence in (
+        "p.business_id IS DISTINCT FROM a.business_id",
+        "p.action_type IS DISTINCT FROM 'appointment'",
+        "p.status IS DISTINCT FROM 'confirmed'",
+        "p.committed_entity_type IS DISTINCT FROM 'appointment'",
+        "p.committed_entity_id IS DISTINCT FROM a.id",
+        "operation' IS DISTINCT FROM 'create'",
+    ):
+        assert evidence in preflight
+    assert (
+        source.index("p.business_id IS DISTINCT FROM a.business_id")
+        < source.index('op.drop_constraint("appointments_pending_action_id_fkey"')
+        < source.index('"fk_appointment_business_pending_action"')
+    )
+
+
+def test_appointment_provenance_nullable_and_unique() -> None:
+    appointments = Base.metadata.tables["appointments"]
+    assert appointments.c.pending_action_id.nullable
+    assert ("pending_action_id",) in _unique_signatures(appointments)
+
+
+def test_upgrade_preflight_fake_bind_rejects_each_state_before_ddl() -> None:
+    migration = _load_migration(MIGRATION_0004, "fonely_migration_0004_fake_upgrade")
+    checks = 14
+    for failing_index in range(checks):
+        results = []
+        for index in range(failing_index + 1):
+            result = Mock()
+            result.scalar_one_or_none.return_value = 1 if index == failing_index else None
+            results.append(result)
+        bind = Mock()
+        bind.execute.side_effect = results
+        migration.op = SimpleNamespace(get_bind=lambda current_bind=bind: current_bind)
+
+        with pytest.raises(RuntimeError, match="Migration 0004"):
+            migration._preflight_upgrade()
+
+        assert bind.execute.call_count == failing_index + 1
+
+
+def test_upgrade_preflight_guards_every_provenance_cast_at_source() -> None:
+    source = MIGRATION_0004.read_text()
+    preflight = source[source.index("def _preflight_upgrade") : source.index("def upgrade")]
+    for field, postgres_type in (
+        ("service_id", "bigint"),
+        ("resource_id", "bigint"),
+        ("call_id", "bigint"),
+        ("target_appointment_id", "bigint"),
+        ("schema_version", "integer"),
+        ("duration_minutes", "integer"),
+        ("buffer_before_minutes", "integer"),
+        ("buffer_after_minutes", "integer"),
+        ("price", "numeric"),
+        ("start_at", "timestamp with time zone"),
+        ("end_at", "timestamp with time zone"),
+        ("effective_start_at", "timestamp with time zone"),
+        ("effective_end_at", "timestamp with time zone"),
+    ):
+        assert field in preflight
+        assert postgres_type in preflight
+    assert preflight.count("pg_input_is_valid") >= 18
+    assert "CASE WHEN pg_input_is_valid" in preflight
+    assert source.index("_preflight_upgrade()") < source.index('op.execute("CREATE EXTENSION')
+
+
+def test_runtime_provenance_triggers_guard_every_cast_inside_case() -> None:
+    source = MIGRATION_0004.read_text()
+    runtime = source[
+        source.index("CREATE FUNCTION enforce_appointment_provenance") : source.index(
+            "def _preflight_downgrade"
+        )
+    ]
+    guarded_casts = (
+        "THEN (payload_data->'facts'->>'service_id')::bigint END",
+        "THEN (payload_data->'facts'->>'resource_id')::bigint END",
+        "THEN (payload_data->'facts'->>'start_at')::timestamptz END",
+        "THEN (payload_data->'facts'->>'end_at')::timestamptz END",
+        "THEN (payload_data->>'call_id')::bigint END",
+        "THEN (pending_data->>'target_appointment_id')::bigint END",
+        "THEN (pending_data->>'target_expected_version')::integer END",
+        "THEN (pa.proposed_payload->'data'->>'target_appointment_id')::bigint END",
+        "THEN (pa.proposed_payload->'data'\n                                "
+        "->>'target_expected_version')::integer END",
+    )
+    for guarded_cast in guarded_casts:
+        assert guarded_cast in runtime
+    assert runtime.count("::bigint") == 7
+    assert runtime.count("::integer") == 2
+    assert runtime.count("::timestamptz") == 8
+    assert runtime.count("CASE WHEN pg_input_is_valid") >= 10
+
+
+def test_downgrade_preflight_fake_bind_rejects_each_lossy_state() -> None:
+    migration = _load_migration(MIGRATION_0004, "fonely_migration_0004_fake_downgrade")
+    checks = 8
+    for failing_index in range(checks):
+        results = []
+        for index in range(failing_index + 1):
+            result = Mock()
+            result.scalar_one_or_none.return_value = 1 if index == failing_index else None
+            results.append(result)
+        bind = Mock()
+        bind.execute.side_effect = results
+        migration.op = SimpleNamespace(get_bind=lambda current_bind=bind: current_bind)
+
+        with pytest.raises(RuntimeError, match="Migration 0004 downgrade"):
+            migration._preflight_downgrade()
+
+        assert bind.execute.call_count == failing_index + 1
+
+
+def test_capacity_allocation_deferred_trigger_lifecycle_is_rendered() -> None:
+    upgrade = _capture_upgrade().executed_sql
+    source = MIGRATION_0004.read_text()
+    for marker in (
+        "CREATE FUNCTION enforce_one_confirmed_appointment_allocation",
+        "CREATE FUNCTION enforce_confirmed_appointment_allocation",
+        "CREATE CONSTRAINT TRIGGER ck_confirmed_appointment_active_allocation_from_appointment",
+        "CREATE CONSTRAINT TRIGGER ck_confirmed_appointment_active_allocation_from_allocation",
+        "AFTER INSERT OR UPDATE OR DELETE ON appointments",
+        "AFTER INSERT OR UPDATE OR DELETE ON resource_allocations",
+        "DEFERRABLE INITIALLY DEFERRED",
+        "appointment requires exactly one",
+        "cancelled appointment requires zero active allocations",
+    ):
+        assert any(marker in statement for statement in upgrade)
+    deferred = [s for s in upgrade if "CONSTRAINT TRIGGER" in s]
+    assert all("UPDATE OF" not in s for s in deferred)
+    consistency_function = next(
+        statement
+        for statement in upgrade
+        if "CREATE FUNCTION enforce_one_confirmed_appointment_allocation" in statement
+    )
+    assert "appointment_status IN ('confirmed', 'completed', 'no_show')" in consistency_function
+    downgrade = source[source.index("def downgrade") :]
+    assert downgrade.index("DROP TRIGGER") < downgrade.index(
+        'op.drop_table("resource_allocations")'
+    )
+    assert "DROP FUNCTION enforce_confirmed_appointment_allocation()" in downgrade
+    assert (
+        "DROP FUNCTION enforce_one_confirmed_appointment_allocation(integer, integer)" in downgrade
+    )
+
+
+def test_integrity_trigger_and_append_only_sql_is_rendered() -> None:
+    rendered = "\n".join(_capture_upgrade().executed_sql)
+    for marker in (
+        "ck_customer_conversation_appointment_provenance",
+        "ck_committed_pending_action_provenance",
+        "committed PendingAction provenance is immutable",
+        "ck_appointment_commit_provenance",
+        "ck_appointment_mutation_commit",
+        "ck_confirmed_appointment_action_commit",
+        "appointment_authoritative_snapshot",
+        "appointment_payload_facts_match",
+        "appointment commits are append-only",
+        "CONSTRAINT = 'ck_appointment_commit_append_only'",
+        "ck_resource_allocation_immutable_identity",
+        "resource allocations cannot be deleted",
+        "NEW.version <> OLD.version + 1",
+    ):
+        assert marker in rendered
+
+
+def test_upgrade_preflight_is_null_safe_and_service_wide() -> None:
+    source = MIGRATION_0004.read_text()
+    preflight = source[source.index("def _preflight_upgrade") : source.index("def upgrade")]
+    assert "SELECT 1 FROM services" in preflight
+    assert "duration_minutes IS NULL" in preflight
+    assert "COALESCE(f.facts->>'service_id' !~" in preflight
+    assert "NOT COALESCE(pg_input_is_valid" in preflight
+    first_guard = preflight.index("pg_input_is_valid(f.facts->>'service_id', 'bigint')")
+    first_cast = preflight.index("(f.facts->>'service_id')::bigint")
+    assert first_guard < first_cast
+
+
+def test_downgrade_restores_scalar_appointment_provenance_fk() -> None:
+    source = MIGRATION_0004.read_text()
+    downgrade = source[source.index("def downgrade") :]
+    drop_composite = downgrade.index("fk_appointment_business_pending_action")
+    restore_scalar = downgrade.index("appointments_pending_action_id_fkey")
+    drop_tenant_unique = downgrade.index("uq_pending_actions_business_id_id")
+    assert drop_composite < restore_scalar < drop_tenant_unique
 
 
 def test_phase_b_offline_migration_guards_populated_database() -> None:

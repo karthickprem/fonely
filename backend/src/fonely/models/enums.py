@@ -52,11 +52,41 @@ class OrderStatus(enum.StrEnum):
 
 
 class AppointmentStatus(enum.StrEnum):
-    HELD = "held"
     CONFIRMED = "confirmed"
     COMPLETED = "completed"
     CANCELLED = "cancelled"
     NO_SHOW = "no_show"
+
+
+class AppointmentSource(enum.StrEnum):
+    CUSTOMER_CONVERSATION = "customer_conversation"
+    OWNER_MANUAL = "owner_manual"
+    WALK_IN = "walk_in"
+
+
+class AppointmentCommitOperation(enum.StrEnum):
+    CANCEL = "cancel"
+    RESCHEDULE = "reschedule"
+
+
+class ResourceAllocationType(enum.StrEnum):
+    APPOINTMENT = "appointment"
+    MANUAL_APPOINTMENT = "manual_appointment"
+    WALK_IN = "walk_in"
+    OWNER_BLOCK = "owner_block"
+
+
+class ResourceAllocationStatus(enum.StrEnum):
+    ACTIVE = "active"
+    RELEASED = "released"
+    CANCELLED = "cancelled"
+
+
+class ResourceAllocationSource(enum.StrEnum):
+    CUSTOMER_CONVERSATION = "customer_conversation"
+    OWNER_MANUAL = "owner_manual"
+    WALK_IN = "walk_in"
+    OWNER_BLOCK = "owner_block"
 
 
 class InventoryReservationStatus(enum.StrEnum):

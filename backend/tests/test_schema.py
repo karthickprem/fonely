@@ -4,6 +4,7 @@ import ast
 from pathlib import Path
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
 from fonely.core.locale_mapping import SARVAM_LOCALE_MAP, to_sarvam_locale
 from fonely.models import enums
@@ -19,12 +20,15 @@ EXPECTED_TABLES = [
     "products",
     "services",
     "resources",
+    "service_resource_eligibility",
     "inventory_balances",
     "inventory_reservations",
     "inventory_movements",
     "orders",
     "order_line_items",
     "appointments",
+    "resource_allocations",
+    "appointment_commits",
     "pending_actions",
     "calls",
     "owner_audit_log",
@@ -34,7 +38,7 @@ EXPECTED_TABLES = [
 class TestSchemaMetadata:
     def test_expected_table_count(self) -> None:
         tables = list(Base.metadata.tables.keys())
-        assert len(tables) == 18
+        assert len(tables) == 21
 
     def test_all_expected_tables_exist(self) -> None:
         tables = set(Base.metadata.tables.keys())
@@ -46,6 +50,18 @@ class TestSchemaMetadata:
         constraint_names = {c.name for c in biz.constraints if hasattr(c, "name") and c.name}
         assert "ck_businesses_lat_range" in constraint_names
         assert "ck_businesses_lng_range" in constraint_names
+
+    def test_businesses_has_bounded_appointment_policy_defaults(self) -> None:
+        businesses = Base.metadata.tables["businesses"]
+        checks = {constraint.name for constraint in businesses.constraints}
+        assert {
+            "ck_businesses_appointment_horizon",
+            "ck_businesses_appointment_notice",
+            "ck_businesses_appointment_slot_interval",
+        } <= checks
+        assert str(businesses.c.appointment_booking_horizon_days.server_default.arg) == "90"
+        assert str(businesses.c.appointment_minimum_notice_minutes.server_default.arg) == "0"
+        assert str(businesses.c.appointment_slot_interval_minutes.server_default.arg) == "15"
 
     def test_calls_has_confidence_constraint(self) -> None:
         calls = Base.metadata.tables["calls"]
@@ -94,6 +110,106 @@ class TestSchemaMetadata:
         bu = Base.metadata.tables["business_users"]
         role_col = bu.c.role
         assert role_col is not None
+
+    def test_resource_allocation_is_capacity_authority(self) -> None:
+        allocations = Base.metadata.tables["resource_allocations"]
+        constraint_names = {constraint.name for constraint in allocations.constraints}
+        assert "ex_resource_allocations_active_overlap" in constraint_names
+        indexes = {index.name: index for index in allocations.indexes}
+        active = indexes["uq_allocation_active_appointment"]
+        assert active.unique
+        predicate = str(active.dialect_options["postgresql"]["where"])
+        assert predicate == "appointment_id IS NOT NULL AND status = 'active'"
+        appointment_facts = next(
+            constraint
+            for constraint in allocations.foreign_key_constraints
+            if constraint.name == "fk_allocation_business_appointment"
+        )
+        assert appointment_facts.deferrable is True
+        assert appointment_facts.initially == "DEFERRED"
+
+    def test_allocation_type_source_link_semantics_are_constrained(self) -> None:
+        allocations = Base.metadata.tables["resource_allocations"]
+        constraint = next(
+            item
+            for item in allocations.constraints
+            if item.name == "ck_allocation_type_source_link"
+        )
+        sql = " ".join(str(constraint.sqltext).split())
+        for combination in (
+            "allocation_type = 'appointment' AND appointment_id IS NOT NULL "
+            "AND pending_action_id IS NOT NULL AND source = 'customer_conversation'",
+            "allocation_type = 'manual_appointment' AND appointment_id IS NOT NULL "
+            "AND pending_action_id IS NULL AND source = 'owner_manual'",
+            "allocation_type = 'walk_in' AND appointment_id IS NOT NULL "
+            "AND pending_action_id IS NULL AND source = 'walk_in'",
+            "allocation_type = 'owner_block' AND appointment_id IS NULL "
+            "AND pending_action_id IS NULL AND source = 'owner_block'",
+        ):
+            assert combination in sql
+        assert set(allocations.c.source.type.enums) == {
+            "customer_conversation",
+            "owner_manual",
+            "walk_in",
+            "owner_block",
+        }
+
+    def test_appointment_history_is_not_coupled_to_current_eligibility(self) -> None:
+        appointments = Base.metadata.tables["appointments"]
+        targets = {
+            element.target_fullname
+            for constraint in appointments.foreign_key_constraints
+            for element in constraint.elements
+        }
+        assert all(not target.startswith("service_resource_eligibility.") for target in targets)
+
+    def test_appointment_status_excludes_holds_and_has_no_default(self) -> None:
+        appointments = Base.metadata.tables["appointments"]
+        status = appointments.c.status
+        assert set(status.type.enums) == {"confirmed", "completed", "cancelled", "no_show"}
+        assert status.default is None
+        assert status.server_default is None
+        assert "held_until" not in appointments.c
+
+    def test_appointment_source_uses_validating_enum_and_one_explicit_check(self) -> None:
+        appointments = Base.metadata.tables["appointments"]
+        source = appointments.c.source
+        assert set(source.type.enums) == {"customer_conversation", "owner_manual", "walk_in"}
+        assert source.type.name == "appointment_source"
+        assert source.type.validate_strings is True
+        assert source.type.create_constraint is False
+        assert (
+            sum(
+                constraint.name == "ck_appointment_source"
+                for constraint in appointments.constraints
+            )
+            == 1
+        )
+        processor = source.type.bind_processor(postgresql.dialect())
+        assert processor is not None
+        with pytest.raises(LookupError):
+            processor("invalid_source")
+
+    def test_resource_allocation_status_has_database_default(self) -> None:
+        status = Base.metadata.tables["resource_allocations"].c.status
+        assert status.default is not None
+        assert status.server_default is not None
+        assert str(status.server_default.arg) == "active"
+
+    def test_appointment_commit_supports_mutations_only(self) -> None:
+        commits = Base.metadata.tables["appointment_commits"]
+        operation = commits.c.operation.type
+        assert set(operation.enums) == {"cancel", "reschedule"}
+
+    def test_schedule_scope_indexes_are_partial(self) -> None:
+        schedules = Base.metadata.tables["operating_schedules"]
+        indexes = {index.name: index for index in schedules.indexes}
+        assert str(
+            indexes["uq_schedule_business_scope"].dialect_options["postgresql"]["where"]
+        ) == ("resource_id IS NULL")
+        assert str(
+            indexes["uq_schedule_resource_scope"].dialect_options["postgresql"]["where"]
+        ) == ("resource_id IS NOT NULL")
 
 
 class TestEnums:

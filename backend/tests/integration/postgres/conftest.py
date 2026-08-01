@@ -83,7 +83,7 @@ def migrated_postgres(postgres_database_url: str) -> Generator[None, None, None]
     )
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def pg_engine(
     postgres_database_url: str,
     migrated_postgres: None,
@@ -100,7 +100,7 @@ def pg_session_factory(
     return async_sessionmaker(pg_engine, expire_on_commit=False)
 
 
-@pytest_asyncio.fixture(autouse=True)
+@pytest_asyncio.fixture(autouse=True, loop_scope="session")
 async def clean_database(
     pg_engine: AsyncEngine,
 ) -> AsyncGenerator[None, None]:
@@ -118,7 +118,7 @@ async def clean_database(
         )
 
 
-@pytest_asyncio.fixture
+@pytest_asyncio.fixture(loop_scope="session")
 async def pg_session(
     pg_session_factory: async_sessionmaker[AsyncSession],
 ) -> AsyncGenerator[AsyncSession, None]:

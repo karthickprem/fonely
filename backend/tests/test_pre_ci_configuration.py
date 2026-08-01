@@ -21,12 +21,28 @@ def test_lockfile_contains_jsonschema() -> None:
 
 def test_ci_uses_frozen_sync_and_required_root_qa_gates() -> None:
     workflow = (PROJECT_ROOT / ".github" / "workflows" / "backend-ci.yml").read_text()
+    assert "actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809" in workflow
     assert "uv sync --frozen --all-extras" in workflow
     assert "backend/.venv/bin/python scripts/validate-evals.py" in workflow
     assert "${{ runner.temp }}/tool-contract-mismatches.ci.json" in workflow
     assert "backend/.venv/bin/python scripts/report-eval-coverage.py" in workflow
     assert "--profile chennai-pilot" in workflow
+    assert ".venv/bin/pytest -m postgres -q" in workflow
     assert workflow.count("working-directory: .") >= 2
+
+
+def test_postgres_async_engine_and_tests_share_session_loop() -> None:
+    config = tomllib.loads((BACKEND_ROOT / "pyproject.toml").read_text())
+    pytest_options = config["tool"]["pytest"]["ini_options"]
+    assert pytest_options["asyncio_mode"] == "auto"
+    assert pytest_options["asyncio_default_fixture_loop_scope"] == "session"
+    assert pytest_options["asyncio_default_test_loop_scope"] == "session"
+
+    fixtures = (BACKEND_ROOT / "tests" / "integration" / "postgres" / "conftest.py").read_text()
+    assert '@pytest_asyncio.fixture(scope="session", loop_scope="session")' in fixtures
+    assert '@pytest_asyncio.fixture(autouse=True, loop_scope="session")' in fixtures
+    assert '@pytest_asyncio.fixture(loop_scope="session")' in fixtures
+    assert "def event_loop(" not in fixtures
 
 
 def test_root_gitignore_contains_required_recursive_rules() -> None:

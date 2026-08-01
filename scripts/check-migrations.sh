@@ -1,360 +1,196 @@
 #!/usr/bin/env bash
-#
-# Offline migration smoke-test — no live database required.
-#
-# Checks:
-#   - Alembic history and heads
-#   - Exactly one head
-#   - Upgrade/downgrade SQL rendering
-#   - Migration source quality (empty bodies, extensions, missing metadata)
-#   - Migration files match Alembic history
-#   - DDL operation counts
+# Fail-closed wrapper for the offline migration policy checker.
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-BACKEND_ROOT="${BACKEND_ROOT:-${PROJECT_ROOT}/backend}"
-VENV_BIN="${VENV_BIN:-${BACKEND_ROOT}/.venv/bin}"
-ALEMBIC="${ALEMBIC:-${VENV_BIN}/alembic}"
-VERSIONS_DIR="${VERSIONS_DIR:-${BACKEND_ROOT}/migrations/versions}"
-MIGRATION_POLICY="${SCRIPT_DIR}/migration_policy.py"
-
-FAKE_URL="postgresql+asyncpg://fake_test_user:fake_test_password@localhost:55432/fonely_test"
-export DATABASE_URL="${FAKE_URL}"
-
-ERRORS=0
-WARNINGS=0
-
-error() { echo "ERROR: $*" >&2; ERRORS=$((ERRORS + 1)); }
-warn()  { echo "WARNING: $*" >&2; WARNINGS=$((WARNINGS + 1)); }
-info()  { echo "INFO: $*"; }
-
-# ---------------------------------------------------------------------------
-# Secure temporary directory
-# ---------------------------------------------------------------------------
-
-TMPDIR_WORK="$(mktemp -d)"
-cleanup() {
-    rm -rf "${TMPDIR_WORK}"
-}
-trap cleanup EXIT
-
-# ---------------------------------------------------------------------------
-# 1. Alembic history and heads
-# ---------------------------------------------------------------------------
-
-info "=== Alembic history ==="
-cd "${BACKEND_ROOT}"
-
-HISTORY=$("${ALEMBIC}" history 2>&1) || { error "alembic history failed"; }
-echo "${HISTORY}"
-
-echo ""
-info "=== Alembic heads ==="
-HEADS=$("${ALEMBIC}" heads 2>&1) || { error "alembic heads failed"; }
-echo "${HEADS}"
-
-HEAD_COUNT=$(echo "${HEADS}" | grep -c "(head)" || true)
-if [[ ${HEAD_COUNT} -ne 1 ]]; then
-    error "Expected exactly 1 head, found ${HEAD_COUNT}."
-else
-    info "Single head confirmed."
-fi
-
-# ---------------------------------------------------------------------------
-# 2. Discover revisions from Alembic (not filenames)
-# ---------------------------------------------------------------------------
-
-# Extract the ordered revision chain from Alembic history.
-# `alembic history` outputs lines like:
-#   0001 -> 0002 (head), pending_action_state_machine
-#   <base> -> 0001, initial_schema
-# We parse both source and target revision IDs, excluding <base>.
-# Then topologically sort: walk from base upward.
-
-declare -A DOWN_TO_UP
-declare -A UP_TO_DOWN
-ALEMBIC_REVISIONS=()
-
-while IFS= read -r line; do
-    [[ -z "${line}" ]] && continue
-    src=$(echo "${line}" | sed -n 's/^\([^ ]*\) -> .*/\1/p')
-    dst=$(echo "${line}" | sed -n 's/^[^ ]* -> \([^ ,()]*\).*/\1/p')
-    if [[ -n "${src}" && -n "${dst}" ]]; then
-        DOWN_TO_UP["${src}"]="${dst}"
-        UP_TO_DOWN["${dst}"]="${src}"
-    fi
-done <<< "${HISTORY}"
-
-# Walk the chain from <base> upward
-CURRENT="<base>"
-while [[ -n "${DOWN_TO_UP[${CURRENT}]+_}" ]]; do
-    NEXT="${DOWN_TO_UP[${CURRENT}]}"
-    ALEMBIC_REVISIONS+=("${NEXT}")
-    CURRENT="${NEXT}"
-done
-
-if [[ ${#ALEMBIC_REVISIONS[@]} -eq 0 ]]; then
-    error "Could not derive any revisions from Alembic history."
-fi
-
-info "Revision chain from Alembic: ${ALEMBIC_REVISIONS[*]}"
-
-# Build a set of Alembic-known revisions for cross-referencing
-declare -A ALEMBIC_REV_SET
-for rev in "${ALEMBIC_REVISIONS[@]}"; do
-    ALEMBIC_REV_SET["${rev}"]=1
-done
-
-# ---------------------------------------------------------------------------
-# 3. Verify migration files match Alembic history
-# ---------------------------------------------------------------------------
-
-echo ""
-info "=== Migration file / Alembic history cross-check ==="
-
-declare -A FILE_REV_BY_PATH
-declare -A REVISION_FILE
-
-for f in "${VERSIONS_DIR}"/*.py; do
-    [[ "$(basename "${f}")" == "__init__.py" ]] && continue
-    BASENAME="$(basename "${f}")"
-
-    FILE_REV=$(MIGRATION_FILE="${f}" "${VENV_BIN}/python" - <<'EXTRACT_REV_PY' 2>/dev/null || true
-import ast
-import os
-import sys
-
-with open(os.environ["MIGRATION_FILE"]) as source_file:
-    tree = ast.parse(source_file.read())
-for node in ast.iter_child_nodes(tree):
-    target = value = None
-    if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-        target, value = node.target.id, node.value
-    elif isinstance(node, ast.Assign):
-        for candidate in node.targets:
-            if isinstance(candidate, ast.Name) and candidate.id == "revision":
-                target, value = candidate.id, node.value
-    if target == "revision" and isinstance(value, ast.Constant) and isinstance(value.value, str):
-        print(value.value)
-        sys.exit(0)
-print("")
-EXTRACT_REV_PY
-)
-
-    if [[ -z "${FILE_REV}" ]]; then
-        warn "${BASENAME}: could not extract revision ID from source."
-        continue
-    fi
-
-    FILE_REV_BY_PATH["${f}"]="${FILE_REV}"
-    REVISION_FILE["${FILE_REV}"]="${BASENAME}"
-
-    if [[ -z "${ALEMBIC_REV_SET[${FILE_REV}]+_}" ]]; then
-        error "${BASENAME}: revision '${FILE_REV}' is not in Alembic history (orphan migration file)."
-    else
-        info "  ${BASENAME}: revision '${FILE_REV}' matches Alembic history."
-    fi
-done
-
-# ---------------------------------------------------------------------------
-# 4. Render cumulative offline upgrade SQL
-# ---------------------------------------------------------------------------
-
-echo ""
-info "=== Cumulative upgrade SQL (base -> head) ==="
-UPGRADE_SQL="${TMPDIR_WORK}/upgrade_full.sql"
-if "${ALEMBIC}" upgrade head --sql > "${UPGRADE_SQL}" 2>&1; then
-    info "Upgrade SQL rendered to ${UPGRADE_SQL}"
-    wc -l < "${UPGRADE_SQL}" | xargs -I{} echo "  Lines: {}"
-else
-    error "Failed to render cumulative upgrade SQL."
-fi
-
-# ---------------------------------------------------------------------------
-# 5. Render per-revision downgrade SQL
-# ---------------------------------------------------------------------------
-
-echo ""
-info "=== Downgrade SQL ranges ==="
-PREV="base"
-for rev in "${ALEMBIC_REVISIONS[@]}"; do
-    DOWNGRADE_SQL="${TMPDIR_WORK}/downgrade_${rev}_to_${PREV}.sql"
-    if "${ALEMBIC}" downgrade "${rev}:${PREV}" --sql > "${DOWNGRADE_SQL}" 2>&1; then
-        info "  ${rev} -> ${PREV}: rendered ($(wc -l < "${DOWNGRADE_SQL}" | xargs) lines)"
-    else
-        error "Failed to render downgrade SQL for ${rev} -> ${PREV}."
-    fi
-    PREV="${rev}"
-done
-
-# ---------------------------------------------------------------------------
-# 6. Check migration source files
-# ---------------------------------------------------------------------------
-
-echo ""
-info "=== Migration source checks ==="
-
-declare -A EXTENSION_REVISION_SET
-
-for f in "${VERSIONS_DIR}"/*.py; do
-    [[ "$(basename "${f}")" == "__init__.py" ]] && continue
-    BASENAME="$(basename "${f}")"
-    info "Checking ${BASENAME}..."
-
-    if ! grep -qP '^revision\s*[:=]' "${f}"; then
-        error "${BASENAME}: missing 'revision' attribute."
-    fi
-
-    if ! grep -qP '^down_revision\s*[:=]' "${f}"; then
-        error "${BASENAME}: missing 'down_revision' attribute."
-    fi
-
-    UPGRADE_BODY=$(MIGRATION_FILE="${f}" "${VENV_BIN}/python" - <<'CHECK_UPGRADE_PY' 2>&1
-import ast, os, sys
-fpath = os.environ["MIGRATION_FILE"]
-with open(fpath) as fh:
-    tree = ast.parse(fh.read())
-for node in ast.walk(tree):
-    if isinstance(node, ast.FunctionDef) and node.name == "upgrade":
-        body = [n for n in node.body if not isinstance(n, (ast.Pass, ast.Expr)) or
-                (isinstance(n, ast.Expr) and not isinstance(n.value, (ast.Constant, ast.Str)))]
-        print(len(body))
-        sys.exit(0)
-print(-1)
-CHECK_UPGRADE_PY
-)
-
-    if [[ "${UPGRADE_BODY}" == "0" ]]; then
-        error "${BASENAME}: upgrade() body is empty."
-    fi
-
-    DOWNGRADE_BODY=$(MIGRATION_FILE="${f}" "${VENV_BIN}/python" - <<'CHECK_DOWNGRADE_PY' 2>&1
-import ast, os, sys
-fpath = os.environ["MIGRATION_FILE"]
-with open(fpath) as fh:
-    tree = ast.parse(fh.read())
-for node in ast.walk(tree):
-    if isinstance(node, ast.FunctionDef) and node.name == "downgrade":
-        body = [n for n in node.body if not isinstance(n, (ast.Pass, ast.Expr)) or
-                (isinstance(n, ast.Expr) and not isinstance(n.value, (ast.Constant, ast.Str)))]
-        print(len(body))
-        sys.exit(0)
-print(-1)
-CHECK_DOWNGRADE_PY
-)
-
-    if [[ "${DOWNGRADE_BODY}" == "0" ]]; then
-        error "${BASENAME}: downgrade() body is empty."
-    fi
-
-    SOURCE_STATUS=0
-    SOURCE_SCAN=$("${VENV_BIN}/python" "${MIGRATION_POLICY}" source "${f}" 2>&1) || SOURCE_STATUS=$?
-    REQUESTED_EXTENSIONS=()
-    while IFS= read -r line; do
-        [[ -z "${line}" ]] && continue
-        if [[ "${line}" == REQUESTED_EXTENSION=* ]]; then
-            REQUESTED_EXTENSIONS+=("${line#REQUESTED_EXTENSION=}")
-        elif [[ "${line}" == ERROR:* ]]; then
-            error "${line#ERROR: }"
-        else
-            echo "${line}"
-        fi
-    done <<< "${SOURCE_SCAN}"
-    if [[ ${SOURCE_STATUS} -ne 0 && "${SOURCE_SCAN}" != *"ERROR:"* ]]; then
-        error "${BASENAME}: extension source scan failed."
-    fi
-    if [[ ${#REQUESTED_EXTENSIONS[@]} -gt 0 ]]; then
-        FILE_REV="${FILE_REV_BY_PATH[${f}]:-}"
-        if [[ -z "${FILE_REV}" ]]; then
-            error "${BASENAME}: extension migration has no literal revision ID."
-        else
-            EXTENSION_REVISION_SET["${FILE_REV}"]="${REQUESTED_EXTENSIONS[*]}"
-        fi
-    fi
-done
-
-# ---------------------------------------------------------------------------
-# 7. Verify rendered SQL for extension revisions
-# ---------------------------------------------------------------------------
-
-echo ""
-info "=== Rendered extension revision SQL policy ==="
-
-for rev in "${ALEMBIC_REVISIONS[@]}"; do
-    [[ -z "${EXTENSION_REVISION_SET[${rev}]+_}" ]] && continue
-    down_revision="${UP_TO_DOWN[${rev}]}"
-    [[ "${down_revision}" == "<base>" ]] && down_revision="base"
-    SAFE_REV_NAME=$(printf '%s' "${rev}" | tr -c 'A-Za-z0-9_.-' '_')
-    REV_UPGRADE_SQL="${TMPDIR_WORK}/upgrade_${SAFE_REV_NAME}.sql"
-    REV_DOWNGRADE_SQL="${TMPDIR_WORK}/downgrade_${SAFE_REV_NAME}.sql"
-    if ! "${ALEMBIC}" upgrade "${down_revision}:${rev}" --sql > "${REV_UPGRADE_SQL}" 2>&1; then
-        error "${rev}: failed to render exact extension upgrade range."
-        continue
-    fi
-    if ! "${ALEMBIC}" downgrade "${rev}:${down_revision}" --sql > "${REV_DOWNGRADE_SQL}" 2>&1; then
-        error "${rev}: failed to render exact extension downgrade range."
-        continue
-    fi
-    POLICY_ARGS=(
-        rendered
-        --upgrade-sql "${REV_UPGRADE_SQL}"
-        --downgrade-sql "${REV_DOWNGRADE_SQL}"
-        --migration-name "${REVISION_FILE[${rev}]}"
-        --revision "${rev}"
-    )
-    for requested_extension in ${EXTENSION_REVISION_SET[${rev}]}; do
-        POLICY_ARGS+=(--requested-extension "${requested_extension}")
-    done
-    RENDER_STATUS=0
-    RENDER_SCAN=$("${VENV_BIN}/python" "${MIGRATION_POLICY}" "${POLICY_ARGS[@]}" 2>&1) || RENDER_STATUS=$?
-    while IFS= read -r line; do
-        [[ -z "${line}" ]] && continue
-        if [[ "${line}" == ERROR:* ]]; then error "${line#ERROR: }"; else echo "${line}"; fi
-    done <<< "${RENDER_SCAN}"
-    if [[ ${RENDER_STATUS} -ne 0 && "${RENDER_SCAN}" != *"ERROR:"* ]]; then
-        error "${rev}: rendered extension SQL scan failed."
-    fi
-done
-
-# ---------------------------------------------------------------------------
-# 8. DDL operation counts from upgrade SQL
-# ---------------------------------------------------------------------------
-
-echo ""
-info "=== DDL operation counts (from upgrade SQL) ==="
-
-if [[ -f "${UPGRADE_SQL}" ]]; then
-    count_pattern() {
-        local label="$1"
-        local pattern="$2"
-        local count
-        count=$(grep -ciP "${pattern}" "${UPGRADE_SQL}" || true)
-        printf "  %-25s %d\n" "${label}:" "${count}"
-    }
-
-    count_pattern "CREATE TABLE"    'CREATE\s+TABLE'
-    count_pattern "DROP TABLE"      'DROP\s+TABLE'
-    count_pattern "ADD COLUMN"      'ADD\s+COLUMN'
-    count_pattern "DROP COLUMN"     'DROP\s+COLUMN'
-    count_pattern "CHECK constraint" 'CHECK\s*\('
-    count_pattern "CREATE INDEX"    'CREATE\s+INDEX'
-    count_pattern "DROP INDEX"      'DROP\s+INDEX'
-else
-    warn "Upgrade SQL file not available for DDL counts."
-fi
-
-# ---------------------------------------------------------------------------
-# Summary
-# ---------------------------------------------------------------------------
-
-echo ""
-echo "========================================"
-if [[ ${ERRORS} -gt 0 ]]; then
-    echo "FAILED: ${ERRORS} error(s), ${WARNINGS} warning(s)."
+fail() {
+    printf 'ERROR: %s\n' "$1" >&2
     exit 1
-else
-    echo "PASSED: 0 errors, ${WARNINGS} warning(s)."
-    exit 0
-fi
+}
+
+REALPATH=/usr/bin/realpath
+FIND=/usr/bin/find
+MKTEMP=/usr/bin/mktemp
+TIMEOUT=/usr/bin/timeout
+RM=/usr/bin/rm
+ENV=/usr/bin/env
+GREP=/usr/bin/grep
+DIRNAME=/usr/bin/dirname
+for utility in "${REALPATH}" "${FIND}" "${MKTEMP}" "${TIMEOUT}" "${RM}" "${ENV}" "${GREP}" "${DIRNAME}"; do
+    [[ -x "${utility}" ]] || fail "required system utility validation failed"
+done
+
+SCRIPT_DIR=$(cd "$("${DIRNAME}" "${BASH_SOURCE[0]}")" && pwd -P)
+PROJECT_ROOT=$(cd "${SCRIPT_DIR}/.." && pwd -P)
+resolve_from() {
+    local base=$1
+    local value=$2
+    if [[ "${value}" = /* ]]; then
+        "${REALPATH}" -e -- "${value}"
+    else
+        "${REALPATH}" -e -- "${base}/${value}"
+    fi
+}
+
+BACKEND_ROOT=$(resolve_from "${PROJECT_ROOT}" "${BACKEND_ROOT:-backend}") \
+    || fail "backend path validation failed"
+VERSIONS_DIR=$(resolve_from "${BACKEND_ROOT}" "migrations/versions") \
+    || fail "versions path validation failed"
+ALEMBIC_CONFIG=$(resolve_from "${BACKEND_ROOT}" "alembic.ini") \
+    || fail "Alembic configuration validation failed"
+POLICY_HELPER=$(resolve_from "${PROJECT_ROOT}" "scripts/migration_policy.py") \
+    || fail "policy helper validation failed"
+PYTHON_BIN=$(resolve_from "${BACKEND_ROOT}" ".venv/bin/python") \
+    || fail "Python executable validation failed"
+VENV_ROOT=$(resolve_from "${BACKEND_ROOT}" ".venv") \
+    || fail "virtual environment validation failed"
+VENV_SITE_PACKAGES=$("${FIND}" "${VENV_ROOT}/lib" -mindepth 2 -maxdepth 2 -type d -name site-packages -print -quit)
+[[ -n "${VENV_SITE_PACKAGES}" ]] || fail "virtual environment site-packages validation failed"
+ALEMBIC_BIN=$(resolve_from "${BACKEND_ROOT}" ".venv/bin/alembic") \
+    || fail "Alembic executable validation failed"
+
+[[ -d "${BACKEND_ROOT}" ]] || fail "backend path is not a directory"
+[[ -d "${VERSIONS_DIR}" ]] || fail "versions path is not a directory"
+[[ -f "${ALEMBIC_CONFIG}" ]] || fail "Alembic configuration is not a regular file"
+[[ -f "${POLICY_HELPER}" ]] || fail "policy helper is not a regular file"
+[[ -x "${PYTHON_BIN}" ]] || fail "Python executable is not executable"
+[[ -x "${ALEMBIC_BIN}" ]] || fail "Alembic executable is not executable"
+
+RENDER_TIMEOUT_SECONDS=${MIGRATION_RENDER_TIMEOUT:-30}
+[[ ${#RENDER_TIMEOUT_SECONDS} -le 3 ]] \
+    || fail "render timeout must be a bounded positive integer"
+[[ "${RENDER_TIMEOUT_SECONDS}" =~ ^[1-9][0-9]*$ ]] \
+    || fail "render timeout must be a positive integer"
+[[ ${RENDER_TIMEOUT_SECONDS} -le 300 ]] || fail "render timeout exceeds hard cap"
+REVISION_CANDIDATES=$("${FIND}" "${VERSIONS_DIR}" -type f -name '*.py' ! -name '__init__.py' -print | /usr/bin/wc -l)
+[[ "${REVISION_CANDIDATES}" =~ ^[1-9][0-9]*$ ]] || fail "revision count validation failed"
+[[ ${REVISION_CANDIDATES} -le 500 ]] || fail "revision count exceeds hard cap"
+AGGREGATE_TIMEOUT_SECONDS=$((30 + RENDER_TIMEOUT_SECONDS * (2 + 2 * REVISION_CANDIDATES)))
+[[ ${AGGREGATE_TIMEOUT_SECONDS} -le 3600 ]] \
+    || fail "aggregate timeout exceeds hard cap"
+
+TMPDIR_WORK=$("${MKTEMP}" -d)
+cleanup() { "${RM}" -rf "${TMPDIR_WORK}"; }
+trap cleanup EXIT
+RESULT_FILE="${TMPDIR_WORK}/result.json"
+DIAGNOSTIC_FILE="${TMPDIR_WORK}/helper.stderr"
+
+set +e
+"${ENV}" -i PATH="/usr/bin:/bin" HOME="${HOME:-/tmp}" LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+    VIRTUAL_ENV="${VENV_ROOT}" PYTHONPATH="${VENV_SITE_PACKAGES}" \
+    DATABASE_URL="postgresql+asyncpg://localhost:55432/fonely_test" \
+    "${TIMEOUT}" --signal=TERM --kill-after=5 "${AGGREGATE_TIMEOUT_SECONDS}" \
+    "${PYTHON_BIN}" "${POLICY_HELPER}" check \
+    --backend-root "${BACKEND_ROOT}" \
+    --versions-dir "${VERSIONS_DIR}" \
+    --alembic-config "${ALEMBIC_CONFIG}" \
+    --alembic "${ALEMBIC_BIN}" \
+    --render-timeout "${RENDER_TIMEOUT_SECONDS}" \
+    >"${RESULT_FILE}" 2>"${DIAGNOSTIC_FILE}"
+HELPER_STATUS=$?
+set -e
+
+[[ ${HELPER_STATUS} -eq 0 ]] || fail "migration policy helper process failed"
+[[ ! -s "${DIAGNOSTIC_FILE}" ]] || fail "migration policy helper emitted unexpected diagnostics"
+[[ -s "${RESULT_FILE}" ]] || fail "migration policy helper returned empty output"
+
+VALIDATED_FILE="${TMPDIR_WORK}/validated.txt"
+set +e
+"${PYTHON_BIN}" - "${RESULT_FILE}" "${REVISION_CANDIDATES}" >"${VALIDATED_FILE}" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+SAFE_TEXT = re.compile(r"^[ -~]{1,200}$")
+SAFE_HEAD = re.compile(r"^[A-Za-z0-9_]{1,32}$")
+
+try:
+    text = Path(sys.argv[1]).read_text(encoding="utf-8")
+    expected_revisions = int(sys.argv[2])
+    decoder = json.JSONDecoder()
+    data, end = decoder.raw_decode(text)
+    if text[end:].strip():
+        raise ValueError
+    required = {
+        "protocol_version",
+        "ok",
+        "findings",
+        "errors",
+        "revision_count",
+        "head",
+        "evidence",
+        "ddl_counts",
+    }
+    if not isinstance(data, dict) or set(data) != required:
+        raise ValueError
+    if data["protocol_version"] != 1 or data["ok"] is not True:
+        raise ValueError
+    if not isinstance(data["findings"], list) or not all(
+        isinstance(item, str)
+        and SAFE_TEXT.fullmatch(item)
+        and not item.startswith(("INFO:", "ERROR:"))
+        for item in data["findings"]
+    ):
+        raise ValueError
+    if data["errors"] != []:
+        raise ValueError
+    if (
+        type(data["revision_count"]) is not int
+        or data["revision_count"] != expected_revisions
+        or not 1 <= data["revision_count"] <= 500
+    ):
+        raise ValueError
+    if not isinstance(data["head"], str) or not SAFE_HEAD.fullmatch(data["head"]):
+        raise ValueError
+    evidence = data["evidence"]
+    if not isinstance(evidence, dict) or evidence != {
+        "cumulative_upgrade_rendered": True,
+        "cumulative_downgrade_rendered": True,
+    }:
+        raise ValueError
+    counts = data["ddl_counts"]
+    expected_counts = {
+        "create_table",
+        "drop_table",
+        "add_column",
+        "drop_column",
+        "check_constraint",
+        "create_index",
+        "drop_index",
+    }
+    if not isinstance(counts, dict) or set(counts) != expected_counts:
+        raise ValueError
+    if not all(type(value) is int and value >= 0 for value in counts.values()):
+        raise ValueError
+except (OSError, UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+    sys.exit(1)
+
+print(f"revision_count={data['revision_count']}")
+print(f"head={data['head']}")
+for finding in data["findings"]:
+    print(f"finding={finding}")
+for key in sorted(data["ddl_counts"]):
+    print(f"count_{key}={data['ddl_counts'][key]}")
+PY
+VALIDATION_STATUS=$?
+set -e
+[[ ${VALIDATION_STATUS} -eq 0 ]] || fail "migration policy helper protocol validation failed"
+[[ -s "${VALIDATED_FILE}" ]] || fail "migration policy helper protocol validation failed"
+[[ $("${GREP}" -c '^revision_count=' "${VALIDATED_FILE}") -eq 1 ]] \
+    || fail "migration policy helper protocol validation failed"
+[[ $("${GREP}" -c '^head=' "${VALIDATED_FILE}") -eq 1 ]] \
+    || fail "migration policy helper protocol validation failed"
+[[ $("${GREP}" -c '^count_' "${VALIDATED_FILE}") -eq 7 ]] \
+    || fail "migration policy helper protocol validation failed"
+
+printf 'INFO: Migration policy PASSED.\n'
+while IFS= read -r line; do
+    case "${line}" in
+        revision_count=*) printf 'INFO: Revisions accounted: %s\n' "${line#revision_count=}" ;;
+        head=*) printf 'INFO: Effective head: %s\n' "${line#head=}" ;;
+        finding=*) printf 'INFO: %s\n' "${line#finding=}" ;;
+        count_*) printf 'INFO: DDL %s\n' "${line#count_}" ;;
+        *) fail "migration policy wrapper validation failed" ;;
+    esac
+done <"${VALIDATED_FILE}"

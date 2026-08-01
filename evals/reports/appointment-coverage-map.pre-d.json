@@ -1,0 +1,1444 @@
+{
+  "report_version": 1,
+  "phase": "pre-d",
+  "case_count": 50,
+  "evidence_limit": "Synthetic eval cases verify conversational intent, tool selection, arguments, response constraints, and declared effects only. They do not prove migrations, PostgreSQL constraints, transactions, concurrency, authorization queries, native-language quality, clinical safety, or pilot behavior.",
+  "requirements": [
+    {
+      "id": "SVC-01",
+      "name": "service_duration",
+      "case_ids": [
+        "APPT-001",
+        "APPT-003",
+        "APPT-036",
+        "APPT-047"
+      ],
+      "classification": "foundation",
+      "evidence": [
+        "generic_infrastructure",
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "appointment_d_work",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SVC-02",
+      "name": "before_after_buffers",
+      "case_ids": [
+        "APPT-004",
+        "APPT-005",
+        "APPT-035",
+        "APPT-036"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SVC-03",
+      "name": "inactive_service",
+      "case_ids": [
+        "APPT-028",
+        "APPT-036"
+      ],
+      "classification": "partial",
+      "evidence": [
+        "generic_infrastructure",
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "d1_or_d2_or_d3_completion",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SVC-04",
+      "name": "inactive_resource",
+      "case_ids": [
+        "APPT-029"
+      ],
+      "classification": "partial",
+      "evidence": [
+        "generic_infrastructure",
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "d1_or_d2_or_d3_completion",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SVC-05",
+      "name": "service_resource_eligibility",
+      "case_ids": [
+        "APPT-030",
+        "APPT-050"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SVC-06",
+      "name": "named_resource",
+      "case_ids": [
+        "APPT-002",
+        "APPT-009",
+        "APPT-043",
+        "MLT-009",
+        "MLT-016",
+        "MLH-009"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SVC-07",
+      "name": "any_eligible_resource",
+      "case_ids": [
+        "APPT-011",
+        "APPT-050",
+        "MLT-001",
+        "MLH-002",
+        "MLS-002",
+        "MLS-004"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SVC-08",
+      "name": "no_silent_substitution",
+      "case_ids": [
+        "APPT-002",
+        "APPT-029",
+        "APPT-043"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SVC-09",
+      "name": "multiple_resources_simultaneously_available",
+      "case_ids": [
+        "APPT-011",
+        "APPT-050"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "CAP-01",
+      "name": "same_resource_non_overlap",
+      "case_ids": [
+        "APPT-010",
+        "APPT-013",
+        "APPT-014",
+        "APPT-015"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "CAP-02",
+      "name": "different_resources_may_overlap",
+      "case_ids": [
+        "APPT-011",
+        "APPT-050"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "CAP-03",
+      "name": "half_open_adjacency",
+      "case_ids": [
+        "APPT-012",
+        "APPT-042",
+        "APPT-045",
+        "APPT-046"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "CAP-04",
+      "name": "buffer_created_conflict",
+      "case_ids": [
+        "APPT-004",
+        "APPT-005",
+        "APPT-035"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "CAP-05",
+      "name": "manual_appointment_capacity",
+      "case_ids": [
+        "APPT-031"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "CAP-06",
+      "name": "walk_in_capacity",
+      "case_ids": [
+        "APPT-022"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "CAP-07",
+      "name": "owner_block_allocation",
+      "case_ids": [
+        "APPT-031"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "CAP-08",
+      "name": "cancellation_releases_capacity",
+      "case_ids": [
+        "APPT-019",
+        "APPT-044",
+        "MLT-005",
+        "MLH-006"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "CAP-09",
+      "name": "atomic_reschedule_move",
+      "case_ids": [
+        "APPT-020",
+        "APPT-021",
+        "MLH-011"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "CAP-10",
+      "name": "released_or_cancelled_allocation_non_blocking",
+      "case_ids": [
+        "APPT-044"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SCH-01",
+      "name": "business_default_schedule",
+      "case_ids": [
+        "APPT-039",
+        "APPT-047"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SCH-02",
+      "name": "resource_schedule_replacement",
+      "case_ids": [],
+      "classification": "missing",
+      "evidence": [],
+      "missing_layers": [
+        "d1_or_d2_or_d3_implementation",
+        "postgresql",
+        "eval",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SCH-03",
+      "name": "split_shifts",
+      "case_ids": [
+        "APPT-006"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SCH-04",
+      "name": "breaks",
+      "case_ids": [
+        "APPT-007",
+        "APPT-026"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SCH-05",
+      "name": "holidays",
+      "case_ids": [
+        "APPT-008",
+        "APPT-009",
+        "APPT-039"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SCH-06",
+      "name": "resource_leave",
+      "case_ids": [
+        "APPT-009",
+        "APPT-029"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SCH-07",
+      "name": "modified_hours",
+      "case_ids": [
+        "APPT-008",
+        "APPT-009"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SCH-08",
+      "name": "exception_precedence",
+      "case_ids": [
+        "APPT-008",
+        "APPT-009"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SCH-09",
+      "name": "contiguous_shift_containment",
+      "case_ids": [
+        "APPT-006",
+        "APPT-035",
+        "APPT-045",
+        "APPT-046"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SCH-10",
+      "name": "business_timezone_schedule",
+      "case_ids": [
+        "APPT-024",
+        "APPT-025",
+        "APPT-026",
+        "APPT-039"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SCH-11",
+      "name": "block_preserves_existing_booking_and_warns",
+      "case_ids": [],
+      "classification": "missing",
+      "evidence": [],
+      "missing_layers": [
+        "d1_or_d2_or_d3_implementation",
+        "postgresql",
+        "eval",
+        "pilot"
+      ]
+    },
+    {
+      "id": "PA-01",
+      "name": "create_proposal",
+      "case_ids": [
+        "APPT-002",
+        "APPT-007",
+        "APPT-011",
+        "APPT-016",
+        "APPT-017",
+        "APPT-022",
+        "APPT-025",
+        "APPT-036",
+        "MLT-001",
+        "MLT-009",
+        "MLH-002",
+        "MLH-009",
+        "MLS-002",
+        "MLS-004",
+        "MED-013"
+      ],
+      "classification": "partial",
+      "evidence": [
+        "generic_infrastructure",
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "d1_or_d2_or_d3_completion",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "PA-02",
+      "name": "no_temporary_hold",
+      "case_ids": [
+        "APPT-016",
+        "APPT-017",
+        "APPT-018",
+        "APPT-048"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "PA-03",
+      "name": "explicit_confirmation",
+      "case_ids": [
+        "APPT-001",
+        "APPT-012",
+        "APPT-017",
+        "APPT-027",
+        "APPT-041",
+        "APPT-042",
+        "APPT-045",
+        "APPT-046",
+        "APPT-050",
+        "MLH-011"
+      ],
+      "classification": "partial",
+      "evidence": [
+        "generic_infrastructure",
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "d1_or_d2_or_d3_completion",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "PA-04",
+      "name": "proposal_expiry",
+      "case_ids": [
+        "APPT-018",
+        "AUTH-022"
+      ],
+      "classification": "foundation",
+      "evidence": [
+        "generic_infrastructure",
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "appointment_d_work",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "PA-05",
+      "name": "idempotent_retry",
+      "case_ids": [
+        "AUTH-020"
+      ],
+      "classification": "foundation",
+      "evidence": [
+        "generic_infrastructure",
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "appointment_d_work",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "PA-06",
+      "name": "conflicting_retry",
+      "case_ids": [
+        "AUTH-020"
+      ],
+      "classification": "foundation",
+      "evidence": [
+        "generic_infrastructure",
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "appointment_d_work",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "PA-07",
+      "name": "stale_version",
+      "case_ids": [
+        "AUTH-021"
+      ],
+      "classification": "foundation",
+      "evidence": [
+        "generic_infrastructure",
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "appointment_d_work",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "PA-08",
+      "name": "slot_lost_before_confirmation",
+      "case_ids": [
+        "APPT-016"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "PA-09",
+      "name": "no_success_before_commit",
+      "case_ids": [
+        "APPT-037",
+        "AUTH-013"
+      ],
+      "classification": "partial",
+      "evidence": [
+        "generic_infrastructure",
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "d1_or_d2_or_d3_completion",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "PA-10",
+      "name": "cancellation_proposal_confirmation",
+      "case_ids": [
+        "APPT-019",
+        "MLT-005",
+        "MLH-006"
+      ],
+      "classification": "partial",
+      "evidence": [
+        "generic_infrastructure",
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "d1_or_d2_or_d3_completion",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "PA-11",
+      "name": "reschedule_proposal_confirmation",
+      "case_ids": [
+        "APPT-020",
+        "APPT-021",
+        "APPT-031",
+        "MLH-011"
+      ],
+      "classification": "partial",
+      "evidence": [
+        "generic_infrastructure",
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "d1_or_d2_or_d3_completion",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "PA-12",
+      "name": "failed_reschedule_preserves_old",
+      "case_ids": [
+        "APPT-021"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "PA-13",
+      "name": "create_commit_maps_to_appointment",
+      "case_ids": [
+        "AUTH-013",
+        "AUTH-015"
+      ],
+      "classification": "foundation",
+      "evidence": [
+        "generic_infrastructure",
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "appointment_d_work",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "PA-14",
+      "name": "mutation_commit_maps_to_appointment_commit",
+      "case_ids": [],
+      "classification": "missing",
+      "evidence": [],
+      "missing_layers": [
+        "d1_or_d2_or_d3_implementation",
+        "postgresql",
+        "eval",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SEC-01",
+      "name": "tenant_scoped_service_resource_lookup",
+      "case_ids": [
+        "APPT-033",
+        "AUTH-006",
+        "AUTH-008"
+      ],
+      "classification": "partial",
+      "evidence": [
+        "generic_infrastructure",
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "d1_or_d2_or_d3_completion",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SEC-02",
+      "name": "customer_reads_own_appointment",
+      "case_ids": [
+        "AUTH-001",
+        "AUTH-028"
+      ],
+      "classification": "partial",
+      "evidence": [
+        "generic_infrastructure",
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "d1_or_d2_or_d3_completion",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SEC-03",
+      "name": "other_caller_denied",
+      "case_ids": [
+        "APPT-032",
+        "AUTH-002",
+        "AUTH-007",
+        "AUTH-019"
+      ],
+      "classification": "partial",
+      "evidence": [
+        "generic_infrastructure",
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "d1_or_d2_or_d3_completion",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SEC-04",
+      "name": "active_owner_manager_allowed",
+      "case_ids": [
+        "APPT-040",
+        "AUTH-003",
+        "AUTH-004"
+      ],
+      "classification": "foundation",
+      "evidence": [
+        "generic_infrastructure",
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "appointment_d_work",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SEC-05",
+      "name": "inactive_manager_denied",
+      "case_ids": [
+        "AUTH-005",
+        "AUTH-025",
+        "AUTH-030"
+      ],
+      "classification": "foundation",
+      "evidence": [
+        "generic_infrastructure",
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "appointment_d_work",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SEC-06",
+      "name": "forged_role_ignored",
+      "case_ids": [
+        "AUTH-009",
+        "AUTH-010",
+        "AUTH-027"
+      ],
+      "classification": "foundation",
+      "evidence": [
+        "generic_infrastructure",
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "appointment_d_work",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SEC-07",
+      "name": "wrong_entity_type_rejected",
+      "case_ids": [
+        "AUTH-015"
+      ],
+      "classification": "foundation",
+      "evidence": [
+        "generic_infrastructure",
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "appointment_d_work",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SEC-08",
+      "name": "pii_not_leaked",
+      "case_ids": [
+        "APPT-032",
+        "APPT-048",
+        "AUTH-019",
+        "AUTH-023"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "SEC-09",
+      "name": "internal_commit_tools_never_public",
+      "case_ids": [
+        "AUTH-013",
+        "AUTH-014",
+        "AUTH-016",
+        "AUTH-027"
+      ],
+      "classification": "foundation",
+      "evidence": [
+        "generic_infrastructure",
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "appointment_d_work",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "TIME-01",
+      "name": "asia_kolkata_conversion",
+      "case_ids": [
+        "APPT-024",
+        "APPT-025",
+        "APPT-026",
+        "APPT-045",
+        "APPT-046"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "TIME-02",
+      "name": "server_timezone_independence",
+      "case_ids": [],
+      "classification": "missing",
+      "evidence": [],
+      "missing_layers": [
+        "d1_or_d2_or_d3_implementation",
+        "postgresql",
+        "eval",
+        "pilot"
+      ]
+    },
+    {
+      "id": "TIME-03",
+      "name": "dst_ambiguity_nonexistent_rejection",
+      "case_ids": [],
+      "classification": "missing",
+      "evidence": [],
+      "missing_layers": [
+        "d1_or_d2_or_d3_implementation",
+        "postgresql",
+        "eval",
+        "pilot"
+      ]
+    },
+    {
+      "id": "TIME-04",
+      "name": "past_time_rejection",
+      "case_ids": [
+        "APPT-038"
+      ],
+      "classification": "conversation_only",
+      "evidence": [
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "deterministic_implementation",
+        "postgresql",
+        "pilot"
+      ]
+    },
+    {
+      "id": "TIME-05",
+      "name": "booking_horizon",
+      "case_ids": [],
+      "classification": "missing",
+      "evidence": [],
+      "missing_layers": [
+        "d1_or_d2_or_d3_implementation",
+        "postgresql",
+        "eval",
+        "pilot"
+      ]
+    },
+    {
+      "id": "TIME-06",
+      "name": "exact_expiry_boundary",
+      "case_ids": [
+        "APPT-018",
+        "AUTH-022"
+      ],
+      "classification": "foundation",
+      "evidence": [
+        "generic_infrastructure",
+        "synthetic_eval"
+      ],
+      "missing_layers": [
+        "appointment_d_work",
+        "postgresql",
+        "pilot"
+      ]
+    }
+  ],
+  "classification_counts": {
+    "foundation": 12,
+    "conversation_only": 31,
+    "partial": 10,
+    "missing": 6,
+    "total": 59
+  },
+  "appointment_case_classification": {
+    "direct_or_useful": [
+      "APPT-001",
+      "APPT-004",
+      "APPT-005",
+      "APPT-006",
+      "APPT-008",
+      "APPT-009",
+      "APPT-010",
+      "APPT-011",
+      "APPT-012",
+      "APPT-013",
+      "APPT-014",
+      "APPT-015",
+      "APPT-018",
+      "APPT-019",
+      "APPT-021",
+      "APPT-023",
+      "APPT-024",
+      "APPT-026",
+      "APPT-027",
+      "APPT-028",
+      "APPT-029",
+      "APPT-030",
+      "APPT-032",
+      "APPT-033",
+      "APPT-034",
+      "APPT-035",
+      "APPT-038",
+      "APPT-039",
+      "APPT-042",
+      "APPT-044",
+      "APPT-045",
+      "APPT-046",
+      "APPT-047",
+      "APPT-048",
+      "APPT-049",
+      "APPT-050"
+    ],
+    "partial_or_contract_stretch": [
+      "APPT-002",
+      "APPT-007",
+      "APPT-016",
+      "APPT-017",
+      "APPT-020",
+      "APPT-022",
+      "APPT-025",
+      "APPT-031",
+      "APPT-036",
+      "APPT-040",
+      "APPT-041",
+      "APPT-043"
+    ],
+    "conflicting": [
+      "APPT-003",
+      "APPT-017",
+      "APPT-020",
+      "APPT-031",
+      "APPT-036",
+      "APPT-037",
+      "APPT-041",
+      "APPT-043",
+      "APPT-048"
+    ]
+  },
+  "cross_domain_case_ids": {
+    "authorization_security": [
+      "AUTH-002",
+      "AUTH-006",
+      "AUTH-007",
+      "AUTH-008",
+      "AUTH-009",
+      "AUTH-010",
+      "AUTH-012",
+      "AUTH-013",
+      "AUTH-014",
+      "AUTH-015",
+      "AUTH-016",
+      "AUTH-019",
+      "AUTH-021",
+      "AUTH-022",
+      "AUTH-025",
+      "AUTH-027",
+      "AUTH-028",
+      "AUTH-030"
+    ],
+    "tamil_tanglish": [
+      "MLT-001",
+      "MLT-004",
+      "MLT-005",
+      "MLT-009",
+      "MLT-011",
+      "MLT-016",
+      "MLT-019"
+    ],
+    "hindi_hinglish": [
+      "MLH-002",
+      "MLH-006",
+      "MLH-007",
+      "MLH-009",
+      "MLH-011"
+    ],
+    "south_indian_other": [
+      "MLS-002",
+      "MLS-003",
+      "MLS-004"
+    ],
+    "medical_clinical": [
+      "MED-001",
+      "MED-002",
+      "MED-003",
+      "MED-004",
+      "MED-005",
+      "MED-006",
+      "MED-007",
+      "MED-008",
+      "MED-009",
+      "MED-010",
+      "MED-011",
+      "MED-012",
+      "MED-013",
+      "MED-014",
+      "MED-015",
+      "MED-016"
+    ]
+  },
+  "conversational_only_case_ids": [
+    "APPT-001",
+    "APPT-002",
+    "APPT-003",
+    "APPT-004",
+    "APPT-005",
+    "APPT-006",
+    "APPT-007",
+    "APPT-008",
+    "APPT-009",
+    "APPT-010",
+    "APPT-011",
+    "APPT-012",
+    "APPT-013",
+    "APPT-014",
+    "APPT-015",
+    "APPT-016",
+    "APPT-017",
+    "APPT-018",
+    "APPT-019",
+    "APPT-020",
+    "APPT-021",
+    "APPT-022",
+    "APPT-023",
+    "APPT-024",
+    "APPT-025",
+    "APPT-026",
+    "APPT-027",
+    "APPT-028",
+    "APPT-029",
+    "APPT-030",
+    "APPT-031",
+    "APPT-032",
+    "APPT-033",
+    "APPT-034",
+    "APPT-035",
+    "APPT-036",
+    "APPT-037",
+    "APPT-038",
+    "APPT-039",
+    "APPT-040",
+    "APPT-041",
+    "APPT-042",
+    "APPT-043",
+    "APPT-044",
+    "APPT-045",
+    "APPT-046",
+    "APPT-047",
+    "APPT-048",
+    "APPT-049",
+    "APPT-050"
+  ],
+  "missing_future_cases": [
+    {
+      "id": "FUT-APPT-NO-HOLD-RACE",
+      "requirement": "No-hold confirmation race: two proposals coexist; exactly one confirmation commits."
+    },
+    {
+      "id": "FUT-APPT-NAMED-LOST",
+      "requirement": "Exact selected staff becomes unavailable before confirmation."
+    },
+    {
+      "id": "FUT-APPT-NO-SUBSTITUTE",
+      "requirement": "Named staff is unavailable and no silent replacement occurs."
+    },
+    {
+      "id": "FUT-APPT-OWNER-BLOCK",
+      "requirement": "ResourceAllocation owner block conflicts with customer booking."
+    },
+    {
+      "id": "FUT-APPT-WALKIN-CONFLICT",
+      "requirement": "Walk-in allocation conflicts with remote confirmation."
+    },
+    {
+      "id": "FUT-APPT-MANUAL-CONFLICT",
+      "requirement": "Owner manual appointment conflicts with existing allocation."
+    },
+    {
+      "id": "FUT-APPT-BUFFER-CONFLICT",
+      "requirement": "Buffer-only overlap is rejected at commit."
+    },
+    {
+      "id": "FUT-APPT-CANCEL-RELEASE",
+      "requirement": "Committed cancellation releases allocation and permits rebooking."
+    },
+    {
+      "id": "FUT-APPT-RESCHEDULE-ROLLBACK",
+      "requirement": "Failed reschedule preserves old appointment and allocation."
+    },
+    {
+      "id": "FUT-APPT-COMMIT-MAPPING",
+      "requirement": "Create maps to Appointment; cancel/reschedule map to AppointmentCommit."
+    },
+    {
+      "id": "FUT-APPT-FORGED-INTERNAL",
+      "requirement": "Forged internal appointment operation is never publicly dispatchable."
+    }
+  ],
+  "review_gaps": {
+    "language": "All mapped multilingual cases are synthetic. Tamil/Tanglish and Hindi/Hinglish need native review; Telugu, Kannada, and Malayalam have only shallow appointment coverage.",
+    "domain": "All appointment cases are domain-unreviewed and none proves generic reuse outside the scripted vertical examples.",
+    "clinical": "MED-001 through MED-016 require clinician review. Cosmetic-service escalation and regulated medical-aesthetic boundaries are not adequately covered.",
+    "pilot": "All cases are pilot-untested. There is no observed evidence for double-booking, false-success, substitution, local-time, cancellation-release, reschedule rollback, owner-block, walk-in, or manual-booking behavior."
+  },
+  "contract_conflicts": [
+    {
+      "id": "CONFLICT-01",
+      "area": "create_pending_appointment",
+      "conflict": "Description and write policy permit a temporary hold; founder-approved behavior is proposal only and no allocation."
+    },
+    {
+      "id": "CONFLICT-02",
+      "area": "authoritative_end_at",
+      "conflict": "The model may supply end_at; deterministic code must derive end_at from stored service duration."
+    },
+    {
+      "id": "CONFLICT-03",
+      "area": "selected_resource",
+      "conflict": "Resource may be null in a proposal; persisted appointment facts must contain one concrete eligible selected resource."
+    },
+    {
+      "id": "CONFLICT-04",
+      "area": "named_resource",
+      "conflict": "Contract does not state that named resource selection forbids silent fallback."
+    },
+    {
+      "id": "CONFLICT-05",
+      "area": "cancel_identifier",
+      "conflict": "cancel_pending_appointment.action_id is ambiguous between the target Appointment and the cancellation PendingAction."
+    },
+    {
+      "id": "CONFLICT-06",
+      "area": "reschedule_identifier",
+      "conflict": "reschedule_appointment.action_id is ambiguous and its write policy permits proposal or direct commit without a clear confirmation boundary."
+    },
+    {
+      "id": "CONFLICT-07",
+      "area": "commit_mapping",
+      "conflict": "Create must commit to Appointment, while cancel and reschedule must commit to AppointmentCommit."
+    },
+    {
+      "id": "CONFLICT-08",
+      "area": "owner_operations",
+      "conflict": "Owner block, manual appointment, walk-in, and unblock require deterministic effects before public exposure; APPT-022 and APPT-031 currently model these through broad appointment tools."
+    },
+    {
+      "id": "CONFLICT-09",
+      "area": "phase_scope",
+      "conflict": "Physical consumable inventory is not part of appointment Phase D and must not be introduced through multi-service appointment behavior."
+    },
+    {
+      "id": "CONFLICT-10",
+      "area": "corpus_hold_cases",
+      "conflict": "APPT-016, APPT-017, APPT-018, and APPT-048 encode hold behavior that contradicts the no-hold founder decision."
+    },
+    {
+      "id": "CONFLICT-11",
+      "area": "pending_vs_confirmed_language",
+      "conflict": "Several pending_only cases describe booking completion or embed confirmed appointment effects, blurring proposal and commit."
+    },
+    {
+      "id": "CONFLICT-12",
+      "area": "private_lookup",
+      "conflict": "APPT-040, APPT-043, and AUTH-028 stretch availability or public business-information tools into private appointment lookup/listing."
+    }
+  ],
+  "classification_ids": {
+    "foundation": [
+      "SVC-01",
+      "PA-04",
+      "PA-05",
+      "PA-06",
+      "PA-07",
+      "PA-13",
+      "SEC-04",
+      "SEC-05",
+      "SEC-06",
+      "SEC-07",
+      "SEC-09",
+      "TIME-06"
+    ],
+    "conversation_only": [
+      "SVC-02",
+      "SVC-05",
+      "SVC-06",
+      "SVC-07",
+      "SVC-08",
+      "SVC-09",
+      "CAP-01",
+      "CAP-02",
+      "CAP-03",
+      "CAP-04",
+      "CAP-05",
+      "CAP-06",
+      "CAP-07",
+      "CAP-08",
+      "CAP-09",
+      "CAP-10",
+      "SCH-01",
+      "SCH-03",
+      "SCH-04",
+      "SCH-05",
+      "SCH-06",
+      "SCH-07",
+      "SCH-08",
+      "SCH-09",
+      "SCH-10",
+      "PA-02",
+      "PA-08",
+      "PA-12",
+      "SEC-08",
+      "TIME-01",
+      "TIME-04"
+    ],
+    "partial": [
+      "SVC-03",
+      "SVC-04",
+      "PA-01",
+      "PA-03",
+      "PA-09",
+      "PA-10",
+      "PA-11",
+      "SEC-01",
+      "SEC-02",
+      "SEC-03"
+    ],
+    "missing": [
+      "SCH-02",
+      "SCH-11",
+      "PA-14",
+      "TIME-02",
+      "TIME-03",
+      "TIME-05"
+    ]
+  },
+  "future_postgresql_test_count": 48,
+  "future_postgresql_test_groups": {
+    "migration_0003_to_0004": 9,
+    "exclusion_and_allocation": 14,
+    "concurrent_booking": 2,
+    "cancellation": 6,
+    "rescheduling": 6,
+    "owner_manual_operations": 6,
+    "proposal_commit_boundary": 3,
+    "historical_completed_no_show_allocations": 2
+  },
+  "future_non_postgresql_integration_contract_count": 1,
+  "future_non_postgresql_integration_contracts": [
+    "test_caller_facing_success_emitted_only_after_outer_commit"
+  ]
+}

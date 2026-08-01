@@ -113,7 +113,8 @@ Every case remains language-synthetic, domain-unreviewed, and pilot-untested unl
 
 - Owns CI, PostgreSQL verification infrastructure, QA tooling/corpus maintenance, and operational test tooling.
 - PostgreSQL CI correction is complete and green.
-- Current assignment: pre-D appointment verification traceability and PostgreSQL-test blueprint. The first draft is under review and needs four documentation corrections before approval; Dev2 does not edit Dev3 implementation.
+- Pre-D appointment verification traceability is independently approved and integrated: 59 requirements, consistent evidence classifications, 48 future PostgreSQL contracts, and one post-commit adapter contract.
+- Dev2 waits for stable Dev3 D1/D2 interfaces before implementing those tests and must not edit Dev3 implementation.
 
 ### Dev3 — developer only
 
@@ -136,9 +137,9 @@ The founder selected salon appointments, so Phase D is brought forward while Pha
 
 1. Dev1 audit hardening is approved and integrated locally; run CI after publishing/integrating the branch.
 2. Dev3 implements only D1/D2 appointment schema/pure-domain work and stops for independent review.
-3. Dev2 corrects and finalizes the independent appointment verification blueprint without editing Dev3 code.
-4. The AI cofounder reviews migration `0004`, ResourceAllocation capacity semantics, create-versus-mutation commit linkage, payloads, and tests.
-5. Dev2 implements live PostgreSQL appointment contracts only after Dev3's interfaces stabilize.
+3. The AI cofounder reviews migration `0004`, ResourceAllocation capacity semantics, create-versus-mutation commit linkage, payloads, and tests against the approved Dev2 verification blueprint.
+4. Dev2 implements the 48 live PostgreSQL appointment contracts only after Dev3's interfaces stabilize and receives a separate assignment.
+5. The post-commit caller-success adapter contract is implemented only when a real transaction runner/tool adapter exists.
 6. WhatsApp setup and voice integration remain later gates.
 
 Phase C inventory/order code has not started and is intentionally deferred.

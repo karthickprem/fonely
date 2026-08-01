@@ -260,7 +260,7 @@ Repository-audit hardening is complete, independently approved, and integrated l
 
 ### Dev2 current assignment
 
-The PostgreSQL foundation is green. Dev2 is designing independent Phase D traceability, migration verification, and future PostgreSQL contracts. Dev2 must not patch Dev3 appointment implementation; findings return to Dev3 through the AI cofounder.
+The PostgreSQL foundation is green. Dev2's Phase D verification blueprint is independently approved and integrated. Dev2 waits for stable Dev3 D1/D2 interfaces and a separate authorization before implementing the 48 PostgreSQL contracts; Dev2 must not patch Dev3 appointment implementation.
 
 ### Dev3 current assignment
 

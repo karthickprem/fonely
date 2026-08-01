@@ -1330,6 +1330,46 @@ No appointment implementation, CI workflow, migration revision, evaluation corpu
 Current parallel work:
 
 - Dev3 is authorized for Phase D D1/D2 generic appointment implementation, first configured for the salon.
-- Dev2's pre-D verification-plan draft is under review and needs four documentation-only corrections.
+- Dev2's pre-D verification blueprint is independently approved and integrated. It maps 59 requirements, specifies 48 future PostgreSQL contracts plus one post-commit adapter contract, and preserves strict D1/D2 versus D3 ownership boundaries.
 - Phase C inventory/orders is deferred.
 - WhatsApp and voice remain later gates.
+
+---
+
+## AI cofounder — Dev2 appointment verification blueprint approval
+
+Dev2 created and corrected the independent pre-D verification artifacts:
+
+```text
+docs/qa/APPOINTMENT_VERIFICATION_PLAN.md
+evals/reports/appointment-coverage-map.pre-d.json
+```
+
+Final review returned no findings. The approved blueprint records:
+
+```text
+Appointment requirements:                  59
+Foundation evidence:                       12
+Conversation-only evidence:                31
+Partial evidence:                           10
+Missing evidence:                            6
+Future PostgreSQL contracts:                48
+Future post-commit adapter contract:         1
+Contract conflicts requiring later update: 12
+```
+
+The blueprint directly covers the founder-approved no-hold proposal boundary, caller-success-after-commit boundary, same-resource allocation races, cancellation release, reschedule rollback, owner/manual capacity operations, and completed/no-show historical allocation retention.
+
+Dev2 commit:
+
+```text
+e2a021d  docs(qa): define appointment verification blueprint
+```
+
+Integrated as:
+
+```text
+8942502  docs(qa): define appointment verification blueprint
+```
+
+No production backend, migration, tests, workflow, script, eval corpus, or Dev3 implementation file changed. Dev2 waits for stable D1/D2 interfaces before receiving a separate PostgreSQL-test implementation assignment.

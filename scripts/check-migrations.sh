@@ -18,8 +18,7 @@ BACKEND_ROOT="${BACKEND_ROOT:-${PROJECT_ROOT}/backend}"
 VENV_BIN="${VENV_BIN:-${BACKEND_ROOT}/.venv/bin}"
 ALEMBIC="${ALEMBIC:-${VENV_BIN}/alembic}"
 VERSIONS_DIR="${VERSIONS_DIR:-${BACKEND_ROOT}/migrations/versions}"
-
-ALLOWED_EXTENSIONS="btree_gist"
+MIGRATION_POLICY="${SCRIPT_DIR}/migration_policy.py"
 
 FAKE_URL="postgresql+asyncpg://fake_test_user:fake_test_password@localhost:55432/fonely_test"
 export DATABASE_URL="${FAKE_URL}"
@@ -115,27 +114,31 @@ done
 echo ""
 info "=== Migration file / Alembic history cross-check ==="
 
+declare -A FILE_REV_BY_PATH
+declare -A REVISION_FILE
+
 for f in "${VERSIONS_DIR}"/*.py; do
     [[ "$(basename "${f}")" == "__init__.py" ]] && continue
     BASENAME="$(basename "${f}")"
 
     FILE_REV=$(MIGRATION_FILE="${f}" "${VENV_BIN}/python" - <<'EXTRACT_REV_PY' 2>/dev/null || true
-import ast, os, sys
-fpath = os.environ["MIGRATION_FILE"]
-with open(fpath) as fh:
-    tree = ast.parse(fh.read())
+import ast
+import os
+import sys
+
+with open(os.environ["MIGRATION_FILE"]) as source_file:
+    tree = ast.parse(source_file.read())
 for node in ast.iter_child_nodes(tree):
+    target = value = None
     if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-        if node.target.id == "revision" and node.value:
-            if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-                print(node.value.value)
-                sys.exit(0)
-    if isinstance(node, ast.Assign):
-        for target in node.targets:
-            if isinstance(target, ast.Name) and target.id == "revision":
-                if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-                    print(node.value.value)
-                    sys.exit(0)
+        target, value = node.target.id, node.value
+    elif isinstance(node, ast.Assign):
+        for candidate in node.targets:
+            if isinstance(candidate, ast.Name) and candidate.id == "revision":
+                target, value = candidate.id, node.value
+    if target == "revision" and isinstance(value, ast.Constant) and isinstance(value.value, str):
+        print(value.value)
+        sys.exit(0)
 print("")
 EXTRACT_REV_PY
 )
@@ -144,6 +147,9 @@ EXTRACT_REV_PY
         warn "${BASENAME}: could not extract revision ID from source."
         continue
     fi
+
+    FILE_REV_BY_PATH["${f}"]="${FILE_REV}"
+    REVISION_FILE["${FILE_REV}"]="${BASENAME}"
 
     if [[ -z "${ALEMBIC_REV_SET[${FILE_REV}]+_}" ]]; then
         error "${BASENAME}: revision '${FILE_REV}' is not in Alembic history (orphan migration file)."
@@ -189,6 +195,8 @@ done
 
 echo ""
 info "=== Migration source checks ==="
+
+declare -A EXTENSION_REVISION_SET
 
 for f in "${VERSIONS_DIR}"/*.py; do
     [[ "$(basename "${f}")" == "__init__.py" ]] && continue
@@ -241,140 +249,77 @@ CHECK_DOWNGRADE_PY
         error "${BASENAME}: downgrade() body is empty."
     fi
 
-    EXTENSION_STATUS=0
-    EXTENSION_SCAN=$(
-        MIGRATION_FILE="${f}" \
-        ALLOWED_EXTENSIONS="${ALLOWED_EXTENSIONS}" \
-        "${VENV_BIN}/python" - <<'CHECK_EXTENSIONS_PY' 2>&1
-import ast
-import os
-import re
-import sys
-from pathlib import Path
-
-path = Path(os.environ["MIGRATION_FILE"])
-basename = path.name
-allowed = frozenset(os.environ["ALLOWED_EXTENSIONS"].split())
-source = path.read_text()
-tree = ast.parse(source, filename=str(path))
-
-extension_keyword = re.compile(r"\b(?:CREATE|DROP)\s+EXTENSION\b", re.IGNORECASE)
-create_statement = re.compile(
-    r'^CREATE\s+EXTENSION\s+(?:IF\s+NOT\s+EXISTS\s+)?'
-    r'(?P<name>"[A-Za-z_][A-Za-z0-9_]*"|[A-Za-z_][A-Za-z0-9_]*)\s*;?\s*$',
-    re.IGNORECASE,
-)
-drop_statement = re.compile(r"^DROP\s+EXTENSION\b", re.IGNORECASE)
-extension_fragment = re.compile(r"\b(?:CREATE|DROP)\s+EXTENSION\b[^;]*(?:;|$)", re.IGNORECASE)
-gist_fragment = re.compile(r"\b(?:EXCLUDE\s+USING\s+GIST|ExcludeConstraint\s*\()", re.IGNORECASE)
-
-errors: list[str] = []
-findings: list[str] = []
-literal_statements: list[tuple[int, str]] = []
-dynamic_extension_calls: list[int] = []
-
-
-def is_execute_call(node: ast.Call) -> bool:
-    func = node.func
-    return (
-        isinstance(func, ast.Attribute)
-        and func.attr == "execute"
-        and isinstance(func.value, ast.Name)
-        and func.value.id == "op"
-    )
-
-
-for node in ast.walk(tree):
-    if not isinstance(node, ast.Call) or not is_execute_call(node) or not node.args:
-        continue
-    argument = node.args[0]
-    if isinstance(argument, ast.Constant) and isinstance(argument.value, str):
-        literal_statements.append((node.lineno, argument.value))
-        continue
-    segment = ast.get_source_segment(source, argument) or ""
-    if re.search(r"extension", segment, re.IGNORECASE):
-        dynamic_extension_calls.append(node.lineno)
-
-for line in dynamic_extension_calls:
-    errors.append(f"{basename}:{line}: dynamic or non-literal extension SQL is forbidden")
-
-create_lines: list[int] = []
-for line, sql in literal_statements:
-    if not extension_keyword.search(sql):
-        continue
-    fragments = extension_fragment.findall(sql)
-    if not fragments:
-        errors.append(f"{basename}:{line}: extension SQL could not be parsed")
-        continue
-    for fragment in fragments:
-        statement = fragment.strip()
-        if drop_statement.match(statement):
-            errors.append(f"{basename}:{line}: DROP EXTENSION is forbidden")
-            continue
-        match = create_statement.fullmatch(statement)
-        if match is None:
-            errors.append(f"{basename}:{line}: unsupported CREATE EXTENSION statement")
-            continue
-        raw_name = match.group("name")
-        name = raw_name[1:-1] if raw_name.startswith('"') else raw_name
-        name = name.lower()
-        if name not in allowed:
-            errors.append(
-                f"{basename}:{line}: CREATE EXTENSION '{name}' is not allowlisted"
-            )
-            continue
-        create_lines.append(line)
-        findings.append(f"{basename}:{line}: CREATE EXTENSION '{name}' is allowlisted")
-
-# Keyword-like extension source outside literal op.execute arguments is rejected.
-covered_lines: set[int] = set()
-for line, sql in literal_statements:
-    if extension_keyword.search(sql):
-        covered_lines.update(range(line, line + sql.count("\n") + 1))
-for line_number, text in enumerate(source.splitlines(), 1):
-    if extension_keyword.search(text) and line_number not in covered_lines:
-        errors.append(
-            f"{basename}:{line_number}: extension SQL must be a literal op.execute argument"
-        )
-
-if create_lines:
-    first_create = min(create_lines)
-    gist_lines = [
-        line_number
-        for line_number, text in enumerate(source.splitlines(), 1)
-        if gist_fragment.search(text)
-    ]
-    if not gist_lines:
-        errors.append(
-            f"{basename}: btree_gist requires a GiST exclusion constraint in the same migration"
-        )
-    elif min(gist_lines) < first_create:
-        errors.append(
-            f"{basename}: btree_gist must be created before the GiST exclusion constraint"
-        )
-
-for finding in findings:
-    print(f"INFO:   {finding}")
-for message in errors:
-    print(f"ERROR: {message}")
-sys.exit(1 if errors else 0)
-CHECK_EXTENSIONS_PY
-    ) || EXTENSION_STATUS=$?
+    SOURCE_STATUS=0
+    SOURCE_SCAN=$("${VENV_BIN}/python" "${MIGRATION_POLICY}" source "${f}" 2>&1) || SOURCE_STATUS=$?
+    REQUESTED_EXTENSIONS=()
     while IFS= read -r line; do
         [[ -z "${line}" ]] && continue
-        if [[ "${line}" == ERROR:* ]]; then
+        if [[ "${line}" == REQUESTED_EXTENSION=* ]]; then
+            REQUESTED_EXTENSIONS+=("${line#REQUESTED_EXTENSION=}")
+        elif [[ "${line}" == ERROR:* ]]; then
             error "${line#ERROR: }"
         else
             echo "${line}"
         fi
-    done <<< "${EXTENSION_SCAN}"
-    if [[ ${EXTENSION_STATUS} -ne 0 && "${EXTENSION_SCAN}" != *"ERROR:"* ]]; then
+    done <<< "${SOURCE_SCAN}"
+    if [[ ${SOURCE_STATUS} -ne 0 && "${SOURCE_SCAN}" != *"ERROR:"* ]]; then
         error "${BASENAME}: extension source scan failed."
+    fi
+    if [[ ${#REQUESTED_EXTENSIONS[@]} -gt 0 ]]; then
+        FILE_REV="${FILE_REV_BY_PATH[${f}]:-}"
+        if [[ -z "${FILE_REV}" ]]; then
+            error "${BASENAME}: extension migration has no literal revision ID."
+        else
+            EXTENSION_REVISION_SET["${FILE_REV}"]="${REQUESTED_EXTENSIONS[*]}"
+        fi
     fi
 done
 
 # ---------------------------------------------------------------------------
-# 7. DDL operation counts from upgrade SQL
+# 7. Verify rendered SQL for extension revisions
+# ---------------------------------------------------------------------------
+
+echo ""
+info "=== Rendered extension revision SQL policy ==="
+
+for rev in "${ALEMBIC_REVISIONS[@]}"; do
+    [[ -z "${EXTENSION_REVISION_SET[${rev}]+_}" ]] && continue
+    down_revision="${UP_TO_DOWN[${rev}]}"
+    [[ "${down_revision}" == "<base>" ]] && down_revision="base"
+    SAFE_REV_NAME=$(printf '%s' "${rev}" | tr -c 'A-Za-z0-9_.-' '_')
+    REV_UPGRADE_SQL="${TMPDIR_WORK}/upgrade_${SAFE_REV_NAME}.sql"
+    REV_DOWNGRADE_SQL="${TMPDIR_WORK}/downgrade_${SAFE_REV_NAME}.sql"
+    if ! "${ALEMBIC}" upgrade "${down_revision}:${rev}" --sql > "${REV_UPGRADE_SQL}" 2>&1; then
+        error "${rev}: failed to render exact extension upgrade range."
+        continue
+    fi
+    if ! "${ALEMBIC}" downgrade "${rev}:${down_revision}" --sql > "${REV_DOWNGRADE_SQL}" 2>&1; then
+        error "${rev}: failed to render exact extension downgrade range."
+        continue
+    fi
+    POLICY_ARGS=(
+        rendered
+        --upgrade-sql "${REV_UPGRADE_SQL}"
+        --downgrade-sql "${REV_DOWNGRADE_SQL}"
+        --migration-name "${REVISION_FILE[${rev}]}"
+        --revision "${rev}"
+    )
+    for requested_extension in ${EXTENSION_REVISION_SET[${rev}]}; do
+        POLICY_ARGS+=(--requested-extension "${requested_extension}")
+    done
+    RENDER_STATUS=0
+    RENDER_SCAN=$("${VENV_BIN}/python" "${MIGRATION_POLICY}" "${POLICY_ARGS[@]}" 2>&1) || RENDER_STATUS=$?
+    while IFS= read -r line; do
+        [[ -z "${line}" ]] && continue
+        if [[ "${line}" == ERROR:* ]]; then error "${line#ERROR: }"; else echo "${line}"; fi
+    done <<< "${RENDER_SCAN}"
+    if [[ ${RENDER_STATUS} -ne 0 && "${RENDER_SCAN}" != *"ERROR:"* ]]; then
+        error "${rev}: rendered extension SQL scan failed."
+    fi
+done
+
+# ---------------------------------------------------------------------------
+# 8. DDL operation counts from upgrade SQL
 # ---------------------------------------------------------------------------
 
 echo ""

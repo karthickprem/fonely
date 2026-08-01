@@ -652,31 +652,55 @@ def test_upgrade_preflight_guards_every_provenance_cast_at_source() -> None:
     assert source.index("_preflight_upgrade()") < source.index('op.execute("CREATE EXTENSION')
 
 
-def test_runtime_provenance_triggers_guard_every_cast_inside_case() -> None:
+def test_runtime_provenance_helper_precedes_and_simplifies_create_trigger() -> None:
+    source = MIGRATION_0004.read_text()
+    helper_start = source.index("CREATE FUNCTION appointment_payload_facts_match")
+    create_start = source.index("CREATE FUNCTION enforce_appointment_provenance")
+    create_end = source.index(
+        "CREATE CONSTRAINT TRIGGER ck_customer_conversation_appointment_provenance"
+    )
+    create_function = source[create_start:create_end]
+
+    assert helper_start < create_start
+    assert "appointment_payload_facts_match(" in create_function
+    assert "payload_data->'facts', NEW) IS NOT TRUE" in create_function
+    assert "payload_data->'facts'->>'service_id'" not in create_function
+    assert "customer-conversation appointment requires matching" in create_function
+    assert create_function.count("BEGIN") == 1
+    assert create_function.count("END IF;") == 3
+    assert create_function.count('$$"""') == 1
+
+
+def test_runtime_provenance_casts_remain_fail_closed() -> None:
     source = MIGRATION_0004.read_text()
     runtime = source[
-        source.index("CREATE FUNCTION enforce_appointment_provenance") : source.index(
+        source.index("CREATE FUNCTION appointment_payload_facts_match") : source.index(
             "def _preflight_downgrade"
         )
     ]
-    guarded_casts = (
-        "THEN (payload_data->'facts'->>'service_id')::bigint END",
-        "THEN (payload_data->'facts'->>'resource_id')::bigint END",
-        "THEN (payload_data->'facts'->>'start_at')::timestamptz END",
-        "THEN (payload_data->'facts'->>'end_at')::timestamptz END",
+    for marker in (
+        "pg_input_is_valid(facts->>'service_id', 'bigint')",
+        "pg_input_is_valid(facts->>'resource_id', 'bigint')",
+        "facts->>'start_at', 'timestamp with time zone'",
+        "facts->>'end_at', 'timestamp with time zone'",
         "THEN (payload_data->>'call_id')::bigint END",
         "THEN (pending_data->>'target_appointment_id')::bigint END",
         "THEN (pending_data->>'target_expected_version')::integer END",
-        "THEN (pa.proposed_payload->'data'->>'target_appointment_id')::bigint END",
-        "THEN (pa.proposed_payload->'data'\n                                "
-        "->>'target_expected_version')::integer END",
+    ):
+        assert marker in runtime
+    assert "RETURN COALESCE(" in runtime
+    assert "IS NOT TRUE" in runtime
+
+
+def test_provenance_helper_downgrade_order_is_dependency_safe() -> None:
+    source = MIGRATION_0004.read_text()
+    downgrade = source[source.index("def downgrade") :]
+    assert downgrade.index(
+        "DROP TRIGGER ck_customer_conversation_appointment_provenance"
+    ) < downgrade.index("DROP FUNCTION enforce_appointment_provenance()")
+    assert downgrade.index("DROP FUNCTION enforce_appointment_provenance()") < downgrade.index(
+        "DROP FUNCTION appointment_payload_facts_match(jsonb, appointments)"
     )
-    for guarded_cast in guarded_casts:
-        assert guarded_cast in runtime
-    assert runtime.count("::bigint") == 7
-    assert runtime.count("::integer") == 2
-    assert runtime.count("::timestamptz") == 8
-    assert runtime.count("CASE WHEN pg_input_is_valid") >= 10
 
 
 def test_downgrade_preflight_fake_bind_rejects_each_lossy_state() -> None:

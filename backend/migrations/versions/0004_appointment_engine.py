@@ -943,6 +943,79 @@ def upgrade() -> None:
            FOR EACH ROW EXECUTE FUNCTION enforce_confirmed_appointment_allocation()"""
     )
     op.execute(
+        """CREATE FUNCTION appointment_payload_facts_match(
+               facts jsonb, a appointments)
+           RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+           BEGIN
+               IF facts IS NULL OR jsonb_typeof(facts) <> 'object' THEN
+                   RETURN FALSE;
+               END IF;
+               IF NOT (facts ? 'service_id' AND facts ? 'resource_id'
+                   AND facts ? 'start_at' AND facts ? 'end_at'
+                   AND facts ? 'effective_start_at'
+                   AND facts ? 'effective_end_at'
+                   AND facts ? 'duration_minutes'
+                   AND facts ? 'service_name' AND facts ? 'resource_name'
+                   AND facts ? 'business_timezone') THEN
+                   RETURN FALSE;
+               END IF;
+               IF NOT COALESCE(
+                      pg_input_is_valid(facts->>'service_id', 'bigint'), FALSE)
+                  OR NOT COALESCE(
+                      pg_input_is_valid(facts->>'resource_id', 'bigint'), FALSE)
+                  OR NOT COALESCE(pg_input_is_valid(
+                      facts->>'start_at', 'timestamp with time zone'), FALSE)
+                  OR NOT COALESCE(pg_input_is_valid(
+                      facts->>'end_at', 'timestamp with time zone'), FALSE)
+                  OR NOT COALESCE(pg_input_is_valid(
+                      facts->>'effective_start_at',
+                      'timestamp with time zone'), FALSE)
+                  OR NOT COALESCE(pg_input_is_valid(
+                      facts->>'effective_end_at',
+                      'timestamp with time zone'), FALSE)
+                  OR NOT COALESCE(pg_input_is_valid(
+                      facts->>'duration_minutes', 'integer'), FALSE)
+                  OR NOT COALESCE(pg_input_is_valid(COALESCE(
+                      facts->>'buffer_before_minutes', '0'), 'integer'), FALSE)
+                  OR NOT COALESCE(pg_input_is_valid(COALESCE(
+                      facts->>'buffer_after_minutes', '0'), 'integer'), FALSE)
+               THEN
+                   RETURN FALSE;
+               END IF;
+               RETURN COALESCE(
+                   (facts->>'service_id')::bigint = a.service_id
+                   AND facts->>'service_name' = a.service_name_snapshot
+                   AND (facts->>'resource_id')::bigint = a.resource_id
+                   AND facts->>'resource_name' = a.resource_name_snapshot
+                   AND (facts->>'start_at')::timestamptz = a.start_at
+                   AND (facts->>'end_at')::timestamptz = a.end_at
+                   AND (facts->>'effective_start_at')::timestamptz
+                       = a.effective_start_at
+                   AND (facts->>'effective_end_at')::timestamptz
+                       = a.effective_end_at
+                   AND (facts->>'duration_minutes')::int
+                       = a.duration_minutes_snapshot
+                   AND COALESCE(
+                       (facts->>'buffer_before_minutes')::int, 0)
+                       = a.buffer_before_minutes_snapshot
+                   AND COALESCE(
+                       (facts->>'buffer_after_minutes')::int, 0)
+                       = a.buffer_after_minutes_snapshot
+                   AND CASE
+                       WHEN facts->'price' IS NULL
+                           OR facts->'price' = 'null'::jsonb
+                       THEN a.price_snapshot IS NULL
+                       WHEN COALESCE(
+                           pg_input_is_valid(facts->>'price', 'numeric'), FALSE)
+                       THEN (facts->>'price')::numeric = a.price_snapshot
+                       ELSE FALSE END
+                   AND facts->>'business_timezone'
+                       = a.business_timezone_snapshot,
+                   FALSE);
+           END;
+           $$"""
+    )
+    op.execute(
         """CREATE FUNCTION enforce_appointment_provenance()
            RETURNS trigger LANGUAGE plpgsql AS $$
            DECLARE
@@ -963,84 +1036,8 @@ def upgrade() -> None:
                  AND committed_entity_id = NEW.id;
                IF payload_data IS NULL
                   OR payload_data->>'operation' IS DISTINCT FROM 'create'
-                  OR NOT COALESCE(pg_input_is_valid(
-                         payload_data->'facts'->>'service_id', 'bigint'), FALSE)
-                  OR CASE WHEN pg_input_is_valid(
-                                   payload_data->'facts'->>'service_id', 'bigint')
-                          THEN (payload_data->'facts'->>'service_id')::bigint END
-                        IS DISTINCT FROM NEW.service_id
-                  OR NOT COALESCE(pg_input_is_valid(
-                         payload_data->'facts'->>'resource_id', 'bigint'), FALSE)
-                  OR CASE WHEN pg_input_is_valid(
-                                   payload_data->'facts'->>'resource_id', 'bigint')
-                          THEN (payload_data->'facts'->>'resource_id')::bigint END
-                        IS DISTINCT FROM NEW.resource_id
-                  OR NOT COALESCE(pg_input_is_valid(
-                         payload_data->'facts'->>'start_at', 'timestamp with time zone'), FALSE)
-                  OR CASE WHEN pg_input_is_valid(
-                                   payload_data->'facts'->>'start_at',
-                                   'timestamp with time zone')
-                          THEN (payload_data->'facts'->>'start_at')::timestamptz END
-                        IS DISTINCT FROM NEW.start_at
-                  OR NOT COALESCE(pg_input_is_valid(
-                         payload_data->'facts'->>'end_at', 'timestamp with time zone'), FALSE)
-                  OR CASE WHEN pg_input_is_valid(
-                                   payload_data->'facts'->>'end_at',
-                                   'timestamp with time zone')
-                          THEN (payload_data->'facts'->>'end_at')::timestamptz END
-                        IS DISTINCT FROM NEW.end_at
-                  OR NOT COALESCE(pg_input_is_valid(
-                         payload_data->'facts'->>'effective_start_at',
-                         'timestamp with time zone'), FALSE)
-                  OR CASE WHEN pg_input_is_valid(
-                                   payload_data->'facts'->>'effective_start_at',
-                                   'timestamp with time zone')
-                          THEN (payload_data->'facts'
-                                ->>'effective_start_at')::timestamptz END
-                        IS DISTINCT FROM NEW.effective_start_at
-                  OR NOT COALESCE(pg_input_is_valid(
-                         payload_data->'facts'->>'effective_end_at',
-                         'timestamp with time zone'), FALSE)
-                  OR CASE WHEN pg_input_is_valid(
-                                   payload_data->'facts'->>'effective_end_at',
-                                   'timestamp with time zone')
-                          THEN (payload_data->'facts'
-                                ->>'effective_end_at')::timestamptz END
-                        IS DISTINCT FROM NEW.effective_end_at
-                  OR payload_data->'facts'->>'service_name'
-                        IS DISTINCT FROM NEW.service_name_snapshot
-                  OR payload_data->'facts'->>'resource_name'
-                        IS DISTINCT FROM NEW.resource_name_snapshot
-                  OR CASE WHEN pg_input_is_valid(
-                             payload_data->'facts'->>'duration_minutes',
-                             'integer')
-                         THEN (payload_data->'facts'
-                               ->>'duration_minutes')::int END
-                        IS DISTINCT FROM NEW.duration_minutes_snapshot
-                  OR CASE WHEN pg_input_is_valid(COALESCE(
-                             payload_data->'facts'->>'buffer_before_minutes',
-                             '0'), 'integer')
-                         THEN COALESCE(
-                             (payload_data->'facts'
-                              ->>'buffer_before_minutes')::int, 0) END
-                        IS DISTINCT FROM NEW.buffer_before_minutes_snapshot
-                  OR CASE WHEN pg_input_is_valid(COALESCE(
-                             payload_data->'facts'->>'buffer_after_minutes',
-                             '0'), 'integer')
-                         THEN COALESCE(
-                             (payload_data->'facts'
-                              ->>'buffer_after_minutes')::int, 0) END
-                        IS DISTINCT FROM NEW.buffer_after_minutes_snapshot
-                  OR CASE WHEN payload_data->'facts'->'price' IS NULL
-                              OR payload_data->'facts'->'price' = 'null'::jsonb
-                          THEN NEW.price_snapshot IS NOT NULL
-                          WHEN pg_input_is_valid(
-                              payload_data->'facts'->>'price', 'numeric')
-                          THEN (payload_data->'facts'->>'price')::numeric
-                              IS DISTINCT FROM NEW.price_snapshot
-                          ELSE TRUE END
-                  OR payload_data->'facts'->>'business_timezone'
-                        IS DISTINCT FROM NEW.business_timezone_snapshot
+                  OR appointment_payload_facts_match(
+                         payload_data->'facts', NEW) IS NOT TRUE
                   OR payload_data->>'customer_phone'
                         IS DISTINCT FROM NEW.customer_phone
                   OR payload_data->>'customer_name'
@@ -1056,7 +1053,7 @@ def upgrade() -> None:
                         IS DISTINCT FROM NEW.call_id THEN
                    RAISE EXCEPTION USING ERRCODE = '23514',
                        CONSTRAINT = 'ck_customer_conversation_appointment_provenance',
-                       MESSAGE = 'customer-call appointment requires matching '
+                       MESSAGE = 'customer-conversation appointment requires matching '
                                  'PendingAction provenance';
                END IF;
                RETURN NEW;
@@ -1215,79 +1212,6 @@ def upgrade() -> None:
                        canonical_utc_jsonb(a.rescheduled_at),
                    'created_at', canonical_utc_jsonb(a.created_at),
                    'updated_at', canonical_utc_jsonb(a.updated_at))
-           $$"""
-    )
-    op.execute(
-        """CREATE FUNCTION appointment_payload_facts_match(
-               facts jsonb, a appointments)
-           RETURNS boolean LANGUAGE plpgsql STABLE AS $$
-           BEGIN
-               IF facts IS NULL OR jsonb_typeof(facts) <> 'object' THEN
-                   RETURN FALSE;
-               END IF;
-               IF NOT (facts ? 'service_id' AND facts ? 'resource_id'
-                   AND facts ? 'start_at' AND facts ? 'end_at'
-                   AND facts ? 'effective_start_at'
-                   AND facts ? 'effective_end_at'
-                   AND facts ? 'duration_minutes'
-                   AND facts ? 'service_name' AND facts ? 'resource_name'
-                   AND facts ? 'business_timezone') THEN
-                   RETURN FALSE;
-               END IF;
-               IF NOT COALESCE(
-                      pg_input_is_valid(facts->>'service_id', 'bigint'), FALSE)
-                  OR NOT COALESCE(
-                      pg_input_is_valid(facts->>'resource_id', 'bigint'), FALSE)
-                  OR NOT COALESCE(pg_input_is_valid(
-                      facts->>'start_at', 'timestamp with time zone'), FALSE)
-                  OR NOT COALESCE(pg_input_is_valid(
-                      facts->>'end_at', 'timestamp with time zone'), FALSE)
-                  OR NOT COALESCE(pg_input_is_valid(
-                      facts->>'effective_start_at',
-                      'timestamp with time zone'), FALSE)
-                  OR NOT COALESCE(pg_input_is_valid(
-                      facts->>'effective_end_at',
-                      'timestamp with time zone'), FALSE)
-                  OR NOT COALESCE(pg_input_is_valid(
-                      facts->>'duration_minutes', 'integer'), FALSE)
-                  OR NOT COALESCE(pg_input_is_valid(COALESCE(
-                      facts->>'buffer_before_minutes', '0'), 'integer'), FALSE)
-                  OR NOT COALESCE(pg_input_is_valid(COALESCE(
-                      facts->>'buffer_after_minutes', '0'), 'integer'), FALSE)
-               THEN
-                   RETURN FALSE;
-               END IF;
-               RETURN COALESCE(
-                   (facts->>'service_id')::bigint = a.service_id
-                   AND facts->>'service_name' = a.service_name_snapshot
-                   AND (facts->>'resource_id')::bigint = a.resource_id
-                   AND facts->>'resource_name' = a.resource_name_snapshot
-                   AND (facts->>'start_at')::timestamptz = a.start_at
-                   AND (facts->>'end_at')::timestamptz = a.end_at
-                   AND (facts->>'effective_start_at')::timestamptz
-                       = a.effective_start_at
-                   AND (facts->>'effective_end_at')::timestamptz
-                       = a.effective_end_at
-                   AND (facts->>'duration_minutes')::int
-                       = a.duration_minutes_snapshot
-                   AND COALESCE(
-                       (facts->>'buffer_before_minutes')::int, 0)
-                       = a.buffer_before_minutes_snapshot
-                   AND COALESCE(
-                       (facts->>'buffer_after_minutes')::int, 0)
-                       = a.buffer_after_minutes_snapshot
-                   AND CASE
-                       WHEN facts->'price' IS NULL
-                           OR facts->'price' = 'null'::jsonb
-                       THEN a.price_snapshot IS NULL
-                       WHEN COALESCE(
-                           pg_input_is_valid(facts->>'price', 'numeric'), FALSE)
-                       THEN (facts->>'price')::numeric = a.price_snapshot
-                       ELSE FALSE END
-                   AND facts->>'business_timezone'
-                       = a.business_timezone_snapshot,
-                   FALSE);
-           END;
            $$"""
     )
     op.execute(
@@ -1706,7 +1630,6 @@ def downgrade() -> None:
     op.execute("DROP FUNCTION enforce_appointment_mutation_commit()")
     op.execute("DROP TRIGGER ck_appointment_commit_provenance ON appointment_commits")
     op.execute("DROP FUNCTION enforce_appointment_commit_provenance()")
-    op.execute("DROP FUNCTION appointment_payload_facts_match(jsonb, appointments)")
     op.execute("DROP FUNCTION appointment_authoritative_snapshot(appointments)")
     op.execute("DROP FUNCTION canonical_utc_jsonb(timestamptz)")
     op.execute("DROP TRIGGER ck_committed_pending_action_provenance ON pending_actions")
@@ -1716,6 +1639,7 @@ def downgrade() -> None:
     op.drop_table("appointment_commits")
     op.execute("DROP TRIGGER ck_customer_conversation_appointment_provenance ON appointments")
     op.execute("DROP FUNCTION enforce_appointment_provenance()")
+    op.execute("DROP FUNCTION appointment_payload_facts_match(jsonb, appointments)")
     op.execute(
         "DROP TRIGGER ck_confirmed_appointment_active_allocation_from_allocation "
         "ON resource_allocations"

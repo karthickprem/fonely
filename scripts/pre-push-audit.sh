@@ -382,6 +382,7 @@ def staged_candidates() -> list[Candidate]:
         "diff",
         "--cached",
         "--ita-visible-in-index",
+        "--no-renames",
         "--name-only",
         "--diff-filter=AMT",
         "-z",
@@ -389,6 +390,7 @@ def staged_candidates() -> list[Candidate]:
     normal_raw = git(
         "diff",
         "--cached",
+        "--no-renames",
         "--name-only",
         "--diff-filter=AMT",
         "-z",

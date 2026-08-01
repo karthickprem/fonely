@@ -392,6 +392,40 @@ def test_default_before_git_initialization_uses_safe_working_tree_mode(
     assert_secret_not_printed(result, secret)
 
 
+def staged_rename(repo: Path, content_suffix: str) -> str:
+    git(repo, "config", "diff.renames", "true")
+    original = "clean appointment documentation\n" * 100
+    stage_file(repo, "old.txt", original)
+    git(repo, "commit", "-qm", "add original file")
+    git(repo, "mv", "old.txt", "new.txt")
+    with (repo / "new.txt").open("a") as file_obj:
+        file_obj.write(content_suffix)
+    git(repo, "add", "-A")
+    status = git(repo, "diff", "--cached", "--name-status", "--find-renames").stdout
+    assert status.startswith("R")
+    assert "old.txt" in status
+    assert "new.txt" in status
+    return status
+
+
+def test_staged_renamed_secret_destination_is_rejected(tmp_path: Path) -> None:
+    repo = create_repo(tmp_path, initial_commit=True)
+    secret = classic_pat()
+    staged_rename(repo, f"\n{secret}\n")
+    result = run_audit(repo, "--staged")
+    assert result.returncode == 1
+    assert "github-classic-pat" in result.stderr
+    assert 'path="new.txt"' in result.stderr
+    assert_secret_not_printed(result, secret)
+
+
+def test_clean_staged_rename_is_allowed(tmp_path: Path) -> None:
+    repo = create_repo(tmp_path, initial_commit=True)
+    staged_rename(repo, "\nclean rename update\n")
+    result = run_audit(repo, "--staged")
+    assert result.returncode == 0
+
+
 def test_staged_mode_reads_index_blob_not_working_tree(tmp_path: Path) -> None:
     repo = create_repo(tmp_path)
     secret = classic_pat()

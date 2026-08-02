@@ -39,26 +39,26 @@ _FAKE_URL = _build_url(
     "postgresql+asyncpg://", "test_user:test_pass@localhost:15432/test_db"
 )
 
-_APPROVED_SQL = frozenset(
+_APPROVED_SQL_EXACT = frozenset(
     {
         "SELECT 1",
         "SHOW server_version",
         "SET TRANSACTION READ ONLY",
         "SHOW transaction_read_only",
+        (
+            "SELECT EXISTS ("
+            " SELECT 1 FROM information_schema.tables"
+            " WHERE table_schema = 'public'"
+            " AND table_name = 'alembic_version')"
+        ),
+        "SELECT version_num FROM public.alembic_version",
     }
-)
-
-_APPROVED_SQL_SUBSTRINGS = (
-    "information_schema.tables",
-    "public.alembic_version",
 )
 
 
 def _is_approved_sql(sql: str) -> bool:
     normalized = " ".join(sql.split())
-    if normalized in _APPROVED_SQL:
-        return True
-    return any(sub in normalized for sub in _APPROVED_SQL_SUBSTRINGS)
+    return normalized in _APPROVED_SQL_EXACT
 
 
 def _run_script(
@@ -574,21 +574,22 @@ def _mock_engine(
 
     async def mock_execute(stmt: Any) -> MagicMock:
         sql = str(stmt) if not isinstance(stmt, str) else stmt
+        normalized = " ".join(sql.split())
         if not _is_approved_sql(sql):
             raise AssertionError(f"unapproved SQL in readiness verifier: {sql}")
         result = MagicMock()
-        if "SELECT 1" in sql:
+        if normalized == "SELECT 1":
             if connect_fails:
                 raise connect_fails
             result.scalar_one.return_value = 1
             return result
-        if "server_version" in sql.lower():
+        if normalized == "SHOW server_version":
             result.scalar_one.return_value = version
             return result
-        if "information_schema.tables" in sql:
+        if "information_schema.tables" in normalized:
             result.scalar.return_value = has_alembic
             return result
-        if "version_num" in sql and "alembic_version" in sql:
+        if normalized == "SELECT version_num FROM public.alembic_version":
             if revision is not None:
                 row = MagicMock()
                 row.__getitem__ = lambda s, i: revision
@@ -596,9 +597,9 @@ def _mock_engine(
             else:
                 result.all.return_value = []
             return result
-        if "SET TRANSACTION READ ONLY" in sql:
+        if normalized == "SET TRANSACTION READ ONLY":
             return result
-        if "transaction_read_only" in sql.lower():
+        if normalized == "SHOW transaction_read_only":
             result.scalar.return_value = readonly
             return result
         raise AssertionError(f"unhandled approved SQL: {sql}")
@@ -607,13 +608,14 @@ def _mock_engine(
 
     async def _mock_scalar(stmt: Any) -> Any:
         sql = str(stmt) if not isinstance(stmt, str) else stmt
+        normalized = " ".join(sql.split())
         if not _is_approved_sql(sql):
             raise AssertionError(f"unapproved SQL in readiness verifier: {sql}")
-        if "information_schema.tables" in sql:
+        if "information_schema.tables" in normalized:
             return has_alembic
-        if "transaction_read_only" in sql.lower():
+        if normalized == "SHOW transaction_read_only":
             return readonly
-        if "server_version" in sql.lower():
+        if normalized == "SHOW server_version":
             return version
         result = await mock_execute(stmt)
         return result.scalar()
@@ -777,38 +779,65 @@ class TestMockedDatabaseChecks:
         assert "DROP" not in json.dumps(report.to_dict())
 
 
-class TestDDLRejection:
+class TestSQLAllowlistEnforcement:
+    def _exec(self, sql: str) -> None:
+        asyncio.run(
+            _mock_engine().connect.return_value.__aenter__.return_value.execute(sql)
+        )
+
     def test_fake_rejects_create_table(self) -> None:
         with pytest.raises(AssertionError, match="unapproved SQL"):
-            asyncio.run(
-                _mock_engine().connect.return_value.__aenter__.return_value.execute(
-                    "CREATE TABLE exploit (id int)"
-                )
-            )
+            self._exec("CREATE TABLE exploit (id int)")
 
     def test_fake_rejects_insert(self) -> None:
         with pytest.raises(AssertionError, match="unapproved SQL"):
-            asyncio.run(
-                _mock_engine().connect.return_value.__aenter__.return_value.execute(
-                    "INSERT INTO alembic_version VALUES ('evil')"
-                )
-            )
+            self._exec("INSERT INTO alembic_version VALUES ('evil')")
 
     def test_fake_rejects_update(self) -> None:
         with pytest.raises(AssertionError, match="unapproved SQL"):
-            asyncio.run(
-                _mock_engine().connect.return_value.__aenter__.return_value.execute(
-                    "UPDATE alembic_version SET version_num = 'evil'"
-                )
-            )
+            self._exec("UPDATE alembic_version SET version_num = 'evil'")
 
     def test_fake_rejects_delete(self) -> None:
         with pytest.raises(AssertionError, match="unapproved SQL"):
-            asyncio.run(
-                _mock_engine().connect.return_value.__aenter__.return_value.execute(
-                    "DELETE FROM alembic_version"
-                )
+            self._exec("DELETE FROM alembic_version")
+
+    def test_fake_rejects_delete_returning_version_num(self) -> None:
+        with pytest.raises(AssertionError, match="unapproved SQL"):
+            self._exec("DELETE FROM public.alembic_version RETURNING version_num")
+
+    def test_fake_rejects_drop_then_select(self) -> None:
+        with pytest.raises(AssertionError, match="unapproved SQL"):
+            self._exec(
+                "DROP TABLE alembic_version; "
+                "SELECT version_num FROM public.alembic_version"
             )
+
+    def test_fake_rejects_select_then_delete(self) -> None:
+        with pytest.raises(AssertionError, match="unapproved SQL"):
+            self._exec(
+                "SELECT version_num FROM public.alembic_version; "
+                "DELETE FROM public.alembic_version"
+            )
+
+    def test_fake_rejects_comment_prefixed_mutation(self) -> None:
+        with pytest.raises(AssertionError, match="unapproved SQL"):
+            self._exec("/* harmless */ DELETE FROM public.alembic_version")
+
+    def test_fake_rejects_comment_suffixed_mutation(self) -> None:
+        with pytest.raises(AssertionError, match="unapproved SQL"):
+            self._exec("SELECT 1; -- DELETE FROM alembic_version")
+
+    def test_approved_select_1_passes(self) -> None:
+        self._exec("SELECT 1")
+
+    def test_approved_show_version_passes(self) -> None:
+        self._exec("SHOW server_version")
+
+    def test_approved_set_readonly_passes(self) -> None:
+        self._exec("SET TRANSACTION READ ONLY")
+
+    def test_approved_show_readonly_passes(self) -> None:
+        self._exec("SHOW transaction_read_only")
 
 
 # --- Revision validation ---
@@ -823,3 +852,131 @@ class TestRevisionValidation:
         assert readiness._safe_revision_text("'; DROP--") == "[invalid-revision]"
         assert readiness._safe_revision_text("a" * 100) == "[invalid-revision]"
         assert readiness._safe_revision_text("") == "[invalid-revision]"
+
+    def test_trailing_newline_rejected(self) -> None:
+        assert readiness._safe_revision_text("0003\n") == "[invalid-revision]"
+
+    def test_leading_whitespace_rejected(self) -> None:
+        assert readiness._safe_revision_text(" 0003") == "[invalid-revision]"
+
+    def test_trailing_whitespace_rejected(self) -> None:
+        assert readiness._safe_revision_text("0003 ") == "[invalid-revision]"
+
+    def test_embedded_newline_rejected(self) -> None:
+        assert readiness._safe_revision_text("00\n03") == "[invalid-revision]"
+
+    def test_fullmatch_used_for_revision_regex(self) -> None:
+        assert not readiness._SAFE_REVISION_RE.fullmatch("0003\n")
+        assert readiness._SAFE_REVISION_RE.fullmatch("0003")
+
+
+# --- Cycle detection ---
+
+
+class TestCycleDetection:
+    def test_self_cycle_rejected(self, tmp_path: Path) -> None:
+        versions = tmp_path / "versions"
+        versions.mkdir()
+        (versions / "0001_self.py").write_text(
+            'revision = "0001"\ndown_revision = "0001"\n'
+        )
+        with (
+            patch.object(readiness, "_VERSIONS_DIR", versions),
+            pytest.raises(readiness.MigrationParseError, match="cycle"),
+        ):
+            readiness._discover_repository_heads()
+
+    def test_two_node_cycle_rejected(self, tmp_path: Path) -> None:
+        versions = tmp_path / "versions"
+        versions.mkdir()
+        (versions / "0001_a.py").write_text(
+            'revision = "0001"\ndown_revision = "0002"\n'
+        )
+        (versions / "0002_b.py").write_text(
+            'revision = "0002"\ndown_revision = "0001"\n'
+        )
+        with (
+            patch.object(readiness, "_VERSIONS_DIR", versions),
+            pytest.raises(readiness.MigrationParseError, match="cycle"),
+        ):
+            readiness._discover_repository_heads()
+
+    def test_longer_cycle_rejected(self, tmp_path: Path) -> None:
+        versions = tmp_path / "versions"
+        versions.mkdir()
+        (versions / "a.py").write_text('revision = "a"\ndown_revision = "c"\n')
+        (versions / "b.py").write_text('revision = "b"\ndown_revision = "a"\n')
+        (versions / "c.py").write_text('revision = "c"\ndown_revision = "b"\n')
+        with (
+            patch.object(readiness, "_VERSIONS_DIR", versions),
+            pytest.raises(readiness.MigrationParseError, match="cycle"),
+        ):
+            readiness._discover_repository_heads()
+
+    def test_cycle_with_disconnected_head_rejected(self, tmp_path: Path) -> None:
+        versions = tmp_path / "versions"
+        versions.mkdir()
+        (versions / "good.py").write_text('revision = "good"\ndown_revision = None\n')
+        (versions / "a.py").write_text('revision = "a"\ndown_revision = "b"\n')
+        (versions / "b.py").write_text('revision = "b"\ndown_revision = "a"\n')
+        with (
+            patch.object(readiness, "_VERSIONS_DIR", versions),
+            pytest.raises(readiness.MigrationParseError, match="cycle"),
+        ):
+            readiness._discover_repository_heads()
+
+    def test_valid_linear_chain_no_cycle(self, tmp_path: Path) -> None:
+        versions = tmp_path / "versions"
+        versions.mkdir()
+        (versions / "0001.py").write_text('revision = "0001"\ndown_revision = None\n')
+        (versions / "0002.py").write_text('revision = "0002"\ndown_revision = "0001"\n')
+        with patch.object(readiness, "_VERSIONS_DIR", versions):
+            assert readiness._discover_repository_heads() == ["0002"]
+
+
+# --- Cleanup timeout ---
+
+
+class TestCleanupTimeout:
+    def test_disposal_stall_does_not_hang(self) -> None:
+        engine = _mock_engine()
+
+        async def slow_dispose() -> None:
+            await asyncio.sleep(100)
+
+        engine.dispose = slow_dispose
+        with (
+            patch.object(
+                readiness, "_discover_repository_heads", return_value=["0003"]
+            ),
+            patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
+        ):
+            report = asyncio.run(readiness._run_checks(_FAKE_URL, "test", 1, 3))
+        assert report.overall_status == "passed"
+
+    def test_rollback_is_bounded(self) -> None:
+        engine = _mock_engine()
+        conn = engine.connect.return_value.__aenter__.return_value
+        conn.rollback = AsyncMock()
+        with (
+            patch.object(
+                readiness, "_discover_repository_heads", return_value=["0003"]
+            ),
+            patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
+        ):
+            report = asyncio.run(readiness._run_checks(_FAKE_URL, "test", 5, 15))
+        assert report.overall_status == "passed"
+        conn.rollback.assert_awaited()
+
+    def test_cleanup_failure_does_not_produce_success(self) -> None:
+        engine = _mock_engine(connect_fails=ConnectionRefusedError())
+        engine.dispose = AsyncMock()
+        with (
+            patch.object(
+                readiness, "_discover_repository_heads", return_value=["0003"]
+            ),
+            patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
+        ):
+            report = asyncio.run(readiness._run_checks(_FAKE_URL, "test", 5, 15))
+        assert report.overall_status == "failed"
+        engine.dispose.assert_awaited_once()

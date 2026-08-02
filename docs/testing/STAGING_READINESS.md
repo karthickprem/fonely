@@ -118,7 +118,13 @@ It does not run `alembic upgrade`, `alembic check`, or any DDL/DML. Migration me
 
 ## Timeout behavior
 
-Each database operation is individually bounded by the configured connection timeout. The overall orchestration deadline bounds the total async execution but cannot interrupt arbitrary synchronous filesystem operations (such as migration-file reads). In practice, filesystem reads are fast and bounded by OS limits. The orchestration deadline is not a hard process-level wall-clock guarantee.
+The verifier applies bounded timeouts at three levels:
+
+- **Per-operation**: each database query is wrapped in `asyncio.wait_for` with the configured connection timeout.
+- **Cleanup**: explicit rollback and engine disposal attempts are individually bounded; a stalled cleanup cannot prevent exit or produce a false success.
+- **Orchestration deadline**: the overall `asyncio.wait_for` bounds the total async execution.
+
+These are cooperative async deadlines, not OS-enforced hard wall-clock guarantees. Synchronous filesystem operations (such as migration-file reads) are not interruptible by async cancellation. In practice, local filesystem reads are fast and bounded by OS limits.
 
 ## Distinction from other tools
 

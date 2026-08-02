@@ -40,7 +40,7 @@ SCHEMA_VERSION = 1
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent / "backend"
 _VERSIONS_DIR = _BACKEND_ROOT / "migrations" / "versions"
 
-_SAFE_REVISION_RE = re.compile(r"^[a-zA-Z0-9_]{1,64}$")
+_SAFE_REVISION_RE = re.compile(r"[a-zA-Z0-9_]{1,64}")
 
 
 def _sanitize(message: str) -> str:
@@ -60,7 +60,7 @@ def _sanitize(message: str) -> str:
 
 
 def _safe_revision_text(value: str) -> str:
-    if _SAFE_REVISION_RE.match(value):
+    if _SAFE_REVISION_RE.fullmatch(value):
         return value
     return "[invalid-revision]"
 
@@ -179,7 +179,7 @@ def _discover_repository_heads() -> list[str]:
             raise MigrationParseError(f"{path.name}: missing revision")
         if rev_value is None:
             raise MigrationParseError(f"{path.name}: revision is not a literal string")
-        if not _SAFE_REVISION_RE.match(rev_value):
+        if not _SAFE_REVISION_RE.fullmatch(rev_value):
             raise MigrationParseError(f"{path.name}: malformed revision identifier")
         if not down_found:
             raise MigrationParseError(f"{path.name}: missing down_revision")
@@ -200,6 +200,23 @@ def _discover_repository_heads() -> list[str]:
             if p not in revisions:
                 raise MigrationParseError(f"missing parent revision: {p}")
             all_parents.add(p)
+
+    visited: set[str] = set()
+    in_stack: set[str] = set()
+
+    def _visit(rev: str) -> None:
+        if rev in in_stack:
+            raise MigrationParseError(f"migration graph contains a cycle at {rev}")
+        if rev in visited:
+            return
+        in_stack.add(rev)
+        for parent in revisions.get(rev, []):
+            _visit(parent)
+        in_stack.remove(rev)
+        visited.add(rev)
+
+    for rev in revisions:
+        _visit(rev)
 
     heads = sorted(set(revisions.keys()) - all_parents)
     return heads
@@ -456,7 +473,7 @@ async def _run_checks(
                 if (
                     not isinstance(db_rev, str)
                     or not db_rev.strip()
-                    or not _SAFE_REVISION_RE.match(db_rev)
+                    or not _SAFE_REVISION_RE.fullmatch(db_rev)
                 ):
                     raise CheckFailure(
                         "database_revision_invalid",
@@ -510,7 +527,10 @@ async def _run_checks(
                         "transaction did not report read-only mode",
                     )
                 readonly_check.status = "passed"
-                await conn.rollback()
+                try:
+                    await asyncio.wait_for(conn.rollback(), timeout=connect_timeout)
+                except Exception:  # noqa: BLE001, S110
+                    pass
         except CheckFailure as exc:
             readonly_check.status = "failed"
             readonly_check.failure_code = exc.code
@@ -537,7 +557,10 @@ async def _run_checks(
         return report
 
     finally:
-        await engine.dispose()
+        try:
+            await asyncio.wait_for(engine.dispose(), timeout=connect_timeout)
+        except Exception:  # noqa: BLE001, S110
+            pass
 
 
 def _emit_failure(

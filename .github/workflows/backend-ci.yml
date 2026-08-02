@@ -140,10 +140,13 @@ jobs:
           PGPORT: "5432"
           PGUSER: fonely_test
           PGPASSWORD: fonely_test_ci_only
+          FONELY_BACKUP_SOURCE_URL: postgresql://fonely_test:fonely_test_ci_only@localhost:5432/fonely_test
+          FONELY_BACKUP_RESTORE_URL: postgresql://fonely_test:fonely_test_ci_only@localhost:5432/fonely_test_restore
+          FONELY_BACKUP_ENVIRONMENT: github-ci
         run: |
           set -euo pipefail
+          trap 'dropdb --if-exists fonely_test_restore 2>/dev/null || true' EXIT
 
-          # Seed synthetic data into the source database
           psql -d fonely_test -c "
             INSERT INTO businesses (id, name, category, primary_contact_phone, timezone, subscription)
             VALUES (1, 'Test Salon A', 'salon', '+919000000001', 'Asia/Kolkata', 'trial'),
@@ -163,15 +166,7 @@ jobs:
             ON CONFLICT DO NOTHING;
           "
 
-          # Create disposable restore database
           createdb fonely_test_restore
 
-          # Run the backup-restore verifier
-          FONELY_BACKUP_SOURCE_URL="postgresql://fonely_test:fonely_test_ci_only@localhost:5432/fonely_test" \
-          FONELY_BACKUP_RESTORE_URL="postgresql://fonely_test:fonely_test_ci_only@localhost:5432/fonely_test_restore" \
-          FONELY_BACKUP_ENVIRONMENT="github-ci" \
           backend/.venv/bin/python scripts/verify-backup-restore.py | tee /dev/stderr | \
           python3 -c "import json,sys; d=json.load(sys.stdin); assert d['overall_status']=='passed', 'backup-restore failed'"
-
-          # Cleanup
-          dropdb --if-exists fonely_test_restore

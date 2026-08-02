@@ -18,7 +18,9 @@ Optional:
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -34,6 +36,7 @@ from urllib.parse import urlparse
 SCHEMA_VERSION = 1
 SAFE_DB_RE = re.compile(r"fonely_test(?:_[a-z0-9_]+)?")
 SAFE_REVISION_RE = re.compile(r"[a-zA-Z0-9_]{1,64}")
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 
 def _sanitize(message: str) -> str:
@@ -66,6 +69,13 @@ def _check_dict(
         "failure_code": code,
         "message": msg,
     }
+
+
+def _canonical_host(host: str) -> str:
+    lower = host.lower()
+    if lower in _LOOPBACK_HOSTS:
+        return "localhost"
+    return lower
 
 
 @dataclass
@@ -134,7 +144,7 @@ def _validate_disposable(label: str, url: str) -> tuple[str, str, str, str, int]
             "safety_guard_failed",
             f"{label} user must contain 'test'",
         )
-    if host.lower() not in {"localhost", "127.0.0.1", "::1"}:
+    if _canonical_host(host) != "localhost":
         raise ConfigError(
             "safety_guard_failed",
             f"{label} must use a local host",
@@ -162,14 +172,18 @@ def _validate_config() -> tuple[str, str, str, str, float]:
     r_host, r_db, _, _, r_port = _parse_sync_url(_sync_url(restore_url))
     _validate_disposable("target", restore_url)
 
-    if (s_host, s_port, s_db) == (r_host, r_port, r_db):
+    if (_canonical_host(s_host), s_port, s_db) == (
+        _canonical_host(r_host),
+        r_port,
+        r_db,
+    ):
         raise ConfigError(
             "safety_guard_failed", "source and target must be different databases"
         )
 
     try:
         timeout = float(timeout_str)
-        if timeout <= 0 or timeout > 600 or not __import__("math").isfinite(timeout):
+        if timeout <= 0 or timeout > 600 or not math.isfinite(timeout):
             raise ValueError
     except ValueError:
         raise ConfigError("configuration_invalid", "timeout must be 1-600")
@@ -193,12 +207,11 @@ def _run_pg(
     url: str,
     *,
     timeout: float = 60,
-    capture: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         cmd,
         env=_pg_env(url),
-        capture_output=capture,
+        capture_output=True,
         text=True,
         timeout=timeout,
         check=False,
@@ -214,6 +227,41 @@ def _query(url: str, sql: str, *, timeout: float = 30) -> str:
     if result.returncode != 0:
         raise RuntimeError(_sanitize(result.stderr.strip()[:200]))
     return result.stdout.strip()
+
+
+_FINGERPRINT_QUERY = (
+    "SELECT "
+    "(SELECT version_num FROM public.alembic_version),"
+    "(SELECT count(*) FROM businesses),"
+    "(SELECT count(*) FROM business_users),"
+    "(SELECT count(*) FROM services),"
+    "(SELECT count(*) FROM resources),"
+    "(SELECT count(*) FROM appointments),"
+    "(SELECT count(*) FROM pending_actions),"
+    "(SELECT count(*) FROM resource_allocations),"
+    "(SELECT count(*) FROM pg_proc p "
+    "JOIN pg_namespace n ON p.pronamespace = n.oid "
+    "WHERE n.nspname = 'public')"
+)
+
+
+def _source_fingerprint(url: str) -> str:
+    raw = _query(url, _FINGERPRINT_QUERY)
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _cleanup_backup(backup_path: Path | None) -> bool:
+    if backup_path is None:
+        return True
+    ok = True
+    try:
+        if backup_path.exists():
+            backup_path.unlink()
+        if backup_path.parent.exists():
+            backup_path.parent.rmdir()
+    except OSError:
+        ok = False
+    return ok
 
 
 def main() -> int:
@@ -245,7 +293,10 @@ def main() -> int:
         t0 = time.monotonic()
         try:
             ver = _query(source_url, "SHOW server_version")
-            major = int(re.match(r"(\d+)", ver).group(1))  # type: ignore[union-attr]
+            match = re.match(r"(\d+)", ver)
+            if not match:
+                raise RuntimeError("cannot parse server version")
+            major = int(match.group(1))
             report.postgres_major = major
             report.checks.append(
                 _check_dict("source_version", "passed", time.monotonic() - t0)
@@ -263,9 +314,10 @@ def main() -> int:
             failed = True
             return 1
 
-        # --- Source revision ---
+        # --- Source fingerprint (before) ---
         t0 = time.monotonic()
         try:
+            fingerprint_before = _source_fingerprint(source_url)
             rev = _query(
                 source_url,
                 "SELECT version_num FROM public.alembic_version",
@@ -274,12 +326,12 @@ def main() -> int:
                 raise RuntimeError("invalid source revision")
             report.source_revision = rev
             report.checks.append(
-                _check_dict("source_revision", "passed", time.monotonic() - t0)
+                _check_dict("source_fingerprint", "passed", time.monotonic() - t0)
             )
         except Exception as exc:  # noqa: BLE001
             report.checks.append(
                 _check_dict(
-                    "source_revision",
+                    "source_fingerprint",
                     "failed",
                     time.monotonic() - t0,
                     "source_revision_invalid",
@@ -319,27 +371,25 @@ def main() -> int:
             failed = True
             return 1
 
-        # --- Restore ---
+        # --- Restore (require exit 0) ---
         t0 = time.monotonic()
         try:
+            _, r_db, _, _, _ = _parse_sync_url(_sync_url(restore_url))
             result = _run_pg(
                 [
                     "pg_restore",
                     "-d",
-                    _parse_sync_url(_sync_url(restore_url))[1],
+                    r_db,
                     "--no-owner",
                     "--no-privileges",
-                    "--clean",
-                    "--if-exists",
                     str(backup_path),
                 ],
                 restore_url,
                 timeout=timeout / 3,
             )
-            if result.returncode not in (0, 1):
-                raise RuntimeError(
-                    _sanitize(result.stderr.strip()[:200]) or "pg_restore failed"
-                )
+            if result.returncode != 0:
+                stderr_safe = _sanitize(result.stderr.strip()[:500])
+                raise RuntimeError(stderr_safe or "pg_restore failed")
             report.checks.append(
                 _check_dict("restore", "passed", time.monotonic() - t0)
             )
@@ -436,35 +486,43 @@ def main() -> int:
         # --- Verify data integrity ---
         t0 = time.monotonic()
         try:
-            source_counts = _query(
-                source_url,
+            count_query = (
                 "SELECT "
                 "(SELECT count(*) FROM businesses),"
+                "(SELECT count(*) FROM business_users),"
+                "(SELECT count(*) FROM services),"
+                "(SELECT count(*) FROM resources),"
                 "(SELECT count(*) FROM appointments),"
                 "(SELECT count(*) FROM pending_actions),"
-                "(SELECT count(*) FROM resource_allocations)",
+                "(SELECT count(*) FROM resource_allocations)"
             )
-            restored_counts = _query(
-                restore_url,
-                "SELECT "
-                "(SELECT count(*) FROM businesses),"
-                "(SELECT count(*) FROM appointments),"
-                "(SELECT count(*) FROM pending_actions),"
-                "(SELECT count(*) FROM resource_allocations)",
-            )
+            source_counts = _query(source_url, count_query)
+            restored_counts = _query(restore_url, count_query)
             if source_counts != restored_counts:
                 raise RuntimeError(
                     f"count mismatch: source={source_counts} restored={restored_counts}"
                 )
-            # Verify tenant isolation: no cross-business FK
-            orphans = _query(
-                restore_url,
-                "SELECT count(*) FROM appointments a "
-                "LEFT JOIN businesses b ON b.id = a.business_id "
-                "WHERE b.id IS NULL",
-            )
-            if int(orphans) != 0:
-                raise RuntimeError("orphaned appointments found")
+            orphan_checks = [
+                (
+                    "SELECT count(*) FROM business_users bu "
+                    "LEFT JOIN businesses b ON b.id = bu.business_id "
+                    "WHERE b.id IS NULL"
+                ),
+                (
+                    "SELECT count(*) FROM services s "
+                    "LEFT JOIN businesses b ON b.id = s.business_id "
+                    "WHERE b.id IS NULL"
+                ),
+                (
+                    "SELECT count(*) FROM resources r "
+                    "LEFT JOIN businesses b ON b.id = r.business_id "
+                    "WHERE b.id IS NULL"
+                ),
+            ]
+            for check_sql in orphan_checks:
+                orphans = _query(restore_url, check_sql)
+                if int(orphans) != 0:
+                    raise RuntimeError("orphaned tenant rows found")
             report.checks.append(
                 _check_dict("data_integrity", "passed", time.monotonic() - t0)
             )
@@ -484,12 +542,9 @@ def main() -> int:
         # --- Source unchanged ---
         t0 = time.monotonic()
         try:
-            source_rev_after = _query(
-                source_url,
-                "SELECT version_num FROM public.alembic_version",
-            )
-            if source_rev_after != report.source_revision:
-                raise RuntimeError("source revision changed during backup/restore")
+            fingerprint_after = _source_fingerprint(source_url)
+            if fingerprint_after != fingerprint_before:
+                raise RuntimeError("source fingerprint changed during backup/restore")
             report.checks.append(
                 _check_dict("source_unchanged", "passed", time.monotonic() - t0)
             )
@@ -506,26 +561,19 @@ def main() -> int:
             failed = True
 
     finally:
-        # --- Cleanup ---
+        # --- File cleanup ---
         t0 = time.monotonic()
-        cleanup_ok = True
-        if backup_path and backup_path.exists():
-            try:
-                backup_path.unlink()
-                if backup_path.parent.exists():
-                    backup_path.parent.rmdir()
-            except OSError:
-                cleanup_ok = False
+        file_ok = _cleanup_backup(backup_path)
         report.checks.append(
             _check_dict(
-                "cleanup",
-                "passed" if cleanup_ok else "failed",
+                "file_cleanup",
+                "passed" if file_ok else "failed",
                 time.monotonic() - t0,
-                None if cleanup_ok else "cleanup_failed",
-                None if cleanup_ok else "temporary files could not be removed",
+                None if file_ok else "cleanup_failed",
+                None if file_ok else "temporary files could not be removed",
             )
         )
-        if not cleanup_ok:
+        if not file_ok:
             failed = True
 
         report.overall_status = "failed" if failed else "passed"

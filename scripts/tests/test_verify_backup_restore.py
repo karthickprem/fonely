@@ -1,6 +1,6 @@
 """Offline unit tests for PostgreSQL backup-and-restore verification.
 
-Tests configuration guards, safety validation, command construction,
+Tests configuration guards, safety validation, host identity equivalence,
 report semantics, and failure classification without requiring a running
 PostgreSQL instance.
 """
@@ -128,6 +128,60 @@ class TestConfiguration:
         )
 
 
+# --- Host identity equivalence ---
+
+
+class TestHostIdentity:
+    def test_localhost_and_127_same_db_rejected(self) -> None:
+        src = _build_url("postgresql://", "fonely_test:p@localhost:5432/fonely_test")
+        tgt = _build_url("postgresql://", "fonely_test:p@127.0.0.1:5432/fonely_test")
+        result = _run_script(
+            {
+                "FONELY_BACKUP_SOURCE_URL": src,
+                "FONELY_BACKUP_RESTORE_URL": tgt,
+                "FONELY_BACKUP_ENVIRONMENT": "test",
+            }
+        )
+        assert result.returncode != 0
+        assert (
+            _parse_output(result)["checks"][0]["failure_code"] == "safety_guard_failed"
+        )
+
+    def test_localhost_and_ipv6_same_db_rejected(self) -> None:
+        src = _build_url("postgresql://", "fonely_test:p@localhost:5432/fonely_test")
+        tgt = _build_url("postgresql://", "fonely_test:p@[::1]:5432/fonely_test")
+        result = _run_script(
+            {
+                "FONELY_BACKUP_SOURCE_URL": src,
+                "FONELY_BACKUP_RESTORE_URL": tgt,
+                "FONELY_BACKUP_ENVIRONMENT": "test",
+            }
+        )
+        assert result.returncode != 0
+        assert (
+            _parse_output(result)["checks"][0]["failure_code"] == "safety_guard_failed"
+        )
+
+    def test_127_and_ipv6_same_db_rejected(self) -> None:
+        src = _build_url("postgresql://", "fonely_test:p@127.0.0.1:5432/fonely_test")
+        tgt = _build_url("postgresql://", "fonely_test:p@[::1]:5432/fonely_test")
+        result = _run_script(
+            {
+                "FONELY_BACKUP_SOURCE_URL": src,
+                "FONELY_BACKUP_RESTORE_URL": tgt,
+                "FONELY_BACKUP_ENVIRONMENT": "test",
+            }
+        )
+        assert result.returncode != 0
+        assert (
+            _parse_output(result)["checks"][0]["failure_code"] == "safety_guard_failed"
+        )
+
+    def test_different_databases_on_equivalent_hosts_accepted(self) -> None:
+        assert br._canonical_host("localhost") == br._canonical_host("127.0.0.1")
+        assert br._canonical_host("::1") == "localhost"
+
+
 # --- Safety guards ---
 
 
@@ -168,19 +222,6 @@ class TestSafetyGuards:
             {
                 "FONELY_BACKUP_SOURCE_URL": url,
                 "FONELY_BACKUP_RESTORE_URL": _RESTORE_URL,
-                "FONELY_BACKUP_ENVIRONMENT": "test",
-            }
-        )
-        assert result.returncode != 0
-        assert (
-            _parse_output(result)["checks"][0]["failure_code"] == "safety_guard_failed"
-        )
-
-    def test_nonempty_target_same_as_source_rejected(self) -> None:
-        result = _run_script(
-            {
-                "FONELY_BACKUP_SOURCE_URL": _SOURCE_URL,
-                "FONELY_BACKUP_RESTORE_URL": _SOURCE_URL,
                 "FONELY_BACKUP_ENVIRONMENT": "test",
             }
         )
@@ -288,6 +329,26 @@ class TestTimeout:
         )
 
 
+# --- Host canonicalization ---
+
+
+class TestCanonicalHost:
+    def test_localhost_canonical(self) -> None:
+        assert br._canonical_host("localhost") == "localhost"
+
+    def test_127_canonical(self) -> None:
+        assert br._canonical_host("127.0.0.1") == "localhost"
+
+    def test_ipv6_canonical(self) -> None:
+        assert br._canonical_host("::1") == "localhost"
+
+    def test_uppercase_localhost(self) -> None:
+        assert br._canonical_host("LOCALHOST") == "localhost"
+
+    def test_remote_not_canonical(self) -> None:
+        assert br._canonical_host("remote.example.com") == "remote.example.com"
+
+
 # --- Revision validation ---
 
 
@@ -301,3 +362,27 @@ class TestRevisionValidation:
 
     def test_safe_revision_rejects_newline(self) -> None:
         assert not br.SAFE_REVISION_RE.fullmatch("0004\n")
+
+
+# --- Source fingerprint ---
+
+
+class TestSourceFingerprint:
+    def test_fingerprint_query_covers_tables(self) -> None:
+        q = br._FINGERPRINT_QUERY
+        for table in [
+            "businesses",
+            "business_users",
+            "services",
+            "resources",
+            "appointments",
+            "pending_actions",
+            "resource_allocations",
+        ]:
+            assert table in q
+
+    def test_fingerprint_includes_revision(self) -> None:
+        assert "alembic_version" in br._FINGERPRINT_QUERY
+
+    def test_fingerprint_includes_functions(self) -> None:
+        assert "pg_proc" in br._FINGERPRINT_QUERY

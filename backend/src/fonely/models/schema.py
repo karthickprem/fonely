@@ -50,6 +50,10 @@ from fonely.models.enums import (
     InventoryReservationStatus,
     LanguageStatus,
     LocaleRole,
+    NotificationChannel,
+    NotificationEventType,
+    NotificationRecipientType,
+    NotificationStatus,
     OnboardingDraftStatus,
     OrderStatus,
     PendingActionStatus,
@@ -1116,3 +1120,57 @@ class BusinessConfigurationCommit(Base):
     )
     commit_evidence: Mapped[Any] = mapped_column(JSONB, nullable=False)
     rollback_evidence: Mapped[Any | None] = mapped_column(JSONB, nullable=True)
+
+
+# =============================================================================
+# Notification Outbox
+# =============================================================================
+
+
+class NotificationOutboxEvent(Base):
+    __tablename__ = "notification_outbox"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_notification_idempotency"),
+        Index("ix_notification_outbox_poll", "status", "next_attempt_at"),
+        Index(
+            "ix_notification_outbox_entity",
+            "business_id",
+            "entity_type",
+            "entity_id",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    event_type: Mapped[str] = mapped_column(
+        enum_type(NotificationEventType, "notification_event_type"), nullable=False
+    )
+    entity_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    entity_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    recipient_type: Mapped[str] = mapped_column(
+        enum_type(NotificationRecipientType, "notification_recipient_type"), nullable=False
+    )
+    recipient_phone: Mapped[str] = mapped_column(String(20), nullable=False)
+    recipient_name: Mapped[str | None] = mapped_column(String(200))
+    channel: Mapped[str] = mapped_column(
+        enum_type(NotificationChannel, "notification_channel"), nullable=False
+    )
+    payload: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(
+        enum_type(NotificationStatus, "notification_status"),
+        nullable=False,
+        default=NotificationStatus.PENDING,
+        server_default="pending",
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    max_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=5, server_default="5"
+    )
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(500))
+    idempotency_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

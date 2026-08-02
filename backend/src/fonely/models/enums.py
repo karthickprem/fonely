@@ -147,3 +147,30 @@ class OnboardingDraftStatus(enum.StrEnum):
     APPROVED = "approved"
     ACTIVATED = "activated"
     REJECTED = "rejected"
+
+
+class NotificationEventType(enum.StrEnum):
+    APPOINTMENT_CONFIRMED = "appointment_confirmed"
+    APPOINTMENT_CANCELLED = "appointment_cancelled"
+    APPOINTMENT_RESCHEDULED = "appointment_rescheduled"
+    APPOINTMENT_REMINDER = "appointment_reminder"
+
+
+class NotificationRecipientType(enum.StrEnum):
+    PATIENT = "patient"
+    OWNER = "owner"
+    STAFF = "staff"
+
+
+class NotificationChannel(enum.StrEnum):
+    WHATSAPP = "whatsapp"
+    SMS = "sms"
+    INTERNAL = "internal"
+
+
+class NotificationStatus(enum.StrEnum):
+    PENDING = "pending"
+    PROCESSING = "processing"
+    DELIVERED = "delivered"
+    FAILED = "failed"
+    DEAD_LETTER = "dead_letter"

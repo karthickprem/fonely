@@ -9,7 +9,10 @@ from fonely.domain.onboarding.errors import (
     UnresolvedBlockersError,
 )
 from fonely.domain.onboarding.limits import SCHEMA_VERSION
-from fonely.domain.onboarding.models import BusinessOnboardingDraft, validate_reviewer_ref
+from fonely.domain.onboarding.models import (
+    BusinessOnboardingDraft,
+    validate_reviewer_ref,
+)
 from fonely.domain.onboarding.results import (
     ActivationReadinessResult,
     ApprovalResult,
@@ -18,7 +21,9 @@ from fonely.domain.onboarding.results import (
 from fonely.domain.onboarding.validation import validate_draft
 
 
-def create_review_proposal(draft: BusinessOnboardingDraft) -> ReviewProposal:
+def create_review_proposal(
+    draft: BusinessOnboardingDraft,
+) -> ReviewProposal:
     result = validate_draft(draft)
     return ReviewProposal(
         draft_digest=result.draft_digest,
@@ -63,26 +68,21 @@ def check_activation_readiness(
     reviewer_ref: str | None,
 ) -> ActivationReadinessResult:
     current_digest = draft.canonical_digest()
-
-    if draft.schema_version != SCHEMA_VERSION:
-        return ActivationReadinessResult(
-            decision=ActivationDecision.BLOCKED_UNSUPPORTED,
-            draft_digest=current_digest,
-            approved_digest=approved_digest,
-            blocker_count=1,
-            reasons=("Unsupported schema version",),
-        )
-
     result = validate_draft(draft)
     actual_blockers = result.blocker_count
+
+    reasons: list[str] = []
+
+    if draft.schema_version != SCHEMA_VERSION:
+        pass
 
     if reviewer_ref is not None:
         try:
             validate_reviewer_ref(reviewer_ref)
         except ValueError:
             actual_blockers += 1
+            reasons.append("Invalid reviewer reference")
 
-    reasons: list[str] = []
     if approved_digest is None or reviewer_ref is None:
         actual_blockers += 1
         reasons.append("Draft has not been approved by an owner")

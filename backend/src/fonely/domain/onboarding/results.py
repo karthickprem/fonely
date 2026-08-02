@@ -28,6 +28,7 @@ class ValidationResult(BaseModel):
     warnings: tuple[ValidationIssue, ...]
     blocker_count: int
     warning_count: int
+    omitted_issue_count: int = 0
     draft_digest: str
 
 

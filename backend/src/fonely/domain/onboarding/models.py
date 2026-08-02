@@ -8,7 +8,7 @@ from datetime import date, time, timedelta
 from decimal import Decimal
 from typing import Annotated, Any
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 from fonely.domain.onboarding.enums import (
     BusinessCategory,
@@ -21,6 +21,7 @@ from fonely.domain.onboarding.enums import (
 )
 from fonely.domain.onboarding.errors import DraftLimitExceededError
 from fonely.domain.onboarding.limits import (
+    MAX_KEY_LENGTH,
     MAX_LANGUAGES,
     MAX_LOCATION_KEYS_PER_ENTITY,
     MAX_LOCATIONS,
@@ -38,13 +39,28 @@ from fonely.domain.onboarding.limits import (
     MAX_SHORT_TEXT,
     MAX_SOURCE_BATCHES,
     SCHEMA_VERSION,
-    SUPPORTED_CURRENCIES,
+    normalize_currency,
+    validate_key_element,
 )
 
 ShortText = Annotated[str, Field(min_length=1, max_length=MAX_SHORT_TEXT)]
-OptionalText = Annotated[str, Field(max_length=MAX_LONG_TEXT)]
+
+
+def _validate_entity_key(v: str) -> str:
+    return validate_key_element(v, "key")
+
+
+BoundedKey = Annotated[
+    str, Field(min_length=1, max_length=MAX_KEY_LENGTH), AfterValidator(_validate_entity_key)
+]
 
 _DIGEST_EXCLUDES = frozenset({"created_at", "updated_at", "source_batches", "status"})
+
+
+def _validate_key_tuple(values: tuple[str, ...], field: str, limit: int) -> tuple[str, ...]:
+    if len(values) > limit:
+        raise DraftLimitExceededError(field, limit, len(values))
+    return tuple(validate_key_element(v, field) for v in values)
 
 
 class SourceReference(BaseModel):
@@ -58,6 +74,12 @@ class SourceReference(BaseModel):
     adapter_version: str | None = Field(default=None, max_length=MAX_SHORT_TEXT)
     owner_provided: bool = False
 
+    @model_validator(mode="after")
+    def _validate_source_id(self) -> SourceReference:
+        if not self.source_id.strip():
+            raise ValueError("source_id must not be whitespace-only")
+        return self
+
 
 class ProvenanceField(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -70,7 +92,9 @@ class ProvenanceField(BaseModel):
     def _check_sources_limit(self) -> ProvenanceField:
         if len(self.sources) > MAX_PROVENANCE_ENTRIES:
             raise DraftLimitExceededError(
-                "provenance_sources", MAX_PROVENANCE_ENTRIES, len(self.sources)
+                "provenance_sources",
+                MAX_PROVENANCE_ENTRIES,
+                len(self.sources),
             )
         return self
 
@@ -88,8 +112,8 @@ class ProvenanceField(BaseModel):
             resolved_value=self.resolved_value,
         )
 
-    def has_evidence(self) -> bool:
-        return len(self.sources) > 0
+    def has_valid_evidence(self) -> bool:
+        return len(self.sources) > 0 and all(s.source_id.strip() for s in self.sources)
 
 
 class FieldProvenance(BaseModel):
@@ -101,13 +125,18 @@ class FieldProvenance(BaseModel):
     def _check_limits(self) -> FieldProvenance:
         if len(self.fields) > MAX_PROVENANCE_PATHS:
             raise DraftLimitExceededError(
-                "field_provenance_paths", MAX_PROVENANCE_PATHS, len(self.fields)
+                "field_provenance_paths",
+                MAX_PROVENANCE_PATHS,
+                len(self.fields),
             )
         seen: set[str] = set()
         for path, _ in self.fields:
-            if path in seen:
-                raise ValueError(f"Duplicate provenance path: {path}")
-            seen.add(path)
+            stripped = path.strip()
+            if not stripped or len(stripped) > MAX_SHORT_TEXT:
+                raise ValueError(f"Invalid provenance path: {path!r}")
+            if stripped in seen:
+                raise ValueError(f"Duplicate provenance path: {stripped}")
+            seen.add(stripped)
         return self
 
     def get(self, path: str) -> ProvenanceField | None:
@@ -160,14 +189,16 @@ class PricePolicy(BaseModel):
                 raise ValueError("range minimum must not exceed maximum")
             if self.amount is not None:
                 raise ValueError("range price must not specify amount")
-        elif kind in {PriceKind.VARIABLE, PriceKind.CONSULTATION_REQUIRED}:
+        elif kind in {
+            PriceKind.VARIABLE,
+            PriceKind.CONSULTATION_REQUIRED,
+        }:
             if self.amount is not None or self.minimum is not None or self.maximum is not None:
                 raise ValueError(f"{kind.value} price must not specify amounts")
         elif kind is PriceKind.NOT_PROVIDED:
             if self.amount is not None or self.minimum is not None or self.maximum is not None:
                 raise ValueError("not_provided price must not specify amounts")
-        if self.currency.upper() not in SUPPORTED_CURRENCIES:
-            raise ValueError(f"Unsupported currency: {self.currency}")
+        normalize_currency(self.currency)
         return self
 
 
@@ -181,7 +212,10 @@ class SchedulePeriod(BaseModel):
 
     @model_validator(mode="after")
     def _validate_period(self) -> SchedulePeriod:
-        if not self.is_closed and self.start >= self.end:
+        if self.is_closed:
+            if self.start != time(0, 0) or self.end != time(0, 0):
+                raise ValueError("closed period must use start=00:00 end=00:00")
+        elif self.start >= self.end:
             raise ValueError("schedule start must be before end")
         return self
 
@@ -197,7 +231,10 @@ class ScheduleException(BaseModel):
 
     @model_validator(mode="after")
     def _validate_exception(self) -> ScheduleException:
-        if not self.is_closed:
+        if self.is_closed:
+            if self.start is not None or self.end is not None:
+                raise ValueError("closed exception must not specify start or end")
+        else:
             if self.start is None or self.end is None:
                 raise ValueError("open exception requires start and end")
             if self.start >= self.end:
@@ -215,12 +252,22 @@ class WeeklySchedule(BaseModel):
     def _check_limits(self) -> WeeklySchedule:
         if len(self.periods) > MAX_SCHEDULE_PERIODS:
             raise DraftLimitExceededError(
-                "schedule_periods", MAX_SCHEDULE_PERIODS, len(self.periods)
+                "schedule_periods",
+                MAX_SCHEDULE_PERIODS,
+                len(self.periods),
             )
         if len(self.exceptions) > MAX_SCHEDULE_EXCEPTIONS:
             raise DraftLimitExceededError(
-                "schedule_exceptions", MAX_SCHEDULE_EXCEPTIONS, len(self.exceptions)
+                "schedule_exceptions",
+                MAX_SCHEDULE_EXCEPTIONS,
+                len(self.exceptions),
             )
+        exc_dates: dict[date, int] = {}
+        for exc in self.exceptions:
+            exc_dates[exc.date] = exc_dates.get(exc.date, 0) + 1
+        for d, count in exc_dates.items():
+            if count > 1:
+                raise ValueError(f"Duplicate exception date: {d}")
         return self
 
 
@@ -246,7 +293,7 @@ class AddressComponents(BaseModel):
 class LocationDraft(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    key: ShortText
+    key: BoundedKey
     display_name: ShortText
     address: AddressComponents = Field(default_factory=AddressComponents)
     timezone_override: str | None = Field(default=None, max_length=MAX_SHORT_TEXT)
@@ -255,11 +302,19 @@ class LocationDraft(BaseModel):
     schedule: WeeklySchedule = Field(default_factory=WeeklySchedule)
     provenance: FieldProvenance = Field(default_factory=FieldProvenance)
 
+    @model_validator(mode="after")
+    def _validate_tz(self) -> LocationDraft:
+        if self.timezone_override is not None:
+            stripped = self.timezone_override.strip()
+            if not stripped:
+                raise ValueError("explicit timezone_override must not be empty")
+        return self
+
 
 class ServiceDraft(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    key: ShortText
+    key: BoundedKey
     name: ShortText
     description: str | None = Field(default=None, max_length=MAX_LONG_TEXT)
     location_keys: tuple[str, ...] = ()
@@ -275,23 +330,23 @@ class ServiceDraft(BaseModel):
 
     @model_validator(mode="after")
     def _check_limits(self) -> ServiceDraft:
-        if len(self.location_keys) > MAX_LOCATION_KEYS_PER_ENTITY:
-            raise DraftLimitExceededError(
-                "service_location_keys", MAX_LOCATION_KEYS_PER_ENTITY, len(self.location_keys)
-            )
-        if len(self.eligible_resource_keys) > MAX_RESOURCE_KEYS_PER_SERVICE:
-            raise DraftLimitExceededError(
-                "service_resource_keys",
-                MAX_RESOURCE_KEYS_PER_SERVICE,
-                len(self.eligible_resource_keys),
-            )
+        _validate_key_tuple(
+            self.location_keys,
+            "service_location_keys",
+            MAX_LOCATION_KEYS_PER_ENTITY,
+        )
+        _validate_key_tuple(
+            self.eligible_resource_keys,
+            "service_resource_keys",
+            MAX_RESOURCE_KEYS_PER_SERVICE,
+        )
         return self
 
 
 class ResourceDraft(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    key: ShortText
+    key: BoundedKey
     display_name: ShortText
     resource_type: ResourceType = ResourceType.STAFF
     location_keys: tuple[str, ...] = ()
@@ -302,25 +357,23 @@ class ResourceDraft(BaseModel):
 
     @model_validator(mode="after")
     def _check_limits(self) -> ResourceDraft:
-        if len(self.service_keys) > MAX_SERVICE_KEYS_PER_RESOURCE:
-            raise DraftLimitExceededError(
-                "resource_service_keys",
-                MAX_SERVICE_KEYS_PER_RESOURCE,
-                len(self.service_keys),
-            )
-        if len(self.location_keys) > MAX_LOCATION_KEYS_PER_ENTITY:
-            raise DraftLimitExceededError(
-                "resource_location_keys",
-                MAX_LOCATION_KEYS_PER_ENTITY,
-                len(self.location_keys),
-            )
+        _validate_key_tuple(
+            self.service_keys,
+            "resource_service_keys",
+            MAX_SERVICE_KEYS_PER_RESOURCE,
+        )
+        _validate_key_tuple(
+            self.location_keys,
+            "resource_location_keys",
+            MAX_LOCATION_KEYS_PER_ENTITY,
+        )
         return self
 
 
 class ProductDraft(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    key: ShortText
+    key: BoundedKey
     name: ShortText
     unit: str | None = Field(default=None, max_length=MAX_SHORT_TEXT)
     category: str | None = Field(default=None, max_length=MAX_SHORT_TEXT)
@@ -331,12 +384,11 @@ class ProductDraft(BaseModel):
 
     @model_validator(mode="after")
     def _check_limits(self) -> ProductDraft:
-        if len(self.location_keys) > MAX_LOCATION_KEYS_PER_ENTITY:
-            raise DraftLimitExceededError(
-                "product_location_keys",
-                MAX_LOCATION_KEYS_PER_ENTITY,
-                len(self.location_keys),
-            )
+        _validate_key_tuple(
+            self.location_keys,
+            "product_location_keys",
+            MAX_LOCATION_KEYS_PER_ENTITY,
+        )
         return self
 
 
@@ -358,7 +410,7 @@ class BusinessOnboardingDraft(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: int = SCHEMA_VERSION
-    draft_id: ShortText
+    draft_id: BoundedKey
     status: DraftStatus = DraftStatus.INTAKE
     business_name: ShortText | None = None
     business_category: BusinessCategory | None = None
@@ -382,8 +434,22 @@ class BusinessOnboardingDraft(BaseModel):
         _assert_limit("services", self.services, MAX_SERVICES)
         _assert_limit("resources", self.resources, MAX_RESOURCES)
         _assert_limit("products", self.products, MAX_PRODUCTS)
-        _assert_limit("preferred_languages", self.preferred_languages, MAX_LANGUAGES)
-        _assert_limit("source_batches", self.source_batches, MAX_SOURCE_BATCHES)
+        _assert_limit(
+            "preferred_languages",
+            self.preferred_languages,
+            MAX_LANGUAGES,
+        )
+        _assert_limit(
+            "source_batches",
+            self.source_batches,
+            MAX_SOURCE_BATCHES,
+        )
+        for lang in self.preferred_languages:
+            if not lang.strip() or len(lang) > MAX_SHORT_TEXT:
+                raise ValueError(f"Invalid language identifier: {lang!r}")
+        for sb in self.source_batches:
+            if not sb.strip() or len(sb) > MAX_SHORT_TEXT:
+                raise ValueError(f"Invalid source batch identifier: {sb!r}")
         return self
 
     def canonical_digest(self) -> str:
@@ -398,22 +464,29 @@ def _assert_limit(name: str, collection: tuple[Any, ...], limit: int) -> None:
         raise DraftLimitExceededError(name, limit, len(collection))
 
 
-def _normalize_for_digest(obj: Any) -> Any:
+def _canonicalize_obj(obj: Any) -> Any:
     if isinstance(obj, dict):
-        return {k: _normalize_for_digest(v) for k, v in sorted(obj.items())}
+        return {k: _canonicalize_obj(v) for k, v in sorted(obj.items())}
     if isinstance(obj, (list, tuple)):
-        items = [_normalize_for_digest(i) for i in obj]
-        if items and isinstance(items[0], (str, int, float)):
+        items = [_canonicalize_obj(i) for i in obj]
+        if items and all(isinstance(i, dict) for i in items):
+            return sorted(
+                items,
+                key=lambda d: json.dumps(d, sort_keys=True, default=str),
+            )
+        if items and all(isinstance(i, (str, int, float)) for i in items):
             return sorted(items, key=str)
         return items
     return obj
 
 
-def compute_canonical_digest(draft: BusinessOnboardingDraft) -> str:
+def compute_canonical_digest(
+    draft: BusinessOnboardingDraft,
+) -> str:
     data = draft.model_dump(mode="json")
     for key in _DIGEST_EXCLUDES:
         data.pop(key, None)
-    normalized = _normalize_for_digest(data)
+    normalized = _canonicalize_obj(data)
     canonical = json.dumps(normalized, sort_keys=True, default=str, ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
 

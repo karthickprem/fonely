@@ -47,16 +47,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     finally:
         logger.info("shutdown_signal_received")
         try:
-            pool = engine.pool
-            logger.info(
-                "pool_stats",
-                extra={
-                    "pool_size": pool.size(),
-                    "checked_in": pool.checkedin(),
-                    "checked_out": pool.checkedout(),
-                    "overflow": pool.overflow(),
-                },
-            )
             await engine.dispose()
             logger.info("shutdown_complete")
         except Exception:

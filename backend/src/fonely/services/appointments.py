@@ -1,5 +1,6 @@
 """D3 appointment create, cancel, and reschedule application transactions."""
 
+import logging
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -64,6 +65,8 @@ from fonely.models.enums import (
 from fonely.repositories.appointments import AppointmentRepository
 from fonely.services.authorization import require_existing_action_permission
 from fonely.services.pending_actions import PendingActionService
+
+logger = logging.getLogger("fonely.services.appointments")
 
 _OVERLAP_CONSTRAINT = "ex_resource_allocations_active_overlap"
 _OVERLAP_SQLSTATE = "23P01"
@@ -248,6 +251,23 @@ class AppointmentService:
                 await self._repo.force_constraints(
                     _restore_deferred_sql(APPOINTMENT_CREATE_POST_COMPLETION_CONSTRAINTS)
                 )
+
+                try:
+                    from fonely.services.notifications import NotificationService
+
+                    await NotificationService(self._session).create_appointment_notifications(
+                        business_id=command.actor.business_id,
+                        appointment_id=appointment.id,
+                        customer_phone=data.customer_phone,
+                        customer_name=data.customer_name,
+                        service_name=facts.service_name,
+                        resource_name=facts.resource_name,
+                        start_at=facts.start_at,
+                        price=facts.price,
+                        business_timezone=facts.business_timezone,
+                    )
+                except Exception:
+                    logger.warning("notification_outbox_insert_failed", exc_info=True)
         except IntegrityError as exc:
             if (
                 getattr(exc.orig, "sqlstate", None) == _OVERLAP_SQLSTATE

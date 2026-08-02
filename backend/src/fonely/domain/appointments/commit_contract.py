@@ -11,8 +11,35 @@ APPOINTMENT_CREATE_POST_COMPLETION_CONSTRAINTS = (
     "ck_customer_conversation_appointment_provenance",
 )
 
+APPOINTMENT_CANCEL_PRE_COMPLETION_CONSTRAINTS = (
+    "ck_confirmed_appointment_active_allocation_from_appointment",
+    "ck_confirmed_appointment_active_allocation_from_allocation",
+)
+
+APPOINTMENT_CANCEL_POST_COMPLETION_CONSTRAINTS = (
+    "ck_appointment_mutation_commit",
+    "ck_appointment_commit_provenance",
+    "ck_confirmed_appointment_action_commit",
+)
+
+APPOINTMENT_RESCHEDULE_PRE_COMPLETION_CONSTRAINTS = (
+    "ck_confirmed_appointment_active_allocation_from_appointment",
+    "ck_confirmed_appointment_active_allocation_from_allocation",
+)
+
+APPOINTMENT_RESCHEDULE_POST_COMPLETION_CONSTRAINTS = (
+    "ck_appointment_mutation_commit",
+    "ck_appointment_commit_provenance",
+    "ck_confirmed_appointment_action_commit",
+)
+
 _APPROVED_CONSTRAINTS = frozenset(
-    APPOINTMENT_CREATE_PRE_COMPLETION_CONSTRAINTS + APPOINTMENT_CREATE_POST_COMPLETION_CONSTRAINTS
+    APPOINTMENT_CREATE_PRE_COMPLETION_CONSTRAINTS
+    + APPOINTMENT_CREATE_POST_COMPLETION_CONSTRAINTS
+    + APPOINTMENT_CANCEL_PRE_COMPLETION_CONSTRAINTS
+    + APPOINTMENT_CANCEL_POST_COMPLETION_CONSTRAINTS
+    + APPOINTMENT_RESCHEDULE_PRE_COMPLETION_CONSTRAINTS
+    + APPOINTMENT_RESCHEDULE_POST_COMPLETION_CONSTRAINTS
 )
 _CONSTRAINT_IDENTIFIER = re.compile(r"^ck_[a-z][a-z0-9_]{1,62}$")
 

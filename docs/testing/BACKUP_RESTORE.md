@@ -7,10 +7,12 @@ Provider-neutral logical backup-and-restore contract for disposable test databas
 - pg_dump custom-format backup completes from a migrated disposable database.
 - pg_restore restores schema, data, constraints, functions, and triggers into a separate disposable database.
 - Alembic revision in the restored database exactly matches the source.
-- Representative tenant-owned rows survive with intact relationships.
-- No cross-tenant orphans exist after restore.
-- Source database is unchanged.
+- Content-sensitive evidence digest proves exact synthetic row values, tenant relationships, and schema definitions survive — not merely aggregate counts.
+- A same-count content mutation or tenant relationship swap would change the digest and fail verification.
+- Source evidence digest is unchanged after backup/restore.
 - Temporary backup files are cleaned up.
+
+The evidence digest covers the bounded synthetic verification dataset (businesses, users, services, resources, and schema objects). It does not prove unchanged state for arbitrary database contents outside that contract.
 
 ## What a pass does not prove
 

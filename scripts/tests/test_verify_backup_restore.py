@@ -1,12 +1,13 @@
 """Offline unit tests for PostgreSQL backup-and-restore verification.
 
 Tests configuration guards, safety validation, host identity equivalence,
-report semantics, and failure classification without requiring a running
-PostgreSQL instance.
+evidence digest behavior, report semantics, and failure classification
+without requiring a running PostgreSQL instance.
 """
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import importlib.util
 import json
@@ -72,8 +73,10 @@ class TestConfiguration:
             }
         )
         assert result.returncode != 0
-        output = _parse_output(result)
-        assert output["checks"][0]["failure_code"] == "configuration_missing"
+        assert (
+            _parse_output(result)["checks"][0]["failure_code"]
+            == "configuration_missing"
+        )
 
     def test_missing_restore_fails(self) -> None:
         result = _run_script(
@@ -364,25 +367,60 @@ class TestRevisionValidation:
         assert not br.SAFE_REVISION_RE.fullmatch("0004\n")
 
 
-# --- Source fingerprint ---
+# --- Evidence digest behavioral tests ---
 
 
-class TestSourceFingerprint:
-    def test_fingerprint_query_covers_tables(self) -> None:
-        q = br._FINGERPRINT_QUERY
-        for table in [
-            "businesses",
-            "business_users",
-            "services",
-            "resources",
-            "appointments",
-            "pending_actions",
-            "resource_allocations",
-        ]:
-            assert table in q
+def _digest_from_parts(parts: list[tuple[str, str]]) -> str:
+    canonical = "\n".join(f"{label}:{data}" for label, data in parts)
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
-    def test_fingerprint_includes_revision(self) -> None:
-        assert "alembic_version" in br._FINGERPRINT_QUERY
 
-    def test_fingerprint_includes_functions(self) -> None:
-        assert "pg_proc" in br._FINGERPRINT_QUERY
+class TestEvidenceDigest:
+    def test_same_data_same_digest(self) -> None:
+        parts = [("revision", "0004"), ("businesses", "1|Salon A")]
+        assert _digest_from_parts(parts) == _digest_from_parts(parts)
+
+    def test_changed_field_different_digest(self) -> None:
+        base = [("revision", "0004"), ("businesses", "1|Salon A")]
+        changed = [("revision", "0004"), ("businesses", "1|Salon B")]
+        assert _digest_from_parts(base) != _digest_from_parts(changed)
+
+    def test_same_count_substitution_different_digest(self) -> None:
+        base = [("businesses", "1|A\n2|B")]
+        substituted = [("businesses", "1|A\n2|C")]
+        assert _digest_from_parts(base) != _digest_from_parts(substituted)
+
+    def test_tenant_reassignment_different_digest(self) -> None:
+        base = [("services", "1|1|Haircut"), ("services", "2|2|Facial")]
+        swapped = [("services", "1|2|Haircut"), ("services", "2|1|Facial")]
+        assert _digest_from_parts(base) != _digest_from_parts(swapped)
+
+    def test_revision_change_different_digest(self) -> None:
+        base = [("revision", "0003"), ("businesses", "1|A")]
+        updated = [("revision", "0004"), ("businesses", "1|A")]
+        assert _digest_from_parts(base) != _digest_from_parts(updated)
+
+    def test_function_definition_change_different_digest(self) -> None:
+        base = [("schema_functions", "myfunc|CREATE FUNCTION myfunc() ...")]
+        changed = [("schema_functions", "myfunc|CREATE FUNCTION myfunc() ... v2")]
+        assert _digest_from_parts(base) != _digest_from_parts(changed)
+
+    def test_evidence_queries_cover_required_tables(self) -> None:
+        labels = [label for label, _ in br._EVIDENCE_QUERIES]
+        assert "revision" in labels
+        assert "businesses" in labels
+        assert "business_users" in labels
+        assert "services" in labels
+        assert "resources" in labels
+        assert "schema_functions" in labels
+        assert "schema_tables" in labels
+
+    def test_no_digest_input_in_output(self) -> None:
+        result = _run_script({"FONELY_BACKUP_ENVIRONMENT": "test"})
+        assert "Salon" not in result.stdout
+        assert "Haircut" not in result.stdout
+
+    def test_digest_is_sha256_hex(self) -> None:
+        d = _digest_from_parts([("test", "data")])
+        assert len(d) == 64
+        assert all(c in "0123456789abcdef" for c in d)

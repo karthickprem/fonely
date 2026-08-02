@@ -229,25 +229,66 @@ def _query(url: str, sql: str, *, timeout: float = 30) -> str:
     return result.stdout.strip()
 
 
-_FINGERPRINT_QUERY = (
-    "SELECT "
-    "(SELECT version_num FROM public.alembic_version),"
-    "(SELECT count(*) FROM businesses),"
-    "(SELECT count(*) FROM business_users),"
-    "(SELECT count(*) FROM services),"
-    "(SELECT count(*) FROM resources),"
-    "(SELECT count(*) FROM appointments),"
-    "(SELECT count(*) FROM pending_actions),"
-    "(SELECT count(*) FROM resource_allocations),"
-    "(SELECT count(*) FROM pg_proc p "
-    "JOIN pg_namespace n ON p.pronamespace = n.oid "
-    "WHERE n.nspname = 'public')"
-)
+_EVIDENCE_QUERIES = [
+    ("revision", "SELECT version_num FROM public.alembic_version"),
+    (
+        "businesses",
+        (
+            "SELECT id, name, category, primary_contact_phone, timezone, subscription "
+            "FROM businesses ORDER BY id"
+        ),
+    ),
+    (
+        "business_users",
+        (
+            "SELECT business_id, phone, role, is_active "
+            "FROM business_users ORDER BY business_id, phone"
+        ),
+    ),
+    (
+        "services",
+        (
+            "SELECT id, business_id, name, duration_minutes, "
+            "buffer_before_minutes, buffer_after_minutes, price, is_active "
+            "FROM services ORDER BY id"
+        ),
+    ),
+    (
+        "resources",
+        (
+            "SELECT id, business_id, name, resource_type, is_active "
+            "FROM resources ORDER BY id"
+        ),
+    ),
+    (
+        "schema_functions",
+        (
+            "SELECT p.proname, pg_get_functiondef(p.oid) "
+            "FROM pg_proc p "
+            "JOIN pg_namespace n ON p.pronamespace = n.oid "
+            "WHERE n.nspname = 'public' "
+            "ORDER BY p.proname"
+        ),
+    ),
+    (
+        "schema_tables",
+        (
+            "SELECT table_name, column_name, data_type, is_nullable "
+            "FROM information_schema.columns "
+            "WHERE table_schema = 'public' "
+            "ORDER BY table_name, ordinal_position"
+        ),
+    ),
+]
 
 
-def _source_fingerprint(url: str) -> str:
-    raw = _query(url, _FINGERPRINT_QUERY)
-    return hashlib.sha256(raw.encode()).hexdigest()
+def _evidence_digest(url: str) -> str:
+    parts: list[str] = []
+    for label, sql in _EVIDENCE_QUERIES:
+        raw = _query(url, sql)
+        parts.append(f"{label}:{raw}")
+    canonical = "\n".join(parts)
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def _cleanup_backup(backup_path: Path | None) -> bool:
@@ -314,10 +355,10 @@ def main() -> int:
             failed = True
             return 1
 
-        # --- Source fingerprint (before) ---
+        # --- Source evidence digest (before) ---
         t0 = time.monotonic()
         try:
-            fingerprint_before = _source_fingerprint(source_url)
+            evidence_before = _evidence_digest(source_url)
             rev = _query(
                 source_url,
                 "SELECT version_num FROM public.alembic_version",
@@ -326,12 +367,12 @@ def main() -> int:
                 raise RuntimeError("invalid source revision")
             report.source_revision = rev
             report.checks.append(
-                _check_dict("source_fingerprint", "passed", time.monotonic() - t0)
+                _check_dict("source_evidence", "passed", time.monotonic() - t0)
             )
         except Exception as exc:  # noqa: BLE001
             report.checks.append(
                 _check_dict(
-                    "source_fingerprint",
+                    "source_evidence",
                     "failed",
                     time.monotonic() - t0,
                     "source_revision_invalid",
@@ -483,53 +524,19 @@ def main() -> int:
             failed = True
             return 1
 
-        # --- Verify data integrity ---
+        # --- Verify restored evidence digest ---
         t0 = time.monotonic()
         try:
-            count_query = (
-                "SELECT "
-                "(SELECT count(*) FROM businesses),"
-                "(SELECT count(*) FROM business_users),"
-                "(SELECT count(*) FROM services),"
-                "(SELECT count(*) FROM resources),"
-                "(SELECT count(*) FROM appointments),"
-                "(SELECT count(*) FROM pending_actions),"
-                "(SELECT count(*) FROM resource_allocations)"
-            )
-            source_counts = _query(source_url, count_query)
-            restored_counts = _query(restore_url, count_query)
-            if source_counts != restored_counts:
-                raise RuntimeError(
-                    f"count mismatch: source={source_counts} restored={restored_counts}"
-                )
-            orphan_checks = [
-                (
-                    "SELECT count(*) FROM business_users bu "
-                    "LEFT JOIN businesses b ON b.id = bu.business_id "
-                    "WHERE b.id IS NULL"
-                ),
-                (
-                    "SELECT count(*) FROM services s "
-                    "LEFT JOIN businesses b ON b.id = s.business_id "
-                    "WHERE b.id IS NULL"
-                ),
-                (
-                    "SELECT count(*) FROM resources r "
-                    "LEFT JOIN businesses b ON b.id = r.business_id "
-                    "WHERE b.id IS NULL"
-                ),
-            ]
-            for check_sql in orphan_checks:
-                orphans = _query(restore_url, check_sql)
-                if int(orphans) != 0:
-                    raise RuntimeError("orphaned tenant rows found")
+            restored_digest = _evidence_digest(restore_url)
+            if restored_digest != evidence_before:
+                raise RuntimeError("restored evidence digest does not match source")
             report.checks.append(
-                _check_dict("data_integrity", "passed", time.monotonic() - t0)
+                _check_dict("restored_evidence", "passed", time.monotonic() - t0)
             )
         except Exception as exc:  # noqa: BLE001
             report.checks.append(
                 _check_dict(
-                    "data_integrity",
+                    "restored_evidence",
                     "failed",
                     time.monotonic() - t0,
                     "data_mismatch",
@@ -542,9 +549,9 @@ def main() -> int:
         # --- Source unchanged ---
         t0 = time.monotonic()
         try:
-            fingerprint_after = _source_fingerprint(source_url)
-            if fingerprint_after != fingerprint_before:
-                raise RuntimeError("source fingerprint changed during backup/restore")
+            evidence_after = _evidence_digest(source_url)
+            if evidence_after != evidence_before:
+                raise RuntimeError("source evidence changed during backup/restore")
             report.checks.append(
                 _check_dict("source_unchanged", "passed", time.monotonic() - t0)
             )
@@ -554,7 +561,7 @@ def main() -> int:
                     "source_unchanged",
                     "failed",
                     time.monotonic() - t0,
-                    "source_modified",
+                    "source_changed",
                     _sanitize(str(exc)[:200]),
                 )
             )

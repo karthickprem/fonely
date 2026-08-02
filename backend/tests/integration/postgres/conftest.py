@@ -123,7 +123,8 @@ async def clean_database(
         async with pg_engine.begin() as connection:
             await connection.execute(
                 text(
-                    "TRUNCATE TABLE owner_audit_log, appointment_commits, resource_allocations, "
+                    "TRUNCATE TABLE business_configuration_commits, business_onboarding_drafts, "
+                    "owner_audit_log, appointment_commits, resource_allocations, "
                     "appointments, service_resource_eligibility, inventory_operations, "
                     "inventory_movements, inventory_reservations, order_line_items, orders, "
                     "inventory_balances, calls, pending_actions, resources, services, products, "

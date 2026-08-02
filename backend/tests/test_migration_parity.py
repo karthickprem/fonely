@@ -29,6 +29,7 @@ MIGRATION_0002 = MIGRATIONS_DIR / "0002_pending_action_state_machine.py"
 MIGRATION_0003 = MIGRATIONS_DIR / "0003_committed_entity_linkage.py"
 MIGRATION_0004 = MIGRATIONS_DIR / "0004_appointment_engine.py"
 MIGRATION_0005 = MIGRATIONS_DIR / "0005_inventory_order_engine.py"
+MIGRATION_0006 = MIGRATIONS_DIR / "0006_business_onboarding.py"
 
 
 class OperationRecorder:
@@ -222,6 +223,7 @@ def _capture_upgrade() -> OperationRecorder:
         (MIGRATION_0003, "fonely_migration_0003"),
         (MIGRATION_0004, "fonely_migration_0004"),
         (MIGRATION_0005, "fonely_migration_0005"),
+        (MIGRATION_0006, "fonely_migration_0006"),
     ):
         module = _load_migration(path, name)
         module.op = recorder
@@ -246,6 +248,9 @@ def _capture_downgrade() -> OperationRecorder:
     recorder = _capture_upgrade()
     recorder.dropped_tables.clear()
     recorder.operations.clear()
+    module_0006 = _load_migration(MIGRATION_0006, "fonely_migration_0006_down")
+    module_0006.op = recorder
+    module_0006.downgrade()
     module_0005 = _load_migration(MIGRATION_0005, "fonely_migration_0005_down")
     module_0005.op = recorder
     module_0005.context = SimpleNamespace(is_offline_mode=lambda: True)
@@ -356,7 +361,7 @@ def _exclude_signatures(table: sa.Table) -> set[tuple[str, str, str, tuple[tuple
 def test_migration_and_orm_have_identical_application_tables() -> None:
     captured = _capture_upgrade()
     assert set(captured.metadata.tables) == set(Base.metadata.tables)
-    assert len(captured.metadata.tables) == 22
+    assert len(captured.metadata.tables) == 24
 
 
 def test_migration_and_orm_column_parity() -> None:
@@ -421,7 +426,8 @@ def test_migration_and_orm_exclusion_constraint_parity() -> None:
 def test_migration_downgrade_drops_all_application_tables() -> None:
     recorder = _capture_downgrade()
     assert set(recorder.dropped_tables) == set(Base.metadata.tables)
-    assert recorder.dropped_tables[0] == "inventory_operations"
+    assert recorder.dropped_tables[0] == "business_configuration_commits"
+    assert recorder.dropped_tables[1] == "business_onboarding_drafts"
 
 
 def test_appointment_migration_installs_btree_gist_without_dropping_it() -> None:
@@ -685,13 +691,14 @@ def test_revision_chain_has_single_head() -> None:
     }
     heads = revisions - parent_revisions
 
-    assert heads == {"0005"}
+    assert heads == {"0006"}
     assert {migration.revision: migration.down_revision for migration in migrations} == {
         "0001": None,
         "0002": "0001",
         "0003": "0002",
         "0004": "0003",
         "0005": "0004",
+        "0006": "0005",
     }
 
 

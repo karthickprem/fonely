@@ -50,6 +50,7 @@ from fonely.models.enums import (
     InventoryReservationStatus,
     LanguageStatus,
     LocaleRole,
+    OnboardingDraftStatus,
     OrderStatus,
     PendingActionStatus,
     PendingActionType,
@@ -1064,3 +1065,54 @@ class OwnerAuditLog(Base):
     details: Mapped[Any | None] = mapped_column(JSONB, nullable=True)
     pending_action_id: Mapped[int | None] = mapped_column(ForeignKey("pending_actions.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# =============================================================================
+# Onboarding
+# =============================================================================
+
+
+class BusinessOnboardingDraft(Base):
+    __tablename__ = "business_onboarding_drafts"
+    __table_args__ = (
+        UniqueConstraint("business_id", "draft_digest", name="uq_onboarding_draft_digest"),
+        CheckConstraint("version > 0", name="ck_onboarding_draft_version"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
+    status: Mapped[str] = mapped_column(
+        enum_type(OnboardingDraftStatus, "onboarding_draft_status"),
+        nullable=False,
+        default=OnboardingDraftStatus.DRAFT,
+    )
+    draft_data: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    draft_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    submitted_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("business_users.id"))
+    reviewed_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("business_users.id"))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class BusinessConfigurationCommit(Base):
+    __tablename__ = "business_configuration_commits"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    onboarding_draft_id: Mapped[int] = mapped_column(
+        ForeignKey("business_onboarding_drafts.id"), nullable=False
+    )
+    draft_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    committed_by_user_id: Mapped[int] = mapped_column(
+        ForeignKey("business_users.id"), nullable=False
+    )
+    committed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    commit_evidence: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    rollback_evidence: Mapped[Any | None] = mapped_column(JSONB, nullable=True)

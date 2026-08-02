@@ -139,3 +139,11 @@ class BusinessUserRole(enum.StrEnum):
 
     OWNER = "owner"
     MANAGER = "manager"
+
+
+class OnboardingDraftStatus(enum.StrEnum):
+    DRAFT = "draft"
+    PENDING_REVIEW = "pending_review"
+    APPROVED = "approved"
+    ACTIVATED = "activated"
+    REJECTED = "rejected"

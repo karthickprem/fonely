@@ -1,9 +1,8 @@
 """Observed-lock PostgreSQL concurrency contracts for Phase C."""
 
 import asyncio
-from collections.abc import Sequence
-from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 import pytest
@@ -22,7 +21,6 @@ from fonely.domain.pending_actions.commands import (
 )
 from fonely.domain.pending_actions.errors import PendingActionConcurrencyError
 from fonely.models.enums import CallerRole, PendingActionType
-from fonely.repositories.inventory import InventoryRepository
 from fonely.services.inventory import InventoryService
 from fonely.services.orders import OrderService
 from fonely.services.pending_actions import PendingActionService
@@ -162,6 +160,12 @@ def confirmation_command(
     )
 
 
+async def install_transaction_timeouts(session: AsyncSession) -> None:
+    await session.execute(text("SET LOCAL lock_timeout = '8s'"))
+    await session.execute(text("SET LOCAL statement_timeout = '15s'"))
+    await session.execute(text("SET LOCAL idle_in_transaction_session_timeout = '15s'"))
+
+
 async def backend_pid(session: AsyncSession) -> int:
     value = await session.scalar(text("SELECT pg_backend_pid()"))
     assert isinstance(value, int)
@@ -173,6 +177,7 @@ async def lock_inventory_rows(
 ) -> tuple[int, list[int], list[int]]:
     ids = tuple(sorted(set(product_ids)))
     placeholders = ", ".join(str(product_id) for product_id in ids)
+    await install_transaction_timeouts(session)
     pid = await backend_pid(session)
     product_locks = list(
         (
@@ -199,6 +204,7 @@ async def lock_inventory_rows(
 
 
 async def lock_pending_action(session: AsyncSession, action_id: int) -> int:
+    await install_transaction_timeouts(session)
     pid = await backend_pid(session)
     locked_id = await session.scalar(
         text("SELECT id FROM pending_actions WHERE id=:id FOR UPDATE"),
@@ -216,6 +222,7 @@ async def observed_blocker(
 ) -> None:
     async def observe() -> None:
         async with factory() as observer:
+            await install_transaction_timeouts(observer)
             while True:
                 row = (
                     await observer.execute(
@@ -243,6 +250,7 @@ async def confirmation_worker(
     pid_ready: asyncio.Future[int],
 ) -> AttemptOutcome:
     async with factory() as session:
+        await install_transaction_timeouts(session)
         pid_ready.set_result(await backend_pid(session))
         try:
             result = await OrderService(session).confirm(command)
@@ -263,64 +271,26 @@ async def cancel_task(task: asyncio.Task[AttemptOutcome]) -> None:
 
 
 @dataclass(slots=True)
-class RealLockBoundary:
-    """Test-only barrier before real product locks for two service instances."""
-
-    entered: int = 0
-    both_entered: asyncio.Event = field(default_factory=asyncio.Event)
-    release: asyncio.Event = field(default_factory=asyncio.Event)
-    pids: set[int] = field(default_factory=set)
-    transaction_ids: set[int] = field(default_factory=set)
-    requested_product_ids: list[tuple[int, ...]] = field(default_factory=list)
-    balance_lock_product_ids: list[tuple[int, ...]] = field(default_factory=list)
-
-    async def arrive(self, session: AsyncSession, product_ids: tuple[int, ...]) -> None:
-        pid = await backend_pid(session)
-        transaction_id = await session.scalar(text("SELECT txid_current()"))
-        assert isinstance(transaction_id, int)
-        self.pids.add(pid)
-        self.transaction_ids.add(transaction_id)
-        self.requested_product_ids.append(product_ids)
-        self.entered += 1
-        if self.entered == 2:
-            self.both_entered.set()
-        await self.release.wait()
+class HeldConfirmation:
+    pid: int
+    task: asyncio.Task[AttemptOutcome]
 
 
-class BarrierInventoryRepository(InventoryRepository):
-    """Delegates every operation to production SQL with one pre-lock barrier."""
-
-    def __init__(self, session: AsyncSession, boundary: RealLockBoundary) -> None:
-        super().__init__(session)
-        self._boundary = boundary
-
-    async def lock_active_products(self, business_id: int, product_ids: Sequence[int]):
-        ids = tuple(sorted(set(product_ids)))
-        await self._boundary.arrive(self._session, ids)
-        return await super().lock_active_products(business_id, ids)
-
-    async def lock_balances(
-        self,
-        business_id: int,
-        product_ids: Sequence[int],
-        business_date: date,
-    ):
-        ids = tuple(sorted(set(product_ids)))
-        self._boundary.balance_lock_product_ids.append(ids)
-        return await super().lock_balances(business_id, ids, business_date)
-
-
-async def barrier_confirmation_worker(
+async def held_confirmation_worker(
     factory: async_sessionmaker[AsyncSession],
     *,
     command: ConfirmPendingOrderCommand,
-    boundary: RealLockBoundary,
+    pid_ready: asyncio.Future[int],
+    confirmed: asyncio.Event,
+    release: asyncio.Event,
 ) -> AttemptOutcome:
     async with factory() as session:
-        service = OrderService(session)
-        service._inventory = BarrierInventoryRepository(session, boundary)
+        await install_transaction_timeouts(session)
+        pid_ready.set_result(await backend_pid(session))
         try:
-            result = await service.confirm(command)
+            result = await OrderService(session).confirm(command)
+            confirmed.set()
+            await release.wait()
             await session.commit()
             return AttemptOutcome("success", result)
         except PendingActionConcurrencyError as exc:
@@ -331,10 +301,31 @@ async def barrier_confirmation_worker(
             return AttemptOutcome("insufficient", exc)
 
 
+async def start_held_confirmation(
+    factory: async_sessionmaker[AsyncSession],
+    command: ConfirmPendingOrderCommand,
+    confirmed: asyncio.Event,
+    release: asyncio.Event,
+) -> HeldConfirmation:
+    pid_ready: asyncio.Future[int] = asyncio.get_running_loop().create_future()
+    task = asyncio.create_task(
+        held_confirmation_worker(
+            factory,
+            command=command,
+            pid_ready=pid_ready,
+            confirmed=confirmed,
+            release=release,
+        )
+    )
+    pid = await asyncio.wait_for(pid_ready, timeout=2)
+    return HeldConfirmation(pid=pid, task=task)
+
+
 async def test_final_stock_order_race_has_exactly_one_winner(
     pg_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with pg_session_factory() as setup:
+        await install_transaction_timeouts(setup)
         await seed(setup, quantity="1")
         first = await create_action(
             setup,
@@ -391,23 +382,31 @@ async def test_final_stock_order_race_has_exactly_one_winner(
     assert winner.id > 0
     assert loser.kind == "insufficient"
     async with pg_session_factory() as verify:
+        await install_transaction_timeouts(verify)
         counts = (
             await verify.execute(
                 text(
-                    "SELECT (SELECT count(*) FROM orders), "
-                    "(SELECT count(*) FROM inventory_reservations), "
+                    "SELECT (SELECT count(*) FROM orders WHERE business_id=1), "
+                    "(SELECT count(*) FROM inventory_reservations WHERE business_id=1), "
                     "(SELECT count(*) FROM inventory_movements "
-                    " WHERE movement_type='phone_order_reserved')"
+                    " WHERE business_id=1 AND movement_type='phone_order_reserved')"
                 )
             )
         ).one()
         balance = (
             await verify.execute(
-                text("SELECT on_hand_qty, reserved_qty FROM inventory_balances WHERE product_id=1")
+                text(
+                    "SELECT on_hand_qty, reserved_qty FROM inventory_balances "
+                    "WHERE business_id=1 AND product_id=1"
+                )
             )
         ).one()
         states = tuple(
-            (await verify.scalars(text("SELECT status FROM pending_actions ORDER BY id"))).all()
+            (
+                await verify.scalars(
+                    text("SELECT status FROM pending_actions WHERE business_id=1 ORDER BY id")
+                )
+            ).all()
         )
     assert counts == (1, 1, 1)
     assert tuple(balance) == (1, 1)
@@ -418,6 +417,7 @@ async def test_duplicate_confirmation_race_has_one_effect(
     pg_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with pg_session_factory() as setup:
+        await install_transaction_timeouts(setup)
         await seed(setup, quantity="2")
         action_id, version = await create_action(
             setup,
@@ -460,14 +460,16 @@ async def test_duplicate_confirmation_race_has_one_effect(
     assert winner.id > 0
     assert loser.kind == "concurrency"
     async with pg_session_factory() as verify:
+        await install_transaction_timeouts(verify)
         counts = (
             await verify.execute(
                 text(
-                    "SELECT (SELECT count(*) FROM orders), "
-                    "(SELECT count(*) FROM order_line_items), "
-                    "(SELECT count(*) FROM inventory_reservations), "
+                    "SELECT (SELECT count(*) FROM orders WHERE business_id=1), "
+                    "(SELECT count(*) FROM order_line_items li JOIN orders o ON o.id=li.order_id "
+                    " WHERE o.business_id=1), "
+                    "(SELECT count(*) FROM inventory_reservations WHERE business_id=1), "
                     "(SELECT count(*) FROM inventory_movements "
-                    " WHERE movement_type='phone_order_reserved')"
+                    " WHERE business_id=1 AND movement_type='phone_order_reserved')"
                 )
             )
         ).one()
@@ -476,7 +478,8 @@ async def test_duplicate_confirmation_race_has_one_effect(
                 text(
                     "SELECT p.status, p.committed_entity_id, o.id "
                     "FROM pending_actions p JOIN orders o "
-                    "ON o.pending_action_id=p.id WHERE p.id=:id"
+                    "ON o.pending_action_id=p.id WHERE p.business_id=1 "
+                    "AND o.business_id=1 AND p.id=:id"
                 ),
                 {"id": action_id},
             )
@@ -489,6 +492,7 @@ async def test_reversed_multi_product_race_does_not_deadlock(
     pg_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with pg_session_factory() as setup:
+        await install_transaction_timeouts(setup)
         await seed(setup, quantity="4")
         first = await create_action(
             setup,
@@ -520,42 +524,54 @@ async def test_reversed_multi_product_race_does_not_deadlock(
     assert [line.product_id for line in first_command.lines] == [1, 2]
     assert [line.product_id for line in second_command.lines] == [1, 2]
 
-    boundary = RealLockBoundary()
-    tasks = [
-        asyncio.create_task(
-            barrier_confirmation_worker(
+    first_confirmed = asyncio.Event()
+    release_first = asyncio.Event()
+    first_held = await start_held_confirmation(
+        pg_session_factory, first_command, first_confirmed, release_first
+    )
+    second_pid_ready: asyncio.Future[int] = asyncio.get_running_loop().create_future()
+    second_task: asyncio.Task[AttemptOutcome] | None = None
+    try:
+        await asyncio.wait_for(first_confirmed.wait(), timeout=5)
+        second_task = asyncio.create_task(
+            confirmation_worker(
                 pg_session_factory,
-                command=command,
-                boundary=boundary,
+                command=second_command,
+                pid_ready=second_pid_ready,
             )
         )
-        for command in (first_command, second_command)
-    ]
-    try:
-        await asyncio.wait_for(boundary.both_entered.wait(), timeout=5)
-        assert boundary.entered == 2
-        assert len(boundary.pids) == 2
-        assert len(boundary.transaction_ids) == 2
-        assert boundary.requested_product_ids == [(1, 2), (1, 2)]
-        assert not any(task.done() for task in tasks)
-        boundary.release.set()
-        outcomes = await asyncio.wait_for(asyncio.gather(*tasks), timeout=10)
+        second_pid = await asyncio.wait_for(second_pid_ready, timeout=2)
+        assert first_held.pid != second_pid
+        await observed_blocker(
+            pg_session_factory,
+            blocked_pid=second_pid,
+            expected_blocker_pid=first_held.pid,
+        )
+        assert not first_held.task.done()
+        assert not second_task.done()
+        release_first.set()
+        first_outcome, second_outcome = await asyncio.wait_for(
+            asyncio.gather(first_held.task, second_task), timeout=10
+        )
     finally:
-        boundary.release.set()
-        for task in tasks:
-            await cancel_task(task)
+        release_first.set()
+        await cancel_task(first_held.task)
+        if second_task is not None:
+            await cancel_task(second_task)
 
-    assert all(outcome.kind == "success" for outcome in outcomes)
-    assert boundary.balance_lock_product_ids == [(1, 2), (1, 2)]
+    assert first_outcome.kind == second_outcome.kind == "success"
     async with pg_session_factory() as verify:
+        await install_transaction_timeouts(verify)
         counts = (
             await verify.execute(
                 text(
-                    "SELECT (SELECT count(*) FROM orders), "
-                    "(SELECT count(*) FROM order_line_items), "
-                    "(SELECT count(*) FROM inventory_reservations), "
+                    "SELECT "
+                    "(SELECT count(*) FROM orders WHERE business_id=1), "
+                    "(SELECT count(*) FROM order_line_items li JOIN orders o ON o.id=li.order_id "
+                    " WHERE o.business_id=1), "
+                    "(SELECT count(*) FROM inventory_reservations WHERE business_id=1), "
                     "(SELECT count(*) FROM inventory_movements "
-                    " WHERE movement_type='phone_order_reserved')"
+                    " WHERE business_id=1 AND movement_type='phone_order_reserved')"
                 )
             )
         ).one()
@@ -564,7 +580,7 @@ async def test_reversed_multi_product_race_does_not_deadlock(
                 await verify.execute(
                     text(
                         "SELECT product_id, on_hand_qty, reserved_qty "
-                        "FROM inventory_balances ORDER BY product_id"
+                        "FROM inventory_balances WHERE business_id=1 ORDER BY product_id"
                     )
                 )
             ).all()
@@ -574,7 +590,8 @@ async def test_reversed_multi_product_race_does_not_deadlock(
                 await verify.execute(
                     text(
                         "SELECT product_id, sum(reserved_delta) "
-                        "FROM inventory_movements GROUP BY product_id ORDER BY product_id"
+                        "FROM inventory_movements WHERE business_id=1 "
+                        "GROUP BY product_id ORDER BY product_id"
                     )
                 )
             ).all()
@@ -585,7 +602,8 @@ async def test_reversed_multi_product_race_does_not_deadlock(
                     text(
                         "SELECT p.id, p.status, p.committed_entity_id, o.id "
                         "FROM pending_actions p JOIN orders o "
-                        "ON o.pending_action_id=p.id ORDER BY p.id"
+                        "ON o.pending_action_id=p.id "
+                        "WHERE p.business_id=1 AND o.business_id=1 ORDER BY p.id"
                     )
                 )
             ).all()

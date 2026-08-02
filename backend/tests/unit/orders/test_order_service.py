@@ -29,7 +29,7 @@ from fonely.domain.orders.commands import (
     ConfirmPendingOrderCommand,
     ExpireOrderReservationsCommand,
 )
-from fonely.domain.orders.errors import OrderIdempotencyConflictError
+from fonely.domain.orders.errors import OrderIdempotencyConflictError, OrderStateTransitionError
 from fonely.domain.pending_actions.commands import ActorContext, CommitResultContext
 from fonely.domain.pending_actions.results import PendingActionResult
 from fonely.models.enums import (
@@ -434,6 +434,36 @@ async def test_pickup_failure_restores_all_state(
 
     assert state.snapshot() == before
     assert state.events[-1] == "savepoint:rollback"
+
+
+async def test_cancelled_order_pickup_rejects_before_reservation_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state, confirmed = await confirmed_state()
+    service = service_for(state)
+    await service.cancel(
+        CancelOrderCommand(actor=actor(), order_id=confirmed.id, now=NOW, idempotency_key="cancel")
+    )
+    before = state.snapshot()
+    monkeypatch.setattr(
+        "fonely.services.orders.require_owner_or_manager", AsyncMock(return_value=object())
+    )
+    service._inventory.lock_active_reservations = AsyncMock(  # type: ignore[method-assign]
+        side_effect=AssertionError("cancelled pickup must not query active reservations")
+    )
+
+    with pytest.raises(OrderStateTransitionError, match="cancelled order"):
+        await service.complete_pickup(
+            CompletePickupCommand(
+                actor=actor(CallerRole.OWNER),
+                order_id=confirmed.id,
+                now=NOW + timedelta(minutes=30),
+                idempotency_key="pickup-cancelled",
+            )
+        )
+
+    assert state.snapshot() == before
+    service._inventory.lock_active_reservations.assert_not_awaited()  # type: ignore[attr-defined]
 
 
 async def test_pickup_success_and_replay_return_equivalent_results(

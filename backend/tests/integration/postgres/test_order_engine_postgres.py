@@ -478,7 +478,21 @@ async def test_cancelled_order_cannot_pickup(pg_session: AsyncSession) -> None:
             idempotency_key="cancel-before-pickup",
         )
     )
-    with pytest.raises(OrderStateTransitionError):
+    before = (
+        await pg_session.execute(
+            text(
+                "SELECT o.status, r.status, b.on_hand_qty, b.reserved_qty, "
+                "(SELECT count(*) FROM inventory_movements m "
+                " WHERE m.order_id=o.id) "
+                "FROM orders o JOIN inventory_reservations r ON r.order_id=o.id "
+                "JOIN inventory_balances b ON b.business_id=o.business_id "
+                " AND b.product_id=r.product_id AND b.business_date=r.business_date "
+                "WHERE o.business_id=1 AND o.id=:order_id"
+            ),
+            {"order_id": confirmed.id},
+        )
+    ).one()
+    with pytest.raises(OrderStateTransitionError, match="cancelled order"):
         await order_service.complete_pickup(
             CompletePickupCommand(
                 actor=owner(),
@@ -487,6 +501,42 @@ async def test_cancelled_order_cannot_pickup(pg_session: AsyncSession) -> None:
                 idempotency_key="pickup-cancelled",
             )
         )
+    after = (
+        await pg_session.execute(
+            text(
+                "SELECT o.status, r.status, b.on_hand_qty, b.reserved_qty, "
+                "(SELECT count(*) FROM inventory_movements m "
+                " WHERE m.order_id=o.id) "
+                "FROM orders o JOIN inventory_reservations r ON r.order_id=o.id "
+                "JOIN inventory_balances b ON b.business_id=o.business_id "
+                " AND b.product_id=r.product_id AND b.business_date=r.business_date "
+                "WHERE o.business_id=1 AND o.id=:order_id"
+            ),
+            {"order_id": confirmed.id},
+        )
+    ).one()
+    assert (
+        tuple(before)
+        == tuple(after)
+        == (
+            "cancelled",
+            "released",
+            Decimal("20.00"),
+            Decimal("0.00"),
+            3,
+        )
+    )
+    assert (
+        await pg_session.scalar(
+            text(
+                "SELECT count(*) FROM inventory_movements "
+                "WHERE business_id=1 AND order_id=:order_id "
+                "AND movement_type='order_completed'"
+            ),
+            {"order_id": confirmed.id},
+        )
+        == 0
+    )
 
 
 async def test_picked_up_order_cannot_cancel(pg_session: AsyncSession) -> None:

@@ -83,6 +83,8 @@ def test_terminal_transitions_and_exact_expiry_boundary() -> None:
     with pytest.raises(OrderStateTransitionError):
         require_cancellable(OrderStatus.PICKED_UP)
     assert require_pickup(OrderStatus.PICKED_UP, now + timedelta(hours=1), now) is False
+    with pytest.raises(OrderStateTransitionError, match="cancelled order"):
+        require_pickup(OrderStatus.CANCELLED, now + timedelta(hours=1), now)
     with pytest.raises(OrderReservationExpiredError):
         require_pickup(OrderStatus.CONFIRMED, now, now)
     assert reservation_is_expired(now, now)

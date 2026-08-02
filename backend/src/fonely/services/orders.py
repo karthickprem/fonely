@@ -155,6 +155,8 @@ class OrderService:
             status = OrderStatus(order.status)
             if status is OrderStatus.PICKED_UP:
                 return await self._complete_result(order, replay=True)
+            if status is OrderStatus.CANCELLED:
+                require_pickup(status, command.now, command.now)
             reservations = await self._inventory.lock_active_reservations(
                 order.business_id, order.id
             )

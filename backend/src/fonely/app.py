@@ -50,8 +50,10 @@ def create_app() -> FastAPI:
 
     if settings.internal_api_secret:
         from fonely.api.internal.appointments import router as appointment_router
+        from fonely.api.internal.onboarding import router as onboarding_router
 
         app.include_router(appointment_router)
+        app.include_router(onboarding_router)
 
     @app.get("/health/live")
     async def liveness() -> dict[str, str]:

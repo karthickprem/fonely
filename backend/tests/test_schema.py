@@ -24,6 +24,7 @@ EXPECTED_TABLES = [
     "inventory_balances",
     "inventory_reservations",
     "inventory_movements",
+    "inventory_operations",
     "orders",
     "order_line_items",
     "appointments",
@@ -38,7 +39,7 @@ EXPECTED_TABLES = [
 class TestSchemaMetadata:
     def test_expected_table_count(self) -> None:
         tables = list(Base.metadata.tables.keys())
-        assert len(tables) == 21
+        assert len(tables) == 22
 
     def test_all_expected_tables_exist(self) -> None:
         tables = set(Base.metadata.tables.keys())

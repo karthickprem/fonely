@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from decimal import Decimal
+from typing import Literal
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,7 +25,7 @@ from fonely.domain.inventory.errors import (
     InventoryTenantMismatchError,
     ReservedStockViolationError,
 )
-from fonely.domain.inventory.policies import derive_business_date
+from fonely.domain.inventory.policies import DirectInventoryRequestSignature, derive_business_date
 from fonely.domain.inventory.results import (
     InventoryAvailabilityResult,
     InventoryMutationResult,
@@ -100,6 +101,7 @@ class InventoryService:
             operation="set",
             note=command.note,
             initiated_by=command.actor.normalized_phone,
+            idempotency_key=command.idempotency_key,
         )
 
     async def add_stock(self, command: AddOwnerStockCommand) -> InventoryMutationResult:
@@ -112,6 +114,7 @@ class InventoryService:
             operation="add",
             note=command.note,
             initiated_by=command.actor.normalized_phone,
+            idempotency_key=command.idempotency_key,
         )
 
     async def record_walk_in(self, command: RecordWalkInSaleCommand) -> InventoryMutationResult:
@@ -124,6 +127,7 @@ class InventoryService:
             operation="walk_in",
             note=command.note,
             initiated_by=command.actor.normalized_phone,
+            idempotency_key=command.idempotency_key,
         )
 
     async def commit_owner_stock(self, command: CommitOwnerStockCommand) -> InventoryMutationResult:
@@ -420,10 +424,44 @@ class InventoryService:
         product_id: int,
         quantity: Decimal,
         occurred_at: datetime,
-        operation: str,
+        operation: Literal["set", "add", "walk_in"],
         note: str | None,
         initiated_by: str,
+        idempotency_key: str,
     ) -> InventoryMutationResult:
+        signature = DirectInventoryRequestSignature(
+            business_id=business_id,
+            operation=operation,
+            product_id=product_id,
+            quantity=quantity,
+            occurred_at=occurred_at,
+            note=note,
+        )
+        existing = await self._repo.get_operation_by_key(business_id, idempotency_key)
+        if existing is not None:
+            if existing.request_digest != signature.digest:
+                raise InventoryIdempotencyConflictError(
+                    "Direct inventory request conflicts with existing operation"
+                )
+            movement = await self._repo.get_movement_by_id(business_id, existing.movement_id)
+            if movement is None:
+                raise InventoryIdempotencyConflictError(
+                    "Existing operation references missing movement"
+                )
+            return InventoryMutationResult(
+                business_id=movement.business_id,
+                product_id=movement.product_id,
+                business_date=movement.business_date,
+                movement_id=movement.id,
+                movement_type=InventoryMovementType(movement.movement_type),
+                on_hand_delta=movement.on_hand_delta,
+                reserved_delta=movement.reserved_delta,
+                on_hand_after=movement.on_hand_after,
+                reserved_after=movement.reserved_after,
+                available_after=movement.available_after,
+                idempotent_replay=True,
+            )
+
         async with self._session.begin_nested():
             timezone = await self._require_timezone(business_id)
             business_date = derive_business_date(occurred_at, timezone)
@@ -464,6 +502,16 @@ class InventoryService:
                     "available_after": transition.after.available,
                     "initiated_by": initiated_by,
                     "note": note,
+                }
+            )
+            await self._repo.insert_operation(
+                {
+                    "business_id": business_id,
+                    "idempotency_key": idempotency_key,
+                    "operation": operation,
+                    "product_id": product_id,
+                    "request_digest": signature.digest,
+                    "movement_id": movement.id,
                 }
             )
             return InventoryMutationResult(

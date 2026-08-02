@@ -75,3 +75,122 @@ async def test_current_balance_constraints_reject_invalid_values(
             text(f"UPDATE inventory_balances SET {assignment} WHERE product_id = 1")
         )
         await pg_session.flush()
+
+
+async def test_balance_version_zero_rejected(pg_session: AsyncSession) -> None:
+    await seed(pg_session)
+    await InventoryService(pg_session).set_stock(
+        SetOwnerStockCommand(
+            actor=owner(),
+            product_id=1,
+            quantity="5",
+            occurred_at=NOW,
+            idempotency_key="version-setup",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        await pg_session.execute(
+            text("UPDATE inventory_balances SET version = 0 WHERE product_id = 1")
+        )
+        await pg_session.flush()
+
+
+async def test_movement_update_rejected(pg_session: AsyncSession) -> None:
+    await seed(pg_session)
+    await InventoryService(pg_session).set_stock(
+        SetOwnerStockCommand(
+            actor=owner(),
+            product_id=1,
+            quantity="5",
+            occurred_at=NOW,
+            idempotency_key="append-setup",
+        )
+    )
+    with pytest.raises(IntegrityError, match="append-only"):
+        await pg_session.execute(
+            text("UPDATE inventory_movements SET note = 'changed' WHERE business_id = 1")
+        )
+        await pg_session.flush()
+
+
+async def test_movement_delete_rejected(pg_session: AsyncSession) -> None:
+    await seed(pg_session)
+    await InventoryService(pg_session).set_stock(
+        SetOwnerStockCommand(
+            actor=owner(),
+            product_id=1,
+            quantity="5",
+            occurred_at=NOW,
+            idempotency_key="delete-setup",
+        )
+    )
+    with pytest.raises(IntegrityError, match="append-only"):
+        await pg_session.execute(text("DELETE FROM inventory_movements WHERE business_id = 1"))
+        await pg_session.flush()
+
+
+async def test_movement_coherence_enforced(pg_session: AsyncSession) -> None:
+    await seed(pg_session)
+    with pytest.raises(IntegrityError):
+        await pg_session.execute(
+            text(
+                "INSERT INTO inventory_movements "
+                "(business_id, product_id, business_date, movement_type, "
+                "on_hand_delta, reserved_delta, on_hand_after, reserved_after, "
+                "available_after) VALUES "
+                "(1, 1, '2026-08-01', 'stock_added', 5, 0, 5, 0, 99)"
+            )
+        )
+        await pg_session.flush()
+
+
+async def test_direct_inventory_idempotent_replay(pg_session: AsyncSession) -> None:
+    await seed(pg_session)
+    service = InventoryService(pg_session)
+    first = await service.set_stock(
+        SetOwnerStockCommand(
+            actor=owner(),
+            product_id=1,
+            quantity="10",
+            occurred_at=NOW,
+            idempotency_key="idem-1",
+        )
+    )
+    assert first.idempotent_replay is False
+    second = await service.set_stock(
+        SetOwnerStockCommand(
+            actor=owner(),
+            product_id=1,
+            quantity="10",
+            occurred_at=NOW,
+            idempotency_key="idem-1",
+        )
+    )
+    assert second.idempotent_replay is True
+    assert second.movement_id == first.movement_id
+
+
+async def test_direct_inventory_idempotency_conflict(pg_session: AsyncSession) -> None:
+    from fonely.domain.inventory.errors import InventoryIdempotencyConflictError
+
+    await seed(pg_session)
+    service = InventoryService(pg_session)
+    await service.set_stock(
+        SetOwnerStockCommand(
+            actor=owner(),
+            product_id=1,
+            quantity="10",
+            occurred_at=NOW,
+            idempotency_key="conflict-1",
+        )
+    )
+    with pytest.raises(InventoryIdempotencyConflictError):
+        await service.set_stock(
+            SetOwnerStockCommand(
+                actor=owner(),
+                product_id=1,
+                quantity="20",
+                occurred_at=NOW,
+                idempotency_key="conflict-1",
+            )
+        )

@@ -124,9 +124,9 @@ async def clean_database(
             await connection.execute(
                 text(
                     "TRUNCATE TABLE owner_audit_log, appointment_commits, resource_allocations, "
-                    "appointments, service_resource_eligibility, inventory_movements, "
-                    "inventory_reservations, order_line_items, orders, inventory_balances, "
-                    "calls, pending_actions, resources, services, products, "
+                    "appointments, service_resource_eligibility, inventory_operations, "
+                    "inventory_movements, inventory_reservations, order_line_items, orders, "
+                    "inventory_balances, calls, pending_actions, resources, services, products, "
                     "schedule_exceptions, operating_schedules, business_users, "
                     "business_locales, business_capabilities, businesses "
                     "RESTART IDENTITY CASCADE"

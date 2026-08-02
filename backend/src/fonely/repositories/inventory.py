@@ -14,6 +14,7 @@ from fonely.models.schema import (
     Business,
     InventoryBalance,
     InventoryMovement,
+    InventoryOperation,
     InventoryReservation,
     Product,
 )
@@ -221,6 +222,38 @@ class InventoryRepository:
             statement = statement.where(InventoryBalance.product_id == product_id)
         statement = statement.order_by(InventoryBalance.product_id, InventoryBalance.business_date)
         return tuple((await self._session.scalars(statement)).all())
+
+    async def get_operation_by_key(
+        self, business_id: int, idempotency_key: str
+    ) -> InventoryOperation | None:
+        statement = (
+            select(InventoryOperation)
+            .where(
+                InventoryOperation.business_id == business_id,
+                InventoryOperation.idempotency_key == idempotency_key,
+            )
+            .execution_options(populate_existing=True)
+        )
+        return (await self._session.scalars(statement)).one_or_none()
+
+    async def insert_operation(self, values: Mapping[str, Any]) -> InventoryOperation:
+        operation = InventoryOperation(**values)
+        self._session.add(operation)
+        await self._session.flush()
+        return operation
+
+    async def get_movement_by_id(
+        self, business_id: int, movement_id: int
+    ) -> InventoryMovement | None:
+        statement = (
+            select(InventoryMovement)
+            .where(
+                InventoryMovement.business_id == business_id,
+                InventoryMovement.id == movement_id,
+            )
+            .execution_options(populate_existing=True)
+        )
+        return (await self._session.scalars(statement)).one_or_none()
 
     async def ledger_totals(self, business_id: int) -> Sequence[Any]:
         statement: Select[tuple[Any, ...]] = (

@@ -33,6 +33,7 @@ class FakePhaseCState:
     lines: dict[int, list[SimpleNamespace]] = field(default_factory=dict)
     reservations: dict[int, SimpleNamespace] = field(default_factory=dict)
     movements: dict[int, SimpleNamespace] = field(default_factory=dict)
+    operations: dict[tuple[int, str], SimpleNamespace] = field(default_factory=dict)
     pending_actions: dict[int, PendingActionResult] = field(default_factory=dict)
     timezones: dict[int, str] = field(default_factory=lambda: {1: "Asia/Kolkata"})
     events: list[str] = field(default_factory=list)
@@ -42,6 +43,7 @@ class FakePhaseCState:
     next_reservation_id: int = 1
     next_movement_id: int = 1
     next_balance_id: int = 1
+    next_operation_id: int = 1
 
     def snapshot(self) -> dict[str, Any]:
         return copy.deepcopy(
@@ -52,6 +54,7 @@ class FakePhaseCState:
                 "lines": self.lines,
                 "reservations": self.reservations,
                 "movements": self.movements,
+                "operations": self.operations,
                 "pending_actions": self.pending_actions,
                 "timezones": self.timezones,
                 "next_order_id": self.next_order_id,
@@ -59,6 +62,7 @@ class FakePhaseCState:
                 "next_reservation_id": self.next_reservation_id,
                 "next_movement_id": self.next_movement_id,
                 "next_balance_id": self.next_balance_id,
+                "next_operation_id": self.next_operation_id,
             }
         )
 
@@ -246,6 +250,27 @@ class FakeInventoryRepository:
             for (tenant, _, product), balance in sorted(self.state.balances.items())
             if tenant == business_id and (product_id is None or product == product_id)
         )
+
+    async def get_operation_by_key(
+        self, business_id: int, idempotency_key: str
+    ) -> SimpleNamespace | None:
+        return self.state.operations.get((business_id, idempotency_key))
+
+    async def insert_operation(self, values: dict[str, Any]) -> SimpleNamespace:
+        op_id = self.state.next_operation_id
+        self.state.next_operation_id += 1
+        operation = SimpleNamespace(id=op_id, **values)
+        key = (values["business_id"], values["idempotency_key"])
+        self.state.operations[key] = operation
+        return operation
+
+    async def get_movement_by_id(
+        self, business_id: int, movement_id: int
+    ) -> SimpleNamespace | None:
+        movement = self.state.movements.get(movement_id)
+        if movement is not None and movement.business_id == business_id:
+            return movement
+        return None
 
     async def ledger_totals(self, business_id: int) -> tuple[tuple[Any, ...], ...]:
         totals: dict[tuple[int, date], list[Decimal]] = {}

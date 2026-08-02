@@ -321,6 +321,7 @@ class Product(Base):
     __tablename__ = "products"
     __table_args__ = (
         UniqueConstraint("business_id", "name"),
+        UniqueConstraint("business_id", "id", name="uq_products_business_id_id"),
         CheckConstraint("price_per_unit >= 0", name="ck_product_price"),
     )
 
@@ -443,11 +444,17 @@ class InventoryBalance(Base):
         CheckConstraint("on_hand_qty >= 0", name="ck_inv_on_hand"),
         CheckConstraint("reserved_qty >= 0", name="ck_inv_reserved"),
         CheckConstraint("reserved_qty <= on_hand_qty", name="ck_inv_reserved_lte_on_hand"),
+        CheckConstraint("version > 0", name="ck_inv_balance_version"),
+        ForeignKeyConstraint(
+            ["business_id", "product_id"],
+            ["products.business_id", "products.id"],
+            name="fk_inv_balance_business_product",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
-    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
+    product_id: Mapped[int] = mapped_column(Integer, nullable=False)
     business_date: Mapped[date] = mapped_column(Date, nullable=False)
     on_hand_qty: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=0)
     reserved_qty: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=0)
@@ -470,15 +477,31 @@ class InventoryReservation(Base):
         UniqueConstraint(
             "business_id", "idempotency_key", "product_id", name="uq_inv_res_idempotency"
         ),
+        UniqueConstraint("business_id", "id", name="uq_inv_reservations_business_id_id"),
         CheckConstraint("qty > 0", name="ck_inv_res_qty"),
         Index("ix_inv_res_active_expiry", "business_id", "status", "expires_at"),
+        ForeignKeyConstraint(
+            ["business_id", "product_id"],
+            ["products.business_id", "products.id"],
+            name="fk_inv_res_business_product",
+        ),
+        ForeignKeyConstraint(
+            ["business_id", "order_id"],
+            ["orders.business_id", "orders.id"],
+            name="fk_inv_res_business_order",
+        ),
+        ForeignKeyConstraint(
+            ["business_id", "pending_action_id"],
+            ["pending_actions.business_id", "pending_actions.id"],
+            name="fk_inv_res_business_pending_action",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
-    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
-    pending_action_id: Mapped[int | None] = mapped_column(ForeignKey("pending_actions.id"))
-    order_id: Mapped[int | None] = mapped_column(ForeignKey("orders.id"))
+    product_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    pending_action_id: Mapped[int | None] = mapped_column(Integer)
+    order_id: Mapped[int | None] = mapped_column(Integer)
     business_date: Mapped[date] = mapped_column(Date, nullable=False)
     qty: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     status: Mapped[str] = mapped_column(
@@ -501,10 +524,37 @@ class InventoryMovement(Base):
     """
 
     __tablename__ = "inventory_movements"
+    __table_args__ = (
+        UniqueConstraint("business_id", "id", name="uq_inv_movements_business_id_id"),
+        CheckConstraint(
+            "available_after = on_hand_after - reserved_after",
+            name="ck_inv_mov_available_coherence",
+        ),
+        ForeignKeyConstraint(
+            ["business_id", "product_id"],
+            ["products.business_id", "products.id"],
+            name="fk_inv_mov_business_product",
+        ),
+        ForeignKeyConstraint(
+            ["business_id", "order_id"],
+            ["orders.business_id", "orders.id"],
+            name="fk_inv_mov_business_order",
+        ),
+        ForeignKeyConstraint(
+            ["business_id", "reservation_id"],
+            ["inventory_reservations.business_id", "inventory_reservations.id"],
+            name="fk_inv_mov_business_reservation",
+        ),
+        ForeignKeyConstraint(
+            ["business_id", "pending_action_id"],
+            ["pending_actions.business_id", "pending_actions.id"],
+            name="fk_inv_mov_business_pending_action",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
-    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
+    product_id: Mapped[int] = mapped_column(Integer, nullable=False)
     business_date: Mapped[date] = mapped_column(Date, nullable=False)
     movement_type: Mapped[str] = mapped_column(
         enum_type(InventoryMovementType, "movement_type"), nullable=False
@@ -514,14 +564,46 @@ class InventoryMovement(Base):
     on_hand_after: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     reserved_after: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     available_after: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
-    order_id: Mapped[int | None] = mapped_column(ForeignKey("orders.id"))
-    reservation_id: Mapped[int | None] = mapped_column(ForeignKey("inventory_reservations.id"))
-    pending_action_id: Mapped[int | None] = mapped_column(ForeignKey("pending_actions.id"))
+    order_id: Mapped[int | None] = mapped_column(Integer)
+    reservation_id: Mapped[int | None] = mapped_column(Integer)
+    pending_action_id: Mapped[int | None] = mapped_column(Integer)
     initiated_by: Mapped[str | None] = mapped_column(String(20))
     note: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     product: Mapped["Product"] = relationship()
+
+
+class InventoryOperation(Base):
+    """Durable idempotency record for direct inventory mutations (set/add/walk_in)."""
+
+    __tablename__ = "inventory_operations"
+    __table_args__ = (
+        UniqueConstraint("business_id", "idempotency_key", name="uq_inv_op_idempotency"),
+        CheckConstraint(
+            "operation IN ('set', 'add', 'walk_in')",
+            name="ck_inv_op_operation",
+        ),
+        ForeignKeyConstraint(
+            ["business_id", "product_id"],
+            ["products.business_id", "products.id"],
+            name="fk_inv_op_business_product",
+        ),
+        ForeignKeyConstraint(
+            ["business_id", "movement_id"],
+            ["inventory_movements.business_id", "inventory_movements.id"],
+            name="fk_inv_op_business_movement",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    operation: Mapped[str] = mapped_column(String(20), nullable=False)
+    product_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    request_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    movement_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 # =============================================================================
@@ -533,9 +615,20 @@ class Order(Base):
     __tablename__ = "orders"
     __table_args__ = (
         UniqueConstraint("business_id", "idempotency_key", name="uq_order_idempotency"),
+        UniqueConstraint("business_id", "id", name="uq_orders_business_id_id"),
         UniqueConstraint("pending_action_id", name="uq_order_pending_action"),
         CheckConstraint("total_amount >= 0", name="ck_order_total"),
         Index("ix_orders_business_status", "business_id", "status"),
+        ForeignKeyConstraint(
+            ["business_id", "pending_action_id"],
+            ["pending_actions.business_id", "pending_actions.id"],
+            name="fk_order_business_pending_action",
+        ),
+        ForeignKeyConstraint(
+            ["business_id", "call_id"],
+            ["calls.business_id", "calls.id"],
+            name="fk_order_business_call",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -550,8 +643,8 @@ class Order(Base):
         default=OrderStatus.CONFIRMED,
     )
     idempotency_key: Mapped[str] = mapped_column(String(100), nullable=False)
-    pending_action_id: Mapped[int | None] = mapped_column(ForeignKey("pending_actions.id"))
-    call_id: Mapped[int | None] = mapped_column(ForeignKey("calls.id"))
+    pending_action_id: Mapped[int | None] = mapped_column(Integer)
+    call_id: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     business: Mapped["Business"] = relationship(back_populates="orders")
@@ -563,14 +656,26 @@ class Order(Base):
 class OrderLineItem(Base):
     __tablename__ = "order_line_items"
     __table_args__ = (
+        UniqueConstraint("order_id", "product_id", name="uq_line_item_order_product"),
         CheckConstraint("qty > 0", name="ck_line_qty"),
         CheckConstraint("price_per_unit_snapshot >= 0", name="ck_line_price"),
         CheckConstraint("subtotal >= 0", name="ck_line_subtotal"),
+        ForeignKeyConstraint(
+            ["business_id", "order_id"],
+            ["orders.business_id", "orders.id"],
+            name="fk_line_item_business_order",
+        ),
+        ForeignKeyConstraint(
+            ["business_id", "product_id"],
+            ["products.business_id", "products.id"],
+            name="fk_line_item_business_product",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), nullable=False)
-    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), nullable=False)
+    business_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    order_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    product_id: Mapped[int] = mapped_column(Integer, nullable=False)
     product_name_snapshot: Mapped[str] = mapped_column(String(200), nullable=False)
     qty: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
     unit: Mapped[str] = mapped_column(enum_type(ProductUnit, "line_item_unit"), nullable=False)
@@ -578,7 +683,7 @@ class OrderLineItem(Base):
     subtotal: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
 
     order: Mapped["Order"] = relationship(back_populates="line_items")
-    product: Mapped["Product"] = relationship()
+    product: Mapped["Product"] = relationship(overlaps="line_items,order")
 
 
 # =============================================================================

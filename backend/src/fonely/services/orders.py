@@ -302,6 +302,7 @@ class OrderService:
         lines = await self._orders.insert_lines(
             [
                 {
+                    "business_id": command.context.business_id,
                     "order_id": order.id,
                     "product_id": line.product_id,
                     "product_name_snapshot": line.product_name,

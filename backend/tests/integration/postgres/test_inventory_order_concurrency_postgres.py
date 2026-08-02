@@ -10,7 +10,10 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fonely.domain.inventory.commands import SetOwnerStockCommand
-from fonely.domain.inventory.errors import InsufficientAvailableStockError
+from fonely.domain.inventory.errors import (
+    InsufficientAvailableStockError,
+    InventoryIdempotencyConflictError,
+)
 from fonely.domain.orders.commands import ConfirmOrderLine, ConfirmPendingOrderCommand
 from fonely.domain.orders.results import OrderResult
 from fonely.domain.pending_actions.commands import (
@@ -616,3 +619,113 @@ async def test_reversed_multi_product_race_does_not_deadlock(
         status == "confirmed" and entity_id == order_id
         for _, status, entity_id, order_id in linkages
     )
+
+
+async def direct_inventory_worker(
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    quantity: str,
+    key: str,
+    pid_ready: asyncio.Future[int],
+) -> tuple[str, object]:
+    async with factory() as session:
+        await install_transaction_timeouts(session)
+        pid_ready.set_result(await backend_pid(session))
+        try:
+            result = await InventoryService(session).set_stock(
+                SetOwnerStockCommand(
+                    actor=owner(),
+                    product_id=1,
+                    quantity=quantity,
+                    occurred_at=NOW,
+                    idempotency_key=key,
+                )
+            )
+            await session.commit()
+            return ("success", result)
+        except InventoryIdempotencyConflictError as exc:
+            await session.rollback()
+            return ("conflict", exc)
+        except Exception as exc:
+            await session.rollback()
+            return ("error", exc)
+
+
+async def test_direct_inventory_same_key_race_one_effect(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with pg_session_factory() as setup:
+        await install_transaction_timeouts(setup)
+        await seed(setup, quantity="10")
+
+    loop = asyncio.get_running_loop()
+    first_ready: asyncio.Future[int] = loop.create_future()
+    second_ready: asyncio.Future[int] = loop.create_future()
+    first_task = asyncio.create_task(
+        direct_inventory_worker(
+            pg_session_factory, quantity="5", key="race-direct", pid_ready=first_ready
+        )
+    )
+    second_task = asyncio.create_task(
+        direct_inventory_worker(
+            pg_session_factory, quantity="5", key="race-direct", pid_ready=second_ready
+        )
+    )
+    try:
+        results = await asyncio.wait_for(asyncio.gather(first_task, second_task), timeout=15)
+    finally:
+        await cancel_task(first_task)
+        await cancel_task(second_task)
+
+    kinds = sorted(r[0] for r in results)
+    assert kinds == ["success", "success"]
+    async with pg_session_factory() as verify:
+        await install_transaction_timeouts(verify)
+        op_count = await verify.scalar(
+            text("SELECT count(*) FROM inventory_operations WHERE idempotency_key = 'race-direct'")
+        )
+        movement_count = await verify.scalar(
+            text(
+                "SELECT count(*) FROM inventory_movements "
+                "WHERE business_id = 1 AND movement_type = 'manual_adjustment'"
+            )
+        )
+    assert op_count == 1
+    assert movement_count == 1
+
+
+async def test_direct_inventory_same_key_changed_semantics_conflict(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with pg_session_factory() as setup:
+        await install_transaction_timeouts(setup)
+        await seed(setup, quantity="10")
+
+    async with pg_session_factory() as first_session:
+        await install_transaction_timeouts(first_session)
+        await InventoryService(first_session).set_stock(
+            SetOwnerStockCommand(
+                actor=owner(),
+                product_id=1,
+                quantity="5",
+                occurred_at=NOW,
+                idempotency_key="conflict-key",
+            )
+        )
+        await first_session.commit()
+
+    async with pg_session_factory() as second_session:
+        await install_transaction_timeouts(second_session)
+        try:
+            await InventoryService(second_session).set_stock(
+                SetOwnerStockCommand(
+                    actor=owner(),
+                    product_id=1,
+                    quantity="7",
+                    occurred_at=NOW,
+                    idempotency_key="conflict-key",
+                )
+            )
+            pytest.fail("Expected InventoryIdempotencyConflictError")
+        except InventoryIdempotencyConflictError:
+            pass

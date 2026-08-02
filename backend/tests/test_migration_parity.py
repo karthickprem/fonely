@@ -28,6 +28,7 @@ MIGRATION_0001 = MIGRATIONS_DIR / "0001_initial_schema.py"
 MIGRATION_0002 = MIGRATIONS_DIR / "0002_pending_action_state_machine.py"
 MIGRATION_0003 = MIGRATIONS_DIR / "0003_committed_entity_linkage.py"
 MIGRATION_0004 = MIGRATIONS_DIR / "0004_appointment_engine.py"
+MIGRATION_0005 = MIGRATIONS_DIR / "0005_inventory_order_engine.py"
 
 
 class OperationRecorder:
@@ -163,11 +164,29 @@ class OperationRecorder:
                     and isinstance(item, sa.ForeignKeyConstraint)
                     and tuple(column.name for column in item.columns) == ("call_id",)
                 )
+                or (
+                    name.endswith("_fkey")
+                    and isinstance(item, sa.ForeignKeyConstraint)
+                    and item.name is None
+                    and self._fkey_name_matches_columns(name, table_name, item)
+                )
             ),
             None,
         )
         if constraint is not None:
             table.constraints.remove(constraint)
+            if isinstance(constraint, sa.ForeignKeyConstraint):
+                for element in constraint.elements:
+                    col = element.parent
+                    col.foreign_keys.discard(element)
+
+    @staticmethod
+    def _fkey_name_matches_columns(
+        name: str, table_name: str, constraint: sa.ForeignKeyConstraint
+    ) -> bool:
+        cols = tuple(column.name for column in constraint.columns)
+        expected = f"{table_name}_{'_'.join(cols)}_fkey"
+        return name == expected
 
     def drop_table(self, name: str, **_: Any) -> None:
         self.operations.append(("drop_table", name))
@@ -202,10 +221,11 @@ def _capture_upgrade() -> OperationRecorder:
         (MIGRATION_0002, "fonely_migration_0002"),
         (MIGRATION_0003, "fonely_migration_0003"),
         (MIGRATION_0004, "fonely_migration_0004"),
+        (MIGRATION_0005, "fonely_migration_0005"),
     ):
         module = _load_migration(path, name)
         module.op = recorder
-        if name in {"fonely_migration_0002", "fonely_migration_0004"}:
+        if name in {"fonely_migration_0002", "fonely_migration_0004", "fonely_migration_0005"}:
             module.context = SimpleNamespace(is_offline_mode=lambda: True)
         module.upgrade()
     return recorder
@@ -226,6 +246,10 @@ def _capture_downgrade() -> OperationRecorder:
     recorder = _capture_upgrade()
     recorder.dropped_tables.clear()
     recorder.operations.clear()
+    module_0005 = _load_migration(MIGRATION_0005, "fonely_migration_0005_down")
+    module_0005.op = recorder
+    module_0005.context = SimpleNamespace(is_offline_mode=lambda: True)
+    module_0005.downgrade()
     module_0004 = _load_migration(MIGRATION_0004, "fonely_migration_0004_down")
     module_0004.op = recorder
     module_0004.context = SimpleNamespace(is_offline_mode=lambda: True)
@@ -270,6 +294,7 @@ def _fk_deferrability_signatures(
     return {
         (constraint.name, constraint.deferrable, constraint.initially)
         for constraint in table.foreign_key_constraints
+        if constraint in table.constraints
     }
 
 
@@ -331,7 +356,7 @@ def _exclude_signatures(table: sa.Table) -> set[tuple[str, str, str, tuple[tuple
 def test_migration_and_orm_have_identical_application_tables() -> None:
     captured = _capture_upgrade()
     assert set(captured.metadata.tables) == set(Base.metadata.tables)
-    assert len(captured.metadata.tables) == 21
+    assert len(captured.metadata.tables) == 22
 
 
 def test_migration_and_orm_column_parity() -> None:
@@ -396,11 +421,7 @@ def test_migration_and_orm_exclusion_constraint_parity() -> None:
 def test_migration_downgrade_drops_all_application_tables() -> None:
     recorder = _capture_downgrade()
     assert set(recorder.dropped_tables) == set(Base.metadata.tables)
-    assert recorder.dropped_tables[:3] == [
-        "appointment_commits",
-        "resource_allocations",
-        "service_resource_eligibility",
-    ]
+    assert recorder.dropped_tables[0] == "inventory_operations"
 
 
 def test_appointment_migration_installs_btree_gist_without_dropping_it() -> None:
@@ -652,7 +673,7 @@ def test_upgrade_preflight_guards_every_provenance_cast_at_source() -> None:
     assert source.index("_preflight_upgrade()") < source.index('op.execute("CREATE EXTENSION')
 
 
-def test_appointment_revision_chain_has_single_0004_head() -> None:
+def test_revision_chain_has_single_head() -> None:
     migrations = [
         _load_migration(path, f"fonely_chain_{path.stem}")
         for path in sorted(MIGRATIONS_DIR.glob("*.py"))
@@ -664,12 +685,13 @@ def test_appointment_revision_chain_has_single_0004_head() -> None:
     }
     heads = revisions - parent_revisions
 
-    assert heads == {"0004"}
+    assert heads == {"0005"}
     assert {migration.revision: migration.down_revision for migration in migrations} == {
         "0001": None,
         "0002": "0001",
         "0003": "0002",
         "0004": "0003",
+        "0005": "0004",
     }
 
 

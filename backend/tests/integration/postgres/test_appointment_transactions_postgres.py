@@ -439,3 +439,50 @@ async def test_two_confirmations_in_one_outer_transaction(
         assert appt_count == 2
         assert alloc_count == 2
         await session.rollback()
+
+
+async def test_overlapping_confirmation_returns_retryable_failure(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with pg_session_factory() as session:
+        await _seed_catalog(session)
+
+        winner = await _create_and_confirm(session, idempotency_key="winner-slot", start_at=START)
+        assert isinstance(winner, PreCommitAppointmentSuccess)
+        await session.commit()
+
+    async with pg_session_factory() as session:
+        overlap_start = START + timedelta(minutes=15)
+        loser = await _create_and_confirm(
+            session,
+            idempotency_key="loser-slot",
+            start_at=overlap_start,
+        )
+        assert isinstance(loser, PreCommitAppointmentFailure)
+        assert loser.error_code == "resource_unavailable"
+        assert loser.retryable is True
+
+        appt_count = await session.scalar(
+            select(func.count(Appointment.id)).where(
+                Appointment.idempotency_key == "pa-" + str(loser.pending_action_id)
+            )
+        )
+        assert appt_count == 0
+
+        alloc_count = await session.scalar(
+            select(func.count(ResourceAllocation.id)).where(
+                ResourceAllocation.pending_action_id == loser.pending_action_id
+            )
+        )
+        assert alloc_count == 0
+
+        pa = (
+            await session.execute(
+                select(PendingAction).where(PendingAction.id == loser.pending_action_id)
+            )
+        ).scalar_one()
+        assert pa.status == "awaiting_confirmation"
+        assert pa.commit_error_code == "resource_unavailable"
+
+        await session.execute(text("SELECT 1"))
+        await session.rollback()

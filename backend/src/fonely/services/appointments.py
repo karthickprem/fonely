@@ -231,9 +231,13 @@ class AppointmentService:
                 _restore_deferred_sql(APPOINTMENT_CREATE_POST_COMPLETION_CONSTRAINTS)
             )
 
-        except IntegrityError as exc:
-            await savepoint.rollback()
-            if (
+        except BaseException as exc:
+            try:
+                await savepoint.rollback()
+            except BaseException as rollback_exc:
+                raise rollback_exc from exc
+
+            if isinstance(exc, IntegrityError) and (
                 getattr(exc.orig, "sqlstate", None) == _OVERLAP_SQLSTATE
                 and _pg_constraint_name(exc) == _OVERLAP_CONSTRAINT
             ):
@@ -251,6 +255,7 @@ class AppointmentService:
                 )
             raise
         else:
+            await savepoint.commit()
             return PreCommitAppointmentSuccess(
                 appointment=AppointmentConfirmationResult(
                     appointment_id=appointment.id,

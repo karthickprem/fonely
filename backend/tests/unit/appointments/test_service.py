@@ -207,3 +207,135 @@ async def test_confirm_replay_returns_authoritative_version() -> None:
     assert result.appointment.appointment_id == 42
     assert result.pending_action_version == 5
     session.commit.assert_not_called()
+
+
+async def test_success_path_commits_savepoint() -> None:
+    session = AsyncMock()
+    validation = _mock_validation()
+    service = AppointmentService(session, validation=validation)
+
+    action = MagicMock()
+    action.business_id = 1
+    action.version = 2
+    action.initiated_by = "+919123456789"
+    action.action_type = "appointment"
+
+    begin_result = MagicMock()
+    begin_result.version = 3
+    begin_result.payload = {
+        "schema_version": 1,
+        "action_type": "appointment",
+        "data": {
+            "operation": "create",
+            "customer_phone": "+919123456789",
+            "facts": {
+                "service_id": 1,
+                "service_name": "Haircut",
+                "resource_id": 1,
+                "resource_name": "Priya",
+                "start_at": START.isoformat(),
+                "end_at": END.isoformat(),
+                "effective_start_at": START.isoformat(),
+                "effective_end_at": END.isoformat(),
+                "duration_minutes": 30,
+                "business_timezone": "Asia/Kolkata",
+            },
+        },
+    }
+
+    complete_result = MagicMock()
+    complete_result.version = 4
+
+    service._pa_service = AsyncMock()
+    service._pa_service._require_action = AsyncMock(return_value=action)
+    service._pa_service.begin_commit = AsyncMock(return_value=begin_result)
+    service._pa_service.complete_commit = AsyncMock(return_value=complete_result)
+
+    service._repo = AsyncMock()
+    service._repo.get_by_business_and_pending_action.return_value = None
+
+    mock_appointment = MagicMock()
+    mock_appointment.id = 1
+    service._repo.insert.return_value = mock_appointment
+
+    savepoint = AsyncMock()
+    session.begin_nested = AsyncMock(return_value=savepoint)
+
+    result = await service.confirm_and_commit(
+        ConfirmPendingAppointmentCommand(
+            actor=_actor(),
+            pending_action_id=10,
+            expected_version=2,
+        )
+    )
+
+    assert isinstance(result, PreCommitAppointmentSuccess)
+    savepoint.commit.assert_called_once()
+    savepoint.rollback.assert_not_called()
+    session.commit.assert_not_called()
+    session.rollback.assert_not_called()
+
+
+async def test_unexpected_error_rolls_back_savepoint() -> None:
+    session = AsyncMock()
+    validation = _mock_validation()
+    service = AppointmentService(session, validation=validation)
+
+    action = MagicMock()
+    action.business_id = 1
+    action.version = 2
+    action.initiated_by = "+919123456789"
+    action.action_type = "appointment"
+
+    begin_result = MagicMock()
+    begin_result.version = 3
+    begin_result.payload = {
+        "schema_version": 1,
+        "action_type": "appointment",
+        "data": {
+            "operation": "create",
+            "customer_phone": "+919123456789",
+            "facts": {
+                "service_id": 1,
+                "service_name": "Haircut",
+                "resource_id": 1,
+                "resource_name": "Priya",
+                "start_at": START.isoformat(),
+                "end_at": END.isoformat(),
+                "effective_start_at": START.isoformat(),
+                "effective_end_at": END.isoformat(),
+                "duration_minutes": 30,
+                "business_timezone": "Asia/Kolkata",
+            },
+        },
+    }
+
+    service._pa_service = AsyncMock()
+    service._pa_service._require_action = AsyncMock(return_value=action)
+    service._pa_service.begin_commit = AsyncMock(return_value=begin_result)
+    service._pa_service.complete_commit = AsyncMock(side_effect=RuntimeError("unexpected failure"))
+
+    service._repo = AsyncMock()
+    service._repo.get_by_business_and_pending_action.return_value = None
+
+    mock_appointment = MagicMock()
+    mock_appointment.id = 1
+    service._repo.insert.return_value = mock_appointment
+
+    savepoint = AsyncMock()
+    session.begin_nested = AsyncMock(return_value=savepoint)
+
+    import pytest
+
+    with pytest.raises(RuntimeError, match="unexpected failure"):
+        await service.confirm_and_commit(
+            ConfirmPendingAppointmentCommand(
+                actor=_actor(),
+                pending_action_id=10,
+                expected_version=2,
+            )
+        )
+
+    savepoint.rollback.assert_called_once()
+    savepoint.commit.assert_not_called()
+    session.commit.assert_not_called()

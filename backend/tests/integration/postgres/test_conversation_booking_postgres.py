@@ -219,9 +219,7 @@ async def test_medical_escalation_no_appointment(
         gateway = _mock_gateway()
         validation = InternalValidationPort(session)
         appt_service = AppointmentService(session, validation=validation)
-        conv_service = ConversationService(
-            session, gateway, appointment_service=appt_service
-        )
+        conv_service = ConversationService(session, gateway, appointment_service=appt_service)
 
         await conv_service.process_message("medical-esc", 1, _actor(), "Book appointment")
         turn = await conv_service.process_message(

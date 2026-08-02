@@ -132,13 +132,6 @@ async def _seed_catalog(session: AsyncSession) -> None:
             "VALUES (1, 1, 'Priya', 'staff', true)"
         )
     )
-    await session.execute(
-        text(
-            "INSERT INTO business_users "
-            "(business_id, phone, role, is_active) "
-            "VALUES (1, '+919123456789', 'customer', true)"
-        )
-    )
     await session.flush()
 
 

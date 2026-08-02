@@ -48,10 +48,13 @@ from fonely.models.enums import (
     ResourceAllocationType,
 )
 from fonely.repositories.appointments import AppointmentRepository
+from fonely.services.authorization import require_existing_action_permission
 from fonely.services.pending_actions import PendingActionService
 
 _OVERLAP_CONSTRAINT = "ex_resource_allocations_active_overlap"
 _OVERLAP_SQLSTATE = "23P01"
+
+_DEFERRED_RESTORE_SQL = "SET CONSTRAINTS {} DEFERRED"
 
 
 def _pg_constraint_name(error: IntegrityError) -> str | None:
@@ -62,6 +65,10 @@ def _pg_constraint_name(error: IntegrityError) -> str | None:
             return name
         cause = getattr(cause, "__cause__", None)
     return None
+
+
+def _restore_deferred_sql(constraint_names: tuple[str, ...]) -> str:
+    return _DEFERRED_RESTORE_SQL.format(", ".join(constraint_names))
 
 
 class AppointmentService:
@@ -83,21 +90,15 @@ class AppointmentService:
         self,
         command: CreatePendingAppointmentCommand,
     ) -> AppointmentProposalResult:
-        facts = await self._resolve_facts(command)
-        data = CreateAppointmentData(
-            facts=facts,
-            customer_name=command.customer_name,
-            customer_phone=command.customer_phone,
-            reason=command.reason,
-            call_id=command.call_id,
-        )
-        envelope = PendingAppointmentEnvelope(data=data)
+        resolved_envelope = await self._resolve_envelope(command)
+        assert isinstance(resolved_envelope.data, CreateAppointmentData)
+        facts = resolved_envelope.data.facts
 
         pa_result = await self._pa_service.create(
             CreatePendingActionCommand(
                 actor=command.actor,
                 action_type=PendingActionType.APPOINTMENT,
-                payload=canonical_payload_dict(envelope),
+                payload=canonical_payload_dict(resolved_envelope),
                 expires_at=command.expires_at,
                 idempotency_key=command.idempotency_key,
             )
@@ -123,19 +124,25 @@ class AppointmentService:
         self,
         command: ConfirmPendingAppointmentCommand,
     ) -> PreCommitAppointmentOutcome:
-        context = CommitResultContext(
-            business_id=command.actor.business_id,
-            pending_action_id=command.pending_action_id,
-            expected_version=command.expected_version,
-            engine="appointment_engine",
+        action = await self._pa_service._require_action(
+            command.actor.business_id,
+            command.pending_action_id,
         )
+        await require_existing_action_permission(self._session, command.actor, action)
 
         existing = await self._repo.get_by_business_and_pending_action(
             command.actor.business_id,
             command.pending_action_id,
         )
         if existing is not None:
-            return self._replay_result(existing, command)
+            return self._replay_result(existing, action.version)
+
+        context = CommitResultContext(
+            business_id=command.actor.business_id,
+            pending_action_id=command.pending_action_id,
+            expected_version=command.expected_version,
+            engine="appointment_engine",
+        )
 
         begin_result = await self._pa_service.begin_commit(BeginCommitCommand(context=context))
         committing_version = begin_result.version
@@ -205,6 +212,9 @@ class AppointmentService:
             await self._repo.force_constraints(
                 set_constraints_immediate_sql(APPOINTMENT_CREATE_PRE_COMPLETION_CONSTRAINTS)
             )
+            await self._repo.force_constraints(
+                _restore_deferred_sql(APPOINTMENT_CREATE_PRE_COMPLETION_CONSTRAINTS)
+            )
 
             complete_result = await self._pa_service.complete_commit(
                 CompleteCommitCommand(
@@ -216,6 +226,9 @@ class AppointmentService:
 
             await self._repo.force_constraints(
                 set_constraints_immediate_sql(APPOINTMENT_CREATE_POST_COMPLETION_CONSTRAINTS)
+            )
+            await self._repo.force_constraints(
+                _restore_deferred_sql(APPOINTMENT_CREATE_POST_COMPLETION_CONSTRAINTS)
             )
 
         except IntegrityError as exc:
@@ -254,10 +267,10 @@ class AppointmentService:
                 pending_action_version=complete_result.version,
             )
 
-    async def _resolve_facts(
+    async def _resolve_envelope(
         self,
         command: CreatePendingAppointmentCommand,
-    ) -> AppointmentFacts:
+    ) -> PendingAppointmentEnvelope:
         stub_end = command.start_at + timedelta(minutes=1)
         stub_envelope = PendingAppointmentEnvelope(
             data=CreateAppointmentData(
@@ -279,12 +292,10 @@ class AppointmentService:
                 call_id=command.call_id,
             )
         )
-        resolved = await self._validation.validate_for_actor(
+        return await self._validation.validate_for_actor(
             command.actor,
             stub_envelope,
         )
-        assert isinstance(resolved.data, CreateAppointmentData)
-        return resolved.data.facts
 
     def _to_confirmation_facts(self, facts: AppointmentFacts) -> ConfirmationFactsResult:
         return ConfirmationFactsResult(
@@ -303,12 +314,12 @@ class AppointmentService:
     def _replay_result(
         self,
         appointment: object,
-        command: ConfirmPendingAppointmentCommand,
+        authoritative_version: int,
     ) -> PreCommitAppointmentSuccess:
         return PreCommitAppointmentSuccess(
             appointment=AppointmentConfirmationResult(
                 appointment_id=appointment.id,  # type: ignore[attr-defined]
-                pending_action_id=command.pending_action_id,
+                pending_action_id=appointment.pending_action_id,  # type: ignore[attr-defined]
                 service_id=appointment.service_id,  # type: ignore[attr-defined]
                 service_name=appointment.service_name_snapshot,  # type: ignore[attr-defined]
                 resource_id=appointment.resource_id,  # type: ignore[attr-defined]
@@ -318,5 +329,5 @@ class AppointmentService:
                 price=appointment.price_snapshot,  # type: ignore[attr-defined]
                 business_timezone=appointment.business_timezone_snapshot,  # type: ignore[attr-defined]
             ),
-            pending_action_version=command.expected_version,
+            pending_action_version=authoritative_version,
         )

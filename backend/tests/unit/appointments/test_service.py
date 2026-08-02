@@ -7,9 +7,7 @@ from fonely.domain.appointments.commands import (
     ConfirmPendingAppointmentCommand,
     CreatePendingAppointmentCommand,
 )
-from fonely.domain.appointments.results import (
-    PreCommitAppointmentSuccess,
-)
+from fonely.domain.appointments.results import PreCommitAppointmentSuccess
 from fonely.domain.pending_actions.commands import ActorContext
 from fonely.domain.pending_actions.payloads import (
     AppointmentFacts,
@@ -139,7 +137,7 @@ async def test_create_proposal_does_not_commit() -> None:
     session.commit.assert_not_called()
 
 
-async def test_proposal_skips_mark_awaiting_when_already_awaiting() -> None:
+async def test_proposal_validates_once() -> None:
     session = AsyncMock()
     validation = _mock_validation()
     pa_service_mock = AsyncMock()
@@ -155,7 +153,7 @@ async def test_proposal_skips_mark_awaiting_when_already_awaiting() -> None:
     service = AppointmentService(session, validation=validation)
     service._pa_service = pa_service_mock
 
-    result = await service.create_proposal(
+    await service.create_proposal(
         CreatePendingAppointmentCommand(
             actor=_actor(),
             service_id=1,
@@ -166,17 +164,17 @@ async def test_proposal_skips_mark_awaiting_when_already_awaiting() -> None:
         )
     )
 
-    pa_service_mock.mark_awaiting_confirmation.assert_not_called()
-    assert result.pending_action_id == 1
+    assert validation.validate_for_actor.call_count == 1
 
 
-async def test_confirm_replay_returns_existing_appointment() -> None:
+async def test_confirm_replay_returns_authoritative_version() -> None:
     session = AsyncMock()
     validation = _mock_validation()
     service = AppointmentService(session, validation=validation)
 
     existing = MagicMock()
     existing.id = 42
+    existing.pending_action_id = 10
     existing.service_id = 1
     existing.service_name_snapshot = "Haircut"
     existing.resource_id = 1
@@ -186,8 +184,16 @@ async def test_confirm_replay_returns_existing_appointment() -> None:
     existing.price_snapshot = None
     existing.business_timezone_snapshot = "Asia/Kolkata"
 
+    action = MagicMock()
+    action.business_id = 1
+    action.version = 5
+    action.initiated_by = "+919123456789"
+    action.action_type = "appointment"
+
     service._repo = AsyncMock()
     service._repo.get_by_business_and_pending_action.return_value = existing
+    service._pa_service = AsyncMock()
+    service._pa_service._require_action = AsyncMock(return_value=action)
 
     result = await service.confirm_and_commit(
         ConfirmPendingAppointmentCommand(
@@ -199,4 +205,5 @@ async def test_confirm_replay_returns_existing_appointment() -> None:
 
     assert isinstance(result, PreCommitAppointmentSuccess)
     assert result.appointment.appointment_id == 42
+    assert result.pending_action_version == 5
     session.commit.assert_not_called()

@@ -21,6 +21,7 @@ from fonely.domain.appointments.results import (
 )
 from fonely.domain.appointments.validation import AppointmentValidationPort
 from fonely.domain.pending_actions.commands import ActorContext
+from fonely.domain.pending_actions.errors import PendingActionUnauthorizedError
 from fonely.domain.pending_actions.payloads import (
     AppointmentFacts,
     CreateAppointmentData,
@@ -42,10 +43,10 @@ START = _slot_start()
 END = START + timedelta(minutes=30)
 
 
-def _actor(business_id: int = 1) -> ActorContext:
+def _actor(business_id: int = 1, phone: str = "+919123456789") -> ActorContext:
     return ActorContext(
         business_id=business_id,
-        normalized_phone="+919123456789",
+        normalized_phone=phone,
         verified_role=CallerRole.CUSTOMER,
     )
 
@@ -148,16 +149,18 @@ async def _create_and_confirm(
     validation: AppointmentValidationPort | None = None,
     idempotency_key: str = "test-appt-1",
     start_at: datetime = START,
+    actor: ActorContext | None = None,
 ) -> PreCommitAppointmentSuccess | PreCommitAppointmentFailure:
+    a = actor or _actor()
     v = validation or StubValidationPort(facts=_facts(start_at=start_at))
     service = AppointmentService(session, validation=v)
 
     proposal = await service.create_proposal(
         CreatePendingAppointmentCommand(
-            actor=_actor(),
+            actor=a,
             service_id=1,
             start_at=start_at,
-            customer_phone="+919123456789",
+            customer_phone=a.normalized_phone,
             expires_at=utcnow() + timedelta(minutes=15),
             idempotency_key=idempotency_key,
         )
@@ -165,7 +168,7 @@ async def _create_and_confirm(
 
     result = await service.confirm_and_commit(
         ConfirmPendingAppointmentCommand(
-            actor=_actor(),
+            actor=a,
             pending_action_id=proposal.pending_action_id,
             expected_version=proposal.version,
         )
@@ -270,7 +273,7 @@ async def test_outer_rollback_leaves_no_rows(
         assert pa_count == 0
 
 
-async def test_replay_returns_same_appointment(
+async def test_replay_returns_authoritative_version(
     pg_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     async with pg_session_factory() as session:
@@ -278,7 +281,6 @@ async def test_replay_returns_same_appointment(
         result1 = await _create_and_confirm(session)
         assert isinstance(result1, PreCommitAppointmentSuccess)
         pa_id = result1.appointment.pending_action_id
-        pa_version = result1.pending_action_version
         await session.commit()
 
     async with pg_session_factory() as session:
@@ -287,11 +289,75 @@ async def test_replay_returns_same_appointment(
             ConfirmPendingAppointmentCommand(
                 actor=_actor(),
                 pending_action_id=pa_id,
-                expected_version=pa_version,
+                expected_version=999,
             )
         )
         assert isinstance(result2, PreCommitAppointmentSuccess)
-        assert result2.appointment.appointment_id == result1.appointment.appointment_id
+        assert result2.appointment.appointment_id == (result1.appointment.appointment_id)
+        assert result2.pending_action_version == result1.pending_action_version
+        await session.rollback()
+
+
+async def test_unrelated_customer_cannot_confirm(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with pg_session_factory() as session:
+        await _seed_catalog(session)
+        service = AppointmentService(session, validation=StubValidationPort())
+        proposal = await service.create_proposal(
+            CreatePendingAppointmentCommand(
+                actor=_actor(),
+                service_id=1,
+                start_at=START,
+                customer_phone="+919123456789",
+                expires_at=utcnow() + timedelta(minutes=15),
+                idempotency_key="auth-test",
+            )
+        )
+
+        unrelated = _actor(phone="+919999999999")
+        with pytest.raises(PendingActionUnauthorizedError):
+            await service.confirm_and_commit(
+                ConfirmPendingAppointmentCommand(
+                    actor=unrelated,
+                    pending_action_id=proposal.pending_action_id,
+                    expected_version=proposal.version,
+                )
+            )
+
+        appt_count = await session.scalar(select(func.count(Appointment.id)))
+        assert appt_count == 0
+        await session.rollback()
+
+
+async def test_cross_tenant_confirm_forbidden(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with pg_session_factory() as session:
+        await _seed_catalog(session)
+        service = AppointmentService(session, validation=StubValidationPort())
+        proposal = await service.create_proposal(
+            CreatePendingAppointmentCommand(
+                actor=_actor(),
+                service_id=1,
+                start_at=START,
+                customer_phone="+919123456789",
+                expires_at=utcnow() + timedelta(minutes=15),
+                idempotency_key="tenant-test",
+            )
+        )
+
+        from fonely.domain.pending_actions.errors import PendingActionNotFoundError
+
+        cross_tenant = _actor(business_id=999)
+        with pytest.raises(PendingActionNotFoundError):
+            await service.confirm_and_commit(
+                ConfirmPendingAppointmentCommand(
+                    actor=cross_tenant,
+                    pending_action_id=proposal.pending_action_id,
+                    expected_version=proposal.version,
+                )
+            )
         await session.rollback()
 
 
@@ -320,7 +386,8 @@ async def test_different_resources_same_time_succeed(
         await _seed_catalog(session)
         await session.execute(
             text(
-                "INSERT INTO resources (id, business_id, name, resource_type, is_active) "
+                "INSERT INTO resources "
+                "(id, business_id, name, resource_type, is_active) "
                 "VALUES (2, 1, 'Mira', 'staff', true)"
             )
         )
@@ -338,4 +405,37 @@ async def test_different_resources_same_time_succeed(
             idempotency_key="res-2-slot",
         )
         assert isinstance(r2, PreCommitAppointmentSuccess)
+        await session.rollback()
+
+
+async def test_two_confirmations_in_one_outer_transaction(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with pg_session_factory() as session:
+        await _seed_catalog(session)
+        await session.execute(
+            text(
+                "INSERT INTO resources "
+                "(id, business_id, name, resource_type, is_active) "
+                "VALUES (2, 1, 'Mira', 'staff', true)"
+            )
+        )
+        await session.flush()
+
+        r1 = await _create_and_confirm(session, idempotency_key="dual-1", start_at=START)
+        assert isinstance(r1, PreCommitAppointmentSuccess)
+
+        shifted = START + timedelta(hours=3)
+        r2 = await _create_and_confirm(
+            session,
+            validation=StubValidationPort(facts=_facts(start_at=shifted, resource_id=2)),
+            idempotency_key="dual-2",
+            start_at=shifted,
+        )
+        assert isinstance(r2, PreCommitAppointmentSuccess)
+
+        appt_count = await session.scalar(select(func.count(Appointment.id)))
+        alloc_count = await session.scalar(select(func.count(ResourceAllocation.id)))
+        assert appt_count == 2
+        assert alloc_count == 2
         await session.rollback()

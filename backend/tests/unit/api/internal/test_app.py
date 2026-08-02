@@ -70,4 +70,4 @@ async def test_missing_business_id_returns_400(client: AsyncClient) -> None:
         },
         headers={"X-Actor-Phone": "+919123456789"},
     )
-    assert response.status_code in (400, 422)
+    assert response.status_code == 400

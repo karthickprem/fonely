@@ -50,9 +50,13 @@ async def _get_session(request: Request) -> AsyncSession:
 
 
 def _trusted_actor(request: Request) -> ActorContext:
+    business_id = int(request.headers.get("X-Business-ID", "0"))
+    phone = request.headers.get("X-Actor-Phone", "")
+    if business_id <= 0 or not phone:
+        raise HTTPException(status_code=400, detail="Missing trusted business/actor context")
     return ActorContext(
-        business_id=int(request.headers.get("X-Business-ID", "0")),
-        normalized_phone=request.headers.get("X-Actor-Phone", ""),
+        business_id=business_id,
+        normalized_phone=phone,
         verified_role=CallerRole(request.headers.get("X-Actor-Role", "customer")),
         session_id=request.headers.get("X-Session-ID"),
     )
@@ -71,9 +75,6 @@ async def create_proposal(
     correlation_id = _get_correlation_id(request)
     actor = _trusted_actor(request)
     start = time.monotonic()
-
-    if actor.business_id <= 0:
-        raise HTTPException(status_code=400, detail="Missing trusted business context")
 
     session = await _get_session(request)
     try:
@@ -153,9 +154,6 @@ async def confirm_proposal(
     correlation_id = _get_correlation_id(request)
     actor = _trusted_actor(request)
     start = time.monotonic()
-
-    if actor.business_id <= 0:
-        raise HTTPException(status_code=400, detail="Missing trusted business context")
 
     session = await _get_session(request)
     try:

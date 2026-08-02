@@ -151,7 +151,7 @@ class TestDockerConfiguration:
         assert compose.exists()
 
     def test_env_template_no_real_secrets(self) -> None:
-        template = Path(__file__).parents[2] / ".env.staging.template"
+        template = Path(__file__).parents[2] / "docs" / "staging-env.template"
         assert template.exists()
         content = template.read_text()
         assert "changeme" in content

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async
 
 from fonely.core.config import settings
 from fonely.core.logging_config import configure_logging
+from fonely.core.middleware import apply_hardening
 
 logger = logging.getLogger("fonely.app")
 
@@ -33,7 +34,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     try:
         yield
     finally:
+        logger.info("shutdown_signal_received")
         try:
+            pool = engine.pool
+            logger.info(
+                "pool_stats",
+                extra={
+                    "pool_size": pool.size(),
+                    "checked_in": pool.checkedin(),
+                    "checked_out": pool.checkedout(),
+                    "overflow": pool.overflow(),
+                },
+            )
             await engine.dispose()
             logger.info("shutdown_complete")
         except Exception:
@@ -55,6 +67,8 @@ def create_app() -> FastAPI:
         response: Response = await call_next(request)  # type: ignore[operator]
         response.headers["X-Correlation-ID"] = correlation_id
         return response
+
+    apply_hardening(app)
 
     if settings.internal_api_secret:
         from fonely.api.internal.appointments import router as appointment_router

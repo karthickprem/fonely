@@ -11,12 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from fonely.domain.appointments.validation import AppointmentValidationPort
 from fonely.domain.pending_actions.commands import ActorContext
+from fonely.domain.pending_actions.errors import PendingActionIdempotencyConflictError
 from fonely.domain.pending_actions.payloads import (
     AppointmentFacts,
     CreateAppointmentData,
     PendingAppointmentEnvelope,
 )
-from fonely.models.schema import Business, Resource, Service
+from fonely.domain.pending_actions.snapshots import payload_digest
+from fonely.models.schema import Business, Resource, Service, ServiceResourceEligibility
 
 
 class InternalValidationPort(AppointmentValidationPort):
@@ -51,6 +53,19 @@ class InternalValidationPort(AppointmentValidationPort):
         ).scalar_one_or_none()
         if resource is None:
             raise ValueError("Resource not found or inactive")
+
+        eligibility = (
+            await self._session.execute(
+                select(ServiceResourceEligibility).where(
+                    ServiceResourceEligibility.business_id == business_id,
+                    ServiceResourceEligibility.service_id == stub_facts.service_id,
+                    ServiceResourceEligibility.resource_id == stub_facts.resource_id,
+                    ServiceResourceEligibility.is_active.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+        if eligibility is None:
+            raise ValueError("Resource is not eligible for this service")
 
         start_at = stub_facts.start_at.astimezone(UTC)
         end_at = start_at + timedelta(minutes=service.duration_minutes)
@@ -117,10 +132,6 @@ class InternalValidationPort(AppointmentValidationPort):
             or current_facts.service_name != stored_facts.service_name
             or current_facts.resource_name != stored_facts.resource_name
         ):
-            from fonely.domain.pending_actions.errors import (
-                PendingActionIdempotencyConflictError,
-            )
-
             raise PendingActionIdempotencyConflictError(
                 "Authoritative facts changed since proposal; revalidation required"
             )
@@ -133,7 +144,10 @@ class InternalValidationPort(AppointmentValidationPort):
         proposed: PendingAppointmentEnvelope,
         stored: PendingAppointmentEnvelope,
     ) -> None:
-        pass
+        if payload_digest(proposed) != payload_digest(stored):
+            raise PendingActionIdempotencyConflictError(
+                "Idempotency key already used for a different appointment request"
+            )
 
     async def validate_completion_evidence(
         self,

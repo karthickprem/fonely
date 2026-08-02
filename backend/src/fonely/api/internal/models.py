@@ -5,17 +5,19 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+StrictPositiveId = Annotated[int, Field(gt=0, le=2_147_483_647, strict=True)]
+
 
 class AppointmentProposalRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    service_id: Annotated[int, Field(gt=0, le=2_147_483_647)]
-    resource_id: Annotated[int, Field(gt=0, le=2_147_483_647)]
+    service_id: StrictPositiveId
+    resource_id: StrictPositiveId
     start_at: datetime
     customer_name: str | None = Field(default=None, max_length=200)
     customer_phone: str = Field(min_length=1, max_length=20)
     reason: str | None = Field(default=None, max_length=500)
-    call_id: Annotated[int | None, Field(default=None, gt=0, le=2_147_483_647)]
+    call_id: Annotated[int | None, Field(default=None, gt=0, le=2_147_483_647, strict=True)]
     idempotency_key: str = Field(min_length=1, max_length=100)
     expires_at: datetime
 
@@ -37,7 +39,7 @@ class AppointmentProposalRequest(BaseModel):
 class AppointmentConfirmRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    expected_version: Annotated[int, Field(gt=0, le=2_147_483_647)]
+    expected_version: StrictPositiveId
 
 
 class ProposalResponse(BaseModel):

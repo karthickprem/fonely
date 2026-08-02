@@ -140,6 +140,13 @@ async def _seed_catalog(session: AsyncSession) -> None:
             "VALUES (1, 1, 'Priya', 'staff', true)"
         )
     )
+    await session.execute(
+        text(
+            "INSERT INTO service_resource_eligibility "
+            "(business_id, service_id, resource_id, is_active) "
+            "VALUES (1, 1, 1, true)"
+        )
+    )
     await session.flush()
 
 
@@ -395,6 +402,13 @@ async def test_different_resources_same_time_succeed(
                 "VALUES (2, 1, 'Mira', 'staff', true)"
             )
         )
+        await session.execute(
+            text(
+                "INSERT INTO service_resource_eligibility "
+                "(business_id, service_id, resource_id, is_active) "
+                "VALUES (1, 1, 2, true)"
+            )
+        )
         await session.flush()
 
         r1 = await _create_and_confirm(session, idempotency_key="res-1-slot")
@@ -422,6 +436,13 @@ async def test_two_confirmations_in_one_outer_transaction(
                 "INSERT INTO resources "
                 "(id, business_id, name, resource_type, is_active) "
                 "VALUES (2, 1, 'Mira', 'staff', true)"
+            )
+        )
+        await session.execute(
+            text(
+                "INSERT INTO service_resource_eligibility "
+                "(business_id, service_id, resource_id, is_active) "
+                "VALUES (1, 1, 2, true)"
             )
         )
         await session.flush()

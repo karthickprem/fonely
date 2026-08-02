@@ -95,6 +95,54 @@ def test_confirm_request_rejects_extra_fields() -> None:
         )
 
 
+def test_proposal_request_rejects_string_service_id() -> None:
+    with pytest.raises(ValidationError):
+        AppointmentProposalRequest(
+            service_id="1",  # type: ignore[arg-type]
+            resource_id=1,
+            start_at="2026-08-05T10:00:00Z",
+            customer_phone="+919123456789",
+            idempotency_key="test",
+            expires_at="2026-08-05T11:00:00Z",
+        )
+
+
+def test_proposal_request_rejects_boolean_service_id() -> None:
+    with pytest.raises(ValidationError):
+        AppointmentProposalRequest(
+            service_id=True,  # type: ignore[arg-type]
+            resource_id=1,
+            start_at="2026-08-05T10:00:00Z",
+            customer_phone="+919123456789",
+            idempotency_key="test",
+            expires_at="2026-08-05T11:00:00Z",
+        )
+
+
+def test_proposal_request_rejects_float_service_id() -> None:
+    with pytest.raises(ValidationError):
+        AppointmentProposalRequest(
+            service_id=1.0,  # type: ignore[arg-type]
+            resource_id=1,
+            start_at="2026-08-05T10:00:00Z",
+            customer_phone="+919123456789",
+            idempotency_key="test",
+            expires_at="2026-08-05T11:00:00Z",
+        )
+
+
+def test_proposal_request_accepts_valid_request() -> None:
+    req = AppointmentProposalRequest(
+        service_id=1,
+        resource_id=1,
+        start_at="2026-08-05T10:00:00Z",
+        customer_phone="+919123456789",
+        idempotency_key="test",
+        expires_at="2026-08-05T11:00:00Z",
+    )
+    assert req.service_id == 1
+
+
 def test_error_response_shape() -> None:
     resp = ErrorResponse(
         correlation_id="abc",

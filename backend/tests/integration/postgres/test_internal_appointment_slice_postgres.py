@@ -52,6 +52,13 @@ async def _seed_salon(session: AsyncSession) -> None:
             "VALUES (1, 1, 'Priya', 'staff', true)"
         )
     )
+    await session.execute(
+        text(
+            "INSERT INTO service_resource_eligibility "
+            "(business_id, service_id, resource_id, is_active) "
+            "VALUES (1, 1, 1, true)"
+        )
+    )
     await session.commit()
 
 

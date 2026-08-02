@@ -1,8 +1,12 @@
 """PostgreSQL integration tests for onboarding persistence lifecycle."""
 
+import os
+import subprocess
+from pathlib import Path
+
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from fonely.domain.onboarding.commands import (
     DraftTransitionCommand,
@@ -236,3 +240,123 @@ async def test_approve_requires_owner(pg_session: AsyncSession) -> None:
                 expected_version=2,
             )
         )
+
+
+# =============================================================================
+# Populated migration roundtrip
+# =============================================================================
+
+BACKEND_ROOT = Path(__file__).parents[3]
+
+
+def _run_alembic(database_url: str, *args: str) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["DATABASE_URL"] = database_url
+    result = subprocess.run(
+        [str(BACKEND_ROOT / ".venv" / "bin" / "alembic"), *args],
+        cwd=BACKEND_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        msg = (result.stderr or "").strip()
+        if not msg:
+            msg = (result.stdout or "").strip()
+        raise RuntimeError(f"alembic {' '.join(args)} failed (rc={result.returncode}): {msg}")
+    return result
+
+
+async def test_populated_onboarding_migration_roundtrip(
+    pg_engine: AsyncEngine, postgres_database_url: str
+) -> None:
+    """Prove onboarding data survives 0005 → 0006 → 0005 → 0006."""
+    url = postgres_database_url
+
+    _run_alembic(url, "downgrade", "0005")
+
+    async with pg_engine.begin() as conn:
+        rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
+        assert rev == "0005"
+
+    _run_alembic(url, "upgrade", "head")
+
+    async with pg_engine.begin() as conn:
+        rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
+        assert rev == "0006"
+
+        await conn.execute(
+            text(
+                "INSERT INTO businesses "
+                "(id, name, category, primary_contact_phone, timezone, subscription) "
+                "VALUES (1, 'Roundtrip Clinic', 'clinic', '+914400000001', "
+                "'Asia/Kolkata', 'trial')"
+            )
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO business_users "
+                "(id, business_id, phone, role, is_active) VALUES "
+                "(1, 1, '+914400000001', 'owner', true)"
+            )
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO business_onboarding_drafts "
+                "(id, business_id, version, status, draft_data, draft_digest, "
+                "submitted_by_user_id) VALUES "
+                "(1, 1, 4, 'activated', :data, 'roundtrip_digest_0000000000000000', 1)"
+            ),
+            {"data": '{"schema_version": 1, "draft_id": "roundtrip"}'},
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO business_configuration_commits "
+                "(id, business_id, onboarding_draft_id, draft_digest, "
+                "committed_by_user_id, commit_evidence) VALUES "
+                "(1, 1, 1, 'roundtrip_digest_0000000000000000', 1, "
+                ":evidence)"
+            ),
+            {"evidence": '{"services_count": 3}'},
+        )
+
+    _run_alembic(url, "downgrade", "0005")
+
+    async with pg_engine.begin() as conn:
+        rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
+        assert rev == "0005"
+
+        has_drafts = await conn.scalar(
+            text(
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_name = 'business_onboarding_drafts'"
+            )
+        )
+        assert has_drafts is None
+
+    _run_alembic(url, "upgrade", "head")
+
+    async with pg_engine.begin() as conn:
+        rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
+        assert rev == "0006"
+
+        tables_exist = await conn.scalar(
+            text(
+                "SELECT count(*) FROM information_schema.tables "
+                "WHERE table_name IN ('business_onboarding_drafts', "
+                "'business_configuration_commits')"
+            )
+        )
+        assert tables_exist == 2
+
+        draft_count = await conn.scalar(text("SELECT count(*) FROM business_onboarding_drafts"))
+        assert draft_count == 0
+
+        commit_count = await conn.scalar(
+            text("SELECT count(*) FROM business_configuration_commits")
+        )
+        assert commit_count == 0
+
+        business_survived = await conn.scalar(text("SELECT count(*) FROM businesses WHERE id = 1"))
+        assert business_survived == 1

@@ -93,9 +93,9 @@ def _get_actor_user_id(request: Request) -> int:
     return uid
 
 
-async def _get_session(request: Request) -> AsyncSession:
+def _get_factory(request: Request) -> async_sessionmaker[AsyncSession]:
     factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
-    return factory()
+    return factory
 
 
 def _map_error(exc: OnboardingError) -> HTTPException:
@@ -116,33 +116,28 @@ def _map_error(exc: OnboardingError) -> HTTPException:
 async def submit_draft(body: SubmitDraftRequest, request: Request) -> OnboardingDraftResponse:
     _verify_internal_auth(request)
     business_id = _get_business_id(request)
-    session = await _get_session(request)
-    try:
-        service = OnboardingService(session)
-        result = await service.submit_draft(
-            SubmitDraftCommand(
-                business_id=business_id,
-                actor_user_id=None,
-                draft_data=body.draft_data,
+    async with _get_factory(request)() as session:
+        try:
+            result = await OnboardingService(session).submit_draft(
+                SubmitDraftCommand(
+                    business_id=business_id, actor_user_id=None, draft_data=body.draft_data
+                )
             )
-        )
-        await session.commit()
-        return OnboardingDraftResponse(
-            id=result.id,
-            business_id=result.business_id,
-            status=result.status,
-            draft_digest=result.draft_digest,
-            version=result.version,
-            idempotent_replay=result.idempotent_replay,
-        )
-    except OnboardingError as exc:
-        await session.rollback()
-        raise _map_error(exc) from exc
-    except Exception:
-        await session.rollback()
-        raise
-    finally:
-        await session.close()
+            await session.commit()
+            return OnboardingDraftResponse(
+                id=result.id,
+                business_id=result.business_id,
+                status=result.status,
+                draft_digest=result.draft_digest,
+                version=result.version,
+                idempotent_replay=result.idempotent_replay,
+            )
+        except OnboardingError as exc:
+            await session.rollback()
+            raise _map_error(exc) from exc
+        except Exception:
+            await session.rollback()
+            raise
 
 
 @router.post(
@@ -155,33 +150,30 @@ async def submit_for_review(
     _verify_internal_auth(request)
     business_id = _get_business_id(request)
     actor_user_id = _get_actor_user_id(request)
-    session = await _get_session(request)
-    try:
-        service = OnboardingService(session)
-        result = await service.submit_for_review(
-            DraftTransitionCommand(
-                business_id=business_id,
-                draft_id=draft_id,
-                actor_user_id=actor_user_id,
-                expected_version=body.expected_version,
+    async with _get_factory(request)() as session:
+        try:
+            result = await OnboardingService(session).submit_for_review(
+                DraftTransitionCommand(
+                    business_id=business_id,
+                    draft_id=draft_id,
+                    actor_user_id=actor_user_id,
+                    expected_version=body.expected_version,
+                )
             )
-        )
-        await session.commit()
-        return OnboardingDraftResponse(
-            id=result.id,
-            business_id=result.business_id,
-            status=result.status,
-            draft_digest=result.draft_digest,
-            version=result.version,
-        )
-    except OnboardingError as exc:
-        await session.rollback()
-        raise _map_error(exc) from exc
-    except Exception:
-        await session.rollback()
-        raise
-    finally:
-        await session.close()
+            await session.commit()
+            return OnboardingDraftResponse(
+                id=result.id,
+                business_id=result.business_id,
+                status=result.status,
+                draft_digest=result.draft_digest,
+                version=result.version,
+            )
+        except OnboardingError as exc:
+            await session.rollback()
+            raise _map_error(exc) from exc
+        except Exception:
+            await session.rollback()
+            raise
 
 
 @router.post(
@@ -194,33 +186,30 @@ async def approve_draft(
     _verify_internal_auth(request)
     business_id = _get_business_id(request)
     actor_user_id = _get_actor_user_id(request)
-    session = await _get_session(request)
-    try:
-        service = OnboardingService(session)
-        result = await service.approve_draft(
-            DraftTransitionCommand(
-                business_id=business_id,
-                draft_id=draft_id,
-                actor_user_id=actor_user_id,
-                expected_version=body.expected_version,
+    async with _get_factory(request)() as session:
+        try:
+            result = await OnboardingService(session).approve_draft(
+                DraftTransitionCommand(
+                    business_id=business_id,
+                    draft_id=draft_id,
+                    actor_user_id=actor_user_id,
+                    expected_version=body.expected_version,
+                )
             )
-        )
-        await session.commit()
-        return OnboardingDraftResponse(
-            id=result.id,
-            business_id=result.business_id,
-            status=result.status,
-            draft_digest=result.draft_digest,
-            version=result.version,
-        )
-    except OnboardingError as exc:
-        await session.rollback()
-        raise _map_error(exc) from exc
-    except Exception:
-        await session.rollback()
-        raise
-    finally:
-        await session.close()
+            await session.commit()
+            return OnboardingDraftResponse(
+                id=result.id,
+                business_id=result.business_id,
+                status=result.status,
+                draft_digest=result.draft_digest,
+                version=result.version,
+            )
+        except OnboardingError as exc:
+            await session.rollback()
+            raise _map_error(exc) from exc
+        except Exception:
+            await session.rollback()
+            raise
 
 
 @router.post(
@@ -233,38 +222,35 @@ async def activate_configuration(
     _verify_internal_auth(request)
     business_id = _get_business_id(request)
     actor_user_id = _get_actor_user_id(request)
-    session = await _get_session(request)
-    try:
-        service = OnboardingService(session)
-        result = await service.activate_configuration(
-            DraftTransitionCommand(
-                business_id=business_id,
-                draft_id=draft_id,
-                actor_user_id=actor_user_id,
-                expected_version=body.expected_version,
+    async with _get_factory(request)() as session:
+        try:
+            result = await OnboardingService(session).activate_configuration(
+                DraftTransitionCommand(
+                    business_id=business_id,
+                    draft_id=draft_id,
+                    actor_user_id=actor_user_id,
+                    expected_version=body.expected_version,
+                )
             )
-        )
-        await session.commit()
-        resp = ActivationResponse(success=result.success, commit_id=result.commit_id)
-        if result.evidence is not None:
-            resp = ActivationResponse(
-                success=result.success,
-                commit_id=result.commit_id,
-                services_count=result.evidence.services_count,
-                resources_count=result.evidence.resources_count,
-                eligibilities_count=result.evidence.eligibilities_count,
-                schedules_count=result.evidence.schedules_count,
-                exceptions_count=result.evidence.exceptions_count,
-            )
-        return resp
-    except OnboardingError as exc:
-        await session.rollback()
-        raise _map_error(exc) from exc
-    except Exception:
-        await session.rollback()
-        raise
-    finally:
-        await session.close()
+            await session.commit()
+            resp = ActivationResponse(success=result.success, commit_id=result.commit_id)
+            if result.evidence is not None:
+                resp = ActivationResponse(
+                    success=result.success,
+                    commit_id=result.commit_id,
+                    services_count=result.evidence.services_count,
+                    resources_count=result.evidence.resources_count,
+                    eligibilities_count=result.evidence.eligibilities_count,
+                    schedules_count=result.evidence.schedules_count,
+                    exceptions_count=result.evidence.exceptions_count,
+                )
+            return resp
+        except OnboardingError as exc:
+            await session.rollback()
+            raise _map_error(exc) from exc
+        except Exception:
+            await session.rollback()
+            raise
 
 
 @router.post(
@@ -277,33 +263,30 @@ async def reject_draft(
     _verify_internal_auth(request)
     business_id = _get_business_id(request)
     actor_user_id = _get_actor_user_id(request)
-    session = await _get_session(request)
-    try:
-        service = OnboardingService(session)
-        result = await service.reject_draft(
-            DraftTransitionCommand(
-                business_id=business_id,
-                draft_id=draft_id,
-                actor_user_id=actor_user_id,
-                expected_version=body.expected_version,
+    async with _get_factory(request)() as session:
+        try:
+            result = await OnboardingService(session).reject_draft(
+                DraftTransitionCommand(
+                    business_id=business_id,
+                    draft_id=draft_id,
+                    actor_user_id=actor_user_id,
+                    expected_version=body.expected_version,
+                )
             )
-        )
-        await session.commit()
-        return OnboardingDraftResponse(
-            id=result.id,
-            business_id=result.business_id,
-            status=result.status,
-            draft_digest=result.draft_digest,
-            version=result.version,
-        )
-    except OnboardingError as exc:
-        await session.rollback()
-        raise _map_error(exc) from exc
-    except Exception:
-        await session.rollback()
-        raise
-    finally:
-        await session.close()
+            await session.commit()
+            return OnboardingDraftResponse(
+                id=result.id,
+                business_id=result.business_id,
+                status=result.status,
+                draft_digest=result.draft_digest,
+                version=result.version,
+            )
+        except OnboardingError as exc:
+            await session.rollback()
+            raise _map_error(exc) from exc
+        except Exception:
+            await session.rollback()
+            raise
 
 
 @router.get(
@@ -313,18 +296,17 @@ async def reject_draft(
 async def get_draft(draft_id: int, request: Request) -> OnboardingDraftResponse:
     _verify_internal_auth(request)
     business_id = _get_business_id(request)
-    session = await _get_session(request)
-    try:
-        service = OnboardingService(session)
-        result = await service.get_draft(GetDraftQuery(business_id=business_id, draft_id=draft_id))
-        return OnboardingDraftResponse(
-            id=result.id,
-            business_id=result.business_id,
-            status=result.status,
-            draft_digest=result.draft_digest,
-            version=result.version,
-        )
-    except OnboardingError as exc:
-        raise _map_error(exc) from exc
-    finally:
-        await session.close()
+    async with _get_factory(request)() as session:
+        try:
+            result = await OnboardingService(session).get_draft(
+                GetDraftQuery(business_id=business_id, draft_id=draft_id)
+            )
+            return OnboardingDraftResponse(
+                id=result.id,
+                business_id=result.business_id,
+                status=result.status,
+                draft_digest=result.draft_digest,
+                version=result.version,
+            )
+        except OnboardingError as exc:
+            raise _map_error(exc) from exc

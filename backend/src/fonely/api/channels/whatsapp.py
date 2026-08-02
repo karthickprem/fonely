@@ -3,7 +3,7 @@
 import logging
 
 from fastapi import APIRouter, BackgroundTasks, Request, Response
-from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fonely.api.internal.validation import InternalValidationPort
 from fonely.core.config import settings
@@ -128,7 +128,7 @@ async def _handle_message(
     factory = getattr(app, "state", None)
     if factory is None:
         return
-    session_factory: async_sessionmaker = getattr(factory, "session_factory", None)  # type: ignore[assignment]
+    session_factory: async_sessionmaker[AsyncSession] = getattr(factory, "session_factory", None)  # type: ignore[assignment]
     gateway = getattr(factory, "model_gateway", None)
     if session_factory is None or gateway is None:
         return

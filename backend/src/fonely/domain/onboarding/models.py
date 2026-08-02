@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import time, timedelta
+from datetime import date, time, timedelta
 from decimal import Decimal
 from typing import Annotated, Any
 
@@ -22,19 +22,23 @@ from fonely.domain.onboarding.enums import (
 from fonely.domain.onboarding.errors import DraftLimitExceededError
 from fonely.domain.onboarding.limits import (
     MAX_LANGUAGES,
-    MAX_LOCATION_KEYS_PER_SERVICE,
+    MAX_LOCATION_KEYS_PER_ENTITY,
     MAX_LOCATIONS,
     MAX_LONG_TEXT,
     MAX_PRODUCTS,
     MAX_PROVENANCE_ENTRIES,
+    MAX_PROVENANCE_PATHS,
     MAX_RESOURCE_KEYS_PER_SERVICE,
     MAX_RESOURCES,
+    MAX_REVIEWER_REF,
     MAX_SCHEDULE_EXCEPTIONS,
     MAX_SCHEDULE_PERIODS,
     MAX_SERVICE_KEYS_PER_RESOURCE,
     MAX_SERVICES,
     MAX_SHORT_TEXT,
+    MAX_SOURCE_BATCHES,
     SCHEMA_VERSION,
+    SUPPORTED_CURRENCIES,
 )
 
 ShortText = Annotated[str, Field(min_length=1, max_length=MAX_SHORT_TEXT)]
@@ -47,7 +51,7 @@ class SourceReference(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     source_type: SourceType
-    source_id: str = Field(max_length=MAX_SHORT_TEXT)
+    source_id: str = Field(min_length=1, max_length=MAX_SHORT_TEXT)
     locator: str | None = Field(default=None, max_length=MAX_SHORT_TEXT)
     batch_id: str | None = Field(default=None, max_length=MAX_SHORT_TEXT)
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -58,9 +62,17 @@ class SourceReference(BaseModel):
 class ProvenanceField(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    review_status: ReviewStatus = ReviewStatus.CLEAR
+    review_status: ReviewStatus = ReviewStatus.MISSING
     sources: tuple[SourceReference, ...] = ()
     resolved_value: str | None = Field(default=None, max_length=MAX_LONG_TEXT)
+
+    @model_validator(mode="after")
+    def _check_sources_limit(self) -> ProvenanceField:
+        if len(self.sources) > MAX_PROVENANCE_ENTRIES:
+            raise DraftLimitExceededError(
+                "provenance_sources", MAX_PROVENANCE_ENTRIES, len(self.sources)
+            )
+        return self
 
     def with_correction(self, resolved: str, source: SourceReference) -> ProvenanceField:
         return ProvenanceField(
@@ -76,11 +88,39 @@ class ProvenanceField(BaseModel):
             resolved_value=self.resolved_value,
         )
 
-    def _check_sources_limit(self) -> None:
-        if len(self.sources) > MAX_PROVENANCE_ENTRIES:
+    def has_evidence(self) -> bool:
+        return len(self.sources) > 0
+
+
+class FieldProvenance(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    fields: tuple[tuple[str, ProvenanceField], ...] = ()
+
+    @model_validator(mode="after")
+    def _check_limits(self) -> FieldProvenance:
+        if len(self.fields) > MAX_PROVENANCE_PATHS:
             raise DraftLimitExceededError(
-                "provenance_sources", MAX_PROVENANCE_ENTRIES, len(self.sources)
+                "field_provenance_paths", MAX_PROVENANCE_PATHS, len(self.fields)
             )
+        seen: set[str] = set()
+        for path, _ in self.fields:
+            if path in seen:
+                raise ValueError(f"Duplicate provenance path: {path}")
+            seen.add(path)
+        return self
+
+    def get(self, path: str) -> ProvenanceField | None:
+        for p, prov in self.fields:
+            if p == path:
+                return prov
+        return None
+
+    def with_field(self, path: str, prov: ProvenanceField) -> FieldProvenance:
+        entries = [(p, v) for p, v in self.fields if p != path]
+        entries.append((path, prov))
+        entries.sort(key=lambda e: e[0])
+        return FieldProvenance(fields=tuple(entries))
 
 
 class PricePolicy(BaseModel):
@@ -102,11 +142,15 @@ class PricePolicy(BaseModel):
                 raise ValueError("fixed price requires amount")
             if self.amount < 0:
                 raise ValueError("fixed price amount must be non-negative")
+            if self.minimum is not None or self.maximum is not None:
+                raise ValueError("fixed price must not specify minimum or maximum")
         elif kind is PriceKind.STARTING_FROM:
             if self.minimum is None:
                 raise ValueError("starting_from price requires minimum")
             if self.minimum < 0:
                 raise ValueError("starting_from minimum must be non-negative")
+            if self.amount is not None or self.maximum is not None:
+                raise ValueError("starting_from must not specify amount or maximum")
         elif kind is PriceKind.RANGE:
             if self.minimum is None or self.maximum is None:
                 raise ValueError("range price requires minimum and maximum")
@@ -114,12 +158,16 @@ class PricePolicy(BaseModel):
                 raise ValueError("range amounts must be non-negative")
             if self.minimum > self.maximum:
                 raise ValueError("range minimum must not exceed maximum")
+            if self.amount is not None:
+                raise ValueError("range price must not specify amount")
         elif kind in {PriceKind.VARIABLE, PriceKind.CONSULTATION_REQUIRED}:
             if self.amount is not None or self.minimum is not None or self.maximum is not None:
                 raise ValueError(f"{kind.value} price must not specify amounts")
         elif kind is PriceKind.NOT_PROVIDED:
             if self.amount is not None or self.minimum is not None or self.maximum is not None:
                 raise ValueError("not_provided price must not specify amounts")
+        if self.currency.upper() not in SUPPORTED_CURRENCIES:
+            raise ValueError(f"Unsupported currency: {self.currency}")
         return self
 
 
@@ -141,7 +189,7 @@ class SchedulePeriod(BaseModel):
 class ScheduleException(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    date: str = Field(min_length=10, max_length=10)
+    date: date
     is_closed: bool = True
     start: time | None = None
     end: time | None = None
@@ -205,7 +253,7 @@ class LocationDraft(BaseModel):
     contact: ContactInfo = Field(default_factory=ContactInfo)
     is_active: bool = True
     schedule: WeeklySchedule = Field(default_factory=WeeklySchedule)
-    provenance: ProvenanceField = Field(default_factory=ProvenanceField)
+    provenance: FieldProvenance = Field(default_factory=FieldProvenance)
 
 
 class ServiceDraft(BaseModel):
@@ -223,13 +271,13 @@ class ServiceDraft(BaseModel):
     price: PricePolicy | None = None
     eligible_resource_keys: tuple[str, ...] = ()
     requires_resource: bool = True
-    provenance: ProvenanceField = Field(default_factory=ProvenanceField)
+    provenance: FieldProvenance = Field(default_factory=FieldProvenance)
 
     @model_validator(mode="after")
     def _check_limits(self) -> ServiceDraft:
-        if len(self.location_keys) > MAX_LOCATION_KEYS_PER_SERVICE:
+        if len(self.location_keys) > MAX_LOCATION_KEYS_PER_ENTITY:
             raise DraftLimitExceededError(
-                "service_location_keys", MAX_LOCATION_KEYS_PER_SERVICE, len(self.location_keys)
+                "service_location_keys", MAX_LOCATION_KEYS_PER_ENTITY, len(self.location_keys)
             )
         if len(self.eligible_resource_keys) > MAX_RESOURCE_KEYS_PER_SERVICE:
             raise DraftLimitExceededError(
@@ -250,7 +298,7 @@ class ResourceDraft(BaseModel):
     service_keys: tuple[str, ...] = ()
     schedule: WeeklySchedule = Field(default_factory=WeeklySchedule)
     is_active: bool = True
-    provenance: ProvenanceField = Field(default_factory=ProvenanceField)
+    provenance: FieldProvenance = Field(default_factory=FieldProvenance)
 
     @model_validator(mode="after")
     def _check_limits(self) -> ResourceDraft:
@@ -259,6 +307,12 @@ class ResourceDraft(BaseModel):
                 "resource_service_keys",
                 MAX_SERVICE_KEYS_PER_RESOURCE,
                 len(self.service_keys),
+            )
+        if len(self.location_keys) > MAX_LOCATION_KEYS_PER_ENTITY:
+            raise DraftLimitExceededError(
+                "resource_location_keys",
+                MAX_LOCATION_KEYS_PER_ENTITY,
+                len(self.location_keys),
             )
         return self
 
@@ -273,7 +327,17 @@ class ProductDraft(BaseModel):
     price: PricePolicy | None = None
     is_active: bool = True
     location_keys: tuple[str, ...] = ()
-    provenance: ProvenanceField = Field(default_factory=ProvenanceField)
+    provenance: FieldProvenance = Field(default_factory=FieldProvenance)
+
+    @model_validator(mode="after")
+    def _check_limits(self) -> ProductDraft:
+        if len(self.location_keys) > MAX_LOCATION_KEYS_PER_ENTITY:
+            raise DraftLimitExceededError(
+                "product_location_keys",
+                MAX_LOCATION_KEYS_PER_ENTITY,
+                len(self.location_keys),
+            )
+        return self
 
 
 class PolicyDraft(BaseModel):
@@ -287,7 +351,7 @@ class PolicyDraft(BaseModel):
     walk_in_allowed: bool | None = None
     resource_selection_required: bool | None = None
     owner_review_required: bool = True
-    provenance: ProvenanceField = Field(default_factory=ProvenanceField)
+    provenance: FieldProvenance = Field(default_factory=FieldProvenance)
 
 
 class BusinessOnboardingDraft(BaseModel):
@@ -310,10 +374,7 @@ class BusinessOnboardingDraft(BaseModel):
     source_batches: tuple[str, ...] = ()
     created_at: str | None = Field(default=None, max_length=MAX_SHORT_TEXT)
     updated_at: str | None = Field(default=None, max_length=MAX_SHORT_TEXT)
-    business_name_provenance: ProvenanceField = Field(default_factory=ProvenanceField)
-    business_category_provenance: ProvenanceField = Field(default_factory=ProvenanceField)
-    timezone_provenance: ProvenanceField = Field(default_factory=ProvenanceField)
-    currency_provenance: ProvenanceField = Field(default_factory=ProvenanceField)
+    provenance: FieldProvenance = Field(default_factory=FieldProvenance)
 
     @model_validator(mode="after")
     def _check_collection_limits(self) -> BusinessOnboardingDraft:
@@ -322,13 +383,14 @@ class BusinessOnboardingDraft(BaseModel):
         _assert_limit("resources", self.resources, MAX_RESOURCES)
         _assert_limit("products", self.products, MAX_PRODUCTS)
         _assert_limit("preferred_languages", self.preferred_languages, MAX_LANGUAGES)
+        _assert_limit("source_batches", self.source_batches, MAX_SOURCE_BATCHES)
         return self
 
     def canonical_digest(self) -> str:
         return compute_canonical_digest(self)
 
     def with_updates(self, **kwargs: Any) -> BusinessOnboardingDraft:
-        return self.model_copy(update=kwargs)
+        return BusinessOnboardingDraft.model_validate({**self.model_dump(mode="json"), **kwargs})
 
 
 def _assert_limit(name: str, collection: tuple[Any, ...], limit: int) -> None:
@@ -336,11 +398,23 @@ def _assert_limit(name: str, collection: tuple[Any, ...], limit: int) -> None:
         raise DraftLimitExceededError(name, limit, len(collection))
 
 
+def _normalize_for_digest(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        return {k: _normalize_for_digest(v) for k, v in sorted(obj.items())}
+    if isinstance(obj, (list, tuple)):
+        items = [_normalize_for_digest(i) for i in obj]
+        if items and isinstance(items[0], (str, int, float)):
+            return sorted(items, key=str)
+        return items
+    return obj
+
+
 def compute_canonical_digest(draft: BusinessOnboardingDraft) -> str:
     data = draft.model_dump(mode="json")
     for key in _DIGEST_EXCLUDES:
         data.pop(key, None)
-    canonical = json.dumps(data, sort_keys=True, default=str, ensure_ascii=False)
+    normalized = _normalize_for_digest(data)
+    canonical = json.dumps(normalized, sort_keys=True, default=str, ensure_ascii=False)
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:32]
 
 
@@ -352,3 +426,12 @@ def effective_duration(service: ServiceDraft) -> timedelta | None:
     if service.duration_minutes is None:
         return None
     return timedelta(minutes=service.duration_minutes)
+
+
+def validate_reviewer_ref(reviewer_ref: str) -> str:
+    stripped = reviewer_ref.strip()
+    if not stripped:
+        raise ValueError("Reviewer reference must not be empty or whitespace")
+    if len(stripped) > MAX_REVIEWER_REF:
+        raise ValueError(f"Reviewer reference exceeds {MAX_REVIEWER_REF} characters")
+    return stripped

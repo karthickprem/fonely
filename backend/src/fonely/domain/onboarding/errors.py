@@ -32,3 +32,9 @@ class DraftLimitExceededError(OnboardingError):
         self.limit = limit
         self.actual = actual
         super().__init__(f"{field}: limit {limit}, got {actual}")
+
+
+class InvalidReviewerError(OnboardingError):
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+        super().__init__(f"Invalid reviewer reference: {reason}")

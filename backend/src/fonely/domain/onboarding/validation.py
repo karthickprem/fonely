@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fonely.domain.onboarding.enums import (
@@ -10,15 +11,42 @@ from fonely.domain.onboarding.enums import (
     PriceKind,
     ReviewStatus,
 )
-from fonely.domain.onboarding.limits import MAX_ISSUES, SCHEMA_VERSION
+from fonely.domain.onboarding.limits import MAX_ISSUES, SCHEMA_VERSION, SUPPORTED_CURRENCIES
 from fonely.domain.onboarding.models import (
     BusinessOnboardingDraft,
     PricePolicy,
+    ProvenanceField,
+    ResourceDraft,
     SchedulePeriod,
     WeeklySchedule,
     effective_timezone,
 )
 from fonely.domain.onboarding.results import ValidationIssue, ValidationResult
+
+_UNRESOLVED_STATUSES = frozenset(
+    {
+        ReviewStatus.MISSING,
+        ReviewStatus.AMBIGUOUS,
+        ReviewStatus.CONFLICTING,
+        ReviewStatus.UNREADABLE,
+        ReviewStatus.UNSUPPORTED,
+    }
+)
+
+_EVIDENCE_REQUIRED_STATUSES = frozenset(
+    {
+        ReviewStatus.CLEAR,
+        ReviewStatus.OWNER_CONFIRMED,
+        ReviewStatus.OWNER_CORRECTED,
+    }
+)
+
+_BUSINESS_REQUIRED_FIELDS = (
+    "business_name",
+    "business_category",
+    "default_timezone",
+    "default_currency",
+)
 
 
 def validate_draft(draft: BusinessOnboardingDraft) -> ValidationResult:
@@ -31,7 +59,7 @@ def validate_draft(draft: BusinessOnboardingDraft) -> ValidationResult:
     _validate_resources(draft, issues)
     _validate_products(draft, issues)
     _validate_policy(draft, issues)
-    _validate_provenance(draft, issues)
+    _validate_field_provenance(draft, issues)
 
     issues.sort(key=_issue_sort_key)
     if len(issues) > MAX_ISSUES:
@@ -116,14 +144,14 @@ def _validate_business(draft: BusinessOnboardingDraft, issues: list[ValidationIs
             category=IssueCategory.MISSING,
             message="Default timezone is required",
         )
-    if len(draft.default_currency) != 3:
+    if draft.default_currency.upper() not in SUPPORTED_CURRENCIES:
         _add(
             issues,
             path="default_currency",
-            code="invalid_currency",
+            code="unsupported_currency",
             severity=IssueSeverity.BLOCKER,
             category=IssueCategory.INVALID,
-            message="Currency must be a 3-letter code",
+            message=f"Unsupported currency: {draft.default_currency}",
         )
     active_locations = [loc for loc in draft.locations if loc.is_active]
     if not active_locations:
@@ -165,18 +193,34 @@ def _validate_locations(draft: BusinessOnboardingDraft, issues: list[ValidationI
 
 
 def _validate_schedule(schedule: WeeklySchedule, path: str, issues: list[ValidationIssue]) -> None:
-    for index, period in enumerate(schedule.periods):
-        _validate_period(period, f"{path}.periods[{index}]", issues)
     seen_days: dict[int, list[SchedulePeriod]] = {}
     for period in schedule.periods:
-        if period.is_closed:
-            continue
         seen_days.setdefault(period.day.value, []).append(period)
-    for day_val, periods in seen_days.items():
-        if len(periods) > 1:
-            sorted_periods = sorted(periods, key=lambda p: p.start)
-            for i in range(len(sorted_periods) - 1):
-                if sorted_periods[i].end > sorted_periods[i + 1].start:
+    for day_val, periods in sorted(seen_days.items()):
+        open_periods = [p for p in periods if not p.is_closed]
+        closed_periods = [p for p in periods if p.is_closed]
+        if open_periods and closed_periods:
+            _add(
+                issues,
+                path=f"{path}.periods",
+                code="schedule_closed_open_conflict",
+                severity=IssueSeverity.BLOCKER,
+                category=IssueCategory.CONFLICTING,
+                message=f"Day {day_val} has both open and closed periods",
+            )
+        if len(closed_periods) > 1:
+            _add(
+                issues,
+                path=f"{path}.periods",
+                code="schedule_duplicate_closed",
+                severity=IssueSeverity.WARNING,
+                category=IssueCategory.DUPLICATE,
+                message=f"Day {day_val} has multiple closed markers",
+            )
+        if len(open_periods) > 1:
+            sorted_open = sorted(open_periods, key=lambda p: p.start)
+            for i in range(len(sorted_open) - 1):
+                if sorted_open[i].end > sorted_open[i + 1].start:
                     _add(
                         issues,
                         path=f"{path}.periods",
@@ -187,14 +231,37 @@ def _validate_schedule(schedule: WeeklySchedule, path: str, issues: list[Validat
                     )
                     break
 
-
-def _validate_period(period: SchedulePeriod, path: str, issues: list[ValidationIssue]) -> None:
-    pass
+    exception_dates: dict[date, list[int]] = {}
+    for idx, exc in enumerate(schedule.exceptions):
+        exception_dates.setdefault(exc.date, []).append(idx)
+    for exc_date, indices in sorted(exception_dates.items()):
+        if len(indices) > 1:
+            has_closed = any(schedule.exceptions[i].is_closed for i in indices)
+            has_open = any(not schedule.exceptions[i].is_closed for i in indices)
+            if has_closed and has_open:
+                _add(
+                    issues,
+                    path=f"{path}.exceptions",
+                    code="exception_closed_open_conflict",
+                    severity=IssueSeverity.BLOCKER,
+                    category=IssueCategory.CONFLICTING,
+                    message=f"Exception date {exc_date} has both closed and open entries",
+                )
+            elif has_closed and len(indices) > 1:
+                _add(
+                    issues,
+                    path=f"{path}.exceptions",
+                    code="exception_duplicate_date",
+                    severity=IssueSeverity.WARNING,
+                    category=IssueCategory.DUPLICATE,
+                    message=f"Duplicate exception entries for {exc_date}",
+                )
 
 
 def _validate_services(draft: BusinessOnboardingDraft, issues: list[ValidationIssue]) -> None:
     location_keys = {loc.key for loc in draft.locations}
-    resource_keys = {res.key for res in draft.resources}
+    active_location_keys = {loc.key for loc in draft.locations if loc.is_active}
+    resource_map = {res.key: res for res in draft.resources}
     seen_keys: set[str] = set()
     seen_names: set[str] = set()
 
@@ -232,7 +299,7 @@ def _validate_services(draft: BusinessOnboardingDraft, issues: list[ValidationIs
                     message=f"Service {svc.key} references missing location {loc_key}",
                 )
         for res_key in svc.eligible_resource_keys:
-            if res_key not in resource_keys:
+            if res_key not in resource_map:
                 _add(
                     issues,
                     path=f"{path}.eligible_resource_keys",
@@ -241,15 +308,23 @@ def _validate_services(draft: BusinessOnboardingDraft, issues: list[ValidationIs
                     category=IssueCategory.CROSS_REFERENCE,
                     message=f"Service {svc.key} references missing resource {res_key}",
                 )
-        if svc.is_active and svc.requires_resource and not svc.eligible_resource_keys:
-            _add(
-                issues,
-                path=path,
-                code="service_no_eligible_resource",
-                severity=IssueSeverity.BLOCKER,
-                category=IssueCategory.MISSING,
-                message=f"Active service {svc.key} requires a resource but has none",
+        if svc.is_active and svc.requires_resource:
+            usable = _find_usable_resources(
+                svc.key,
+                svc.eligible_resource_keys,
+                svc.location_keys,
+                resource_map,
+                active_location_keys,
             )
+            if not usable:
+                _add(
+                    issues,
+                    path=path,
+                    code="service_no_usable_resource",
+                    severity=IssueSeverity.BLOCKER,
+                    category=IssueCategory.MISSING,
+                    message=f"Active service {svc.key} has no usable eligible resource",
+                )
         if svc.is_active and svc.duration_minutes is None:
             _add(
                 issues,
@@ -270,6 +345,29 @@ def _validate_services(draft: BusinessOnboardingDraft, issues: list[ValidationIs
                 category=IssueCategory.MISSING,
                 message=f"Active service {svc.key} has no price",
             )
+
+
+def _find_usable_resources(
+    service_key: str,
+    eligible_keys: tuple[str, ...],
+    service_location_keys: tuple[str, ...],
+    resource_map: dict[str, ResourceDraft],
+    active_location_keys: set[str],
+) -> list[str]:
+    usable = []
+    service_locs = set(service_location_keys) if service_location_keys else active_location_keys
+    for rk in eligible_keys:
+        res = resource_map.get(rk)
+        if res is None or not res.is_active:
+            continue
+        res_locs = set(res.location_keys)
+        if res_locs and not (res_locs & service_locs & active_location_keys):
+            continue
+        res_svcs = set(res.service_keys)
+        if res_svcs and service_key not in res_svcs:
+            continue
+        usable.append(rk)
+    return usable
 
 
 def _validate_resources(draft: BusinessOnboardingDraft, issues: list[ValidationIssue]) -> None:
@@ -360,7 +458,7 @@ def _validate_price(
     expected_currency: str,
     issues: list[ValidationIssue],
 ) -> None:
-    if price.currency != expected_currency:
+    if price.currency.upper() != expected_currency.upper():
         _add(
             issues,
             path=path,
@@ -397,43 +495,70 @@ def _validate_policy(draft: BusinessOnboardingDraft, issues: list[ValidationIssu
         )
 
 
-def _validate_provenance(draft: BusinessOnboardingDraft, issues: list[ValidationIssue]) -> None:
-    if draft.business_name and draft.business_name_provenance.review_status is ReviewStatus.MISSING:
-        pass
-    if draft.business_name_provenance.review_status in {
-        ReviewStatus.AMBIGUOUS,
-        ReviewStatus.CONFLICTING,
-    }:
+def _validate_field_provenance(
+    draft: BusinessOnboardingDraft, issues: list[ValidationIssue]
+) -> None:
+    for field_name in _BUSINESS_REQUIRED_FIELDS:
+        prov = draft.provenance.get(field_name)
+        _check_provenance(prov, f"provenance.{field_name}", issues)
+
+    for idx, loc in enumerate(draft.locations):
+        for field_name in ("display_name", "is_active"):
+            prov = loc.provenance.get(field_name)
+            _check_provenance(prov, f"locations[{idx}].provenance.{field_name}", issues)
+
+    for idx, svc in enumerate(draft.services):
+        for field_name in ("name", "duration_minutes", "is_active"):
+            prov = svc.provenance.get(field_name)
+            _check_provenance(prov, f"services[{idx}].provenance.{field_name}", issues)
+
+    for idx, res in enumerate(draft.resources):
+        for field_name in ("display_name", "is_active"):
+            prov = res.provenance.get(field_name)
+            _check_provenance(prov, f"resources[{idx}].provenance.{field_name}", issues)
+
+    for idx, prod in enumerate(draft.products):
+        for field_name in ("name", "is_active"):
+            prov = prod.provenance.get(field_name)
+            _check_provenance(prov, f"products[{idx}].provenance.{field_name}", issues)
+
+
+def _check_provenance(
+    prov: ProvenanceField | None, path: str, issues: list[ValidationIssue]
+) -> None:
+    if prov is None:
         _add(
             issues,
-            path="business_name_provenance",
-            code="unresolved_business_name",
+            path=path,
+            code="missing_field_provenance",
             severity=IssueSeverity.BLOCKER,
-            category=_review_to_category(draft.business_name_provenance.review_status),
-            message="Business name provenance is unresolved",
+            category=IssueCategory.MISSING,
+            message=f"Required field provenance missing at {path}",
         )
-    if draft.business_name_provenance.review_status is ReviewStatus.UNREADABLE:
+        return
+    if prov.review_status in _UNRESOLVED_STATUSES:
         _add(
             issues,
-            path="business_name_provenance",
-            code="unreadable_business_name",
+            path=path,
+            code=f"unresolved_{prov.review_status.value}",
             severity=IssueSeverity.BLOCKER,
-            category=IssueCategory.UNREADABLE,
-            message="Business name source is unreadable",
+            category=_review_to_category(prov.review_status),
+            message=f"Field at {path} has unresolved status: {prov.review_status.value}",
         )
-    if draft.business_name_provenance.review_status is ReviewStatus.UNSUPPORTED:
+    if prov.review_status in _EVIDENCE_REQUIRED_STATUSES and not prov.has_evidence():
         _add(
             issues,
-            path="business_name_provenance",
-            code="unsupported_business_name",
+            path=path,
+            code="no_evidence",
             severity=IssueSeverity.BLOCKER,
-            category=IssueCategory.UNSUPPORTED,
-            message="Business name source type is unsupported",
+            category=IssueCategory.MISSING,
+            message=f"Field at {path} claims {prov.review_status.value} but has no evidence",
         )
 
 
 def _review_to_category(status: ReviewStatus) -> IssueCategory:
     mapping = {
+        ReviewStatus.MISSING: IssueCategory.MISSING,
         ReviewStatus.AMBIGUOUS: IssueCategory.AMBIGUOUS,
         ReviewStatus.CONFLICTING: IssueCategory.CONFLICTING,
         ReviewStatus.UNREADABLE: IssueCategory.UNREADABLE,
@@ -443,8 +568,13 @@ def _review_to_category(status: ReviewStatus) -> IssueCategory:
 
 
 def _valid_timezone(tz: str) -> bool:
+    if not tz or len(tz) > MAX_SHORT_TEXT:
+        return False
     try:
         ZoneInfo(tz)
         return True
-    except (ZoneInfoNotFoundError, KeyError):
+    except (ZoneInfoNotFoundError, KeyError, ValueError):
         return False
+
+
+MAX_SHORT_TEXT = 200

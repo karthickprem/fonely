@@ -50,6 +50,7 @@ class QuestionPlan(BaseModel):
     blocker_question_count: int
     warning_question_count: int
     draft_digest: str
+    omitted_count: int = 0
 
 
 class ReviewProposal(BaseModel):

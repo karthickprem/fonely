@@ -1329,7 +1329,7 @@ async def test_malformed_runtime_commit_provenance_is_a_constraint_violation(
                 text(
                     "UPDATE pending_actions SET proposed_payload = "
                     "jsonb_set(proposed_payload, '{data}', "
-                    "proposed_payload->'data' - :field) WHERE id = 10"
+                    "proposed_payload->'data' - CAST(:field AS text)) WHERE id = 10"
                 ),
                 {"field": field},
             )
@@ -1551,6 +1551,7 @@ async def test_terminal_rewrite_and_appointment_delete_are_rejected(
     async with pg_session_factory() as session:
         await _seed_head_catalog(session)
         await _insert_head_appointment(session, 1, start_at=past, status="completed")
+        await _insert_active_allocation(session, 1, start_at=past)
         await session.commit()
     async with pg_session_factory() as session:
         await session.execute(

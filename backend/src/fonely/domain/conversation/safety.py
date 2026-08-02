@@ -15,6 +15,15 @@ _URGENT_PATTERNS = [
         r"\bcan'?t\s+breathe",
         r"\bmajor\s+(swell|trauma|bleed)",
         r"\bfacial\s+swelling",
+        # Tamil urgent
+        r"ரத்தம்\s*(நிற்கல|நிக்கல|நிற்காது)",
+        r"மூச்\s*(விட|விடமுடியல)",
+        r"(severe|கடுமையான|அதிகமான)\s*வீக்கம்",
+        # Tanglish urgent
+        r"blood\s+stop\s+ஆகல",
+        r"heavy\s+bleeding\s+ஆகுது",
+        r"can'?t\s+breathe\s+பண்ணல",
+        r"breathing\s+problem\b",
     ]
 ]
 
@@ -37,6 +46,17 @@ _MEDICAL_PATTERNS = [
         r"\b(tooth|teeth)\b.{0,20}\b(hurt|pain|ache|broken|crack|loose|hurting|aching)",
         r"\bgum\s+(bleed|swell|pain)",
         r"\bnumb",
+        # Tamil medical
+        r"பல்\s*(வலி|வலிக்கு|வலிக்குது)",
+        r"வீக்கம்",
+        r"மருந்து",
+        r"tablet",
+        r"extraction.{0,10}(அப்புறம்|பிறகு)",
+        r"normal.{0,5}(ஆ|ா)\s*(இருக்கா|இருக்குமா)",
+        # Tanglish medical
+        r"tooth\s+வலிக்குது",
+        r"infection\b",
+        r"pain\s+இருக்கு",
     ]
 ]
 
@@ -52,6 +72,15 @@ _ADMINISTRATIVE_PATTERNS = [
         r"\b(location|address|direction|parking)\b",
         r"\b(doctor|dentist)\s+(name|list|available)",
         r"\b(call\s+back|callback)\b",
+        # Tamil administrative
+        r"appointment\s*போடணும்",
+        r"book\s*பண்ணணும்",
+        r"(available|slot)\s*(ஆ|ா)\s*இருக்கா",
+        r"எவ்வளவு",
+        r"fees\s*என்ன",
+        r"timing\s*என்ன",
+        r"எப்போ\s*open",
+        r"doctor\s*இருக்காங்களா",
     ]
 ]
 
@@ -63,6 +92,19 @@ ESCALATION_MEDICAL = (
 ESCALATION_URGENT = (
     "This sounds urgent. Please seek immediate medical attention "
     "or call emergency services. I'll also alert the clinic."
+)
+
+_POSITIVE_CONFIRM = re.compile(
+    r"^\s*(yes|yeah|ok|okay|confirm|book\s*it|go\s*ahead|sure|please|"
+    r"seri|seringa|சரி|ஆமா|ஆமாங்க|போடுங்க|"
+    r"book\s*பண்ணுங்க|confirm\s*பண்ணுங்க)",
+    re.IGNORECASE,
+)
+
+_NEGATIVE_CONFIRM = re.compile(
+    r"^\s*(no|nope|cancel|don'?t|wait|change|different|"
+    r"வேண்டாம்|வேற|change\s*பண்ணணும்|different\s*time)",
+    re.IGNORECASE,
 )
 
 
@@ -95,7 +137,11 @@ def classify_intent(message: str) -> SafetyClassification:
 
     admin_matches = sum(1 for p in _ADMINISTRATIVE_PATTERNS if p.search(message))
     if admin_matches > 0:
-        booking_patterns = re.compile(r"\b(book|schedule|appointment)\b", re.IGNORECASE)
+        booking_patterns = re.compile(
+            r"\b(book|schedule|appointment)\b|"
+            r"appointment\s*போடணும்|book\s*பண்ணணும்",
+            re.IGNORECASE,
+        )
         if booking_patterns.search(message):
             return SafetyClassification(
                 intent=ConversationIntent.BOOK_APPOINTMENT,
@@ -116,3 +162,12 @@ def classify_intent(message: str) -> SafetyClassification:
         confidence=0.3,
         reasoning="No clear pattern matched",
     )
+
+
+def detect_confirmation(message: str) -> str:
+    stripped = message.strip()
+    if _POSITIVE_CONFIRM.search(stripped):
+        return "positive"
+    if _NEGATIVE_CONFIRM.search(stripped):
+        return "negative"
+    return "ambiguous"

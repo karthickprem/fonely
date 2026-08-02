@@ -27,7 +27,9 @@ from fonely.services.appointments import AppointmentService
 
 pytestmark = pytest.mark.postgres
 
-START = datetime(2026, 8, 4, 5, 0, tzinfo=UTC)  # 10:30 IST
+
+def _future_start() -> datetime:
+    return datetime.now(UTC) + timedelta(hours=2)
 
 
 def _customer(business_id: int = 1) -> ActorContext:
@@ -96,9 +98,12 @@ async def _create_confirmed_appointment(
     session: AsyncSession,
     *,
     business_id: int = 1,
-    start_at: datetime = START,
+    start_at: datetime | None = None,
     key_suffix: str = "1",
 ) -> PreCommitAppointmentSuccess:
+    if start_at is None:
+        start_at = _future_start()
+    now = datetime.now(UTC)
     validation = InternalValidationPort(session)
     service = AppointmentService(session, validation=validation)
 
@@ -109,7 +114,7 @@ async def _create_confirmed_appointment(
             resource_id=business_id,
             start_at=start_at,
             customer_phone="+919123456789",
-            expires_at=start_at + timedelta(hours=1),
+            expires_at=now + timedelta(minutes=30),
             idempotency_key=f"create-{key_suffix}",
         )
     )
@@ -164,7 +169,7 @@ async def test_full_cancellation_lifecycle(
                 actor=_customer(),
                 appointment_id=appt_id,
                 expected_appointment_version=1,
-                expires_at=START + timedelta(hours=1),
+                expires_at=datetime.now(UTC) + timedelta(minutes=30),
                 idempotency_key="cancel-lifecycle",
             )
         )
@@ -240,7 +245,7 @@ async def test_cancel_already_cancelled_appointment(
                 actor=_customer(),
                 appointment_id=appt_id,
                 expected_appointment_version=1,
-                expires_at=START + timedelta(hours=1),
+                expires_at=datetime.now(UTC) + timedelta(minutes=30),
                 idempotency_key="cancel-first",
             )
         )
@@ -259,7 +264,7 @@ async def test_cancel_already_cancelled_appointment(
                     actor=_customer(),
                     appointment_id=appt_id,
                     expected_appointment_version=2,
-                    expires_at=START + timedelta(hours=1),
+                    expires_at=datetime.now(UTC) + timedelta(minutes=30),
                     idempotency_key="cancel-second",
                 )
             )
@@ -297,7 +302,7 @@ async def test_cancellation_tenant_isolation(
                     actor=_customer(business_id=2),
                     appointment_id=appt_id_b1,
                     expected_appointment_version=1,
-                    expires_at=START + timedelta(hours=1),
+                    expires_at=datetime.now(UTC) + timedelta(minutes=30),
                     idempotency_key="cross-tenant-cancel",
                 )
             )
@@ -330,7 +335,7 @@ async def test_cancellation_proposal_idempotency(
                 actor=_customer(),
                 appointment_id=appt_id,
                 expected_appointment_version=1,
-                expires_at=START + timedelta(hours=1),
+                expires_at=datetime.now(UTC) + timedelta(minutes=30),
                 idempotency_key="cancel-idemp",
             )
         )
@@ -339,7 +344,7 @@ async def test_cancellation_proposal_idempotency(
                 actor=_customer(),
                 appointment_id=appt_id,
                 expected_appointment_version=1,
-                expires_at=START + timedelta(hours=1),
+                expires_at=datetime.now(UTC) + timedelta(minutes=30),
                 idempotency_key="cancel-idemp",
             )
         )

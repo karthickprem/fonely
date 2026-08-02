@@ -95,8 +95,7 @@ async def _handle_message(
     if message_type != "text":
         await sender.send_text(
             sender_phone,
-            "I can currently help with text messages. "
-            "Please type your request.",
+            "I can currently help with text messages. Please type your request.",
         )
         return
 
@@ -138,9 +137,7 @@ async def _handle_message(
         try:
             validation = InternalValidationPort(session)
             appt_service = AppointmentService(session, validation=validation)
-            conv_service = ConversationService(
-                session, gateway, appointment_service=appt_service
-            )
+            conv_service = ConversationService(session, gateway, appointment_service=appt_service)
             turn = await conv_service.process_message(
                 ctx.conversation_id,
                 business_id,

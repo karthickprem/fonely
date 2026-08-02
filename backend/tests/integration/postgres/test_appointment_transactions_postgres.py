@@ -4,12 +4,13 @@ Collected everywhere; executed only against the guarded local PostgreSQL test
 database configured by the integration-test fixtures.
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from fonely.core.validators import utcnow
 from fonely.domain.appointments.commands import (
     ConfirmPendingAppointmentCommand,
     CreatePendingAppointmentCommand,
@@ -31,7 +32,13 @@ from fonely.services.appointments import AppointmentService
 
 pytestmark = pytest.mark.postgres
 
-START = datetime(2026, 8, 5, 10, 0, tzinfo=UTC)
+
+def _slot_start() -> datetime:
+    now = utcnow()
+    return now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=2)
+
+
+START = _slot_start()
 END = START + timedelta(minutes=30)
 
 
@@ -151,7 +158,7 @@ async def _create_and_confirm(
             service_id=1,
             start_at=start_at,
             customer_phone="+919123456789",
-            expires_at=start_at + timedelta(hours=1),
+            expires_at=utcnow() + timedelta(minutes=15),
             idempotency_key=idempotency_key,
         )
     )
@@ -179,7 +186,7 @@ async def test_proposal_creates_pending_action_without_appointment(
                 service_id=1,
                 start_at=START,
                 customer_phone="+919123456789",
-                expires_at=START + timedelta(hours=1),
+                expires_at=utcnow() + timedelta(minutes=15),
                 idempotency_key="proposal-only",
             )
         )
@@ -280,7 +287,7 @@ async def test_replay_returns_same_appointment(
                 service_id=1,
                 start_at=START,
                 customer_phone="+919123456789",
-                expires_at=START + timedelta(hours=1),
+                expires_at=utcnow() + timedelta(minutes=15),
                 idempotency_key="test-appt-1",
             )
         )

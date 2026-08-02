@@ -263,11 +263,13 @@ _EVIDENCE_QUERIES = [
     (
         "schema_functions",
         (
-            "SELECT p.proname, pg_get_functiondef(p.oid) "
+            "SELECT p.proname, "
+            "pg_get_function_identity_arguments(p.oid), "
+            "pg_get_functiondef(p.oid) "
             "FROM pg_proc p "
             "JOIN pg_namespace n ON p.pronamespace = n.oid "
             "WHERE n.nspname = 'public' "
-            "ORDER BY p.proname"
+            "ORDER BY p.proname, pg_get_function_identity_arguments(p.oid)"
         ),
     ),
     (
@@ -282,13 +284,26 @@ _EVIDENCE_QUERIES = [
 ]
 
 
-def _evidence_digest(url: str) -> str:
-    parts: list[str] = []
-    for label, sql in _EVIDENCE_QUERIES:
-        raw = _query(url, sql)
-        parts.append(f"{label}:{raw}")
-    canonical = "\n".join(parts)
+def _compute_digest(parts: list[tuple[str, str]]) -> str:
+    canonical = "\n".join(f"{label}:{data}" for label, data in parts)
     return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _collect_evidence(
+    query_fn: Any,
+) -> list[tuple[str, str]]:
+    parts: list[tuple[str, str]] = []
+    for label, sql in _EVIDENCE_QUERIES:
+        raw = query_fn(sql)
+        parts.append((label, raw))
+    return parts
+
+
+def _evidence_digest(url: str) -> str:
+    def query_fn(sql: str) -> str:
+        return _query(url, sql)
+
+    return _compute_digest(_collect_evidence(query_fn))
 
 
 def _cleanup_backup(backup_path: Path | None) -> bool:

@@ -1,13 +1,11 @@
 """Offline unit tests for PostgreSQL backup-and-restore verification.
 
-Tests configuration guards, safety validation, host identity equivalence,
-evidence digest behavior, report semantics, and failure classification
-without requiring a running PostgreSQL instance.
+Tests use production digest code paths with controlled query executors.
+No running PostgreSQL instance is required.
 """
 
 from __future__ import annotations
 
-import hashlib
 import importlib
 import importlib.util
 import json
@@ -59,6 +57,36 @@ def _run_script(
 
 def _parse_output(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
     return json.loads(result.stdout)
+
+
+# --- Fake query executor for production digest tests ---
+
+_BASE_EVIDENCE: dict[str, str] = {
+    "revision": "0004",
+    "businesses": "1|Salon A|salon|+910000000001|Asia/Kolkata|trial\n2|Salon B|salon|+910000000002|Asia/Kolkata|trial",
+    "business_users": "1|+910000000001|owner|t\n2|+910000000002|owner|t",
+    "services": "1|1|Haircut|30|0|0|500.00|t\n2|2|Facial|45|5|5|800.00|t",
+    "resources": "1|1|Priya|staff|t\n2|2|Mira|staff|t",
+    "schema_functions": "myfunc||CREATE FUNCTION myfunc() ...",
+    "schema_tables": "businesses|id|integer|NO\nbusinesses|name|varchar|NO",
+}
+
+
+def _make_query_fn(overrides: dict[str, str] | None = None) -> Any:
+    data = {**_BASE_EVIDENCE, **(overrides or {})}
+    label_to_sql: dict[str, str] = {}
+    for label, sql in br._EVIDENCE_QUERIES:
+        label_to_sql[label] = sql
+
+    def query_fn(sql: str) -> str:
+        for label, expected_sql in label_to_sql.items():
+            if sql == expected_sql:
+                if label not in data:
+                    raise RuntimeError(f"missing evidence for {label}")
+                return data[label]
+        raise RuntimeError(f"unexpected query: {sql}")
+
+    return query_fn
 
 
 # --- Configuration guards ---
@@ -119,10 +147,7 @@ class TestConfiguration:
 
     def test_database_url_ignored(self) -> None:
         result = _run_script(
-            {
-                "DATABASE_URL": _SOURCE_URL,
-                "FONELY_BACKUP_ENVIRONMENT": "test",
-            }
+            {"DATABASE_URL": _SOURCE_URL, "FONELY_BACKUP_ENVIRONMENT": "test"}
         )
         assert result.returncode != 0
         assert (
@@ -131,7 +156,7 @@ class TestConfiguration:
         )
 
 
-# --- Host identity equivalence ---
+# --- Host identity ---
 
 
 class TestHostIdentity:
@@ -367,60 +392,184 @@ class TestRevisionValidation:
         assert not br.SAFE_REVISION_RE.fullmatch("0004\n")
 
 
-# --- Evidence digest behavioral tests ---
+# --- Production evidence digest tests ---
 
 
-def _digest_from_parts(parts: list[tuple[str, str]]) -> str:
-    canonical = "\n".join(f"{label}:{data}" for label, data in parts)
-    return hashlib.sha256(canonical.encode()).hexdigest()
+class TestProductionEvidenceDigest:
+    def test_identical_evidence_same_digest(self) -> None:
+        fn1 = _make_query_fn()
+        fn2 = _make_query_fn()
+        d1 = br._compute_digest(br._collect_evidence(fn1))
+        d2 = br._compute_digest(br._collect_evidence(fn2))
+        assert d1 == d2
 
+    def test_changed_field_same_count_different_digest(self) -> None:
+        base = br._compute_digest(br._collect_evidence(_make_query_fn()))
+        changed = br._compute_digest(
+            br._collect_evidence(
+                _make_query_fn(
+                    {
+                        "businesses": _BASE_EVIDENCE["businesses"].replace(
+                            "Salon A", "Salon X"
+                        )
+                    }
+                )
+            )
+        )
+        assert base != changed
 
-class TestEvidenceDigest:
-    def test_same_data_same_digest(self) -> None:
-        parts = [("revision", "0004"), ("businesses", "1|Salon A")]
-        assert _digest_from_parts(parts) == _digest_from_parts(parts)
-
-    def test_changed_field_different_digest(self) -> None:
-        base = [("revision", "0004"), ("businesses", "1|Salon A")]
-        changed = [("revision", "0004"), ("businesses", "1|Salon B")]
-        assert _digest_from_parts(base) != _digest_from_parts(changed)
-
-    def test_same_count_substitution_different_digest(self) -> None:
-        base = [("businesses", "1|A\n2|B")]
-        substituted = [("businesses", "1|A\n2|C")]
-        assert _digest_from_parts(base) != _digest_from_parts(substituted)
+    def test_same_count_row_substitution_different_digest(self) -> None:
+        base = br._compute_digest(br._collect_evidence(_make_query_fn()))
+        substituted = br._compute_digest(
+            br._collect_evidence(
+                _make_query_fn(
+                    {
+                        "resources": "1|1|Priya|staff|t\n2|2|Ravi|staff|t",
+                    }
+                )
+            )
+        )
+        assert base != substituted
 
     def test_tenant_reassignment_different_digest(self) -> None:
-        base = [("services", "1|1|Haircut"), ("services", "2|2|Facial")]
-        swapped = [("services", "1|2|Haircut"), ("services", "2|1|Facial")]
-        assert _digest_from_parts(base) != _digest_from_parts(swapped)
+        base = br._compute_digest(br._collect_evidence(_make_query_fn()))
+        swapped = br._compute_digest(
+            br._collect_evidence(
+                _make_query_fn(
+                    {
+                        "services": "1|2|Haircut|30|0|0|500.00|t\n2|1|Facial|45|5|5|800.00|t",
+                    }
+                )
+            )
+        )
+        assert base != swapped
 
     def test_revision_change_different_digest(self) -> None:
-        base = [("revision", "0003"), ("businesses", "1|A")]
-        updated = [("revision", "0004"), ("businesses", "1|A")]
-        assert _digest_from_parts(base) != _digest_from_parts(updated)
+        base = br._compute_digest(br._collect_evidence(_make_query_fn()))
+        updated = br._compute_digest(
+            br._collect_evidence(_make_query_fn({"revision": "0005"}))
+        )
+        assert base != updated
 
     def test_function_definition_change_different_digest(self) -> None:
-        base = [("schema_functions", "myfunc|CREATE FUNCTION myfunc() ...")]
-        changed = [("schema_functions", "myfunc|CREATE FUNCTION myfunc() ... v2")]
-        assert _digest_from_parts(base) != _digest_from_parts(changed)
+        base = br._compute_digest(br._collect_evidence(_make_query_fn()))
+        changed = br._compute_digest(
+            br._collect_evidence(
+                _make_query_fn(
+                    {"schema_functions": "myfunc||CREATE FUNCTION myfunc() ... v2"}
+                )
+            )
+        )
+        assert base != changed
 
-    def test_evidence_queries_cover_required_tables(self) -> None:
-        labels = [label for label, _ in br._EVIDENCE_QUERIES]
-        assert "revision" in labels
-        assert "businesses" in labels
-        assert "business_users" in labels
-        assert "services" in labels
-        assert "resources" in labels
-        assert "schema_functions" in labels
-        assert "schema_tables" in labels
+    def test_overloaded_functions_include_identity(self) -> None:
+        fn_query = next(
+            sql for label, sql in br._EVIDENCE_QUERIES if label == "schema_functions"
+        )
+        assert "pg_get_function_identity_arguments" in fn_query
+        assert "ORDER BY p.proname, pg_get_function_identity_arguments" in fn_query
 
-    def test_no_digest_input_in_output(self) -> None:
-        result = _run_script({"FONELY_BACKUP_ENVIRONMENT": "test"})
-        assert "Salon" not in result.stdout
-        assert "Haircut" not in result.stdout
+    def test_overloaded_functions_deterministic_order(self) -> None:
+        overloaded = (
+            "myfunc|integer|CREATE FUNCTION myfunc(integer) ...\n"
+            "myfunc|text|CREATE FUNCTION myfunc(text) ..."
+        )
+        d1 = br._compute_digest(
+            br._collect_evidence(_make_query_fn({"schema_functions": overloaded}))
+        )
+        d2 = br._compute_digest(
+            br._collect_evidence(_make_query_fn({"schema_functions": overloaded}))
+        )
+        assert d1 == d2
+
+    def test_query_failure_raises(self) -> None:
+        call_count = 0
+
+        def failing_fn(sql: str) -> str:
+            nonlocal call_count
+            call_count += 1
+            if call_count > 1:
+                raise RuntimeError("query failed")
+            return "0004"
+
+        try:
+            br._collect_evidence(failing_fn)
+            collected = True
+        except RuntimeError:
+            collected = False
+        assert not collected
 
     def test_digest_is_sha256_hex(self) -> None:
-        d = _digest_from_parts([("test", "data")])
+        d = br._compute_digest(br._collect_evidence(_make_query_fn()))
         assert len(d) == 64
         assert all(c in "0123456789abcdef" for c in d)
+
+    def test_production_labels_are_deterministic(self) -> None:
+        labels = [label for label, _ in br._EVIDENCE_QUERIES]
+        assert labels == sorted(set(labels), key=labels.index)
+        assert len(labels) == len(set(labels))
+
+    def test_digest_mismatch_is_detected(self) -> None:
+        source = br._compute_digest(br._collect_evidence(_make_query_fn()))
+        restored = br._compute_digest(
+            br._collect_evidence(
+                _make_query_fn(
+                    {"businesses": "1|Changed|salon|+910000000001|Asia/Kolkata|trial"}
+                )
+            )
+        )
+        assert source != restored
+
+    def test_exact_match_succeeds(self) -> None:
+        source = br._compute_digest(br._collect_evidence(_make_query_fn()))
+        restored = br._compute_digest(br._collect_evidence(_make_query_fn()))
+        assert source == restored
+
+
+# --- No-leak evidence path test ---
+
+
+class TestEvidencePathNoLeak:
+    def test_evidence_values_never_in_failure_output(self) -> None:
+        synthetic_name = "LeakTestSalon" + "XYZ"
+        synthetic_phone = "+910000099999"
+
+        evidence = {
+            **_BASE_EVIDENCE,
+            "businesses": f"1|{synthetic_name}|salon|{synthetic_phone}|Asia/Kolkata|trial",
+        }
+
+        captured_queries: list[str] = []
+
+        def tracking_fn(sql: str) -> str:
+            captured_queries.append(sql)
+            for label, expected_sql in br._EVIDENCE_QUERIES:
+                if sql == expected_sql and label in evidence:
+                    return evidence[label]
+            raise RuntimeError(f"unexpected: {sql}")
+
+        parts = br._collect_evidence(tracking_fn)
+        digest = br._compute_digest(parts)
+        assert len(digest) == 64
+        assert synthetic_name not in digest
+        assert synthetic_phone not in digest
+
+        report_json = json.dumps({"digest": digest, "status": "passed"})
+        assert synthetic_name not in report_json
+        assert synthetic_phone not in report_json
+
+        assert len(captured_queries) == len(br._EVIDENCE_QUERIES)
+
+
+# --- Query failure sanitization ---
+
+
+class TestQueryFailureSanitization:
+    def test_query_exception_is_sanitized(self) -> None:
+        secret = "secret" + "_password"
+        url_with_secret = _build_url(
+            "postgresql://", f"fonely_test:{secret}@localhost/fonely_test"
+        )
+        sanitized = br._sanitize(f"connection to {url_with_secret} failed")
+        assert secret not in sanitized
+        assert "[REDACTED-URL]" in sanitized

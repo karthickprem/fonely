@@ -810,22 +810,47 @@ async def test_direct_inventory_different_product_unique_race(
         )
         assert op_count == 1
 
-        winner_product = await verify.scalar(
-            text(
-                "SELECT product_id FROM inventory_operations "
-                "WHERE idempotency_key = 'unique-race-key'"
+        winner_op = (
+            await verify.execute(
+                text(
+                    "SELECT product_id, movement_id FROM inventory_operations "
+                    "WHERE idempotency_key = 'unique-race-key'"
+                )
             )
-        )
+        ).one()
+        winner_product = winner_op[0]
+        winner_movement_id = winner_op[1]
         loser_product = 2 if winner_product == 1 else 1
 
-        winner_race_movements = await verify.scalar(
+        winner_movement = (
+            await verify.execute(
+                text(
+                    "SELECT business_id, product_id, movement_type, "
+                    "on_hand_delta, reserved_delta, on_hand_after, reserved_after, "
+                    "business_date "
+                    "FROM inventory_movements WHERE id = :mid"
+                ),
+                {"mid": winner_movement_id},
+            )
+        ).one()
+        assert winner_movement[0] == 1
+        assert winner_movement[1] == winner_product
+        assert winner_movement[2] == "manual_adjustment"
+        assert winner_movement[3] == -7
+        assert winner_movement[4] == 0
+        assert winner_movement[5] == 3
+        assert winner_movement[6] == 0
+        assert str(winner_movement[7]) == "2026-08-01"
+        assert winner_movement_id > seed_max_movement
+
+        winner_race_count = await verify.scalar(
             text(
                 "SELECT count(*) FROM inventory_movements "
                 "WHERE business_id = 1 AND product_id = :pid AND id > :baseline"
             ),
             {"pid": winner_product, "baseline": seed_max_movement},
         )
-        assert winner_race_movements == 1
+        assert winner_race_count == 1
 
         loser_race_movements = await verify.scalar(
             text(
@@ -853,7 +878,7 @@ async def test_direct_inventory_different_product_unique_race(
         winner_balance = (
             await verify.execute(
                 text(
-                    "SELECT on_hand_qty, version "
+                    "SELECT on_hand_qty, reserved_qty, version "
                     "FROM inventory_balances "
                     "WHERE business_id = 1 AND product_id = :pid"
                 ),
@@ -861,7 +886,8 @@ async def test_direct_inventory_different_product_unique_race(
             )
         ).one()
         assert winner_balance[0] == 3
-        assert winner_balance[1] == seed_balances[winner_product] + 1
+        assert winner_balance[1] == 0
+        assert winner_balance[2] == seed_balances[winner_product] + 1
 
 
 async def test_direct_inventory_same_key_changed_semantics_conflict(

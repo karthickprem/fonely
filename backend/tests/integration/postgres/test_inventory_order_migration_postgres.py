@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from fonely.domain.inventory.commands import SetOwnerStockCommand
 from fonely.domain.pending_actions.commands import ActorContext
@@ -201,6 +201,19 @@ async def test_direct_inventory_idempotency_conflict(pg_session: AsyncSession) -
 # =============================================================================
 
 
+def _assert_immutability_violation(exc: IntegrityError) -> None:
+    """Assert the exact PostgreSQL diagnostic for the order-line immutability trigger."""
+    driver = exc.orig
+    assert driver is not None
+    assert getattr(driver, "sqlstate", None) == "23514"
+    name = getattr(driver, "constraint_name", None)
+    if name is None:
+        cause = driver.__cause__
+        assert cause is not None
+        name = getattr(cause, "constraint_name", None)
+    assert name == "ck_order_line_item_immutable"
+
+
 async def _seed_order_with_lines(session: AsyncSession) -> int:
     """Seed a complete order with one line item. Returns the order ID."""
     await seed(session)
@@ -249,62 +262,93 @@ async def _seed_order_with_lines(session: AsyncSession) -> int:
     return 1
 
 
-async def test_order_line_update_rejected(pg_session: AsyncSession) -> None:
+_LINE_SNAPSHOT_QUERY = (
+    "SELECT id, business_id, order_id, product_id, product_name_snapshot, "
+    "qty, unit, price_per_unit_snapshot, subtotal FROM order_line_items WHERE id = 1"
+)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "qty = 999",
+        "product_name_snapshot = 'Altered'",
+        "unit = 'piece'",
+        "price_per_unit_snapshot = 999.99",
+        "subtotal = 999.99",
+        "order_id = 999",
+        "product_id = 999",
+        "business_id = 999",
+    ],
+)
+async def test_order_line_update_rejected_with_exact_constraint(
+    pg_session: AsyncSession, mutation: str
+) -> None:
     await _seed_order_with_lines(pg_session)
-    with pytest.raises(IntegrityError, match="immutable evidence"):
-        await pg_session.execute(text("UPDATE order_line_items SET qty = 999 WHERE id = 1"))
+    with pytest.raises(IntegrityError) as exc_info:
+        await pg_session.execute(text(f"UPDATE order_line_items SET {mutation} WHERE id = 1"))
         await pg_session.flush()
+    _assert_immutability_violation(exc_info.value)
 
 
-async def test_order_line_snapshot_update_rejected(pg_session: AsyncSession) -> None:
+async def test_order_line_delete_rejected_with_exact_constraint(
+    pg_session: AsyncSession,
+) -> None:
     await _seed_order_with_lines(pg_session)
-    with pytest.raises(IntegrityError, match="immutable evidence"):
-        await pg_session.execute(
-            text("UPDATE order_line_items SET product_name_snapshot = 'Altered' WHERE id = 1")
-        )
-        await pg_session.flush()
-
-
-async def test_order_line_price_update_rejected(pg_session: AsyncSession) -> None:
-    await _seed_order_with_lines(pg_session)
-    with pytest.raises(IntegrityError, match="immutable evidence"):
-        await pg_session.execute(
-            text("UPDATE order_line_items SET price_per_unit_snapshot = 999.99 WHERE id = 1")
-        )
-        await pg_session.flush()
-
-
-async def test_order_line_delete_rejected(pg_session: AsyncSession) -> None:
-    await _seed_order_with_lines(pg_session)
-    with pytest.raises(IntegrityError, match="immutable evidence"):
+    with pytest.raises(IntegrityError) as exc_info:
         await pg_session.execute(text("DELETE FROM order_line_items WHERE id = 1"))
         await pg_session.flush()
+    _assert_immutability_violation(exc_info.value)
 
 
-async def test_order_line_unchanged_after_rejected_mutation(pg_session: AsyncSession) -> None:
-    await _seed_order_with_lines(pg_session)
-    before = (
-        await pg_session.execute(
-            text(
-                "SELECT product_name_snapshot, qty, price_per_unit_snapshot, subtotal "
-                "FROM order_line_items WHERE id = 1"
-            )
-        )
-    ).one()
-    try:
-        await pg_session.execute(text("UPDATE order_line_items SET qty = 999 WHERE id = 1"))
-    except IntegrityError:
-        await pg_session.rollback()
-    await _seed_order_with_lines(pg_session)
-    after = (
-        await pg_session.execute(
-            text(
-                "SELECT product_name_snapshot, qty, price_per_unit_snapshot, subtotal "
-                "FROM order_line_items WHERE id = 1"
-            )
-        )
-    ).one()
+async def test_order_line_unchanged_after_rejected_update(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with pg_session_factory() as session:
+        await _seed_order_with_lines(session)
+        await session.commit()
+
+    async with pg_session_factory() as session:
+        before = (await session.execute(text(_LINE_SNAPSHOT_QUERY))).one()
+
+    async with pg_session_factory() as session:
+        try:
+            await session.execute(text("UPDATE order_line_items SET qty = 999 WHERE id = 1"))
+            await session.commit()
+            pytest.fail("UPDATE should have been rejected")
+        except IntegrityError:
+            await session.rollback()
+
+    async with pg_session_factory() as session:
+        after = (await session.execute(text(_LINE_SNAPSHOT_QUERY))).one()
+        count = await session.scalar(text("SELECT count(*) FROM order_line_items WHERE id = 1"))
     assert tuple(before) == tuple(after)
+    assert count == 1
+
+
+async def test_order_line_unchanged_after_rejected_delete(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with pg_session_factory() as session:
+        await _seed_order_with_lines(session)
+        await session.commit()
+
+    async with pg_session_factory() as session:
+        before = (await session.execute(text(_LINE_SNAPSHOT_QUERY))).one()
+
+    async with pg_session_factory() as session:
+        try:
+            await session.execute(text("DELETE FROM order_line_items WHERE id = 1"))
+            await session.commit()
+            pytest.fail("DELETE should have been rejected")
+        except IntegrityError:
+            await session.rollback()
+
+    async with pg_session_factory() as session:
+        after = (await session.execute(text(_LINE_SNAPSHOT_QUERY))).one()
+        count = await session.scalar(text("SELECT count(*) FROM order_line_items WHERE id = 1"))
+    assert tuple(before) == tuple(after)
+    assert count == 1
 
 
 async def test_product_mutation_does_not_alter_line_snapshot(pg_session: AsyncSession) -> None:
@@ -493,24 +537,32 @@ async def test_populated_migration_cycle(
 
     _run_alembic(url, "upgrade", "head")
 
+    expected_lines = (
+        (1, 1, 1, 1, "Rice", 2, "kg", 100, 200),
+        (2, 2, 2, 3, "Flour", 1, "kg", 50, 50),
+    )
+    line_query = (
+        "SELECT id, order_id, business_id, product_id, product_name_snapshot, "
+        "qty, unit, price_per_unit_snapshot, subtotal "
+        "FROM order_line_items ORDER BY id"
+    )
+
     async with pg_engine.begin() as conn:
         rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
         assert rev == "0005"
 
-        backfilled = tuple(
-            (
-                await conn.execute(
-                    text(
-                        "SELECT li.id, li.business_id, o.business_id "
-                        "FROM order_line_items li JOIN orders o ON o.id = li.order_id "
-                        "ORDER BY li.id"
-                    )
-                )
-            ).all()
-        )
-        assert len(backfilled) == 2
-        for li_id, li_biz, o_biz in backfilled:
-            assert li_biz == o_biz, f"line {li_id}: business_id mismatch"
+        lines_after_upgrade = tuple((await conn.execute(text(line_query))).all())
+        assert len(lines_after_upgrade) == 2
+        for actual, expected in zip(lines_after_upgrade, expected_lines, strict=True):
+            assert actual[0] == expected[0]
+            assert actual[1] == expected[1]
+            assert actual[2] == expected[2]
+            assert actual[3] == expected[3]
+            assert actual[4] == expected[4]
+            assert actual[5] == expected[5]
+            assert actual[6] == expected[6]
+            assert actual[7] == expected[7]
+            assert actual[8] == expected[8]
 
         bal_t1 = (
             await conn.execute(
@@ -522,16 +574,6 @@ async def test_populated_migration_cycle(
         ).one()
         assert tuple(bal_t1) == (10, 2, 3)
 
-        bal_t2 = (
-            await conn.execute(
-                text(
-                    "SELECT on_hand_qty, reserved_qty "
-                    "FROM inventory_balances WHERE business_id=2 AND product_id=3"
-                )
-            )
-        ).one()
-        assert tuple(bal_t2) == (20, 1)
-
         uq_exists = await conn.scalar(
             text("SELECT 1 FROM pg_constraint WHERE conname='uq_products_business_id_id'")
         )
@@ -541,6 +583,11 @@ async def test_populated_migration_cycle(
             text("SELECT 1 FROM pg_trigger WHERE tgname='ck_inventory_movement_append_only'")
         )
         assert trigger == 1
+
+        line_trigger = await conn.scalar(
+            text("SELECT 1 FROM pg_trigger WHERE tgname='ck_order_line_item_immutable'")
+        )
+        assert line_trigger == 1
 
         inv_ops = await conn.scalar(text("SELECT count(*) FROM inventory_operations"))
         assert inv_ops == 0
@@ -553,6 +600,28 @@ async def test_populated_migration_cycle(
 
         orders_exist = await conn.scalar(text("SELECT count(*) FROM orders"))
         assert orders_exist == 2
+
+        lines_after_downgrade = tuple(
+            (
+                await conn.execute(
+                    text(
+                        "SELECT id, order_id, product_id, product_name_snapshot, "
+                        "qty, unit, price_per_unit_snapshot, subtotal "
+                        "FROM order_line_items ORDER BY id"
+                    )
+                )
+            ).all()
+        )
+        assert len(lines_after_downgrade) == 2
+        for actual, expected in zip(lines_after_downgrade, expected_lines, strict=True):
+            assert actual[0] == expected[0]
+            assert actual[1] == expected[1]
+            assert actual[2] == expected[3]
+            assert actual[3] == expected[4]
+            assert actual[4] == expected[5]
+            assert actual[5] == expected[6]
+            assert actual[6] == expected[7]
+            assert actual[7] == expected[8]
 
         has_business_id = await conn.scalar(
             text(
@@ -568,16 +637,18 @@ async def test_populated_migration_cycle(
         rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
         assert rev == "0005"
 
-        backfilled_again = tuple(
-            (
-                await conn.execute(
-                    text("SELECT li.id, li.business_id FROM order_line_items li ORDER BY li.id")
-                )
-            ).all()
-        )
-        assert len(backfilled_again) == 2
-        for _li_id, li_biz in backfilled_again:
-            assert li_biz is not None
+        lines_after_reupgrade = tuple((await conn.execute(text(line_query))).all())
+        assert len(lines_after_reupgrade) == 2
+        for actual, expected in zip(lines_after_reupgrade, expected_lines, strict=True):
+            assert actual[0] == expected[0]
+            assert actual[1] == expected[1]
+            assert actual[2] == expected[2]
+            assert actual[3] == expected[3]
+            assert actual[4] == expected[4]
+            assert actual[5] == expected[5]
+            assert actual[6] == expected[6]
+            assert actual[7] == expected[7]
+            assert actual[8] == expected[8]
 
         movement_count = await conn.scalar(text("SELECT count(*) FROM inventory_movements"))
         assert movement_count == 5

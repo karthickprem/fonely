@@ -23,6 +23,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     app.state.engine = engine
     app.state.session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+    if settings.sarvam_api_key:
+        import httpx
+
+        from fonely.services.model_gateway import SarvamModelGateway
+
+        http_client = httpx.AsyncClient()
+        app.state.model_gateway = SarvamModelGateway(client=http_client)
+    else:
+        app.state.model_gateway = None
+
     try:
         yield
     finally:

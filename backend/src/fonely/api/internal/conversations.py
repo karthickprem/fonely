@@ -1,6 +1,7 @@
 """Internal conversation API routes."""
 
 import logging
+import re
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -11,12 +12,17 @@ from fonely.api.internal.appointments import (
     _trusted_actor,
     _verify_internal_auth,
 )
-from fonely.services.conversation import ConversationService, create_conversation, get_conversation
-from fonely.services.model_gateway import SarvamModelGateway
+from fonely.services.conversation import (
+    ConversationService,
+    create_conversation,
+    get_conversation,
+)
 
 logger = logging.getLogger("fonely.api.internal.conversations")
 
 router = APIRouter(prefix="/internal/v1", tags=["internal-conversations"])
+
+_UUID_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
 class CreateConversationRequest(BaseModel):
@@ -51,7 +57,16 @@ class TurnResponse(BaseModel):
     proposal_version: int | None = None
 
 
-@router.post("/conversations", response_model=ConversationResponse, status_code=201)
+def _validate_conversation_id(conversation_id: str) -> None:
+    if not _UUID_PATTERN.match(conversation_id):
+        raise HTTPException(status_code=422, detail="Invalid conversation ID")
+
+
+@router.post(
+    "/conversations",
+    response_model=ConversationResponse,
+    status_code=201,
+)
 async def create_conversation_route(
     body: CreateConversationRequest,
     request: Request,
@@ -65,23 +80,33 @@ async def create_conversation_route(
     )
 
 
-@router.post("/conversations/{conversation_id}/messages", response_model=TurnResponse)
+@router.post(
+    "/conversations/{conversation_id}/messages",
+    response_model=TurnResponse,
+)
 async def send_message(
     conversation_id: str,
     body: MessageRequest,
     request: Request,
 ) -> TurnResponse:
     _verify_internal_auth(request)
+    _validate_conversation_id(conversation_id)
     actor = _trusted_actor(request)
 
     ctx = get_conversation(conversation_id)
     if ctx is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+    if ctx.business_id != actor.business_id:
+        raise HTTPException(status_code=403, detail="Tenant mismatch")
+
     factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
+    gateway = getattr(request.app.state, "model_gateway", None)
+    if gateway is None:
+        raise HTTPException(status_code=503, detail="Model gateway not configured")
+
     async with factory() as session:
         try:
-            gateway = SarvamModelGateway()
             service = ConversationService(session, gateway)
             turn = await service.process_message(
                 conversation_id=conversation_id,
@@ -113,12 +138,16 @@ async def send_message(
             raise HTTPException(status_code=500, detail="Internal error") from None
 
 
-@router.get("/conversations/{conversation_id}", response_model=ConversationResponse)
+@router.get(
+    "/conversations/{conversation_id}",
+    response_model=ConversationResponse,
+)
 async def get_conversation_route(
     conversation_id: str,
     request: Request,
 ) -> ConversationResponse:
     _verify_internal_auth(request)
+    _validate_conversation_id(conversation_id)
     ctx = get_conversation(conversation_id)
     if ctx is None:
         raise HTTPException(status_code=404, detail="Conversation not found")

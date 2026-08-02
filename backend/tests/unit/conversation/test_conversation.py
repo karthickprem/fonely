@@ -282,3 +282,104 @@ async def test_conversation_eviction_at_capacity() -> None:
         create_conversation(business_id=1)
 
     assert len(_CONVERSATIONS) <= _MAX_CONVERSATIONS
+
+
+async def test_concurrent_messages_do_not_corrupt() -> None:
+    import asyncio
+
+    session = AsyncMock()
+    gateway = _mock_gateway("Response")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            "fonely.services.conversation_tools.get_business_context",
+            AsyncMock(return_value=_mock_biz_context()),
+        )
+        service = ConversationService(session, gateway)
+        tasks = [
+            asyncio.create_task(service.process_message("conv-concurrent", 1, _actor(), f"msg-{i}"))
+            for i in range(2)
+        ]
+        results = await asyncio.gather(*tasks)
+
+    assert len(results) == 2
+    ctx = _CONVERSATIONS.get("conv-concurrent")
+    assert ctx is not None
+    assert ctx.turn_count == 2
+
+
+async def test_timeout_returns_graceful_response() -> None:
+    session = AsyncMock()
+    gateway = AsyncMock()
+
+    async def slow_complete(*args: object, **kwargs: object) -> ModelResponse:
+        await asyncio.sleep(60)
+        return ModelResponse(text="late")
+
+    gateway.complete = slow_complete
+
+    import asyncio
+
+    from fonely.services.conversation import _TIMEOUT_RESPONSE
+
+    with (
+        pytest.MonkeyPatch.context() as mp,
+        pytest.MonkeyPatch.context() as mp2,
+    ):
+        mp.setattr(
+            "fonely.services.conversation_tools.get_business_context",
+            AsyncMock(return_value=_mock_biz_context()),
+        )
+        mp2.setattr("fonely.services.conversation.settings.conversation_timeout_seconds", 0.1)
+        service = ConversationService(session, gateway)
+        turn = await service.process_message("conv-timeout", 1, _actor(), "Hello")
+
+    assert _TIMEOUT_RESPONSE in turn.assistant_response
+
+
+async def test_fact_validation_rejects_past_time() -> None:
+    session = AsyncMock()
+    gateway = _mock_gateway("What time works?")
+
+    from datetime import UTC, datetime
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            "fonely.services.conversation_tools.get_business_context",
+            AsyncMock(return_value=_mock_biz_context()),
+        )
+        service = ConversationService(session, gateway)
+
+        from fonely.services.conversation import _CONVERSATIONS
+
+        ctx_id = "conv-past"
+        from fonely.domain.conversation.state import ConversationContext
+
+        ctx = ConversationContext(conversation_id=ctx_id, business_id=1)
+        ctx.state = ConversationState.FACT_COLLECTION
+        ctx.collected_facts = {
+            "service_id": 1,
+            "resource_id": 1,
+            "customer_phone": "+919123456789",
+            "start_at": datetime(2020, 1, 1, 10, 0, tzinfo=UTC),
+        }
+        _CONVERSATIONS[ctx_id] = ctx
+
+        turn = await service.process_message(ctx_id, 1, _actor(), "ok")
+
+    assert "start_at" not in turn.collected_facts
+
+
+async def test_customer_name_extraction() -> None:
+    session = AsyncMock()
+    gateway = _mock_gateway("Nice to meet you!")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            "fonely.services.conversation_tools.get_business_context",
+            AsyncMock(return_value=_mock_biz_context()),
+        )
+        service = ConversationService(session, gateway)
+        turn = await service.process_message("conv-name", 1, _actor(), "My name is Raj Kumar")
+
+    assert turn.collected_facts.get("customer_name") == "Raj Kumar"

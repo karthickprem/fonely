@@ -80,6 +80,11 @@ def create_app() -> FastAPI:
         app.include_router(conversation_router)
         app.include_router(onboarding_router)
 
+    if settings.whatsapp_verify_token:
+        from fonely.api.channels.whatsapp import router as whatsapp_router
+
+        app.include_router(whatsapp_router)
+
     @app.get("/health/live")
     async def liveness() -> dict[str, str]:
         return {"status": "ok"}

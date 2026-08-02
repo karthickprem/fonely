@@ -362,7 +362,7 @@ class AppointmentService:
         )
         await require_existing_action_permission(self._session, command.actor, action)
 
-        envelope = PendingAppointmentEnvelope.model_validate(action.payload)
+        envelope = PendingAppointmentEnvelope.model_validate(action.proposed_payload)
         data = envelope.data
         assert isinstance(data, CancelAppointmentData)
 
@@ -560,7 +560,7 @@ class AppointmentService:
         )
         await require_existing_action_permission(self._session, command.actor, action)
 
-        envelope = PendingAppointmentEnvelope.model_validate(action.payload)
+        envelope = PendingAppointmentEnvelope.model_validate(action.proposed_payload)
         data = envelope.data
         assert isinstance(data, RescheduleAppointmentData)
         new_facts = data.new_facts
@@ -717,6 +717,7 @@ class AppointmentService:
                 "New time slot conflicts with existing allocation",
             )
 
+        assert updated is not None
         return AppointmentRescheduleResult(
             appointment_id=data.target_appointment_id,
             appointment_commit_id=commit.id,

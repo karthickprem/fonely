@@ -687,14 +687,15 @@ async def test_direct_inventory_post_serialization_replay(
         op_count = await verify.scalar(
             text("SELECT count(*) FROM inventory_operations WHERE idempotency_key = 'race-direct'")
         )
-        movement_count = await verify.scalar(
+        race_movement_count = await verify.scalar(
             text(
-                "SELECT count(*) FROM inventory_movements "
-                "WHERE business_id = 1 AND movement_type = 'manual_adjustment'"
+                "SELECT count(*) FROM inventory_movements m "
+                "JOIN inventory_operations o ON o.movement_id = m.id "
+                "WHERE o.idempotency_key = 'race-direct'"
             )
         )
     assert op_count == 1
-    assert movement_count == 1
+    assert race_movement_count == 1
 
 
 async def direct_inventory_product_worker(
@@ -792,32 +793,33 @@ async def test_direct_inventory_different_product_unique_race(
         )
         assert op_count == 1
 
+        race_movement_count = await verify.scalar(
+            text(
+                "SELECT count(*) FROM inventory_movements m "
+                "JOIN inventory_operations o ON o.movement_id = m.id "
+                "WHERE o.idempotency_key = 'unique-race-key'"
+            )
+        )
+        assert race_movement_count == 1
+
         winner_product = await verify.scalar(
             text(
                 "SELECT product_id FROM inventory_operations "
                 "WHERE idempotency_key = 'unique-race-key'"
             )
         )
-        winner_movements = await verify.scalar(
-            text(
-                "SELECT count(*) FROM inventory_movements "
-                "WHERE business_id = 1 AND product_id = :pid "
-                "AND movement_type = 'manual_adjustment'"
-            ),
-            {"pid": winner_product},
-        )
-        assert winner_movements == 1
-
         loser_product = 2 if winner_product == 1 else 1
-        loser_movements = await verify.scalar(
+
+        loser_race_movements = await verify.scalar(
             text(
-                "SELECT count(*) FROM inventory_movements "
-                "WHERE business_id = 1 AND product_id = :pid "
-                "AND movement_type = 'manual_adjustment'"
+                "SELECT count(*) FROM inventory_movements m "
+                "JOIN inventory_operations o ON o.movement_id = m.id "
+                "WHERE o.idempotency_key = 'unique-race-key' "
+                "AND m.product_id = :pid"
             ),
             {"pid": loser_product},
         )
-        assert loser_movements == 0
+        assert loser_race_movements == 0
 
         loser_balance = (
             await verify.execute(

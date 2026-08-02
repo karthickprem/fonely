@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fonely.core.exceptions import FonelyError
@@ -439,93 +439,121 @@ class InventoryService:
         )
         existing = await self._repo.get_operation_by_key(business_id, idempotency_key)
         if existing is not None:
-            if existing.request_digest != signature.digest:
-                raise InventoryIdempotencyConflictError(
-                    "Direct inventory request conflicts with existing operation"
-                )
-            movement = await self._repo.get_movement_by_id(business_id, existing.movement_id)
-            if movement is None:
-                raise InventoryIdempotencyConflictError(
-                    "Existing operation references missing movement"
-                )
-            return InventoryMutationResult(
-                business_id=movement.business_id,
-                product_id=movement.product_id,
-                business_date=movement.business_date,
-                movement_id=movement.id,
-                movement_type=InventoryMovementType(movement.movement_type),
-                on_hand_delta=movement.on_hand_delta,
-                reserved_delta=movement.reserved_delta,
-                on_hand_after=movement.on_hand_after,
-                reserved_after=movement.reserved_after,
-                available_after=movement.available_after,
-                idempotent_replay=True,
-            )
+            return await self._resolve_existing_operation(existing, signature)
 
-        async with self._session.begin_nested():
-            timezone = await self._require_timezone(business_id)
-            business_date = derive_business_date(occurred_at, timezone)
-            products = await self._repo.lock_active_products(business_id, [product_id])
-            if len(products) != 1:
-                raise InvalidProductError("Product is unavailable")
-            await self._repo.ensure_balance(business_id, product_id, business_date)
-            balances = await self._repo.lock_balances(business_id, [product_id], business_date)
-            if len(balances) != 1:
-                raise InventoryBalanceNotFoundError("Inventory balance could not be locked")
-            balance = balances[0]
-            before = InventoryState(balance.on_hand_qty, balance.reserved_qty)
-            if operation == "set":
-                transition = set_stock(before, quantity)
-            elif operation == "add":
-                transition = add_stock(before, quantity)
-            else:
-                transition = sell_walk_in(before, quantity)
-            updated = await self._repo.update_balance(
-                balance_id=balance.id,
-                business_id=business_id,
-                expected_version=balance.version,
-                on_hand_qty=transition.after.on_hand,
-                reserved_qty=transition.after.reserved,
+        try:
+            async with self._session.begin_nested():
+                timezone = await self._require_timezone(business_id)
+                business_date = derive_business_date(occurred_at, timezone)
+                products = await self._repo.lock_active_products(business_id, [product_id])
+                if len(products) != 1:
+                    raise InvalidProductError("Product is unavailable")
+                await self._repo.ensure_balance(business_id, product_id, business_date)
+                balances = await self._repo.lock_balances(business_id, [product_id], business_date)
+                if len(balances) != 1:
+                    raise InventoryBalanceNotFoundError("Inventory balance could not be locked")
+                balance = balances[0]
+
+                recheck = await self._repo.get_operation_by_key(business_id, idempotency_key)
+                if recheck is not None:
+                    return await self._resolve_existing_operation(recheck, signature)
+
+                before = InventoryState(balance.on_hand_qty, balance.reserved_qty)
+                if operation == "set":
+                    transition = set_stock(before, quantity)
+                elif operation == "add":
+                    transition = add_stock(before, quantity)
+                else:
+                    transition = sell_walk_in(before, quantity)
+                updated = await self._repo.update_balance(
+                    balance_id=balance.id,
+                    business_id=business_id,
+                    expected_version=balance.version,
+                    on_hand_qty=transition.after.on_hand,
+                    reserved_qty=transition.after.reserved,
+                )
+                if updated is None:
+                    raise InventoryStaleVersionError("Inventory balance changed concurrently")
+                movement = await self._repo.insert_movement(
+                    {
+                        "business_id": business_id,
+                        "product_id": product_id,
+                        "business_date": business_date,
+                        "movement_type": transition.movement_type.value,
+                        "on_hand_delta": transition.on_hand_delta,
+                        "reserved_delta": transition.reserved_delta,
+                        "on_hand_after": transition.after.on_hand,
+                        "reserved_after": transition.after.reserved,
+                        "available_after": transition.after.available,
+                        "initiated_by": initiated_by,
+                        "note": note,
+                    }
+                )
+                await self._repo.insert_operation(
+                    {
+                        "business_id": business_id,
+                        "idempotency_key": idempotency_key,
+                        "operation": operation,
+                        "product_id": product_id,
+                        "request_digest": signature.digest,
+                        "movement_id": movement.id,
+                    }
+                )
+
+                return InventoryMutationResult(
+                    business_id=business_id,
+                    product_id=product_id,
+                    business_date=business_date,
+                    movement_id=movement.id,
+                    movement_type=InventoryMovementType(movement.movement_type),
+                    on_hand_delta=movement.on_hand_delta,
+                    reserved_delta=movement.reserved_delta,
+                    on_hand_after=movement.on_hand_after,
+                    reserved_after=movement.reserved_after,
+                    available_after=movement.available_after,
+                )
+        except IntegrityError as exc:
+            if getattr(exc.orig, "sqlstate", None) == "23505" and "uq_inv_op_idempotency" in str(
+                exc
+            ):
+                winner = await self._repo.get_operation_by_key(business_id, idempotency_key)
+                if winner is None:
+                    raise InventoryIdempotencyConflictError(
+                        "Concurrent operation vanished after uniqueness conflict"
+                    ) from exc
+                return await self._resolve_existing_operation(winner, signature)
+            raise
+
+    async def _resolve_existing_operation(
+        self,
+        existing: object,
+        signature: DirectInventoryRequestSignature,
+    ) -> InventoryMutationResult:
+        request_digest: str = getattr(existing, "request_digest", "")
+        movement_id: int = getattr(existing, "movement_id", 0)
+        business_id: int = getattr(existing, "business_id", 0)
+        if request_digest != signature.digest:
+            raise InventoryIdempotencyConflictError(
+                "Direct inventory request conflicts with existing operation"
             )
-            if updated is None:
-                raise InventoryStaleVersionError("Inventory balance changed concurrently")
-            movement = await self._repo.insert_movement(
-                {
-                    "business_id": business_id,
-                    "product_id": product_id,
-                    "business_date": business_date,
-                    "movement_type": transition.movement_type.value,
-                    "on_hand_delta": transition.on_hand_delta,
-                    "reserved_delta": transition.reserved_delta,
-                    "on_hand_after": transition.after.on_hand,
-                    "reserved_after": transition.after.reserved,
-                    "available_after": transition.after.available,
-                    "initiated_by": initiated_by,
-                    "note": note,
-                }
+        movement = await self._repo.get_movement_by_id(business_id, movement_id)
+        if movement is None:
+            raise InventoryIdempotencyConflictError(
+                "Existing operation references missing movement"
             )
-            await self._repo.insert_operation(
-                {
-                    "business_id": business_id,
-                    "idempotency_key": idempotency_key,
-                    "operation": operation,
-                    "product_id": product_id,
-                    "request_digest": signature.digest,
-                    "movement_id": movement.id,
-                }
-            )
-            return InventoryMutationResult(
-                business_id=business_id,
-                product_id=product_id,
-                business_date=business_date,
-                movement_id=movement.id,
-                movement_type=InventoryMovementType(movement.movement_type),
-                on_hand_delta=movement.on_hand_delta,
-                reserved_delta=movement.reserved_delta,
-                on_hand_after=movement.on_hand_after,
-                reserved_after=movement.reserved_after,
-                available_after=movement.available_after,
-            )
+        return InventoryMutationResult(
+            business_id=movement.business_id,
+            product_id=movement.product_id,
+            business_date=movement.business_date,
+            movement_id=movement.id,
+            movement_type=InventoryMovementType(movement.movement_type),
+            on_hand_delta=movement.on_hand_delta,
+            reserved_delta=movement.reserved_delta,
+            on_hand_after=movement.on_hand_after,
+            reserved_after=movement.reserved_after,
+            available_after=movement.available_after,
+            idempotent_replay=True,
+        )
 
     async def _require_timezone(self, business_id: int) -> str:
         timezone = await self._repo.get_business_timezone(business_id)

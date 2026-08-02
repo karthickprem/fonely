@@ -1087,3 +1087,89 @@ def test_phase_b_migration_rejects_unsupported_or_invalid_payloads(
     migration = _load_migration(MIGRATION_0002, "fonely_migration_0002_invalid")
     with pytest.raises(RuntimeError):
         migration._digest(action_type, version, payload)
+
+
+def test_0005_lock_set_is_deterministic_and_includes_fk_targets() -> None:
+    migration = _load_migration(MIGRATION_0005, "fonely_migration_0005_lock_order")
+    expected = tuple(
+        sorted(
+            (
+                "calls",
+                "inventory_balances",
+                "inventory_movements",
+                "inventory_operations",
+                "inventory_reservations",
+                "order_line_items",
+                "orders",
+                "pending_actions",
+                "products",
+            )
+        )
+    )
+    assert expected == migration._AFFECTED_TABLES
+    source = MIGRATION_0005.read_text()
+    assert source.count("_lock_affected_tables()") == 3
+
+
+def test_0005_inventory_order_tenant_composite_fk_signatures() -> None:
+    captured = _capture_upgrade().metadata.tables
+    balance_fks = _fk_signatures(captured["inventory_balances"])
+    assert (
+        ("business_id", "product_id"),
+        ("products.business_id", "products.id"),
+    ) in balance_fks
+
+    reservation_fks = _fk_signatures(captured["inventory_reservations"])
+    assert (
+        ("business_id", "product_id"),
+        ("products.business_id", "products.id"),
+    ) in reservation_fks
+    assert (
+        ("business_id", "order_id"),
+        ("orders.business_id", "orders.id"),
+    ) in reservation_fks
+
+    movement_fks = _fk_signatures(captured["inventory_movements"])
+    assert (
+        ("business_id", "product_id"),
+        ("products.business_id", "products.id"),
+    ) in movement_fks
+    assert (
+        ("business_id", "reservation_id"),
+        ("inventory_reservations.business_id", "inventory_reservations.id"),
+    ) in movement_fks
+
+    order_fks = _fk_signatures(captured["orders"])
+    assert (
+        ("business_id", "pending_action_id"),
+        ("pending_actions.business_id", "pending_actions.id"),
+    ) in order_fks
+    assert (
+        ("business_id", "call_id"),
+        ("calls.business_id", "calls.id"),
+    ) in order_fks
+
+    line_fks = _fk_signatures(captured["order_line_items"])
+    assert (
+        ("business_id", "order_id"),
+        ("orders.business_id", "orders.id"),
+    ) in line_fks
+    assert (
+        ("business_id", "product_id"),
+        ("products.business_id", "products.id"),
+    ) in line_fks
+
+
+def test_0005_append_only_trigger_is_rendered() -> None:
+    rendered = "\n".join(_capture_upgrade().executed_sql)
+    assert "reject_inventory_movement_mutation" in rendered
+    assert "ck_inventory_movement_append_only" in rendered
+    assert "inventory movements are append-only" in rendered
+    assert "BEFORE UPDATE OR DELETE ON inventory_movements" in rendered
+
+
+def test_0005_offline_guard_checks_order_line_items() -> None:
+    source = MIGRATION_0005.read_text()
+    offline_block = source[source.index("else:") : source.index("# --- Prerequisite")]
+    assert "order_line_items" in offline_block
+    assert "requires online backfill" in offline_block

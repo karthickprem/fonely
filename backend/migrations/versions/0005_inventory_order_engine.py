@@ -28,12 +28,14 @@ def _fail_if_exists(sql: str, message: str) -> None:
 
 
 _AFFECTED_TABLES = (
+    "calls",
     "inventory_balances",
     "inventory_movements",
     "inventory_operations",
     "inventory_reservations",
     "order_line_items",
     "orders",
+    "pending_actions",
     "products",
 )
 
@@ -180,8 +182,9 @@ def upgrade() -> None:
     else:
         op.execute(
             sa.text(
-                "SELECT CASE WHEN EXISTS (SELECT 1 FROM inventory_balances LIMIT 1) "
-                "THEN CAST('Migration 0005 requires online backfill' AS integer) END"
+                "SELECT CASE WHEN EXISTS (SELECT 1 FROM order_line_items LIMIT 1) "
+                "THEN CAST('Migration 0005 requires online backfill "
+                "for order_line_items.business_id' AS integer) END"
             )
         )
 

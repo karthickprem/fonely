@@ -1,15 +1,14 @@
-"""Executable current-schema PostgreSQL contracts for Phase C inventory/orders.
+"""Executable current-schema PostgreSQL contracts for Phase C inventory/orders."""
 
-Future migration 0005 requirements are specifications in the final Phase C handoff,
-not executable tests in this module.
-"""
-
+import os
+import subprocess
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from fonely.domain.inventory.commands import SetOwnerStockCommand
 from fonely.domain.pending_actions.commands import ActorContext
@@ -18,6 +17,7 @@ from fonely.services.inventory import InventoryService
 
 pytestmark = pytest.mark.postgres
 NOW = datetime(2026, 8, 1, 6, tzinfo=UTC)
+BACKEND_ROOT = Path(__file__).parents[3]
 
 
 def owner() -> ActorContext:
@@ -194,3 +194,362 @@ async def test_direct_inventory_idempotency_conflict(pg_session: AsyncSession) -
                 idempotency_key="conflict-1",
             )
         )
+
+
+# =============================================================================
+# Populated migration cycle contracts
+# =============================================================================
+
+
+def _alembic_env(database_url: str) -> dict[str, str]:
+    env = os.environ.copy()
+    env["DATABASE_URL"] = database_url
+    return env
+
+
+def _run_alembic(database_url: str, *args: str) -> subprocess.CompletedProcess[str]:
+    env = _alembic_env(database_url)
+    result = subprocess.run(
+        [str(BACKEND_ROOT / ".venv" / "bin" / "alembic"), *args],
+        cwd=BACKEND_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        msg = (result.stderr or "").strip()
+        if not msg:
+            msg = (result.stdout or "").strip()
+        raise RuntimeError(f"alembic {' '.join(args)} failed (rc={result.returncode}): {msg}")
+    return result
+
+
+_TWO_TENANT_SEED = """
+INSERT INTO businesses (id, name, category, primary_contact_phone, timezone, subscription)
+VALUES
+  (1, 'Tenant A Shop', 'shop', '+919100000001', 'Asia/Kolkata', 'trial'),
+  (2, 'Tenant B Shop', 'shop', '+919200000002', 'Asia/Kolkata', 'trial');
+
+INSERT INTO business_users (business_id, phone, role, is_active) VALUES
+  (1, '+919100000001', 'owner', true),
+  (2, '+919200000002', 'owner', true);
+
+INSERT INTO products (id, business_id, name, unit, price_per_unit, is_active) VALUES
+  (1, 1, 'Rice', 'kg', 100.00, true),
+  (2, 1, 'Oil', 'litre', 200.00, true),
+  (3, 2, 'Flour', 'kg', 50.00, true);
+
+INSERT INTO pending_actions
+  (id, business_id, action_type, payload_schema_version, proposed_payload,
+   confirmation_snapshot, status, expires_at, idempotency_key, version,
+   payload_digest, committed_entity_type, committed_entity_id)
+VALUES
+  (1, 1, 'order', 1,
+   '{"schema_version":1,"action_type":"order","data":{"customer_name":"A","customer_phone":"+919111111111","pickup_at":"2026-08-01T12:00:00+05:30","lines":[{"product_id":1,"quantity":"2"}]}}',
+   'confirmed', 'confirmed', '2026-08-02T00:00:00+05:30', 'pa-a-1', 3,
+   'aaaaaaaabbbbbbbbccccccccdddddddd1111111122222222333333334444444', 'order', 1),
+  (2, 2, 'order', 1,
+   '{"schema_version":1,"action_type":"order","data":{"customer_name":"B","customer_phone":"+919222222222","pickup_at":"2026-08-01T14:00:00+05:30","lines":[{"product_id":3,"quantity":"1"}]}}',
+   'confirmed', 'confirmed', '2026-08-02T00:00:00+05:30', 'pa-b-1', 3,
+   'eeeeeeeeffffffffaaaaaaaabbbbbbbb5555555566666666777777778888888', 'order', 2);
+
+INSERT INTO inventory_balances
+  (id, business_id, product_id, business_date, on_hand_qty, reserved_qty,
+   available_tomorrow, version)
+VALUES
+  (1, 1, 1, '2026-08-01', 10.00, 2.00, true, 3),
+  (2, 1, 2, '2026-08-01', 5.00, 0.00, true, 1),
+  (3, 2, 3, '2026-08-01', 20.00, 1.00, true, 2);
+
+INSERT INTO orders
+  (id, business_id, customer_name, customer_phone, total_amount, status,
+   idempotency_key, pending_action_id)
+VALUES
+  (1, 1, 'Customer A', '+919111111111', 200.00, 'confirmed', 'ord-a-1', 1),
+  (2, 2, 'Customer B', '+919222222222', 50.00, 'confirmed', 'ord-b-1', 2);
+
+INSERT INTO order_line_items
+  (id, order_id, product_id, product_name_snapshot, qty, unit,
+   price_per_unit_snapshot, subtotal)
+VALUES
+  (1, 1, 1, 'Rice', 2.00, 'kg', 100.00, 200.00),
+  (2, 2, 3, 'Flour', 1.00, 'kg', 50.00, 50.00);
+
+INSERT INTO inventory_reservations
+  (id, business_id, product_id, pending_action_id, order_id, business_date,
+   qty, status, expires_at, idempotency_key)
+VALUES
+  (1, 1, 1, 1, 1, '2026-08-01', 2.00, 'active',
+   '2026-08-01T14:00:00+05:30', 'ord-a-1'),
+  (2, 2, 3, 2, 2, '2026-08-01', 1.00, 'active',
+   '2026-08-01T16:00:00+05:30', 'ord-b-1');
+
+INSERT INTO inventory_movements
+  (id, business_id, product_id, business_date, movement_type,
+   on_hand_delta, reserved_delta, on_hand_after, reserved_after,
+   available_after, order_id, reservation_id, pending_action_id)
+VALUES
+  (1, 1, 1, '2026-08-01', 'manual_adjustment', 10, 0, 10, 0, 10, NULL, NULL, NULL),
+  (2, 1, 1, '2026-08-01', 'phone_order_reserved', 0, 2, 10, 2, 8, 1, 1, 1),
+  (3, 1, 2, '2026-08-01', 'manual_adjustment', 5, 0, 5, 0, 5, NULL, NULL, NULL),
+  (4, 2, 3, '2026-08-01', 'manual_adjustment', 20, 0, 20, 0, 20, NULL, NULL, NULL),
+  (5, 2, 3, '2026-08-01', 'phone_order_reserved', 0, 1, 20, 1, 19, 2, 2, 2);
+"""
+
+
+async def test_populated_migration_cycle(
+    pg_engine: AsyncEngine, postgres_database_url: str
+) -> None:
+    """Prove 0004→0005→0004→0005 with populated two-tenant data."""
+    url = postgres_database_url
+
+    _run_alembic(url, "downgrade", "0004")
+
+    async with pg_engine.begin() as conn:
+        rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
+        assert rev == "0004"
+        await conn.execute(text(_TWO_TENANT_SEED))
+
+    _run_alembic(url, "upgrade", "head")
+
+    async with pg_engine.begin() as conn:
+        rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
+        assert rev == "0005"
+
+        backfilled = tuple(
+            (
+                await conn.execute(
+                    text(
+                        "SELECT li.id, li.business_id, o.business_id "
+                        "FROM order_line_items li JOIN orders o ON o.id = li.order_id "
+                        "ORDER BY li.id"
+                    )
+                )
+            ).all()
+        )
+        assert len(backfilled) == 2
+        for li_id, li_biz, o_biz in backfilled:
+            assert li_biz == o_biz, f"line {li_id}: business_id mismatch"
+
+        bal_t1 = (
+            await conn.execute(
+                text(
+                    "SELECT on_hand_qty, reserved_qty, version "
+                    "FROM inventory_balances WHERE business_id=1 AND product_id=1"
+                )
+            )
+        ).one()
+        assert tuple(bal_t1) == (10, 2, 3)
+
+        bal_t2 = (
+            await conn.execute(
+                text(
+                    "SELECT on_hand_qty, reserved_qty "
+                    "FROM inventory_balances WHERE business_id=2 AND product_id=3"
+                )
+            )
+        ).one()
+        assert tuple(bal_t2) == (20, 1)
+
+        uq_exists = await conn.scalar(
+            text("SELECT 1 FROM pg_constraint WHERE conname='uq_products_business_id_id'")
+        )
+        assert uq_exists == 1
+
+        trigger = await conn.scalar(
+            text("SELECT 1 FROM pg_trigger WHERE tgname='ck_inventory_movement_append_only'")
+        )
+        assert trigger == 1
+
+        inv_ops = await conn.scalar(text("SELECT count(*) FROM inventory_operations"))
+        assert inv_ops == 0
+
+    _run_alembic(url, "downgrade", "0004")
+
+    async with pg_engine.begin() as conn:
+        rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
+        assert rev == "0004"
+
+        orders_exist = await conn.scalar(text("SELECT count(*) FROM orders"))
+        assert orders_exist == 2
+
+        has_business_id = await conn.scalar(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name='order_line_items' AND column_name='business_id'"
+            )
+        )
+        assert has_business_id is None
+
+    _run_alembic(url, "upgrade", "head")
+
+    async with pg_engine.begin() as conn:
+        rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
+        assert rev == "0005"
+
+        backfilled_again = tuple(
+            (
+                await conn.execute(
+                    text("SELECT li.id, li.business_id FROM order_line_items li ORDER BY li.id")
+                )
+            ).all()
+        )
+        assert len(backfilled_again) == 2
+        for _li_id, li_biz in backfilled_again:
+            assert li_biz is not None
+
+        movement_count = await conn.scalar(text("SELECT count(*) FROM inventory_movements"))
+        assert movement_count == 5
+
+
+async def test_preflight_rejects_cross_tenant_product_reference(
+    pg_engine: AsyncEngine, postgres_database_url: str
+) -> None:
+    url = postgres_database_url
+    _run_alembic(url, "downgrade", "0004")
+
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO businesses (id, name, category, primary_contact_phone, "
+                "timezone, subscription) VALUES "
+                "(1, 'A', 'shop', '+919100000001', 'Asia/Kolkata', 'trial'), "
+                "(2, 'B', 'shop', '+919200000002', 'Asia/Kolkata', 'trial')"
+            )
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO products (id, business_id, name, unit, price_per_unit, is_active) "
+                "VALUES (1, 1, 'Rice', 'kg', 100.00, true)"
+            )
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO inventory_balances "
+                "(business_id, product_id, business_date, on_hand_qty, reserved_qty, "
+                "available_tomorrow, version) VALUES "
+                "(2, 1, '2026-08-01', 5, 0, true, 1)"
+            )
+        )
+
+    with pytest.raises(RuntimeError, match="cross-tenant product reference"):
+        _run_alembic(url, "upgrade", "head")
+
+
+async def test_preflight_rejects_duplicate_line_item_product(
+    pg_engine: AsyncEngine, postgres_database_url: str
+) -> None:
+    url = postgres_database_url
+    _run_alembic(url, "downgrade", "0004")
+
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO businesses (id, name, category, primary_contact_phone, "
+                "timezone, subscription) VALUES "
+                "(1, 'A', 'shop', '+919100000001', 'Asia/Kolkata', 'trial')"
+            )
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO products (id, business_id, name, unit, price_per_unit, is_active) "
+                "VALUES (1, 1, 'Rice', 'kg', 100.00, true)"
+            )
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO orders (id, business_id, customer_phone, total_amount, "
+                "status, idempotency_key) VALUES "
+                "(1, 1, '+919111111111', 300, 'confirmed', 'ord-1')"
+            )
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO order_line_items "
+                "(order_id, product_id, product_name_snapshot, qty, unit, "
+                "price_per_unit_snapshot, subtotal) VALUES "
+                "(1, 1, 'Rice', 1, 'kg', 100, 100), "
+                "(1, 1, 'Rice', 2, 'kg', 100, 200)"
+            )
+        )
+
+    with pytest.raises(RuntimeError, match="duplicate order line items"):
+        _run_alembic(url, "upgrade", "head")
+
+
+async def test_preflight_rejects_invalid_balance_version(
+    pg_engine: AsyncEngine, postgres_database_url: str
+) -> None:
+    url = postgres_database_url
+    _run_alembic(url, "downgrade", "0004")
+
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO businesses (id, name, category, primary_contact_phone, "
+                "timezone, subscription) VALUES "
+                "(1, 'A', 'shop', '+919100000001', 'Asia/Kolkata', 'trial')"
+            )
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO products (id, business_id, name, unit, price_per_unit, is_active) "
+                "VALUES (1, 1, 'Rice', 'kg', 100.00, true)"
+            )
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO inventory_balances "
+                "(business_id, product_id, business_date, on_hand_qty, reserved_qty, "
+                "available_tomorrow, version) VALUES "
+                "(1, 1, '2026-08-01', 5, 0, true, 0)"
+            )
+        )
+
+    with pytest.raises(RuntimeError, match="version"):
+        _run_alembic(url, "upgrade", "head")
+
+
+async def test_downgrade_preflight_rejects_inventory_operations(
+    pg_engine: AsyncEngine, postgres_database_url: str
+) -> None:
+    url = postgres_database_url
+    _run_alembic(url, "downgrade", "0004")
+    _run_alembic(url, "upgrade", "head")
+
+    async with pg_engine.begin() as conn:
+        await conn.execute(
+            text(
+                "INSERT INTO businesses (id, name, category, primary_contact_phone, "
+                "timezone, subscription) VALUES "
+                "(1, 'A', 'shop', '+919100000001', 'Asia/Kolkata', 'trial')"
+            )
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO products (id, business_id, name, unit, price_per_unit, is_active) "
+                "VALUES (1, 1, 'Rice', 'kg', 100.00, true)"
+            )
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO inventory_movements "
+                "(id, business_id, product_id, business_date, movement_type, "
+                "on_hand_delta, reserved_delta, on_hand_after, reserved_after, "
+                "available_after) VALUES "
+                "(1, 1, 1, '2026-08-01', 'manual_adjustment', 5, 0, 5, 0, 5)"
+            )
+        )
+        await conn.execute(
+            text(
+                "INSERT INTO inventory_operations "
+                "(business_id, idempotency_key, operation, product_id, "
+                "request_digest, movement_id) VALUES "
+                "(1, 'op-1', 'set', 1, "
+                "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1)"
+            )
+        )
+
+    with pytest.raises(RuntimeError, match="inventory operation records"):
+        _run_alembic(url, "downgrade", "0004")

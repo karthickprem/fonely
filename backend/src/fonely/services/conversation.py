@@ -182,7 +182,7 @@ class ConversationService:
             self._log_turn(turn, start_time)
             return turn
 
-        self._extract_facts(ctx, user_message, biz)
+        await self._extract_facts(ctx, user_message, biz)
         await self._validate_facts(ctx, biz)
         missing = self._identify_missing_facts(ctx)
 
@@ -202,17 +202,20 @@ class ConversationService:
         self._log_turn(turn, start_time)
         return turn
 
-    def _extract_facts(self, ctx: ConversationContext, message: str, biz: object) -> None:
+    async def _extract_facts(self, ctx: ConversationContext, message: str, biz: object) -> None:
         from fonely.services.conversation_tools import BusinessContext
 
         assert isinstance(biz, BusinessContext)
         msg_lower = message.lower()
+
+        regex_found = False
 
         if "service_id" not in ctx.collected_facts:
             for svc in biz.services:
                 if svc.name.lower() in msg_lower:
                     ctx.collected_facts["service_id"] = svc.id
                     ctx.collected_facts["service_name"] = svc.name
+                    regex_found = True
                     break
 
         if "resource_id" not in ctx.collected_facts:
@@ -225,6 +228,7 @@ class ConversationService:
                     if eligible or "service_id" not in ctx.collected_facts:
                         ctx.collected_facts["resource_id"] = res.id
                         ctx.collected_facts["resource_name"] = res.name
+                        regex_found = True
                         break
 
         if "customer_phone" not in ctx.collected_facts:
@@ -235,6 +239,7 @@ class ConversationService:
                     phone = "+91" + phone
                 if len(phone) >= 12 and not all(c == "0" for c in phone.lstrip("+")):
                     ctx.collected_facts["customer_phone"] = phone
+                    regex_found = True
 
         if "customer_name" not in ctx.collected_facts:
             name_match = re.search(
@@ -244,9 +249,26 @@ class ConversationService:
             )
             if name_match:
                 ctx.collected_facts["customer_name"] = name_match.group(1)
+                regex_found = True
 
         if "start_at" not in ctx.collected_facts:
             self._extract_datetime(ctx, message)
+            if "start_at" in ctx.collected_facts:
+                regex_found = True
+
+        if not regex_found:
+            try:
+                from fonely.services.fact_extractor import FactExtractor
+                from fonely.services.fact_resolver import FactResolver
+
+                extractor = FactExtractor(self._model)
+                extracted = await extractor.extract(message, biz, ctx.collected_facts)
+                resolved = FactResolver().resolve(extracted, biz, biz.timezone)
+                for key, value in resolved.to_dict().items():
+                    if key not in ctx.collected_facts:
+                        ctx.collected_facts[key] = value
+            except Exception:
+                logger.warning("llm_fact_extraction_failed", exc_info=True)
 
     async def _validate_facts(self, ctx: ConversationContext, biz: object) -> None:
         from fonely.services.conversation_tools import BusinessContext, validate_slot_time

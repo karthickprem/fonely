@@ -271,6 +271,7 @@ _LINE_SNAPSHOT_QUERY = (
 @pytest.mark.parametrize(
     "mutation",
     [
+        "id = 999",
         "qty = 999",
         "product_name_snapshot = 'Altered'",
         "unit = 'piece'",

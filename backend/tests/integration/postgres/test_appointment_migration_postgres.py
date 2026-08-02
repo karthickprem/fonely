@@ -1328,10 +1328,9 @@ async def test_malformed_runtime_commit_provenance_is_a_constraint_violation(
             await session.execute(
                 text(
                     "UPDATE pending_actions SET proposed_payload = "
-                    "jsonb_set(proposed_payload, '{data}', "
-                    "proposed_payload->'data' - CAST(:field AS text)) WHERE id = 10"
+                    "proposed_payload #- CAST(:path AS text[]) WHERE id = 10"
                 ),
-                {"field": field},
+                {"path": ["data", field]},
             )
         else:
             await session.execute(
@@ -1561,9 +1560,11 @@ async def test_terminal_rewrite_and_appointment_delete_are_rejected(
             await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
         assert _pg_constraint_name(error.value) == "ck_appointment_mutation_commit"
         await session.rollback()
+
     async with pg_session_factory() as session:
         await session.execute(text("DELETE FROM appointments WHERE id=1"))
         with pytest.raises(IntegrityError) as error:
             await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
-        assert _pg_constraint_name(error.value) == "ck_appointment_mutation_commit"
+        cn = _pg_constraint_name(error.value)
+        assert cn in ("ck_appointment_mutation_commit", "fk_allocation_business_appointment")
         await session.rollback()

@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     # Database — async PostgreSQL in production, async SQLite for tests
     database_url: str = "postgresql+asyncpg://localhost:5432/fonely"
 
+    # Connection pool
+    db_pool_size: int = 5
+    db_max_overflow: int = 5
+    db_pool_timeout: int = 30
+    db_pool_recycle: int = 1800
+
     # Server
     host: str = "0.0.0.0"
     port: int = 8000
@@ -36,6 +42,10 @@ class Settings(BaseSettings):
 
     # Readiness
     readiness_timeout_seconds: float = 3.0
+
+    # Logging
+    log_format: str = "text"
+    log_level: str = "INFO"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 

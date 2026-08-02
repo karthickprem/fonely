@@ -11,15 +11,22 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
 from fonely.core.config import settings
+from fonely.core.logging_config import configure_logging
 
 logger = logging.getLogger("fonely.app")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    configure_logging(settings.log_format, settings.log_level)
+    logger.info("starting", extra={"host": settings.host, "port": settings.port})
     engine: AsyncEngine = create_async_engine(
         settings.database_url,
         pool_pre_ping=True,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        pool_timeout=settings.db_pool_timeout,
+        pool_recycle=settings.db_pool_recycle,
     )
     app.state.engine = engine
     app.state.session_factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -28,6 +35,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     finally:
         try:
             await engine.dispose()
+            logger.info("shutdown_complete")
         except Exception:
             logger.error("engine_disposal_failed", extra={"operation": "shutdown"})
 

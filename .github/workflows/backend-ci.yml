@@ -114,9 +114,8 @@ jobs:
           FONELY_READINESS_DATABASE_URL: ${{ env.FONELY_TEST_DATABASE_URL }}
           FONELY_READINESS_ENVIRONMENT: github-ci
         run: |
-          output=$(backend/.venv/bin/python scripts/check-deployment-readiness.py)
-          echo "$output"
-          echo "$output" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['overall_status']=='passed', f'readiness failed: {d[\"overall_status\"]}'"
+          set -euo pipefail
+          backend/.venv/bin/python scripts/check-deployment-readiness.py | tee /dev/stderr | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['overall_status']=='passed', 'readiness check failed'"
 
       - name: Unit and non-PostgreSQL tests
         run: .venv/bin/pytest -m "not postgres" -q

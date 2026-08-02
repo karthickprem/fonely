@@ -2,6 +2,10 @@
 
 Non-destructive tool that checks whether a PostgreSQL database is reachable, at the expected Alembic revision, running a supported version, and capable of read-only transactions.
 
+This is a **post-migration readiness** and **CI readiness** verifier. It confirms that the database is ready for application startup after migrations have been applied. It is not a pre-migration gate — it requires the database revision to equal the repository head.
+
+Migration metadata is discovered via static AST parsing. Migration modules are never imported or executed.
+
 ## What a pass proves
 
 - The configured database is reachable within bounded time.
@@ -14,47 +18,34 @@ Non-destructive tool that checks whether a PostgreSQL database is reachable, at 
 
 - Application correctness, provider connectivity, or channel readiness.
 - That migrations ran successfully (use `alembic upgrade head` for that).
+- Pre-migration state or backup readiness.
 - Staging, pilot, or production readiness.
-- Backup/restore capability.
 - Data integrity or tenant isolation.
 
 ## Required environment variables
 
 | Variable | Required | Description |
 |---|---|---|
-| `FONELY_READINESS_DATABASE_URL` | Yes | `postgresql+asyncpg://...` connection URL |
+| `FONELY_READINESS_DATABASE_URL` | Yes | `postgresql+asyncpg://` connection URL |
 | `FONELY_READINESS_ENVIRONMENT` | Yes | Deployment label: `staging`, `github-ci`, etc. |
 | `FONELY_READINESS_CONNECT_TIMEOUT_S` | No | Connection timeout in seconds (default: 10, max: 120) |
-| `FONELY_READINESS_OVERALL_TIMEOUT_S` | No | Total execution timeout in seconds (default: 30, max: 300) |
+| `FONELY_READINESS_OVERALL_TIMEOUT_S` | No | Orchestration deadline in seconds (default: 30, max: 300) |
 
 `DATABASE_URL` is intentionally ignored. The verifier requires its own explicit URL to prevent accidental production use.
 
+Timeout values must be finite positive numbers within documented bounds. NaN and infinity are rejected.
+
 ## Usage
-
-### Local (after running migrations against a local test database)
-
-```bash
-FONELY_READINESS_DATABASE_URL="postgresql+asyncpg://fonely_test:fonely_test@localhost:5432/fonely_test" \
-FONELY_READINESS_ENVIRONMENT="local-dev" \
-python scripts/check-deployment-readiness.py
-```
 
 ### CI
 
 The Backend CI workflow runs the verifier automatically after `alembic upgrade head` against the disposable PostgreSQL 16 service. No additional setup is needed.
 
-### Future staging pre-deploy / post-deploy
+### Post-migration staging check
+
+After applying migrations through the deployment process:
 
 ```bash
-# Pre-deploy: verify current state before applying migrations
-FONELY_READINESS_DATABASE_URL="$STAGING_DB_URL" \
-FONELY_READINESS_ENVIRONMENT="staging" \
-python scripts/check-deployment-readiness.py
-
-# Apply migration through deployment process
-alembic upgrade head
-
-# Post-deploy: verify migration succeeded
 FONELY_READINESS_DATABASE_URL="$STAGING_DB_URL" \
 FONELY_READINESS_ENVIRONMENT="staging" \
 python scripts/check-deployment-readiness.py
@@ -62,7 +53,7 @@ python scripts/check-deployment-readiness.py
 
 ## JSON output
 
-The verifier emits exactly one JSON document to stdout. All diagnostics go to stderr.
+The verifier emits exactly one JSON document to stdout. Failure details are bounded fields within that JSON document — not separate stderr output.
 
 ```json
 {
@@ -99,18 +90,18 @@ The verifier emits exactly one JSON document to stdout. All diagnostics go to st
 | `connection_failed` | Database unreachable | Check network, host, port, credentials |
 | `connection_timeout` | Connection took too long | Check network path and database load |
 | `unsupported_postgres_version` | Major version outside 14–17 | Use a supported PostgreSQL version |
-| `repository_head_missing` | No Alembic revisions found | Check repository checkout |
+| `repository_head_missing` | No Alembic revisions found or parse error | Check repository checkout |
 | `repository_heads_multiple` | Branched migration history | Resolve to a single Alembic head |
-| `alembic_version_missing` | No `alembic_version` table | Run initial migration |
-| `database_revision_invalid` | Empty or malformed revision | Investigate database state |
+| `alembic_version_missing` | No `public.alembic_version` table | Run initial migration |
+| `database_revision_invalid` | Empty, null, or malformed revision | Investigate database state |
 | `database_revision_stale` | Database behind repository head | Apply pending migrations |
 | `readonly_check_failed` | Cannot verify read-only mode | Investigate database permissions |
-| `overall_timeout` | Total execution exceeded limit | Increase timeout or investigate |
+| `overall_timeout` | Orchestration deadline exceeded | Increase timeout or investigate |
 | `internal_error` | Unexpected error | Report for investigation |
 
-## Credential redaction
+## Credential safety
 
-The verifier never prints database URLs, usernames, passwords, or raw exception messages containing connection strings. All output is sanitized before emission.
+The verifier never prints database URLs, usernames, passwords, or raw exception messages containing connection strings. All output is sanitized before emission. Database-controlled revision values are validated against a strict safe-identifier grammar before inclusion in output.
 
 ## Non-destructive guarantee
 
@@ -119,11 +110,15 @@ The verifier performs no writes. It issues only:
 - `SELECT 1`
 - `SHOW server_version`
 - `SELECT EXISTS (... information_schema.tables ...)`
-- `SELECT version_num FROM alembic_version`
+- `SELECT version_num FROM public.alembic_version`
 - `SET TRANSACTION READ ONLY`
 - `SHOW transaction_read_only`
 
-It does not run `alembic upgrade`, `alembic check`, or any DDL/DML.
+It does not run `alembic upgrade`, `alembic check`, or any DDL/DML. Migration metadata is discovered by parsing Python AST — migration modules are never imported or executed.
+
+## Timeout behavior
+
+Each database operation is individually bounded by the configured connection timeout. The overall orchestration deadline bounds the total async execution but cannot interrupt arbitrary synchronous filesystem operations (such as migration-file reads). In practice, filesystem reads are fast and bounded by OS limits. The orchestration deadline is not a hard process-level wall-clock guarantee.
 
 ## Distinction from other tools
 
@@ -137,9 +132,8 @@ It does not run `alembic upgrade`, `alembic check`, or any DDL/DML.
 ## Future deployment sequence
 
 1. Verify backup/restore readiness (separate process).
-2. Run pre-deploy readiness check.
-3. Apply approved migration through deployment process.
-4. Run post-deploy readiness check.
-5. Start application traffic only after all required gates pass.
-6. Monitor.
-7. Follow rollback or forward-fix policy on failure.
+2. Apply approved migration through deployment process.
+3. Run post-deploy readiness check.
+4. Start application traffic only after all required gates pass.
+5. Monitor.
+6. Follow rollback or forward-fix policy on failure.

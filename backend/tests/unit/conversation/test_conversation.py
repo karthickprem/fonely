@@ -66,7 +66,7 @@ async def test_greeting_transitions_to_fact_collection() -> None:
             "fonely.services.conversation_tools.get_business_context",
             AsyncMock(return_value=_mock_biz_context()),
         )
-        service = ConversationService(session, gateway)
+        service = ConversationService(session, gateway, appointment_service=AsyncMock())
         turn = await service.process_message(
             "conv-1", 1, _actor(), "Hi, I want to book an appointment"
         )
@@ -79,7 +79,7 @@ async def test_medical_question_escalates() -> None:
     session = AsyncMock()
     gateway = _mock_gateway()
 
-    service = ConversationService(session, gateway)
+    service = ConversationService(session, gateway, appointment_service=AsyncMock())
     turn = await service.process_message(
         "conv-2", 1, _actor(), "My tooth has been hurting badly for days"
     )
@@ -94,7 +94,7 @@ async def test_urgent_medical_escalates_immediately() -> None:
     session = AsyncMock()
     gateway = _mock_gateway()
 
-    service = ConversationService(session, gateway)
+    service = ConversationService(session, gateway, appointment_service=AsyncMock())
     turn = await service.process_message(
         "conv-3", 1, _actor(), "Emergency! There is heavy bleeding from the gum"
     )
@@ -127,7 +127,7 @@ async def test_turn_limit_ends_conversation() -> None:
         )
     _CONVERSATIONS["conv-limit"] = ctx
 
-    service = ConversationService(session, gateway)
+    service = ConversationService(session, gateway, appointment_service=AsyncMock())
     turn = await service.process_message("conv-limit", 1, _actor(), "hello")
 
     assert turn.state == ConversationState.ENDED
@@ -143,7 +143,7 @@ async def test_missing_business_ends_conversation() -> None:
             "fonely.services.conversation_tools.get_business_context",
             AsyncMock(return_value=None),
         )
-        service = ConversationService(session, gateway)
+        service = ConversationService(session, gateway, appointment_service=AsyncMock())
         turn = await service.process_message("conv-no-biz", 999, _actor(), "Hello")
 
     assert turn.state == ConversationState.ENDED
@@ -159,7 +159,7 @@ async def test_fact_extraction_populates_service() -> None:
             "fonely.services.conversation_tools.get_business_context",
             AsyncMock(return_value=_mock_biz_context()),
         )
-        service = ConversationService(session, gateway)
+        service = ConversationService(session, gateway, appointment_service=AsyncMock())
         turn = await service.process_message("conv-facts", 1, _actor(), "I want a consultation")
 
     assert turn.collected_facts.get("service_id") == 1
@@ -175,7 +175,7 @@ async def test_fact_extraction_populates_resource() -> None:
             "fonely.services.conversation_tools.get_business_context",
             AsyncMock(return_value=_mock_biz_context()),
         )
-        service = ConversationService(session, gateway)
+        service = ConversationService(session, gateway, appointment_service=AsyncMock())
         turn = await service.process_message(
             "conv-res", 1, _actor(), "I want to see Dr. Priya for consultation"
         )
@@ -187,17 +187,43 @@ async def test_confirmation_positive_completes() -> None:
     session = AsyncMock()
     gateway = _mock_gateway()
 
+    from fonely.domain.appointments.results import (
+        AppointmentConfirmationResult,
+        PreCommitAppointmentSuccess,
+    )
     from fonely.domain.conversation.state import ConversationContext
 
     ctx = ConversationContext(conversation_id="conv-confirm", business_id=1)
     ctx.state = ConversationState.AWAITING_CONFIRMATION
+    ctx.proposal_id = 42
+    ctx.proposal_version = 3
     _CONVERSATIONS["conv-confirm"] = ctx
 
-    service = ConversationService(session, gateway)
+    from datetime import UTC, datetime
+
+    mock_appt_service = AsyncMock()
+    mock_appt_service.confirm_and_commit.return_value = PreCommitAppointmentSuccess(
+        appointment=AppointmentConfirmationResult(
+            appointment_id=1,
+            pending_action_id=42,
+            service_id=1,
+            service_name="Consultation",
+            resource_id=1,
+            resource_name="Dr. Priya",
+            start_at=datetime(2026, 8, 5, 10, 0, tzinfo=UTC),
+            end_at=datetime(2026, 8, 5, 10, 30, tzinfo=UTC),
+            price=None,
+            business_timezone="Asia/Kolkata",
+        ),
+        pending_action_version=4,
+    )
+
+    service = ConversationService(session, gateway, appointment_service=mock_appt_service)
     turn = await service.process_message("conv-confirm", 1, _actor(), "yes")
 
     assert turn.state == ConversationState.COMPLETED
     assert "confirmed" in turn.assistant_response.lower()
+    mock_appt_service.confirm_and_commit.assert_called_once()
 
 
 async def test_confirmation_negative_returns_to_facts() -> None:
@@ -211,7 +237,7 @@ async def test_confirmation_negative_returns_to_facts() -> None:
     ctx.collected_facts = {"service_id": 1, "start_at": "dummy"}
     _CONVERSATIONS["conv-no"] = ctx
 
-    service = ConversationService(session, gateway)
+    service = ConversationService(session, gateway, appointment_service=AsyncMock())
     turn = await service.process_message("conv-no", 1, _actor(), "no, different time")
 
     assert turn.state == ConversationState.FACT_COLLECTION
@@ -228,7 +254,7 @@ async def test_confirmation_ambiguous_asks_clarification() -> None:
     ctx.state = ConversationState.AWAITING_CONFIRMATION
     _CONVERSATIONS["conv-maybe"] = ctx
 
-    service = ConversationService(session, gateway)
+    service = ConversationService(session, gateway, appointment_service=AsyncMock())
     turn = await service.process_message("conv-maybe", 1, _actor(), "hmm let me think")
 
     assert turn.state == ConversationState.AWAITING_CONFIRMATION
@@ -262,7 +288,7 @@ async def test_history_construction_correct() -> None:
             "fonely.services.conversation_tools.get_business_context",
             AsyncMock(return_value=_mock_biz_context()),
         )
-        service = ConversationService(session, gateway)
+        service = ConversationService(session, gateway, appointment_service=AsyncMock())
         await service.process_message("conv-hist", 1, _actor(), "I need help")
 
     call_args = gateway.complete.call_args
@@ -295,7 +321,7 @@ async def test_concurrent_messages_do_not_corrupt() -> None:
             "fonely.services.conversation_tools.get_business_context",
             AsyncMock(return_value=_mock_biz_context()),
         )
-        service = ConversationService(session, gateway)
+        service = ConversationService(session, gateway, appointment_service=AsyncMock())
         tasks = [
             asyncio.create_task(service.process_message("conv-concurrent", 1, _actor(), f"msg-{i}"))
             for i in range(2)
@@ -331,7 +357,7 @@ async def test_timeout_returns_graceful_response() -> None:
             AsyncMock(return_value=_mock_biz_context()),
         )
         mp2.setattr("fonely.services.conversation.settings.conversation_timeout_seconds", 0.1)
-        service = ConversationService(session, gateway)
+        service = ConversationService(session, gateway, appointment_service=AsyncMock())
         turn = await service.process_message("conv-timeout", 1, _actor(), "Hello")
 
     assert _TIMEOUT_RESPONSE in turn.assistant_response
@@ -348,7 +374,7 @@ async def test_fact_validation_rejects_past_time() -> None:
             "fonely.services.conversation_tools.get_business_context",
             AsyncMock(return_value=_mock_biz_context()),
         )
-        service = ConversationService(session, gateway)
+        service = ConversationService(session, gateway, appointment_service=AsyncMock())
 
         from fonely.services.conversation import _CONVERSATIONS
 
@@ -379,7 +405,7 @@ async def test_customer_name_extraction() -> None:
             "fonely.services.conversation_tools.get_business_context",
             AsyncMock(return_value=_mock_biz_context()),
         )
-        service = ConversationService(session, gateway)
+        service = ConversationService(session, gateway, appointment_service=AsyncMock())
         turn = await service.process_message("conv-name", 1, _actor(), "My name is Raj Kumar")
 
     assert turn.collected_facts.get("customer_name") == "Raj Kumar"

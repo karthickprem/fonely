@@ -234,6 +234,69 @@ async def check_availability(
     return slots
 
 
+async def validate_slot_time(
+    business_id: int,
+    resource_id: int | None,
+    target_datetime: datetime,
+    session: AsyncSession,
+) -> tuple[bool, str]:
+    day_of_week = target_datetime.isoweekday()
+
+    exceptions = (
+        (
+            await session.execute(
+                select(ScheduleException).where(
+                    ScheduleException.business_id == business_id,
+                    ScheduleException.exception_date == target_datetime.date(),
+                    (
+                        (ScheduleException.resource_id == resource_id)
+                        | (ScheduleException.resource_id.is_(None))
+                    )
+                    if resource_id
+                    else (ScheduleException.resource_id.is_(None)),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    for exc in exceptions:
+        if exc.is_closed:
+            return False, "Clinic is closed on this date"
+
+    resource_filter = (
+        ((OperatingSchedule.resource_id == resource_id) | (OperatingSchedule.resource_id.is_(None)))
+        if resource_id
+        else (OperatingSchedule.resource_id.is_(None))
+    )
+
+    schedules = (
+        (
+            await session.execute(
+                select(OperatingSchedule).where(
+                    OperatingSchedule.business_id == business_id,
+                    OperatingSchedule.day_of_week == day_of_week,
+                    OperatingSchedule.is_active.is_(True),
+                    resource_filter,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    if not schedules:
+        return False, "No operating schedule for this day"
+
+    target_time = target_datetime.time()
+    for schedule in schedules:
+        if schedule.open_time <= target_time < schedule.close_time:
+            return True, "Within schedule"
+
+    return False, "Outside operating hours"
+
+
 def format_confirmation_summary(
     service_name: str,
     resource_name: str,

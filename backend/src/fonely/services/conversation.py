@@ -77,7 +77,7 @@ class ConversationService:
         session: AsyncSession,
         model: ModelGateway,
         *,
-        appointment_service: "object | None" = None,
+        appointment_service: object,
     ) -> None:
         self._session = session
         self._model = model
@@ -183,7 +183,7 @@ class ConversationService:
             return turn
 
         self._extract_facts(ctx, user_message, biz)
-        self._validate_facts(ctx, biz)
+        await self._validate_facts(ctx, biz)
         missing = self._identify_missing_facts(ctx)
 
         if not missing and ctx.state == ConversationState.FACT_COLLECTION:
@@ -248,8 +248,8 @@ class ConversationService:
         if "start_at" not in ctx.collected_facts:
             self._extract_datetime(ctx, message)
 
-    def _validate_facts(self, ctx: ConversationContext, biz: object) -> None:
-        from fonely.services.conversation_tools import BusinessContext
+    async def _validate_facts(self, ctx: ConversationContext, biz: object) -> None:
+        from fonely.services.conversation_tools import BusinessContext, validate_slot_time
 
         assert isinstance(biz, BusinessContext)
 
@@ -263,13 +263,14 @@ class ConversationService:
                 del ctx.collected_facts["start_at"]
                 return
 
-            hour = start.hour
-            weekday = start.isoweekday()
-            if weekday == 7:
-                del ctx.collected_facts["start_at"]
-                return
-            in_schedule = (10 <= hour < 13) or (17 <= hour < 21)
-            if not in_schedule:
+            resource_id_val: int | None = ctx.collected_facts.get("resource_id")  # type: ignore[assignment]
+            is_valid, _reason = await validate_slot_time(
+                biz.business_id,
+                resource_id_val,
+                start,
+                self._session,
+            )
+            if not is_valid:
                 del ctx.collected_facts["start_at"]
                 return
 
@@ -367,34 +368,58 @@ class ConversationService:
             return self._fact_turn(
                 ctx,
                 user_message,
-                "No available slots for that time. Could you try a different date or time?",
+                "That day is full. Would you like to try another date?",
                 safety,
                 ["start_at"],
             )
 
-        if self._appointment_service is not None:
-            from fonely.domain.appointments.commands import (
-                CreatePendingAppointmentCommand,
+        from fonely.domain.appointments.datetimes import instant
+
+        slot_tolerance = timedelta(minutes=15)
+        matching_slot = None
+        for slot in slots:
+            if abs(instant(slot.start_at) - instant(start_at)) <= slot_tolerance:
+                matching_slot = slot
+                break
+
+        if matching_slot is None:
+            alternatives = slots[:3]
+            alt_texts = [s.start_at.strftime("%-I:%M %p") for s in alternatives]
+            alt_msg = ", ".join(alt_texts)
+            ctx.state = ConversationState.FACT_COLLECTION
+            del ctx.collected_facts["start_at"]
+            return self._fact_turn(
+                ctx,
+                user_message,
+                f"That exact time isn't available. Nearest slots: {alt_msg}. Which one works?",
+                safety,
+                ["start_at"],
             )
 
-            proposal = await self._appointment_service.create_proposal(  # type: ignore[attr-defined]
-                CreatePendingAppointmentCommand(
-                    actor=actor,
-                    service_id=service_id,
-                    resource_id=resource_id,
-                    start_at=start_at,
-                    customer_phone=str(
-                        ctx.collected_facts.get("customer_phone", actor.normalized_phone)
-                    ),
-                    customer_name=ctx.collected_facts.get("customer_name"),  # type: ignore[arg-type]
-                    reason=None,
-                    call_id=None,
-                    expires_at=utcnow() + timedelta(minutes=15),
-                    idempotency_key=f"conv-{ctx.conversation_id}",
-                )
+        start_at = matching_slot.start_at
+
+        from fonely.domain.appointments.commands import (
+            CreatePendingAppointmentCommand,
+        )
+
+        proposal = await self._appointment_service.create_proposal(  # type: ignore[attr-defined]
+            CreatePendingAppointmentCommand(
+                actor=actor,
+                service_id=service_id,
+                resource_id=resource_id,
+                start_at=start_at,
+                customer_phone=str(
+                    ctx.collected_facts.get("customer_phone", actor.normalized_phone)
+                ),
+                customer_name=ctx.collected_facts.get("customer_name"),  # type: ignore[arg-type]
+                reason=None,
+                call_id=None,
+                expires_at=utcnow() + timedelta(minutes=15),
+                idempotency_key=f"conv-{ctx.conversation_id}",
             )
-            ctx.proposal_id = proposal.pending_action_id
-            ctx.proposal_version = proposal.version
+        )
+        ctx.proposal_id = proposal.pending_action_id
+        ctx.proposal_version = proposal.version
 
         ctx.transition(ConversationState.PROPOSAL_PRESENTED)
 
@@ -439,57 +464,55 @@ class ConversationService:
                 [],
             )
 
-        if self._appointment_service is not None and ctx.proposal_id is not None:
-            from fonely.domain.appointments.commands import (
-                ConfirmPendingAppointmentCommand,
-            )
-            from fonely.domain.appointments.results import (
-                PreCommitAppointmentFailure,
-                PreCommitAppointmentSuccess,
-            )
-
-            result = await self._appointment_service.confirm_and_commit(  # type: ignore[attr-defined]
-                ConfirmPendingAppointmentCommand(
-                    actor=actor,
-                    pending_action_id=ctx.proposal_id,
-                    expected_version=ctx.proposal_version or 1,
-                )
-            )
-
-            if isinstance(result, PreCommitAppointmentFailure):
-                ctx.transition(ConversationState.FACT_COLLECTION)
-                ctx.collected_facts.pop("start_at", None)
-                ctx.proposal_id = None
-                ctx.proposal_version = None
-                return self._fact_turn(
-                    ctx,
-                    user_message,
-                    "That slot is no longer available. Would you like to try another time?",
-                    safety,
-                    ["start_at"],
-                )
-
-            assert isinstance(result, PreCommitAppointmentSuccess)
-            await self._session.commit()
-
-            ctx.transition(ConversationState.CONFIRMED)
-            ctx.transition(ConversationState.COMPLETED)
+        if ctx.proposal_id is None:
             return self._fact_turn(
                 ctx,
                 user_message,
-                f"Your appointment is confirmed! "
-                f"Appointment ID: {result.appointment.appointment_id}. "
-                f"See you at the clinic!",
+                "Something went wrong. Let's start over with your appointment.",
                 safety,
-                [],
+                self._identify_missing_facts(ctx),
             )
+
+        from fonely.domain.appointments.commands import (
+            ConfirmPendingAppointmentCommand,
+        )
+        from fonely.domain.appointments.results import (
+            PreCommitAppointmentFailure,
+            PreCommitAppointmentSuccess,
+        )
+
+        result = await self._appointment_service.confirm_and_commit(  # type: ignore[attr-defined]
+            ConfirmPendingAppointmentCommand(
+                actor=actor,
+                pending_action_id=ctx.proposal_id,
+                expected_version=ctx.proposal_version or 1,
+            )
+        )
+
+        if isinstance(result, PreCommitAppointmentFailure):
+            ctx.transition(ConversationState.FACT_COLLECTION)
+            ctx.collected_facts.pop("start_at", None)
+            ctx.proposal_id = None
+            ctx.proposal_version = None
+            return self._fact_turn(
+                ctx,
+                user_message,
+                "That slot is no longer available. Would you like to try another time?",
+                safety,
+                ["start_at"],
+            )
+
+        assert isinstance(result, PreCommitAppointmentSuccess)
+        await self._session.commit()
 
         ctx.transition(ConversationState.CONFIRMED)
         ctx.transition(ConversationState.COMPLETED)
         return self._fact_turn(
             ctx,
             user_message,
-            "Your appointment is confirmed! See you at the clinic!",
+            f"Your appointment is confirmed! "
+            f"Appointment ID: {result.appointment.appointment_id}. "
+            f"See you at the clinic!",
             safety,
             [],
         )

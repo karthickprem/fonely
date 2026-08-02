@@ -107,7 +107,12 @@ async def send_message(
 
     async with factory() as session:
         try:
-            service = ConversationService(session, gateway)
+            from fonely.api.internal.validation import InternalValidationPort
+            from fonely.services.appointments import AppointmentService
+
+            validation = InternalValidationPort(session)
+            appt_service = AppointmentService(session, validation=validation)
+            service = ConversationService(session, gateway, appointment_service=appt_service)
             turn = await service.process_message(
                 conversation_id=conversation_id,
                 business_id=ctx.business_id,

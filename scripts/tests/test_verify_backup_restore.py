@@ -573,3 +573,249 @@ class TestQueryFailureSanitization:
         sanitized = br._sanitize(f"connection to {url_with_secret} failed")
         assert secret not in sanitized
         assert "[REDACTED-URL]" in sanitized
+
+
+# --- Production main() flow tests ---
+
+import contextlib
+import io
+from unittest.mock import MagicMock, patch
+
+
+def _successful_pg_result() -> MagicMock:
+    r = MagicMock()
+    r.returncode = 0
+    r.stdout = ""
+    r.stderr = ""
+    return r
+
+
+def _run_main_controlled(
+    *,
+    source_digest: str = "aaa",
+    restored_digest: str = "aaa",
+    source_after_digest: str = "aaa",
+    evidence_call_count: int = 0,
+    source_query_responses: dict[str, str] | None = None,
+    restore_query_responses: dict[str, str] | None = None,
+    pg_dump_ok: bool = True,
+    pg_restore_ok: bool = True,
+) -> tuple[dict[str, Any], int, str]:
+    digests = [source_digest, restored_digest, source_after_digest]
+    digest_idx = 0
+
+    def fake_evidence_digest(url: str) -> str:
+        nonlocal digest_idx
+        result = digests[digest_idx]
+        digest_idx += 1
+        return result
+
+    _REQUIRED_TABLES = (
+        "alembic_version,businesses,business_users,services,resources,"
+        "appointments,pending_actions,resource_allocations"
+    )
+    default_responses = {
+        "SHOW server_version": "16.4",
+        "SELECT version_num FROM public.alembic_version": "0004",
+        "pg_tables": _REQUIRED_TABLES,
+        "pg_proc": "5",
+    }
+    s_responses = {**default_responses, **(source_query_responses or {})}
+    r_responses = {**default_responses, **(restore_query_responses or {})}
+
+    source_url = _build_url("postgresql://", "fonely_test:t@localhost:5432/fonely_test")
+    restore_url = _build_url(
+        "postgresql://", "fonely_test:t@localhost:5432/fonely_test_restore"
+    )
+
+    def fake_query(url: str, sql: str, *, timeout: float = 30) -> str:
+        responses = s_responses if "fonely_test_restore" not in url else r_responses
+        for key, val in responses.items():
+            if key in sql:
+                return val
+        return ""
+
+    def fake_run_pg(cmd: list[str], url: str, *, timeout: float = 60) -> MagicMock:
+        r = _successful_pg_result()
+        if "pg_dump" in cmd:
+            if not pg_dump_ok:
+                r.returncode = 1
+                r.stderr = "dump failed"
+            else:
+                for arg in cmd:
+                    if arg.endswith(".dump"):
+                        Path(arg).parent.mkdir(parents=True, exist_ok=True)
+                        Path(arg).write_bytes(b"PGDMP_fake_archive_content")
+        elif "pg_restore" in cmd:
+            if not pg_restore_ok:
+                r.returncode = 2
+                r.stderr = "restore failed"
+        elif "psql" in cmd:
+            pass
+        return r
+
+    env = {
+        "FONELY_BACKUP_SOURCE_URL": source_url,
+        "FONELY_BACKUP_RESTORE_URL": restore_url,
+        "FONELY_BACKUP_ENVIRONMENT": "test",
+    }
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with (
+        contextlib.redirect_stdout(stdout),
+        contextlib.redirect_stderr(stderr),
+        patch.dict(os.environ, env, clear=False),
+        patch.object(br, "_query", side_effect=fake_query),
+        patch.object(br, "_run_pg", side_effect=fake_run_pg),
+        patch.object(br, "_evidence_digest", side_effect=fake_evidence_digest),
+    ):
+        exit_code = br.main()
+    output = json.loads(stdout.getvalue())
+    return output, exit_code, stderr.getvalue()
+
+
+def _find_check(checks: list[dict[str, Any]], name: str) -> dict[str, Any] | None:
+    return next((c for c in checks if c["name"] == name), None)
+
+
+class TestMainFlowEvidenceComparison:
+    def test_exact_match_succeeds(self) -> None:
+        output, exit_code, _ = _run_main_controlled(
+            source_digest="abc123",
+            restored_digest="abc123",
+            source_after_digest="abc123",
+        )
+        assert exit_code == 0
+        assert output["overall_status"] == "passed"
+        re_check = _find_check(output["checks"], "restored_evidence")
+        assert re_check is not None and re_check["status"] == "passed"
+        su_check = _find_check(output["checks"], "source_unchanged")
+        assert su_check is not None and su_check["status"] == "passed"
+
+    def test_restored_mismatch_fails(self) -> None:
+        output, exit_code, _ = _run_main_controlled(
+            source_digest="abc123",
+            restored_digest="different",
+            source_after_digest="abc123",
+        )
+        assert exit_code == 1
+        assert output["overall_status"] == "failed"
+        re_check = _find_check(output["checks"], "restored_evidence")
+        assert re_check is not None
+        assert re_check["status"] == "failed"
+        assert re_check["failure_code"] == "data_mismatch"
+        cleanup = _find_check(output["checks"], "file_cleanup")
+        assert cleanup is not None
+
+    def test_source_after_changed_fails(self) -> None:
+        output, exit_code, _ = _run_main_controlled(
+            source_digest="abc123",
+            restored_digest="abc123",
+            source_after_digest="changed",
+        )
+        assert exit_code == 1
+        assert output["overall_status"] == "failed"
+        su_check = _find_check(output["checks"], "source_unchanged")
+        assert su_check is not None
+        assert su_check["status"] == "failed"
+        assert su_check["failure_code"] == "source_changed"
+        cleanup = _find_check(output["checks"], "file_cleanup")
+        assert cleanup is not None
+
+    def test_cleanup_runs_after_restored_mismatch(self) -> None:
+        output, exit_code, _ = _run_main_controlled(
+            source_digest="abc123",
+            restored_digest="different",
+        )
+        assert exit_code == 1
+        cleanup = _find_check(output["checks"], "file_cleanup")
+        assert cleanup is not None and cleanup["status"] == "passed"
+
+    def test_one_json_document(self) -> None:
+        output, _, _ = _run_main_controlled()
+        assert output["schema_version"] == 1
+        assert "run_id" in output
+
+    def test_url_wiring_source_then_restore_then_source(self) -> None:
+        urls_called: list[str] = []
+
+        def tracking_digest(url: str) -> str:
+            urls_called.append(url)
+            return "fixed_digest"
+
+        source_url = _build_url(
+            "postgresql://", "fonely_test:t@localhost:5432/fonely_test"
+        )
+        restore_url = _build_url(
+            "postgresql://", "fonely_test:t@localhost:5432/fonely_test_restore"
+        )
+
+        def fake_query(url: str, sql: str, *, timeout: float = 30) -> str:
+            if "server_version" in sql:
+                return "16.4"
+            if "alembic_version" in sql:
+                return "0004"
+            if "pg_tables" in sql:
+                return "alembic_version,businesses,business_users,services,resources,appointments,pending_actions,resource_allocations"
+            if "pg_proc" in sql:
+                return "5"
+            return ""
+
+        def fake_run_pg(cmd: list[str], url: str, *, timeout: float = 60) -> MagicMock:
+            r = _successful_pg_result()
+            if "pg_dump" in cmd:
+                for arg in cmd:
+                    if arg.endswith(".dump"):
+                        Path(arg).parent.mkdir(parents=True, exist_ok=True)
+                        Path(arg).write_bytes(b"PGDMP_fake")
+            return r
+
+        env = {
+            "FONELY_BACKUP_SOURCE_URL": source_url,
+            "FONELY_BACKUP_RESTORE_URL": restore_url,
+            "FONELY_BACKUP_ENVIRONMENT": "test",
+        }
+        stdout = io.StringIO()
+        with (
+            contextlib.redirect_stdout(stdout),
+            patch.dict(os.environ, env, clear=False),
+            patch.object(br, "_query", side_effect=fake_query),
+            patch.object(br, "_run_pg", side_effect=fake_run_pg),
+            patch.object(br, "_evidence_digest", side_effect=tracking_digest),
+        ):
+            br.main()
+
+        assert len(urls_called) == 3
+        assert "fonely_test_restore" not in urls_called[0]
+        assert "fonely_test_restore" in urls_called[1]
+        assert "fonely_test_restore" not in urls_called[2]
+
+
+class TestMainFlowNoLeak:
+    def test_mismatch_failure_does_not_leak_digest_values(self) -> None:
+        output, exit_code, stderr = _run_main_controlled(
+            source_digest="source_digest_abc",
+            restored_digest="different_restored_xyz",
+        )
+        assert exit_code == 1
+        raw_out = json.dumps(output)
+        assert "source_digest_abc" not in raw_out
+        assert "different_restored_xyz" not in raw_out
+        assert "source_digest_abc" not in stderr
+        re_check = _find_check(output["checks"], "restored_evidence")
+        assert re_check is not None
+        assert re_check["failure_code"] == "data_mismatch"
+
+    def test_source_changed_failure_does_not_leak_digest_values(self) -> None:
+        output, exit_code, stderr = _run_main_controlled(
+            source_digest="original_abc",
+            restored_digest="original_abc",
+            source_after_digest="mutated_xyz",
+        )
+        assert exit_code == 1
+        raw_out = json.dumps(output)
+        assert "mutated_xyz" not in raw_out
+        assert "mutated_xyz" not in stderr
+        su_check = _find_check(output["checks"], "source_unchanged")
+        assert su_check is not None
+        assert su_check["failure_code"] == "source_changed"

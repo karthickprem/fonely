@@ -37,6 +37,7 @@ from urllib.parse import urlparse
 
 SUPPORTED_PG_MAJORS = frozenset({14, 15, 16, 17})
 SCHEMA_VERSION = 1
+CLEANUP_ALLOWANCE_S = 5.0
 _BACKEND_ROOT = Path(__file__).resolve().parent.parent / "backend"
 _VERSIONS_DIR = _BACKEND_ROOT / "migrations" / "versions"
 
@@ -311,7 +312,7 @@ async def _bounded_cleanup(
     timeout: float,
 ) -> str | None:
     try:
-        await asyncio.wait_for(coro, timeout=timeout)
+        await asyncio.wait_for(coro, timeout=max(timeout, 0.1))
     except asyncio.TimeoutError:
         return "timed out"
     except Exception as exc:  # noqa: BLE001
@@ -319,11 +320,16 @@ async def _bounded_cleanup(
     return None
 
 
+def _op_timeout(connect_timeout: float, deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    return max(min(connect_timeout, remaining), 0.1)
+
+
 async def _run_checks(
     url: str,
     env_label: str,
     connect_timeout: float,
-    overall_timeout: float,
+    deadline: float,
 ) -> ReadinessReport:
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import create_async_engine
@@ -360,6 +366,20 @@ async def _run_checks(
         report.overall_status = "failed"
         return report
 
+    if time.monotonic() >= deadline:
+        report.checks.append(
+            _check_dict(
+                CheckResult(
+                    name="overall_timeout",
+                    status="failed",
+                    failure_code="overall_timeout",
+                    message="orchestration deadline exceeded before database checks",
+                )
+            )
+        )
+        report.overall_status = "failed"
+        return report
+
     engine = create_async_engine(
         url,
         pool_size=1,
@@ -371,12 +391,27 @@ async def _run_checks(
     primary_failed = False
 
     try:
+        if time.monotonic() >= deadline:
+            report.checks.append(
+                _check_dict(
+                    CheckResult(
+                        name="overall_timeout",
+                        status="failed",
+                        failure_code="overall_timeout",
+                        message="orchestration deadline exceeded",
+                    )
+                )
+            )
+            primary_failed = True
+            return report
+
         conn_check = CheckResult(name="connection")
         t0 = time.monotonic()
         try:
             async with engine.connect() as conn:
                 await asyncio.wait_for(
-                    conn.execute(text("SELECT 1")), timeout=connect_timeout
+                    conn.execute(text("SELECT 1")),
+                    timeout=_op_timeout(connect_timeout, deadline),
                 )
             conn_check.status = "passed"
         except asyncio.TimeoutError:
@@ -393,13 +428,27 @@ async def _run_checks(
             primary_failed = True
             return report
 
+        if time.monotonic() >= deadline:
+            report.checks.append(
+                _check_dict(
+                    CheckResult(
+                        name="overall_timeout",
+                        status="failed",
+                        failure_code="overall_timeout",
+                        message="orchestration deadline exceeded after connection",
+                    )
+                )
+            )
+            primary_failed = True
+            return report
+
         version_check = CheckResult(name="postgres_version")
         t0 = time.monotonic()
         try:
             async with engine.connect() as conn:
                 row = await asyncio.wait_for(
                     conn.execute(text("SHOW server_version")),
-                    timeout=connect_timeout,
+                    timeout=_op_timeout(connect_timeout, deadline),
                 )
                 version_str = row.scalar_one()
                 match = re.match(r"(\d+)", str(version_str))
@@ -431,6 +480,20 @@ async def _run_checks(
             primary_failed = True
             return report
 
+        if time.monotonic() >= deadline:
+            report.checks.append(
+                _check_dict(
+                    CheckResult(
+                        name="overall_timeout",
+                        status="failed",
+                        failure_code="overall_timeout",
+                        message="orchestration deadline exceeded after version check",
+                    )
+                )
+            )
+            primary_failed = True
+            return report
+
         revision_check = CheckResult(name="database_revision")
         t0 = time.monotonic()
         try:
@@ -445,7 +508,7 @@ async def _run_checks(
                             ")"
                         )
                     ),
-                    timeout=connect_timeout,
+                    timeout=_op_timeout(connect_timeout, deadline),
                 )
                 if not has_table:
                     raise CheckFailure(
@@ -457,7 +520,7 @@ async def _run_checks(
                         conn.execute(
                             text("SELECT version_num FROM public.alembic_version")
                         ),
-                        timeout=connect_timeout,
+                        timeout=_op_timeout(connect_timeout, deadline),
                     )
                 ).all()
                 if len(rows) == 0:
@@ -502,24 +565,40 @@ async def _run_checks(
             primary_failed = True
             return report
 
+        if time.monotonic() >= deadline:
+            report.checks.append(
+                _check_dict(
+                    CheckResult(
+                        name="overall_timeout",
+                        status="failed",
+                        failure_code="overall_timeout",
+                        message="orchestration deadline exceeded after revision check",
+                    )
+                )
+            )
+            primary_failed = True
+            return report
+
         readonly_check = CheckResult(name="readonly_transaction")
         t0 = time.monotonic()
         try:
             async with engine.connect() as conn:
                 await asyncio.wait_for(
                     conn.execute(text("SET TRANSACTION READ ONLY")),
-                    timeout=connect_timeout,
+                    timeout=_op_timeout(connect_timeout, deadline),
                 )
                 is_readonly = await asyncio.wait_for(
                     conn.scalar(text("SHOW transaction_read_only")),
-                    timeout=connect_timeout,
+                    timeout=_op_timeout(connect_timeout, deadline),
                 )
                 if str(is_readonly).lower() != "on":
                     raise CheckFailure(
                         "readonly_check_failed",
                         "transaction did not report read-only mode",
                     )
-                rollback_err = await _bounded_cleanup(conn.rollback(), connect_timeout)
+                rollback_err = await _bounded_cleanup(
+                    conn.rollback(), CLEANUP_ALLOWANCE_S
+                )
                 if rollback_err is not None:
                     readonly_check.status = "failed"
                     readonly_check.failure_code = "readonly_cleanup_failed"
@@ -542,7 +621,7 @@ async def _run_checks(
     finally:
         disposal_check = CheckResult(name="engine_cleanup")
         t0 = time.monotonic()
-        disposal_err = await _bounded_cleanup(engine.dispose(), connect_timeout)
+        disposal_err = await _bounded_cleanup(engine.dispose(), CLEANUP_ALLOWANCE_S)
         if disposal_err is not None:
             disposal_check.status = "failed"
             disposal_check.failure_code = "engine_cleanup_failed"
@@ -592,23 +671,9 @@ async def _main() -> int:
         print(json.dumps(result, indent=2))
         return 1
 
-    try:
-        report = await asyncio.wait_for(
-            _run_checks(url, env_label, connect_timeout, overall_timeout),
-            timeout=overall_timeout,
-        )
-    except asyncio.TimeoutError:
-        result = _emit_failure(
-            "overall_timeout", "orchestration deadline exceeded", env_label
-        )
-        print(json.dumps(result, indent=2))
-        return 1
-    except Exception as exc:  # noqa: BLE001
-        result = _emit_failure(
-            "internal_error", _sanitize(type(exc).__name__), env_label
-        )
-        print(json.dumps(result, indent=2))
-        return 1
+    deadline = start + overall_timeout
+
+    report = await _run_checks(url, env_label, connect_timeout, deadline)
 
     report.total_duration_s = round(time.monotonic() - start, 3)
     print(json.dumps(report.to_dict(), indent=2))

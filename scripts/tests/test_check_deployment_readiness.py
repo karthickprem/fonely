@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -658,7 +659,9 @@ class TestMockedDatabaseChecks:
             ),
             patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
         ):
-            report = asyncio.run(readiness._run_checks(_FAKE_URL, "test", 5, 15))
+            report = asyncio.run(
+                readiness._run_checks(_FAKE_URL, "test", 5, _deadline(15))
+            )
         assert report.overall_status == "failed"
         rev_check = next(c for c in report.checks if c["name"] == "database_revision")
         assert rev_check["failure_code"] == "database_revision_stale"
@@ -671,7 +674,9 @@ class TestMockedDatabaseChecks:
             ),
             patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
         ):
-            report = asyncio.run(readiness._run_checks(_FAKE_URL, "test", 5, 15))
+            report = asyncio.run(
+                readiness._run_checks(_FAKE_URL, "test", 5, _deadline(15))
+            )
         assert report.overall_status == "passed"
         assert report.database_revision == "0003"
         assert report.repository_head == "0003"
@@ -684,7 +689,9 @@ class TestMockedDatabaseChecks:
             ),
             patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
         ):
-            report = asyncio.run(readiness._run_checks(_FAKE_URL, "test", 5, 15))
+            report = asyncio.run(
+                readiness._run_checks(_FAKE_URL, "test", 5, _deadline(15))
+            )
         assert report.overall_status == "failed"
         rev_check = next(c for c in report.checks if c["name"] == "database_revision")
         assert rev_check["failure_code"] == "alembic_version_missing"
@@ -697,7 +704,9 @@ class TestMockedDatabaseChecks:
             ),
             patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
         ):
-            report = asyncio.run(readiness._run_checks(_FAKE_URL, "test", 5, 15))
+            report = asyncio.run(
+                readiness._run_checks(_FAKE_URL, "test", 5, _deadline(15))
+            )
         assert report.overall_status == "failed"
         rev_check = next(c for c in report.checks if c["name"] == "database_revision")
         assert rev_check["failure_code"] == "database_revision_invalid"
@@ -710,7 +719,9 @@ class TestMockedDatabaseChecks:
             ),
             patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
         ):
-            report = asyncio.run(readiness._run_checks(_FAKE_URL, "test", 5, 15))
+            report = asyncio.run(
+                readiness._run_checks(_FAKE_URL, "test", 5, _deadline(15))
+            )
         assert report.overall_status == "failed"
         ver_check = next(c for c in report.checks if c["name"] == "postgres_version")
         assert ver_check["failure_code"] == "unsupported_postgres_version"
@@ -723,7 +734,9 @@ class TestMockedDatabaseChecks:
             ),
             patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
         ):
-            report = asyncio.run(readiness._run_checks(_FAKE_URL, "test", 5, 15))
+            report = asyncio.run(
+                readiness._run_checks(_FAKE_URL, "test", 5, _deadline(15))
+            )
         assert report.overall_status == "failed"
 
     def test_readonly_failure(self) -> None:
@@ -734,7 +747,9 @@ class TestMockedDatabaseChecks:
             ),
             patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
         ):
-            report = asyncio.run(readiness._run_checks(_FAKE_URL, "test", 5, 15))
+            report = asyncio.run(
+                readiness._run_checks(_FAKE_URL, "test", 5, _deadline(15))
+            )
         assert report.overall_status == "failed"
         ro_check = next(c for c in report.checks if c["name"] == "readonly_transaction")
         assert ro_check["failure_code"] == "readonly_check_failed"
@@ -747,7 +762,9 @@ class TestMockedDatabaseChecks:
             ),
             patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
         ):
-            report = asyncio.run(readiness._run_checks(_FAKE_URL, "test", 5, 15))
+            report = asyncio.run(
+                readiness._run_checks(_FAKE_URL, "test", 5, _deadline(15))
+            )
         assert report.overall_status == "passed"
         assert report.repository_head == "0003"
         assert report.database_revision == "0003"
@@ -765,7 +782,9 @@ class TestMockedDatabaseChecks:
             ),
             patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
         ):
-            report = asyncio.run(readiness._run_checks(_FAKE_URL, "test", 5, 15))
+            report = asyncio.run(
+                readiness._run_checks(_FAKE_URL, "test", 5, _deadline(15))
+            )
         assert report.overall_status == "failed"
         conn_check = next(c for c in report.checks if c["name"] == "connection")
         assert conn_check["failure_code"] == "connection_failed"
@@ -779,7 +798,7 @@ class TestMockedDatabaseChecks:
             ),
             patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
         ):
-            asyncio.run(readiness._run_checks(_FAKE_URL, "test", 5, 15))
+            asyncio.run(readiness._run_checks(_FAKE_URL, "test", 5, _deadline(15)))
         engine.dispose.assert_awaited_once()
 
     def test_malformed_db_revision_is_rejected(self) -> None:
@@ -790,7 +809,9 @@ class TestMockedDatabaseChecks:
             ),
             patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
         ):
-            report = asyncio.run(readiness._run_checks(_FAKE_URL, "test", 5, 15))
+            report = asyncio.run(
+                readiness._run_checks(_FAKE_URL, "test", 5, _deadline(15))
+            )
         assert report.overall_status == "failed"
         rev_check = next(c for c in report.checks if c["name"] == "database_revision")
         assert rev_check["failure_code"] == "database_revision_invalid"
@@ -955,12 +976,18 @@ class TestCycleDetection:
 # --- Adversarial cleanup matrix ---
 
 
+def _deadline(seconds: float = 15) -> float:
+    return time.monotonic() + seconds
+
+
 def _run_with_mock(engine: MagicMock, timeout: float = 15) -> readiness.ReadinessReport:
     with (
         patch.object(readiness, "_discover_repository_heads", return_value=["0003"]),
         patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
     ):
-        return asyncio.run(readiness._run_checks(_FAKE_URL, "test", 1, timeout))
+        return asyncio.run(
+            readiness._run_checks(_FAKE_URL, "test", 1, _deadline(timeout))
+        )
 
 
 def _find_check(report: readiness.ReadinessReport, name: str) -> dict[str, Any] | None:
@@ -1053,7 +1080,9 @@ class TestCleanupFailClosed:
 
     def test_no_cleanup_entry_without_engine(self) -> None:
         with patch.object(readiness, "_discover_repository_heads", return_value=[]):
-            report = asyncio.run(readiness._run_checks(_FAKE_URL, "test", 5, 15))
+            report = asyncio.run(
+                readiness._run_checks(_FAKE_URL, "test", 5, _deadline(15))
+            )
         assert report.overall_status == "failed"
         assert _find_check(report, "engine_cleanup") is None
 
@@ -1093,3 +1122,147 @@ class TestCleanupFailClosed:
         assert report.overall_status == "failed"
         exit_code = 0 if report.overall_status == "passed" else 1
         assert exit_code == 1
+
+
+# --- Deadline interaction through _main() ---
+
+
+def _run_main_with_env(
+    env_overrides: dict[str, str],
+    engine: MagicMock | None = None,
+) -> tuple[readiness.ReadinessReport | dict[str, Any], int]:
+    """Run _main() with controlled env and optional engine mock, return (report, exit_code)."""
+    import contextlib
+    import io
+
+    env = {
+        "FONELY_READINESS_DATABASE_URL": _FAKE_URL,
+        "FONELY_READINESS_ENVIRONMENT": "test",
+        **env_overrides,
+    }
+    patches = [
+        patch.dict(os.environ, env, clear=False),
+        patch.object(readiness, "_discover_repository_heads", return_value=["0003"]),
+    ]
+    if engine is not None:
+        patches.append(
+            patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine)
+        )
+
+    stdout = io.StringIO()
+    with contextlib.redirect_stdout(stdout), contextlib.ExitStack() as stack:
+        for p in patches:
+            stack.enter_context(p)
+        # Clear any leftover env to ensure only our overrides are active
+        for key in list(os.environ):
+            if key.startswith("FONELY_READINESS_") and key not in env:
+                del os.environ[key]
+        exit_code = asyncio.run(readiness._main())
+    output = json.loads(stdout.getvalue())
+    return output, exit_code
+
+
+class TestDeadlineInteraction:
+    def test_successful_run_through_main(self) -> None:
+        engine = _mock_engine()
+        output, exit_code = _run_main_with_env({}, engine)
+        assert output["overall_status"] == "passed"
+        assert exit_code == 0
+        cleanup = next(c for c in output["checks"] if c["name"] == "engine_cleanup")
+        assert cleanup["status"] == "passed"
+
+    def test_deadline_expired_before_checks_still_disposes(self) -> None:
+        engine = _mock_engine()
+        output, exit_code = _run_main_with_env(
+            {"FONELY_READINESS_OVERALL_TIMEOUT_S": "0.001"},
+            engine,
+        )
+        assert output["overall_status"] == "failed"
+        assert exit_code == 1
+        codes = [c["failure_code"] for c in output["checks"] if c["failure_code"]]
+        assert any(code in ("overall_timeout", "connection_timeout") for code in codes)
+
+    def test_disposal_failure_through_main_exits_nonzero(self) -> None:
+        engine = _mock_engine(dispose_fails=OSError("dispose error"))
+        output, exit_code = _run_main_with_env({}, engine)
+        assert output["overall_status"] == "failed"
+        assert exit_code == 1
+        cleanup = next(c for c in output["checks"] if c["name"] == "engine_cleanup")
+        assert cleanup["failure_code"] == "engine_cleanup_failed"
+
+    def test_rollback_failure_through_main_exits_nonzero(self) -> None:
+        engine = _mock_engine(rollback_fails=RuntimeError("rb fail"))
+        output, exit_code = _run_main_with_env({}, engine)
+        assert output["overall_status"] == "failed"
+        assert exit_code == 1
+        ro = next(c for c in output["checks"] if c["name"] == "readonly_transaction")
+        assert ro["failure_code"] == "readonly_cleanup_failed"
+
+    def test_primary_failure_plus_disposal_failure_through_main(self) -> None:
+        engine = _mock_engine(
+            connect_fails=ConnectionRefusedError(),
+            dispose_fails=OSError("disp"),
+        )
+        output, exit_code = _run_main_with_env({}, engine)
+        assert output["overall_status"] == "failed"
+        assert exit_code == 1
+        conn = next(c for c in output["checks"] if c["name"] == "connection")
+        assert conn["failure_code"] == "connection_failed"
+        cleanup = next(c for c in output["checks"] if c["name"] == "engine_cleanup")
+        assert cleanup["failure_code"] == "engine_cleanup_failed"
+
+    def test_overall_smaller_than_connect_timeout(self) -> None:
+        engine = _mock_engine()
+        output, exit_code = _run_main_with_env(
+            {
+                "FONELY_READINESS_CONNECT_TIMEOUT_S": "60",
+                "FONELY_READINESS_OVERALL_TIMEOUT_S": "5",
+            },
+            engine,
+        )
+        assert exit_code == 0
+        assert output["overall_status"] == "passed"
+
+    def test_no_engine_no_cleanup_entry_through_main(self) -> None:
+        import contextlib
+        import io
+
+        env = {
+            "FONELY_READINESS_DATABASE_URL": _FAKE_URL,
+            "FONELY_READINESS_ENVIRONMENT": "test",
+        }
+        stdout = io.StringIO()
+        with (
+            contextlib.redirect_stdout(stdout),
+            patch.dict(os.environ, env, clear=False),
+            patch.object(readiness, "_discover_repository_heads", return_value=[]),
+        ):
+            exit_code = asyncio.run(readiness._main())
+        output = json.loads(stdout.getvalue())
+        assert output["overall_status"] == "failed"
+        assert exit_code == 1
+        names = [c["name"] for c in output["checks"]]
+        assert "engine_cleanup" not in names
+
+    def test_exactly_one_json_document(self) -> None:
+        engine = _mock_engine(rollback_fails=RuntimeError("x"))
+        import contextlib
+        import io
+
+        env = {
+            "FONELY_READINESS_DATABASE_URL": _FAKE_URL,
+            "FONELY_READINESS_ENVIRONMENT": "test",
+        }
+        stdout = io.StringIO()
+        with (
+            contextlib.redirect_stdout(stdout),
+            patch.dict(os.environ, env, clear=False),
+            patch.object(
+                readiness, "_discover_repository_heads", return_value=["0003"]
+            ),
+            patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
+        ):
+            asyncio.run(readiness._main())
+        raw = stdout.getvalue().strip()
+        docs = [json.loads(raw)]
+        assert len(docs) == 1

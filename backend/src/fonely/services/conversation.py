@@ -715,3 +715,25 @@ def create_conversation(business_id: int) -> ConversationContext:
     ctx = ConversationContext(business_id=business_id)
     _CONVERSATIONS[ctx.conversation_id] = ctx
     return ctx
+
+
+_PHONE_INDEX: dict[tuple[int, str], str] = {}
+
+
+def find_or_create_conversation(
+    business_id: int,
+    customer_phone: str,
+) -> ConversationContext:
+    key = (business_id, customer_phone)
+    existing_id = _PHONE_INDEX.get(key)
+    if existing_id is not None:
+        ctx = _CONVERSATIONS.get(existing_id)
+        if ctx is not None and ctx.state not in (
+            ConversationState.COMPLETED,
+            ConversationState.ENDED,
+        ):
+            return ctx
+
+    ctx = create_conversation(business_id)
+    _PHONE_INDEX[key] = ctx.conversation_id
+    return ctx

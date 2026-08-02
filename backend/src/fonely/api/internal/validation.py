@@ -4,7 +4,7 @@ Resolves authoritative tenant-scoped facts from the database for the internal
 text appointment slice. Production channels will use richer validation.
 """
 
-from datetime import timedelta
+from datetime import UTC, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -55,7 +55,7 @@ class InternalValidationPort(AppointmentValidationPort):
         if resource is None:
             raise ValueError("Resource not found or inactive")
 
-        start_at = stub_facts.start_at
+        start_at = stub_facts.start_at.astimezone(UTC)
         end_at = start_at + timedelta(minutes=service.duration_minutes)
         buffer_before = getattr(service, "buffer_before_minutes", 0) or 0
         buffer_after = getattr(service, "buffer_after_minutes", 0) or 0

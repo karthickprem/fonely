@@ -191,9 +191,7 @@ class TestWhatsAppSender:
 
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "messages": [{"id": "wamid.sent123"}]
-        }
+        mock_response.json.return_value = {"messages": [{"id": "wamid.sent123"}]}
         mock_response.raise_for_status = MagicMock()
 
         mock_client = AsyncMock()
@@ -301,18 +299,14 @@ class TestMessageHandling:
             mock_sender = AsyncMock()
             mock_get.return_value = mock_sender
 
-            with patch(
-                "fonely.api.channels.whatsapp.WhatsAppBusinessMapping"
-            ) as mock_map_cls:
+            with patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as mock_map_cls:
                 mock_map = MagicMock()
                 mock_map.get_business_id.return_value = 1
                 mock_map_cls.return_value = mock_map
 
                 app = _mock_app()
 
-                with patch(
-                    "fonely.api.channels.whatsapp.ConversationService"
-                ) as mock_conv_cls:
+                with patch("fonely.api.channels.whatsapp.ConversationService") as mock_conv_cls:
                     mock_conv = AsyncMock()
                     mock_turn = MagicMock()
                     mock_turn.assistant_response = "Hello"
@@ -338,9 +332,7 @@ class TestMessageHandling:
             mock_sender = AsyncMock()
             mock_get.return_value = mock_sender
 
-            with patch(
-                "fonely.api.channels.whatsapp.WhatsAppBusinessMapping"
-            ) as mock_map_cls:
+            with patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as mock_map_cls:
                 mock_map = MagicMock()
                 mock_map.get_business_id.return_value = None
                 mock_map_cls.return_value = mock_map
@@ -363,18 +355,14 @@ class TestMessageHandling:
             mock_sender = AsyncMock()
             mock_get.return_value = mock_sender
 
-            with patch(
-                "fonely.api.channels.whatsapp.WhatsAppBusinessMapping"
-            ) as mock_map_cls:
+            with patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as mock_map_cls:
                 mock_map = MagicMock()
                 mock_map.get_business_id.return_value = 1
                 mock_map_cls.return_value = mock_map
 
                 app = _mock_app()
 
-                with patch(
-                    "fonely.api.channels.whatsapp.ConversationService"
-                ) as mock_conv_cls:
+                with patch("fonely.api.channels.whatsapp.ConversationService") as mock_conv_cls:
                     mock_turn = MagicMock()
                     mock_turn.assistant_response = "Welcome to the clinic!"
                     mock_conv = AsyncMock()
@@ -405,22 +393,16 @@ class TestMessageHandling:
             mock_sender = AsyncMock()
             mock_get.return_value = mock_sender
 
-            with patch(
-                "fonely.api.channels.whatsapp.WhatsAppBusinessMapping"
-            ) as mock_map_cls:
+            with patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as mock_map_cls:
                 mock_map = MagicMock()
                 mock_map.get_business_id.return_value = 1
                 mock_map_cls.return_value = mock_map
 
                 app = _mock_app()
 
-                with patch(
-                    "fonely.api.channels.whatsapp.ConversationService"
-                ) as mock_conv_cls:
+                with patch("fonely.api.channels.whatsapp.ConversationService") as mock_conv_cls:
                     mock_conv = AsyncMock()
-                    mock_conv.process_message = AsyncMock(
-                        side_effect=RuntimeError("db error")
-                    )
+                    mock_conv.process_message = AsyncMock(side_effect=RuntimeError("db error"))
                     mock_conv_cls.return_value = mock_conv
 
                     msg = {
@@ -501,9 +483,7 @@ class TestPIISafety:
         from fonely.services.whatsapp_sender import WhatsAppSender
 
         mock_client = AsyncMock()
-        mock_client.post = AsyncMock(
-            side_effect=httpx.TimeoutException("timeout")
-        )
+        mock_client.post = AsyncMock(side_effect=httpx.TimeoutException("timeout"))
 
         sender = WhatsAppSender(
             access_token="super-secret-token-123",

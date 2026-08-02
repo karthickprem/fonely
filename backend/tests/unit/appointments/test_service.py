@@ -259,6 +259,7 @@ async def test_success_path_commits_savepoint() -> None:
     service._repo.insert.return_value = mock_appointment
 
     savepoint = AsyncMock()
+    savepoint.is_active = True
     session.begin_nested = AsyncMock(return_value=savepoint)
 
     result = await service.confirm_and_commit(
@@ -323,6 +324,7 @@ async def test_unexpected_error_rolls_back_savepoint() -> None:
     service._repo.insert.return_value = mock_appointment
 
     savepoint = AsyncMock()
+    savepoint.is_active = True
     session.begin_nested = AsyncMock(return_value=savepoint)
 
     import pytest
@@ -339,3 +341,145 @@ async def test_unexpected_error_rolls_back_savepoint() -> None:
     savepoint.rollback.assert_called_once()
     savepoint.commit.assert_not_called()
     session.commit.assert_not_called()
+
+
+def _confirm_service_with_savepoint(
+    savepoint: AsyncMock,
+) -> tuple[AsyncMock, AppointmentService]:
+    session = AsyncMock()
+    validation = _mock_validation()
+    service = AppointmentService(session, validation=validation)
+
+    action = MagicMock()
+    action.business_id = 1
+    action.version = 2
+    action.initiated_by = "+919123456789"
+    action.action_type = "appointment"
+
+    begin_result = MagicMock()
+    begin_result.version = 3
+    begin_result.payload = {
+        "schema_version": 1,
+        "action_type": "appointment",
+        "data": {
+            "operation": "create",
+            "customer_phone": "+919123456789",
+            "facts": {
+                "service_id": 1,
+                "service_name": "Haircut",
+                "resource_id": 1,
+                "resource_name": "Priya",
+                "start_at": START.isoformat(),
+                "end_at": END.isoformat(),
+                "effective_start_at": START.isoformat(),
+                "effective_end_at": END.isoformat(),
+                "duration_minutes": 30,
+                "business_timezone": "Asia/Kolkata",
+            },
+        },
+    }
+
+    complete_result = MagicMock()
+    complete_result.version = 4
+
+    service._pa_service = AsyncMock()
+    service._pa_service._require_action = AsyncMock(return_value=action)
+    service._pa_service.begin_commit = AsyncMock(return_value=begin_result)
+    service._pa_service.complete_commit = AsyncMock(return_value=complete_result)
+
+    service._repo = AsyncMock()
+    service._repo.get_by_business_and_pending_action.return_value = None
+
+    mock_appointment = MagicMock()
+    mock_appointment.id = 1
+    service._repo.insert.return_value = mock_appointment
+
+    session.begin_nested = AsyncMock(return_value=savepoint)
+    return session, service
+
+
+async def test_release_failure_while_active_rolls_back() -> None:
+    import pytest
+
+    savepoint = AsyncMock()
+    savepoint.is_active = True
+    savepoint.commit = AsyncMock(side_effect=RuntimeError("release failed"))
+
+    _, service = _confirm_service_with_savepoint(savepoint)
+
+    with pytest.raises(RuntimeError, match="release failed"):
+        await service.confirm_and_commit(
+            ConfirmPendingAppointmentCommand(
+                actor=_actor(),
+                pending_action_id=10,
+                expected_version=2,
+            )
+        )
+
+    savepoint.rollback.assert_called_once()
+
+
+async def test_release_failure_while_inactive_no_rollback() -> None:
+    import pytest
+
+    savepoint = AsyncMock()
+    savepoint.is_active = False
+    savepoint.commit = AsyncMock(side_effect=RuntimeError("release failed"))
+
+    _, service = _confirm_service_with_savepoint(savepoint)
+
+    with pytest.raises(RuntimeError, match="release failed"):
+        await service.confirm_and_commit(
+            ConfirmPendingAppointmentCommand(
+                actor=_actor(),
+                pending_action_id=10,
+                expected_version=2,
+            )
+        )
+
+    savepoint.rollback.assert_not_called()
+
+
+async def test_release_and_rollback_both_fail_chains_exceptions() -> None:
+    import pytest
+
+    savepoint = AsyncMock()
+    savepoint.is_active = True
+    savepoint.commit = AsyncMock(side_effect=RuntimeError("release failed"))
+    savepoint.rollback = AsyncMock(side_effect=OSError("rollback failed"))
+
+    _, service = _confirm_service_with_savepoint(savepoint)
+
+    with pytest.raises(OSError, match="rollback failed") as exc_info:
+        await service.confirm_and_commit(
+            ConfirmPendingAppointmentCommand(
+                actor=_actor(),
+                pending_action_id=10,
+                expected_version=2,
+            )
+        )
+
+    assert exc_info.value.__cause__ is not None
+    assert "release failed" in str(exc_info.value.__cause__)
+
+
+async def test_no_outer_transaction_calls_on_any_path() -> None:
+    import pytest
+
+    savepoint = AsyncMock()
+    savepoint.is_active = True
+    savepoint.commit = AsyncMock(side_effect=RuntimeError("release failed"))
+
+    session, service = _confirm_service_with_savepoint(savepoint)
+
+    with pytest.raises(RuntimeError):
+        await service.confirm_and_commit(
+            ConfirmPendingAppointmentCommand(
+                actor=_actor(),
+                pending_action_id=10,
+                expected_version=2,
+            )
+        )
+
+    session.commit.assert_not_called()
+    session.rollback.assert_not_called()

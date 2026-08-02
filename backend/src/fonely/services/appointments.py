@@ -231,11 +231,14 @@ class AppointmentService:
                 _restore_deferred_sql(APPOINTMENT_CREATE_POST_COMPLETION_CONSTRAINTS)
             )
 
+            await savepoint.commit()
+
         except BaseException as exc:
-            try:
-                await savepoint.rollback()
-            except BaseException as rollback_exc:
-                raise rollback_exc from exc
+            if savepoint.is_active:
+                try:
+                    await savepoint.rollback()
+                except BaseException as rollback_exc:
+                    raise rollback_exc from exc
 
             if isinstance(exc, IntegrityError) and (
                 getattr(exc.orig, "sqlstate", None) == _OVERLAP_SQLSTATE
@@ -254,23 +257,22 @@ class AppointmentService:
                     error_code=AppointmentCommitFailureCode.RESOURCE_UNAVAILABLE,
                 )
             raise
-        else:
-            await savepoint.commit()
-            return PreCommitAppointmentSuccess(
-                appointment=AppointmentConfirmationResult(
-                    appointment_id=appointment.id,
-                    pending_action_id=context.pending_action_id,
-                    service_id=facts.service_id,
-                    service_name=facts.service_name,
-                    resource_id=facts.resource_id,
-                    resource_name=facts.resource_name,
-                    start_at=facts.start_at,
-                    end_at=facts.end_at,
-                    price=facts.price,
-                    business_timezone=facts.business_timezone,
-                ),
-                pending_action_version=complete_result.version,
-            )
+
+        return PreCommitAppointmentSuccess(
+            appointment=AppointmentConfirmationResult(
+                appointment_id=appointment.id,
+                pending_action_id=context.pending_action_id,
+                service_id=facts.service_id,
+                service_name=facts.service_name,
+                resource_id=facts.resource_id,
+                resource_name=facts.resource_name,
+                start_at=facts.start_at,
+                end_at=facts.end_at,
+                price=facts.price,
+                business_timezone=facts.business_timezone,
+            ),
+            pending_action_version=complete_result.version,
+        )
 
     async def _resolve_envelope(
         self,

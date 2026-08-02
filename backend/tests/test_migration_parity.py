@@ -719,26 +719,70 @@ def test_runtime_provenance_casts_remain_fail_closed() -> None:
         "facts->>'start_at', 'timestamp with time zone'",
         "facts->>'end_at', 'timestamp with time zone'",
         "parsed_call_id := call_id_text::bigint",
-        "THEN (pending_data->>'target_appointment_id')::bigint END",
-        "THEN (pending_data->>'target_expected_version')::integer END",
+        "parsed_value := field_text::bigint",
     ):
         assert marker in runtime
     assert "RETURN COALESCE(" in runtime
     assert "IS NOT TRUE" in runtime
 
 
+def test_positive_integer_helper_precedes_and_simplifies_dependents() -> None:
+    source = MIGRATION_0004.read_text()
+    helper_start = source.index("CREATE FUNCTION appointment_payload_positive_integer_matches(")
+    create_commit_start = source.index("CREATE FUNCTION enforce_appointment_commit_provenance")
+    create_commit_end = source.index("CREATE CONSTRAINT TRIGGER ck_appointment_commit_provenance")
+    mutation_start = source.index("CREATE FUNCTION enforce_appointment_mutation_commit")
+    mutation_end = source.index("CREATE CONSTRAINT TRIGGER ck_appointment_mutation_commit")
+    helper = source[helper_start : source.index("CREATE FUNCTION enforce_appointment_provenance")]
+    commit_function = source[create_commit_start:create_commit_end]
+    mutation_function = source[mutation_start:mutation_end]
+
+    assert helper_start < create_commit_start < mutation_start
+    assert (
+        "appointment_payload_positive_integer_matches(\n"
+        "               payload_data jsonb, field_name text, expected_value integer)"
+    ) in helper
+    assert "RETURNS boolean LANGUAGE plpgsql STABLE" in helper
+    assert "STRICT" not in helper
+    assert "RETURN COALESCE(parsed_value = expected_value, FALSE)" in helper
+    assert commit_function.count("appointment_payload_positive_integer_matches(") == 2
+    assert mutation_function.count("appointment_payload_positive_integer_matches(") == 2
+    for function in (commit_function, mutation_function):
+        assert "CASE WHEN pg_input_is_valid" not in function
+        assert "target_appointment_id')::bigint" not in function
+        assert "target_expected_version')::integer" not in function
+
+
 def test_provenance_helper_downgrade_order_is_dependency_safe() -> None:
     source = MIGRATION_0004.read_text()
     downgrade = source[source.index("def downgrade") :]
-    trigger_drop = downgrade.index("DROP TRIGGER ck_customer_conversation_appointment_provenance")
-    trigger_function_drop = downgrade.index("DROP FUNCTION enforce_appointment_provenance()")
+    mutation_trigger_drop = downgrade.index("DROP TRIGGER ck_appointment_mutation_commit")
+    mutation_function_drop = downgrade.index("DROP FUNCTION enforce_appointment_mutation_commit()")
+    commit_trigger_drop = downgrade.index("DROP TRIGGER ck_appointment_commit_provenance")
+    commit_function_drop = downgrade.index("DROP FUNCTION enforce_appointment_commit_provenance()")
+    positive_integer_helper_drop = downgrade.index(
+        "DROP FUNCTION appointment_payload_positive_integer_matches(jsonb, text, integer)"
+    )
+    provenance_trigger_drop = downgrade.index(
+        "DROP TRIGGER ck_customer_conversation_appointment_provenance"
+    )
+    provenance_function_drop = downgrade.index("DROP FUNCTION enforce_appointment_provenance()")
     call_id_helper_drop = downgrade.index(
         "DROP FUNCTION appointment_payload_call_id_matches(jsonb, bigint)"
     )
     facts_helper_drop = downgrade.index(
         "DROP FUNCTION appointment_payload_facts_match(jsonb, appointments)"
     )
-    assert trigger_drop < trigger_function_drop < call_id_helper_drop < facts_helper_drop
+    assert (
+        mutation_trigger_drop
+        < mutation_function_drop
+        < commit_trigger_drop
+        < commit_function_drop
+        < positive_integer_helper_drop
+    )
+    assert (
+        provenance_trigger_drop < provenance_function_drop < call_id_helper_drop < facts_helper_drop
+    )
 
 
 def test_downgrade_preflight_fake_bind_rejects_each_lossy_state() -> None:

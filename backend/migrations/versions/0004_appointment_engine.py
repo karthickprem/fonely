@@ -1054,6 +1054,45 @@ def upgrade() -> None:
            $$"""
     )
     op.execute(
+        r"""CREATE FUNCTION appointment_payload_positive_integer_matches(
+               payload_data jsonb, field_name text, expected_value integer)
+           RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+           DECLARE
+               field_value jsonb;
+               field_text text;
+               parsed_value bigint;
+           BEGIN
+               IF payload_data IS NULL
+                  OR jsonb_typeof(payload_data) IS DISTINCT FROM 'object'
+                  OR field_name IS NULL
+                  OR field_name = ''
+                  OR expected_value IS NULL THEN
+                   RETURN FALSE;
+               END IF;
+               IF NOT (payload_data ? field_name) THEN
+                   RETURN FALSE;
+               END IF;
+               field_value := payload_data->field_name;
+               IF field_value = 'null'::jsonb
+                  OR jsonb_typeof(field_value) IS DISTINCT FROM 'number' THEN
+                   RETURN FALSE;
+               END IF;
+               field_text := payload_data->>field_name;
+               IF field_text IS NULL OR field_text !~ '^[1-9][0-9]*$' THEN
+                   RETURN FALSE;
+               END IF;
+               IF NOT COALESCE(pg_input_is_valid(field_text, 'bigint'), FALSE) THEN
+                   RETURN FALSE;
+               END IF;
+               parsed_value := field_text::bigint;
+               IF parsed_value < 1 OR parsed_value > 2147483647 THEN
+                   RETURN FALSE;
+               END IF;
+               RETURN COALESCE(parsed_value = expected_value, FALSE);
+           END;
+           $$"""
+    )
+    op.execute(
         """CREATE FUNCTION enforce_appointment_provenance()
            RETURNS trigger LANGUAGE plpgsql AS $$
            DECLARE
@@ -1265,18 +1304,16 @@ def upgrade() -> None:
                WHERE business_id = NEW.business_id AND id = NEW.appointment_id;
                IF pending_data IS NULL
                   OR pending_data->>'operation' IS DISTINCT FROM NEW.operation::text
-                  OR NOT COALESCE(pg_input_is_valid(
-                         pending_data->>'target_appointment_id', 'bigint'), FALSE)
-                  OR CASE WHEN pg_input_is_valid(
-                                   pending_data->>'target_appointment_id', 'bigint')
-                          THEN (pending_data->>'target_appointment_id')::bigint END
-                        IS DISTINCT FROM NEW.appointment_id
-                  OR NOT COALESCE(pg_input_is_valid(
-                         pending_data->>'target_expected_version', 'integer'), FALSE)
-                  OR CASE WHEN pg_input_is_valid(
-                                   pending_data->>'target_expected_version', 'integer')
-                          THEN (pending_data->>'target_expected_version')::integer END
-                        IS DISTINCT FROM current_appointment.version - 1
+                  OR appointment_payload_positive_integer_matches(
+                         pending_data,
+                         'target_appointment_id',
+                         NEW.appointment_id
+                     ) IS NOT TRUE
+                  OR appointment_payload_positive_integer_matches(
+                         pending_data,
+                         'target_expected_version',
+                         current_appointment.version - 1
+                     ) IS NOT TRUE
                   OR (NEW.operation = 'cancel'
                       AND NEW.reason_code
                           IS DISTINCT FROM pending_data->>'reason_code') THEN
@@ -1407,17 +1444,14 @@ def upgrade() -> None:
                  AND pa.committed_entity_type = 'appointment_commit'
                  AND pa.committed_entity_id = ac.id
                  AND pa.proposed_payload->'data'->>'operation' = commit_operation
-                 AND CASE WHEN pg_input_is_valid(
-                                   pa.proposed_payload->'data'->>'target_appointment_id',
-                                   'bigint')
-                          THEN (pa.proposed_payload->'data'->>'target_appointment_id')::bigint END
-                     = NEW.id
-                 AND CASE WHEN pg_input_is_valid(
-                                   pa.proposed_payload->'data'->>'target_expected_version',
-                                   'integer')
-                          THEN (pa.proposed_payload->'data'
-                                ->>'target_expected_version')::integer END
-                     = OLD.version;
+                 AND appointment_payload_positive_integer_matches(
+                         pa.proposed_payload->'data',
+                         'target_appointment_id',
+                         NEW.id)
+                 AND appointment_payload_positive_integer_matches(
+                         pa.proposed_payload->'data',
+                         'target_expected_version',
+                         OLD.version);
                IF matching_commits <> 1
                   OR commit_before IS DISTINCT FROM appointment_authoritative_snapshot(OLD)
                   OR commit_after IS DISTINCT FROM appointment_authoritative_snapshot(NEW)
@@ -1663,6 +1697,7 @@ def downgrade() -> None:
     op.execute("DROP FUNCTION enforce_appointment_mutation_commit()")
     op.execute("DROP TRIGGER ck_appointment_commit_provenance ON appointment_commits")
     op.execute("DROP FUNCTION enforce_appointment_commit_provenance()")
+    op.execute("DROP FUNCTION appointment_payload_positive_integer_matches(jsonb, text, integer)")
     op.execute("DROP FUNCTION appointment_authoritative_snapshot(appointments)")
     op.execute("DROP FUNCTION canonical_utc_jsonb(timestamptz)")
     op.execute("DROP TRIGGER ck_committed_pending_action_provenance ON pending_actions")

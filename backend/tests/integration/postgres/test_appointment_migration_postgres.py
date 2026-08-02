@@ -397,6 +397,7 @@ async def _insert_head_appointment(
     *,
     start_at: datetime,
     status: str = "confirmed",
+    version: int = 1,
 ) -> None:
     end_at = start_at + timedelta(minutes=30)
     await session.execute(
@@ -410,7 +411,7 @@ async def _insert_head_appointment(
             "idempotency_key, version, created_at, updated_at) VALUES "
             "(:id, 1, 1, 1, '+919123456789', :start_at, :end_at, :start_at, :end_at, "
             "'Haircut', 'Priya', 30, 0, 0, 'Asia/Kolkata', :status, "
-            "'owner_manual', :key, 1, now(), now())"
+            "'owner_manual', :key, :version, now(), now())"
         ),
         {
             "id": appointment_id,
@@ -418,6 +419,7 @@ async def _insert_head_appointment(
             "end_at": end_at,
             "status": status,
             "key": f"appointment-{appointment_id}",
+            "version": version,
         },
     )
 
@@ -833,6 +835,113 @@ async def test_appointment_payload_call_id_matcher_is_total(
     assert result is not None
 
 
+@pytest.mark.parametrize(
+    "field_name",
+    ["target_appointment_id", "target_expected_version"],
+)
+@pytest.mark.parametrize(
+    ("payload", "expected_value", "expected_result"),
+    [
+        (None, 1, False),
+        ("[]", 1, False),
+        ("{}", 1, False),
+        ('{"other": 1}', 1, False),
+        ('{"target_appointment_id": null, "target_expected_version": null}', 1, False),
+        ('{"target_appointment_id": "7", "target_expected_version": "7"}', 7, False),
+        ('{"target_appointment_id": 1, "target_expected_version": 1}', 1, True),
+        (
+            '{"target_appointment_id": 2147483647, "target_expected_version": 2147483647}',
+            2147483647,
+            True,
+        ),
+        ('{"target_appointment_id": 7, "target_expected_version": 7}', 8, False),
+        ('{"target_appointment_id": 0, "target_expected_version": 0}', 1, False),
+        ('{"target_appointment_id": -1, "target_expected_version": -1}', 1, False),
+        ('{"target_appointment_id": 1.0, "target_expected_version": 1.0}', 1, False),
+        (
+            '{"target_appointment_id": 2147483648, "target_expected_version": 2147483648}',
+            1,
+            False,
+        ),
+        (
+            '{"target_appointment_id": 10000000000000000000000000000000000000000, '
+            '"target_expected_version": 10000000000000000000000000000000000000000}',
+            1,
+            False,
+        ),
+        (
+            '{"target_appointment_id": -10000000000000000000000000000000000000000, '
+            '"target_expected_version": -10000000000000000000000000000000000000000}',
+            1,
+            False,
+        ),
+        ('{"target_appointment_id": true, "target_expected_version": true}', 1, False),
+        ('{"target_appointment_id": {}, "target_expected_version": {}}', 1, False),
+        ('{"target_appointment_id": [], "target_expected_version": []}', 1, False),
+        ('{"target_appointment_id": 1, "target_expected_version": 1}', None, False),
+    ],
+    ids=[
+        "sql-null-payload",
+        "non-object",
+        "missing",
+        "unknown-field",
+        "json-null",
+        "numeric-string",
+        "minimum",
+        "maximum",
+        "mismatch",
+        "zero",
+        "negative",
+        "decimal",
+        "above-maximum",
+        "positive-overflow",
+        "negative-overflow",
+        "boolean",
+        "object",
+        "array",
+        "sql-null-expected",
+    ],
+)
+async def test_appointment_payload_positive_integer_matcher_is_total(
+    pg_engine: AsyncEngine,
+    field_name: str,
+    payload: str | None,
+    expected_value: int | None,
+    expected_result: bool,
+) -> None:
+    async with pg_engine.connect() as connection:
+        result = await connection.scalar(
+            text(
+                "SELECT appointment_payload_positive_integer_matches("
+                "CAST(:payload AS jsonb), :field_name, :expected_value)"
+            ),
+            {
+                "payload": payload,
+                "field_name": field_name,
+                "expected_value": expected_value,
+            },
+        )
+    assert result is expected_result
+    assert result is not None
+
+
+@pytest.mark.parametrize("field_name", [None, ""])
+async def test_appointment_payload_positive_integer_matcher_rejects_invalid_field_name(
+    pg_engine: AsyncEngine,
+    field_name: str | None,
+) -> None:
+    async with pg_engine.connect() as connection:
+        result = await connection.scalar(
+            text(
+                "SELECT appointment_payload_positive_integer_matches("
+                "'{\"target_appointment_id\": 1}'::jsonb, :field_name, 1)"
+            ),
+            {"field_name": field_name},
+        )
+    assert result is False
+    assert result is not None
+
+
 async def _exercise_creation_call_id_provenance(
     session: AsyncSession,
     *,
@@ -1140,19 +1249,43 @@ async def test_malformed_runtime_creation_provenance_is_a_constraint_violation(
         await session.rollback()
 
 
+@pytest.mark.parametrize("field", ["target_appointment_id", "target_expected_version"])
 @pytest.mark.parametrize(
-    ("field", "value"),
+    ("value", "remove_field"),
     [
-        ("target_appointment_id", "not-an-id"),
-        ("target_appointment_id", 10**100),
-        ("target_expected_version", "not-a-version"),
-        ("target_expected_version", 10**100),
+        (None, True),
+        (None, False),
+        ("7", False),
+        (0, False),
+        (-1, False),
+        (1.0, False),
+        (2147483648, False),
+        (10**100, False),
+        (True, False),
+        ({}, False),
+        ([], False),
+        (2, False),
+    ],
+    ids=[
+        "missing",
+        "null",
+        "numeric-string",
+        "zero",
+        "negative",
+        "decimal",
+        "above-maximum",
+        "overflow",
+        "boolean",
+        "object",
+        "array",
+        "mismatch",
     ],
 )
 async def test_malformed_runtime_commit_provenance_is_a_constraint_violation(
     pg_session_factory: async_sessionmaker[AsyncSession],
     field: str,
     value: object,
+    remove_field: bool,
 ) -> None:
     async with pg_session_factory() as session:
         await _seed_head_catalog(session)
@@ -1163,14 +1296,24 @@ async def test_malformed_runtime_commit_provenance_is_a_constraint_violation(
             commit_id=10,
             operation="cancel",
         )
-        await session.execute(
-            text(
-                "UPDATE pending_actions SET proposed_payload = "
-                "jsonb_set(proposed_payload, CAST(:path AS text[]), CAST(:value AS jsonb)) "
-                "WHERE id = 10"
-            ),
-            {"path": ["data", field], "value": json.dumps(value)},
-        )
+        if remove_field:
+            await session.execute(
+                text(
+                    "UPDATE pending_actions SET proposed_payload = "
+                    "jsonb_set(proposed_payload, '{data}', "
+                    "proposed_payload->'data' - :field) WHERE id = 10"
+                ),
+                {"field": field},
+            )
+        else:
+            await session.execute(
+                text(
+                    "UPDATE pending_actions SET proposed_payload = "
+                    "jsonb_set(proposed_payload, CAST(:path AS text[]), CAST(:value AS jsonb)) "
+                    "WHERE id = 10"
+                ),
+                {"path": ["data", field], "value": json.dumps(value)},
+            )
         await session.execute(
             text(
                 "INSERT INTO appointment_commits "
@@ -1239,6 +1382,111 @@ async def test_reschedule_requires_exact_commit_and_allows_in_place_fact_update(
         )
         await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
         await session.commit()
+
+
+async def test_cancel_requires_exact_commit_and_allows_status_transition(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with pg_session_factory() as session:
+        await _seed_head_catalog(session)
+        await _insert_head_appointment(session, 1, start_at=START)
+        await _insert_active_allocation(session, 1, start_at=START)
+        await session.commit()
+
+    async with pg_session_factory() as session:
+        before_snapshot = await session.scalar(
+            text("SELECT appointment_authoritative_snapshot(a) FROM appointments a WHERE id = 1")
+        )
+        await _insert_confirmed_mutation_action(
+            session,
+            action_id=10,
+            commit_id=10,
+            operation="cancel",
+        )
+        await session.execute(
+            text(
+                "UPDATE appointments SET status='cancelled', cancelled_at=now(), "
+                "version=2 WHERE id=1"
+            )
+        )
+        await session.execute(
+            text(
+                "UPDATE resource_allocations SET status='released', version=2 "
+                "WHERE appointment_id=1"
+            )
+        )
+        after_snapshot = await session.scalar(
+            text("SELECT appointment_authoritative_snapshot(a) FROM appointments a WHERE id = 1")
+        )
+        await session.execute(
+            text(
+                "INSERT INTO appointment_commits "
+                "(id, business_id, pending_action_id, appointment_id, operation, "
+                "before_snapshot, after_snapshot) VALUES "
+                "(10, 1, 10, 1, 'cancel', CAST(:before AS jsonb), CAST(:after AS jsonb))"
+            ),
+            {"before": json.dumps(before_snapshot), "after": json.dumps(after_snapshot)},
+        )
+        await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        await session.commit()
+
+
+@pytest.mark.parametrize("field", ["target_appointment_id", "target_expected_version"])
+@pytest.mark.parametrize("value", ["1", 1.0], ids=["numeric-string", "decimal"])
+async def test_noncanonical_target_does_not_match_mutation_commit(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+    field: str,
+    value: object,
+) -> None:
+    async with pg_session_factory() as session:
+        await _seed_head_catalog(session)
+        await _insert_head_appointment(session, 1, start_at=START)
+        await _insert_active_allocation(session, 1, start_at=START)
+        await session.commit()
+
+    async with pg_session_factory() as session:
+        before_snapshot = await session.scalar(
+            text("SELECT appointment_authoritative_snapshot(a) FROM appointments a WHERE id = 1")
+        )
+        await _insert_confirmed_mutation_action(
+            session,
+            action_id=10,
+            commit_id=10,
+            operation="cancel",
+        )
+        await session.execute(
+            text(
+                "UPDATE pending_actions SET proposed_payload = "
+                "jsonb_set(proposed_payload, CAST(:path AS text[]), CAST(:value AS jsonb)) "
+                "WHERE id = 10"
+            ),
+            {"path": ["data", field], "value": json.dumps(value)},
+        )
+        await session.execute(
+            text(
+                "UPDATE appointments SET status='cancelled', cancelled_at=now(), "
+                "version=2 WHERE id=1"
+            )
+        )
+        after_snapshot = await session.scalar(
+            text("SELECT appointment_authoritative_snapshot(a) FROM appointments a WHERE id = 1")
+        )
+        await session.execute(
+            text(
+                "INSERT INTO appointment_commits "
+                "(id, business_id, pending_action_id, appointment_id, operation, "
+                "before_snapshot, after_snapshot) VALUES "
+                "(10, 1, 10, 1, 'cancel', CAST(:before AS jsonb), CAST(:after AS jsonb))"
+            ),
+            {"before": json.dumps(before_snapshot), "after": json.dumps(after_snapshot)},
+        )
+        with pytest.raises(IntegrityError) as error:
+            await session.execute(text("SET CONSTRAINTS ck_appointment_mutation_commit IMMEDIATE"))
+        assert getattr(error.value.orig, "sqlstate", None) == "23514"
+        assert getattr(error.value.orig, "constraint_name", None) == (
+            "ck_appointment_mutation_commit"
+        )
+        await session.rollback()
 
 
 async def test_confirmed_cancel_pending_action_without_commit_is_rejected(

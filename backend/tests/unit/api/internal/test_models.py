@@ -14,6 +14,7 @@ def test_proposal_request_rejects_extra_fields() -> None:
     with pytest.raises(ValidationError):
         AppointmentProposalRequest(
             service_id=1,
+            resource_id=1,
             start_at="2026-08-05T10:00:00Z",
             customer_phone="+919123456789",
             idempotency_key="test",
@@ -26,8 +27,56 @@ def test_proposal_request_rejects_nonpositive_service() -> None:
     with pytest.raises(ValidationError):
         AppointmentProposalRequest(
             service_id=0,
+            resource_id=1,
             start_at="2026-08-05T10:00:00Z",
             customer_phone="+919123456789",
+            idempotency_key="test",
+            expires_at="2026-08-05T11:00:00Z",
+        )
+
+
+def test_proposal_request_rejects_overflow_id() -> None:
+    with pytest.raises(ValidationError):
+        AppointmentProposalRequest(
+            service_id=2_147_483_648,
+            resource_id=1,
+            start_at="2026-08-05T10:00:00Z",
+            customer_phone="+919123456789",
+            idempotency_key="test",
+            expires_at="2026-08-05T11:00:00Z",
+        )
+
+
+def test_proposal_request_requires_resource_id() -> None:
+    with pytest.raises(ValidationError):
+        AppointmentProposalRequest(
+            service_id=1,
+            start_at="2026-08-05T10:00:00Z",
+            customer_phone="+919123456789",
+            idempotency_key="test",
+            expires_at="2026-08-05T11:00:00Z",
+        )
+
+
+def test_proposal_request_rejects_naive_datetime() -> None:
+    with pytest.raises(ValidationError):
+        AppointmentProposalRequest(
+            service_id=1,
+            resource_id=1,
+            start_at="2026-08-05T10:00:00",
+            customer_phone="+919123456789",
+            idempotency_key="test",
+            expires_at="2026-08-05T11:00:00Z",
+        )
+
+
+def test_proposal_request_rejects_invalid_phone() -> None:
+    with pytest.raises(ValidationError):
+        AppointmentProposalRequest(
+            service_id=1,
+            resource_id=1,
+            start_at="2026-08-05T10:00:00Z",
+            customer_phone="12345",
             idempotency_key="test",
             expires_at="2026-08-05T11:00:00Z",
         )

@@ -1,5 +1,6 @@
 """Internal text appointment slice routes."""
 
+import hmac
 import logging
 import time
 
@@ -15,6 +16,7 @@ from fonely.api.internal.models import (
     RetryableFailureResponse,
 )
 from fonely.api.internal.validation import InternalValidationPort
+from fonely.core.config import settings
 from fonely.domain.appointments.commands import (
     ConfirmPendingAppointmentCommand,
     CreatePendingAppointmentCommand,
@@ -27,6 +29,7 @@ from fonely.domain.pending_actions.commands import ActorContext
 from fonely.domain.pending_actions.errors import (
     PendingActionConcurrencyError,
     PendingActionExpiredError,
+    PendingActionIdempotencyConflictError,
     PendingActionNotFoundError,
     PendingActionUnauthorizedError,
 )
@@ -37,11 +40,19 @@ logger = logging.getLogger("fonely.api.internal.appointments")
 
 router = APIRouter(prefix="/internal/v1", tags=["internal-appointments"])
 
-_MAX_REQUEST_BODY = 4096
-
 
 def _get_correlation_id(request: Request) -> str:
     return getattr(request.state, "correlation_id", "unknown")
+
+
+def _verify_internal_auth(request: Request) -> None:
+    secret = settings.internal_api_secret
+    if not secret:
+        raise HTTPException(status_code=503, detail="Internal API not configured")
+    provided = request.headers.get("Authorization", "")
+    expected = f"Bearer {secret}"
+    if not hmac.compare_digest(provided.encode(), expected.encode()):
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 async def _get_session(request: Request) -> AsyncSession:
@@ -50,7 +61,11 @@ async def _get_session(request: Request) -> AsyncSession:
 
 
 def _trusted_actor(request: Request) -> ActorContext:
-    business_id = int(request.headers.get("X-Business-ID", "0"))
+    business_id_raw = request.headers.get("X-Business-ID", "0")
+    try:
+        business_id = int(business_id_raw)
+    except ValueError:
+        business_id = 0
     phone = request.headers.get("X-Actor-Phone", "")
     if business_id <= 0 or not phone:
         raise HTTPException(status_code=400, detail="Missing trusted business/actor context")
@@ -59,6 +74,24 @@ def _trusted_actor(request: Request) -> ActorContext:
         normalized_phone=phone,
         verified_role=CallerRole(request.headers.get("X-Actor-Role", "customer")),
         session_id=request.headers.get("X-Session-ID"),
+    )
+
+
+def _safe_log_error(
+    correlation_id: str,
+    operation: str,
+    exc: BaseException,
+    *,
+    retryable: bool = False,
+) -> None:
+    logger.warning(
+        "operation_failed",
+        extra={
+            "correlation_id": correlation_id,
+            "operation": operation,
+            "error_type": type(exc).__name__,
+            "retryable": retryable,
+        },
     )
 
 
@@ -72,6 +105,7 @@ async def create_proposal(
     body: AppointmentProposalRequest,
     request: Request,
 ) -> ProposalResponse | ErrorResponse:
+    _verify_internal_auth(request)
     correlation_id = _get_correlation_id(request)
     actor = _trusted_actor(request)
     start = time.monotonic()
@@ -118,18 +152,18 @@ async def create_proposal(
             slot_is_held=proposal.slot_is_held,
             confirmation_facts=proposal.confirmation_facts.model_dump(),
         )
+    except PendingActionIdempotencyConflictError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Idempotency conflict") from exc
     except (PendingActionNotFoundError, ValueError) as exc:
         await session.rollback()
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PendingActionUnauthorizedError as exc:
         await session.rollback()
         raise HTTPException(status_code=403, detail="Unauthorized") from exc
-    except Exception:
+    except Exception as exc:
         await session.rollback()
-        logger.exception(
-            "proposal_failed",
-            extra={"correlation_id": correlation_id, "operation": "create_proposal"},
-        )
+        _safe_log_error(correlation_id, "create_proposal", exc)
         raise HTTPException(status_code=500, detail="Internal error") from None
     finally:
         await session.close()
@@ -151,6 +185,7 @@ async def confirm_proposal(
     body: AppointmentConfirmRequest,
     request: Request,
 ) -> CommittedAppointmentResponse | RetryableFailureResponse:
+    _verify_internal_auth(request)
     correlation_id = _get_correlation_id(request)
     actor = _trusted_actor(request)
     start = time.monotonic()
@@ -177,7 +212,7 @@ async def confirm_proposal(
                     "correlation_id": correlation_id,
                     "operation": "confirm_proposal",
                     "business_id": actor.business_id,
-                    "error_code": result.error_code,
+                    "error_code": str(result.error_code),
                     "retryable": True,
                     "duration_ms": round(duration * 1000),
                 },
@@ -226,15 +261,12 @@ async def confirm_proposal(
     except PendingActionConcurrencyError as exc:
         await session.rollback()
         raise HTTPException(status_code=409, detail="Version conflict") from exc
-    except Exception:
+    except PendingActionIdempotencyConflictError as exc:
         await session.rollback()
-        logger.exception(
-            "confirmation_failed",
-            extra={
-                "correlation_id": correlation_id,
-                "operation": "confirm_proposal",
-            },
-        )
+        raise HTTPException(status_code=409, detail="Revalidation required") from exc
+    except Exception as exc:
+        await session.rollback()
+        _safe_log_error(correlation_id, "confirm_proposal", exc)
         raise HTTPException(status_code=500, detail="Internal error") from None
     finally:
         await session.close()

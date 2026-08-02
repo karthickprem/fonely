@@ -1,14 +1,18 @@
 """Fonely application factory."""
 
+import asyncio
+import logging
 import uuid
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
-from fonely.api.internal.appointments import router as appointment_router
 from fonely.core.config import settings
+
+logger = logging.getLogger("fonely.app")
 
 
 @asynccontextmanager
@@ -19,8 +23,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     app.state.engine = engine
     app.state.session_factory = async_sessionmaker(engine, expire_on_commit=False)
-    yield
-    await engine.dispose()
+    try:
+        yield
+    finally:
+        try:
+            await engine.dispose()
+        except Exception:
+            logger.error("engine_disposal_failed", extra={"operation": "shutdown"})
 
 
 def create_app() -> FastAPI:
@@ -39,17 +48,33 @@ def create_app() -> FastAPI:
         response.headers["X-Correlation-ID"] = correlation_id
         return response
 
-    app.include_router(appointment_router)
+    if settings.internal_api_secret:
+        from fonely.api.internal.appointments import router as appointment_router
+
+        app.include_router(appointment_router)
 
     @app.get("/health/live")
     async def liveness() -> dict[str, str]:
         return {"status": "ok"}
 
     @app.get("/health/ready")
-    async def readiness(request: Request) -> dict[str, str]:
+    async def readiness(request: Request) -> Response:
+        timeout = settings.readiness_timeout_seconds
         engine: AsyncEngine = request.app.state.engine
-        async with engine.connect() as conn:
-            await conn.execute(__import__("sqlalchemy").text("SELECT 1"))
-        return {"status": "ready"}
+        try:
+            async with asyncio.timeout(timeout):
+                async with engine.connect() as conn:
+                    await conn.execute(text("SELECT 1"))
+            return Response(
+                content='{"status":"ready"}',
+                media_type="application/json",
+                status_code=200,
+            )
+        except (TimeoutError, Exception):
+            return Response(
+                content='{"status":"unavailable"}',
+                media_type="application/json",
+                status_code=503,
+            )
 
     return app

@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
+    # Internal API auth
+    internal_api_secret: str = ""
+
+    # Readiness
+    readiness_timeout_seconds: float = 3.0
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 

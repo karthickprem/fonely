@@ -87,6 +87,7 @@ async def test_create_proposal_returns_awaiting_confirmation() -> None:
         CreatePendingAppointmentCommand(
             actor=_actor(),
             service_id=1,
+            resource_id=1,
             start_at=START,
             customer_phone="+919123456789",
             expires_at=START + timedelta(hours=1),
@@ -128,6 +129,7 @@ async def test_create_proposal_does_not_commit() -> None:
         CreatePendingAppointmentCommand(
             actor=_actor(),
             service_id=1,
+            resource_id=1,
             start_at=START,
             customer_phone="+919123456789",
             expires_at=START + timedelta(hours=1),
@@ -158,6 +160,7 @@ async def test_proposal_validates_once() -> None:
         CreatePendingAppointmentCommand(
             actor=_actor(),
             service_id=1,
+            resource_id=1,
             start_at=START,
             customer_phone="+919123456789",
             expires_at=START + timedelta(hours=1),

@@ -1,17 +1,19 @@
 """End-to-end PostgreSQL tests for internal text appointment slice."""
 
 from datetime import timedelta
+from unittest.mock import patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from fonely.app import create_app
 from fonely.core.validators import utcnow
 from fonely.models.schema import Appointment, PendingAction, ResourceAllocation
 
 pytestmark = pytest.mark.postgres
+
+_SECRET = "test-internal-secret"
 
 
 def _headers(
@@ -24,6 +26,7 @@ def _headers(
         "X-Actor-Phone": phone,
         "X-Actor-Role": role,
         "X-Correlation-ID": "e2e-test",
+        "Authorization": f"Bearer {_SECRET}",
     }
 
 
@@ -60,12 +63,22 @@ async def seeded_app(
     async with pg_session_factory() as session:
         await _seed_salon(session)
 
-    app = create_app()
-    app.state.engine = pg_engine
-    app.state.session_factory = pg_session_factory
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        yield client  # type: ignore[misc]
+    with patch("fonely.app.settings") as mock_settings:
+        mock_settings.internal_api_secret = _SECRET
+        mock_settings.database_url = "unused"
+        mock_settings.readiness_timeout_seconds = 3.0
+        from fonely.app import create_app
+
+        app = create_app()
+
+    with patch("fonely.api.internal.appointments.settings") as route_settings:
+        route_settings.internal_api_secret = _SECRET
+
+        app.state.engine = pg_engine
+        app.state.session_factory = pg_session_factory
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            yield client  # type: ignore[misc]
 
 
 async def _create_proposal(
@@ -141,9 +154,7 @@ async def test_proposal_and_confirm_e2e(
         assert pa.committed_entity_id == appt.id
 
 
-async def test_replay_returns_same_appointment(
-    seeded_app: AsyncClient,
-) -> None:
+async def test_replay_returns_same_appointment(seeded_app: AsyncClient) -> None:
     proposal = await _create_proposal(seeded_app, idempotency_key="replay-test")
     pa_id = proposal["pending_action_id"]
 
@@ -163,9 +174,7 @@ async def test_replay_returns_same_appointment(
     assert r2.json()["appointment_id"] == r1.json()["appointment_id"]
 
 
-async def test_cross_tenant_confirm_returns_404(
-    seeded_app: AsyncClient,
-) -> None:
+async def test_cross_tenant_confirm_returns_404(seeded_app: AsyncClient) -> None:
     proposal = await _create_proposal(seeded_app, idempotency_key="cross-tenant")
     pa_id = proposal["pending_action_id"]
 
@@ -191,9 +200,7 @@ async def test_unrelated_customer_confirm_returns_403(
     assert response.status_code == 403
 
 
-async def test_overlapping_slot_returns_retryable(
-    seeded_app: AsyncClient,
-) -> None:
+async def test_overlapping_slot_returns_retryable(seeded_app: AsyncClient) -> None:
     now = utcnow()
     slot = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=2)
 
@@ -231,3 +238,38 @@ async def test_overlapping_slot_returns_retryable(
     assert data["status"] == "retryable_failure"
     assert data["error_code"] == "resource_unavailable"
     assert data["retryable"] is True
+
+
+async def test_missing_auth_returns_401(seeded_app: AsyncClient) -> None:
+    response = await seeded_app.post(
+        "/internal/v1/appointment-proposals",
+        json={
+            "service_id": 1,
+            "resource_id": 1,
+            "start_at": "2026-08-05T10:00:00Z",
+            "customer_phone": "+919123456789",
+            "idempotency_key": "no-auth",
+            "expires_at": "2026-08-05T11:00:00Z",
+        },
+        headers={
+            "X-Business-ID": "1",
+            "X-Actor-Phone": "+919123456789",
+        },
+    )
+    assert response.status_code == 401
+
+
+async def test_missing_resource_returns_422(seeded_app: AsyncClient) -> None:
+    now = utcnow()
+    response = await seeded_app.post(
+        "/internal/v1/appointment-proposals",
+        json={
+            "service_id": 1,
+            "start_at": (now + timedelta(hours=2)).isoformat(),
+            "customer_phone": "+919123456789",
+            "idempotency_key": "no-resource",
+            "expires_at": (now + timedelta(minutes=15)).isoformat(),
+        },
+        headers=_headers(),
+    )
+    assert response.status_code == 422

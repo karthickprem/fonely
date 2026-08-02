@@ -16,25 +16,22 @@ from fonely.domain.pending_actions.payloads import (
     CreateAppointmentData,
     PendingAppointmentEnvelope,
 )
-from fonely.models.schema import Resource, Service
+from fonely.models.schema import Business, Resource, Service
 
 
 class InternalValidationPort(AppointmentValidationPort):
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def validate_for_actor(
+    async def _resolve_facts(
         self,
-        actor: ActorContext,
-        payload: PendingAppointmentEnvelope,
-    ) -> PendingAppointmentEnvelope:
-        assert isinstance(payload.data, CreateAppointmentData)
-        stub_facts = payload.data.facts
-
+        business_id: int,
+        stub_facts: AppointmentFacts,
+    ) -> AppointmentFacts:
         service = (
             await self._session.execute(
                 select(Service).where(
-                    Service.business_id == actor.business_id,
+                    Service.business_id == business_id,
                     Service.id == stub_facts.service_id,
                     Service.is_active.is_(True),
                 )
@@ -46,7 +43,7 @@ class InternalValidationPort(AppointmentValidationPort):
         resource = (
             await self._session.execute(
                 select(Resource).where(
-                    Resource.business_id == actor.business_id,
+                    Resource.business_id == business_id,
                     Resource.id == stub_facts.resource_id,
                     Resource.is_active.is_(True),
                 )
@@ -62,14 +59,12 @@ class InternalValidationPort(AppointmentValidationPort):
         effective_start = start_at - timedelta(minutes=buffer_before)
         effective_end = end_at + timedelta(minutes=buffer_after)
 
-        from fonely.models.schema import Business
-
         business = (
-            await self._session.execute(select(Business).where(Business.id == actor.business_id))
+            await self._session.execute(select(Business).where(Business.id == business_id))
         ).scalar_one_or_none()
         timezone = business.timezone if business else "Asia/Kolkata"
 
-        resolved_facts = AppointmentFacts(
+        return AppointmentFacts(
             service_id=service.id,
             service_name=service.name,
             resource_id=resource.id,
@@ -85,9 +80,16 @@ class InternalValidationPort(AppointmentValidationPort):
             business_timezone=timezone,
         )
 
+    async def validate_for_actor(
+        self,
+        actor: ActorContext,
+        payload: PendingAppointmentEnvelope,
+    ) -> PendingAppointmentEnvelope:
+        assert isinstance(payload.data, CreateAppointmentData)
+        facts = await self._resolve_facts(actor.business_id, payload.data.facts)
         return PendingAppointmentEnvelope(
             data=CreateAppointmentData(
-                facts=resolved_facts,
+                facts=facts,
                 customer_name=payload.data.customer_name,
                 customer_phone=payload.data.customer_phone,
                 reason=payload.data.reason,
@@ -100,6 +102,29 @@ class InternalValidationPort(AppointmentValidationPort):
         business_id: int,
         payload: PendingAppointmentEnvelope,
     ) -> PendingAppointmentEnvelope:
+        assert isinstance(payload.data, CreateAppointmentData)
+        stored_facts = payload.data.facts
+        current_facts = await self._resolve_facts(business_id, stored_facts)
+
+        if (
+            current_facts.service_id != stored_facts.service_id
+            or current_facts.resource_id != stored_facts.resource_id
+            or current_facts.duration_minutes != stored_facts.duration_minutes
+            or current_facts.buffer_before_minutes != stored_facts.buffer_before_minutes
+            or current_facts.buffer_after_minutes != stored_facts.buffer_after_minutes
+            or current_facts.price != stored_facts.price
+            or current_facts.business_timezone != stored_facts.business_timezone
+            or current_facts.service_name != stored_facts.service_name
+            or current_facts.resource_name != stored_facts.resource_name
+        ):
+            from fonely.domain.pending_actions.errors import (
+                PendingActionIdempotencyConflictError,
+            )
+
+            raise PendingActionIdempotencyConflictError(
+                "Authoritative facts changed since proposal; revalidation required"
+            )
+
         return payload
 
     async def validate_idempotent_retry(

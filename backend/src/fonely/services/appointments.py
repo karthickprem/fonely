@@ -274,13 +274,15 @@ class AppointmentService:
         self,
         command: CreatePendingAppointmentCommand,
     ) -> PendingAppointmentEnvelope:
+        if command.resource_id is None:
+            raise ValueError("resource_id is required")
         stub_end = command.start_at + timedelta(minutes=1)
         stub_envelope = PendingAppointmentEnvelope(
             data=CreateAppointmentData(
                 facts=AppointmentFacts(
                     service_id=command.service_id,
                     service_name="__pending__",
-                    resource_id=command.resource_id or 1,
+                    resource_id=command.resource_id,
                     resource_name="__pending__",
                     start_at=command.start_at,
                     end_at=stub_end,

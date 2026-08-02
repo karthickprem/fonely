@@ -1,28 +1,43 @@
 """Internal appointment slice request/response models."""
 
 from datetime import datetime
+from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class AppointmentProposalRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    service_id: int = Field(gt=0)
-    resource_id: int | None = Field(default=None, gt=0)
+    service_id: Annotated[int, Field(gt=0, le=2_147_483_647)]
+    resource_id: Annotated[int, Field(gt=0, le=2_147_483_647)]
     start_at: datetime
     customer_name: str | None = Field(default=None, max_length=200)
     customer_phone: str = Field(min_length=1, max_length=20)
     reason: str | None = Field(default=None, max_length=500)
-    call_id: int | None = Field(default=None, gt=0)
+    call_id: Annotated[int | None, Field(default=None, gt=0, le=2_147_483_647)]
     idempotency_key: str = Field(min_length=1, max_length=100)
     expires_at: datetime
+
+    @field_validator("start_at", "expires_at")
+    @classmethod
+    def require_timezone_aware(cls, v: datetime) -> datetime:
+        if v.tzinfo is None or v.utcoffset() is None:
+            raise ValueError("Datetime must be timezone-aware")
+        return v
+
+    @field_validator("customer_phone")
+    @classmethod
+    def validate_phone_format(cls, v: str) -> str:
+        if not v.startswith("+") or not v[1:].isdigit() or len(v) < 8:
+            raise ValueError("Phone must be E.164 format")
+        return v
 
 
 class AppointmentConfirmRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    expected_version: int = Field(gt=0)
+    expected_version: Annotated[int, Field(gt=0, le=2_147_483_647)]
 
 
 class ProposalResponse(BaseModel):

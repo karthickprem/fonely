@@ -802,6 +802,7 @@ class TestMainFlowNoLeak:
         assert "source_digest_abc" not in raw_out
         assert "different_restored_xyz" not in raw_out
         assert "source_digest_abc" not in stderr
+        assert "different_restored_xyz" not in stderr
         re_check = _find_check(output["checks"], "restored_evidence")
         assert re_check is not None
         assert re_check["failure_code"] == "data_mismatch"

@@ -246,77 +246,62 @@ def _run_alembic(database_url: str, *args: str) -> subprocess.CompletedProcess[s
     return result
 
 
-_TWO_TENANT_SEED = """
-INSERT INTO businesses (id, name, category, primary_contact_phone, timezone, subscription)
-VALUES
-  (1, 'Tenant A Shop', 'shop', '+919100000001', 'Asia/Kolkata', 'trial'),
-  (2, 'Tenant B Shop', 'shop', '+919200000002', 'Asia/Kolkata', 'trial');
-
-INSERT INTO business_users (business_id, phone, role, is_active) VALUES
-  (1, '+919100000001', 'owner', true),
-  (2, '+919200000002', 'owner', true);
-
-INSERT INTO products (id, business_id, name, unit, price_per_unit, is_active) VALUES
-  (1, 1, 'Rice', 'kg', 100.00, true),
-  (2, 1, 'Oil', 'litre', 200.00, true),
-  (3, 2, 'Flour', 'kg', 50.00, true);
-
-INSERT INTO pending_actions
-  (id, business_id, action_type, payload_schema_version, proposed_payload,
-   confirmation_snapshot, status, expires_at, idempotency_key, version,
-   payload_digest, committed_entity_type, committed_entity_id)
-VALUES
-  (1, 1, 'order', 1,
-   '{"schema_version":1,"action_type":"order","data":{"customer_name":"A","customer_phone":"+919111111111","pickup_at":"2026-08-01T12:00:00+05:30","lines":[{"product_id":1,"quantity":"2"}]}}',
-   'confirmed', 'confirmed', '2026-08-02T00:00:00+05:30', 'pa-a-1', 3,
-   'aaaaaaaabbbbbbbbccccccccdddddddd1111111122222222333333334444444', 'order', 1),
-  (2, 2, 'order', 1,
-   '{"schema_version":1,"action_type":"order","data":{"customer_name":"B","customer_phone":"+919222222222","pickup_at":"2026-08-01T14:00:00+05:30","lines":[{"product_id":3,"quantity":"1"}]}}',
-   'confirmed', 'confirmed', '2026-08-02T00:00:00+05:30', 'pa-b-1', 3,
-   'eeeeeeeeffffffffaaaaaaaabbbbbbbb5555555566666666777777778888888', 'order', 2);
-
-INSERT INTO inventory_balances
-  (id, business_id, product_id, business_date, on_hand_qty, reserved_qty,
-   available_tomorrow, version)
-VALUES
-  (1, 1, 1, '2026-08-01', 10.00, 2.00, true, 3),
-  (2, 1, 2, '2026-08-01', 5.00, 0.00, true, 1),
-  (3, 2, 3, '2026-08-01', 20.00, 1.00, true, 2);
-
-INSERT INTO orders
-  (id, business_id, customer_name, customer_phone, total_amount, status,
-   idempotency_key, pending_action_id)
-VALUES
-  (1, 1, 'Customer A', '+919111111111', 200.00, 'confirmed', 'ord-a-1', 1),
-  (2, 2, 'Customer B', '+919222222222', 50.00, 'confirmed', 'ord-b-1', 2);
-
-INSERT INTO order_line_items
-  (id, order_id, product_id, product_name_snapshot, qty, unit,
-   price_per_unit_snapshot, subtotal)
-VALUES
-  (1, 1, 1, 'Rice', 2.00, 'kg', 100.00, 200.00),
-  (2, 2, 3, 'Flour', 1.00, 'kg', 50.00, 50.00);
-
-INSERT INTO inventory_reservations
-  (id, business_id, product_id, pending_action_id, order_id, business_date,
-   qty, status, expires_at, idempotency_key)
-VALUES
-  (1, 1, 1, 1, 1, '2026-08-01', 2.00, 'active',
-   '2026-08-01T14:00:00+05:30', 'ord-a-1'),
-  (2, 2, 3, 2, 2, '2026-08-01', 1.00, 'active',
-   '2026-08-01T16:00:00+05:30', 'ord-b-1');
-
-INSERT INTO inventory_movements
-  (id, business_id, product_id, business_date, movement_type,
-   on_hand_delta, reserved_delta, on_hand_after, reserved_after,
-   available_after, order_id, reservation_id, pending_action_id)
-VALUES
-  (1, 1, 1, '2026-08-01', 'manual_adjustment', 10, 0, 10, 0, 10, NULL, NULL, NULL),
-  (2, 1, 1, '2026-08-01', 'phone_order_reserved', 0, 2, 10, 2, 8, 1, 1, 1),
-  (3, 1, 2, '2026-08-01', 'manual_adjustment', 5, 0, 5, 0, 5, NULL, NULL, NULL),
-  (4, 2, 3, '2026-08-01', 'manual_adjustment', 20, 0, 20, 0, 20, NULL, NULL, NULL),
-  (5, 2, 3, '2026-08-01', 'phone_order_reserved', 0, 1, 20, 1, 19, 2, 2, 2);
-"""
+_TWO_TENANT_SEED = (
+    "INSERT INTO businesses (id, name, category, primary_contact_phone, timezone, subscription) "
+    "VALUES (1, 'Tenant A Shop', 'shop', '+919100000001', 'Asia/Kolkata', 'trial'), "
+    "(2, 'Tenant B Shop', 'shop', '+919200000002', 'Asia/Kolkata', 'trial')",
+    "INSERT INTO business_users (business_id, phone, role, is_active) VALUES "
+    "(1, '+919100000001', 'owner', true), (2, '+919200000002', 'owner', true)",
+    "INSERT INTO products (id, business_id, name, unit, price_per_unit, is_active) VALUES "
+    "(1, 1, 'Rice', 'kg', 100.00, true), (2, 1, 'Oil', 'litre', 200.00, true), "
+    "(3, 2, 'Flour', 'kg', 50.00, true)",
+    "INSERT INTO pending_actions "
+    "(id, business_id, action_type, payload_schema_version, proposed_payload, "
+    "confirmation_snapshot, status, expires_at, idempotency_key, version, "
+    "payload_digest, committed_entity_type, committed_entity_id) VALUES "
+    "(1, 1, 'order', 1, "
+    '\'{"schema_version":1,"action_type":"order","data":{"customer_name":"A",'
+    '"customer_phone":"+919111111111","pickup_at":"2026-08-01T12:00:00+05:30",'
+    '"lines":[{"product_id":1,"quantity":"2"}]}}\', '
+    "'confirmed', 'confirmed', '2026-08-02T00:00:00+05:30', 'pa-a-1', 3, "
+    "'aaaaaaaabbbbbbbbccccccccdddddddd11111111222222223333333344444444', 'order', 1), "
+    "(2, 2, 'order', 1, "
+    '\'{"schema_version":1,"action_type":"order","data":{"customer_name":"B",'
+    '"customer_phone":"+919222222222","pickup_at":"2026-08-01T14:00:00+05:30",'
+    '"lines":[{"product_id":3,"quantity":"1"}]}}\', '
+    "'confirmed', 'confirmed', '2026-08-02T00:00:00+05:30', 'pa-b-1', 3, "
+    "'eeeeeeeeffffffffaaaaaaaabbbbbbbb55555555666666667777777788888888', 'order', 2)",
+    "INSERT INTO inventory_balances "
+    "(id, business_id, product_id, business_date, on_hand_qty, reserved_qty, "
+    "available_tomorrow, version) VALUES "
+    "(1, 1, 1, '2026-08-01', 10.00, 2.00, true, 3), "
+    "(2, 1, 2, '2026-08-01', 5.00, 0.00, true, 1), "
+    "(3, 2, 3, '2026-08-01', 20.00, 1.00, true, 2)",
+    "INSERT INTO orders "
+    "(id, business_id, customer_name, customer_phone, total_amount, status, "
+    "idempotency_key, pending_action_id) VALUES "
+    "(1, 1, 'Customer A', '+919111111111', 200.00, 'confirmed', 'ord-a-1', 1), "
+    "(2, 2, 'Customer B', '+919222222222', 50.00, 'confirmed', 'ord-b-1', 2)",
+    "INSERT INTO order_line_items "
+    "(id, order_id, product_id, product_name_snapshot, qty, unit, "
+    "price_per_unit_snapshot, subtotal) VALUES "
+    "(1, 1, 1, 'Rice', 2.00, 'kg', 100.00, 200.00), "
+    "(2, 2, 3, 'Flour', 1.00, 'kg', 50.00, 50.00)",
+    "INSERT INTO inventory_reservations "
+    "(id, business_id, product_id, pending_action_id, order_id, business_date, "
+    "qty, status, expires_at, idempotency_key) VALUES "
+    "(1, 1, 1, 1, 1, '2026-08-01', 2.00, 'active', '2026-08-01T14:00:00+05:30', 'ord-a-1'), "
+    "(2, 2, 3, 2, 2, '2026-08-01', 1.00, 'active', '2026-08-01T16:00:00+05:30', 'ord-b-1')",
+    "INSERT INTO inventory_movements "
+    "(id, business_id, product_id, business_date, movement_type, "
+    "on_hand_delta, reserved_delta, on_hand_after, reserved_after, "
+    "available_after, order_id, reservation_id, pending_action_id) VALUES "
+    "(1, 1, 1, '2026-08-01', 'manual_adjustment', 10, 0, 10, 0, 10, NULL, NULL, NULL), "
+    "(2, 1, 1, '2026-08-01', 'phone_order_reserved', 0, 2, 10, 2, 8, 1, 1, 1), "
+    "(3, 1, 2, '2026-08-01', 'manual_adjustment', 5, 0, 5, 0, 5, NULL, NULL, NULL), "
+    "(4, 2, 3, '2026-08-01', 'manual_adjustment', 20, 0, 20, 0, 20, NULL, NULL, NULL), "
+    "(5, 2, 3, '2026-08-01', 'phone_order_reserved', 0, 1, 20, 1, 19, 2, 2, 2)",
+)
 
 
 async def test_populated_migration_cycle(
@@ -330,7 +315,8 @@ async def test_populated_migration_cycle(
     async with pg_engine.begin() as conn:
         rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
         assert rev == "0004"
-        await conn.execute(text(_TWO_TENANT_SEED))
+        for stmt in _TWO_TENANT_SEED:
+            await conn.execute(text(stmt))
 
     _run_alembic(url, "upgrade", "head")
 

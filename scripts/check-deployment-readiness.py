@@ -65,6 +65,16 @@ def _safe_revision_text(value: str) -> str:
     return "[invalid-revision]"
 
 
+def _check_dict(c: CheckResult) -> dict[str, Any]:
+    return {
+        "name": c.name,
+        "status": c.status,
+        "duration_s": c.duration_s,
+        "failure_code": c.failure_code,
+        "message": c.message,
+    }
+
+
 @dataclass
 class CheckResult:
     name: str
@@ -296,6 +306,19 @@ class CheckFailure(Exception):
         self.code = code
 
 
+async def _bounded_cleanup(
+    coro: Any,
+    timeout: float,
+) -> str | None:
+    try:
+        await asyncio.wait_for(coro, timeout=timeout)
+    except asyncio.TimeoutError:
+        return "timed out"
+    except Exception as exc:  # noqa: BLE001
+        return _sanitize(type(exc).__name__)
+    return None
+
+
 async def _run_checks(
     url: str,
     env_label: str,
@@ -331,15 +354,7 @@ async def _run_checks(
         head_check.failure_code = "repository_head_missing"
         head_check.message = str(exc)
     head_check.duration_s = round(time.monotonic() - t0, 3)
-    report.checks.append(
-        {
-            "name": head_check.name,
-            "status": head_check.status,
-            "duration_s": head_check.duration_s,
-            "failure_code": head_check.failure_code,
-            "message": head_check.message,
-        }
-    )
+    report.checks.append(_check_dict(head_check))
 
     if head_check.status == "failed":
         report.overall_status = "failed"
@@ -352,6 +367,8 @@ async def _run_checks(
         pool_pre_ping=False,
         connect_args={"timeout": connect_timeout},
     )
+
+    primary_failed = False
 
     try:
         conn_check = CheckResult(name="connection")
@@ -371,17 +388,9 @@ async def _run_checks(
             conn_check.failure_code = "connection_failed"
             conn_check.message = _sanitize(type(exc).__name__)
         conn_check.duration_s = round(time.monotonic() - t0, 3)
-        report.checks.append(
-            {
-                "name": conn_check.name,
-                "status": conn_check.status,
-                "duration_s": conn_check.duration_s,
-                "failure_code": conn_check.failure_code,
-                "message": conn_check.message,
-            }
-        )
+        report.checks.append(_check_dict(conn_check))
         if conn_check.status == "failed":
-            report.overall_status = "failed"
+            primary_failed = True
             return report
 
         version_check = CheckResult(name="postgres_version")
@@ -417,17 +426,9 @@ async def _run_checks(
             version_check.failure_code = "internal_error"
             version_check.message = _sanitize(type(exc).__name__)
         version_check.duration_s = round(time.monotonic() - t0, 3)
-        report.checks.append(
-            {
-                "name": version_check.name,
-                "status": version_check.status,
-                "duration_s": version_check.duration_s,
-                "failure_code": version_check.failure_code,
-                "message": version_check.message,
-            }
-        )
+        report.checks.append(_check_dict(version_check))
         if version_check.status == "failed":
-            report.overall_status = "failed"
+            primary_failed = True
             return report
 
         revision_check = CheckResult(name="database_revision")
@@ -496,17 +497,9 @@ async def _run_checks(
             revision_check.failure_code = "internal_error"
             revision_check.message = _sanitize(type(exc).__name__)
         revision_check.duration_s = round(time.monotonic() - t0, 3)
-        report.checks.append(
-            {
-                "name": revision_check.name,
-                "status": revision_check.status,
-                "duration_s": revision_check.duration_s,
-                "failure_code": revision_check.failure_code,
-                "message": revision_check.message,
-            }
-        )
+        report.checks.append(_check_dict(revision_check))
         if revision_check.status == "failed":
-            report.overall_status = "failed"
+            primary_failed = True
             return report
 
         readonly_check = CheckResult(name="readonly_transaction")
@@ -526,11 +519,13 @@ async def _run_checks(
                         "readonly_check_failed",
                         "transaction did not report read-only mode",
                     )
-                readonly_check.status = "passed"
-                try:
-                    await asyncio.wait_for(conn.rollback(), timeout=connect_timeout)
-                except Exception:  # noqa: BLE001, S110
-                    pass
+                rollback_err = await _bounded_cleanup(conn.rollback(), connect_timeout)
+                if rollback_err is not None:
+                    readonly_check.status = "failed"
+                    readonly_check.failure_code = "readonly_cleanup_failed"
+                    readonly_check.message = f"rollback failed: {rollback_err}"
+                else:
+                    readonly_check.status = "passed"
         except CheckFailure as exc:
             readonly_check.status = "failed"
             readonly_check.failure_code = exc.code
@@ -540,27 +535,29 @@ async def _run_checks(
             readonly_check.failure_code = "readonly_check_failed"
             readonly_check.message = _sanitize(type(exc).__name__)
         readonly_check.duration_s = round(time.monotonic() - t0, 3)
-        report.checks.append(
-            {
-                "name": readonly_check.name,
-                "status": readonly_check.status,
-                "duration_s": readonly_check.duration_s,
-                "failure_code": readonly_check.failure_code,
-                "message": readonly_check.message,
-            }
-        )
+        report.checks.append(_check_dict(readonly_check))
         if readonly_check.status == "failed":
-            report.overall_status = "failed"
-            return report
-
-        report.overall_status = "passed"
-        return report
+            primary_failed = True
 
     finally:
-        try:
-            await asyncio.wait_for(engine.dispose(), timeout=connect_timeout)
-        except Exception:  # noqa: BLE001, S110
-            pass
+        disposal_check = CheckResult(name="engine_cleanup")
+        t0 = time.monotonic()
+        disposal_err = await _bounded_cleanup(engine.dispose(), connect_timeout)
+        if disposal_err is not None:
+            disposal_check.status = "failed"
+            disposal_check.failure_code = "engine_cleanup_failed"
+            disposal_check.message = f"engine disposal failed: {disposal_err}"
+        else:
+            disposal_check.status = "passed"
+        disposal_check.duration_s = round(time.monotonic() - t0, 3)
+        report.checks.append(_check_dict(disposal_check))
+
+        if primary_failed or disposal_check.status == "failed":
+            report.overall_status = "failed"
+        else:
+            report.overall_status = "passed"
+
+    return report
 
 
 def _emit_failure(

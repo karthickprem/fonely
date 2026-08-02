@@ -568,6 +568,10 @@ def _mock_engine(
     has_alembic: bool = True,
     readonly: str = "on",
     connect_fails: Exception | None = None,
+    rollback_fails: Exception | None = None,
+    rollback_stalls: bool = False,
+    dispose_fails: Exception | None = None,
+    dispose_stalls: bool = False,
 ) -> MagicMock:
     engine = MagicMock()
     conn = AsyncMock()
@@ -621,13 +625,27 @@ def _mock_engine(
         return result.scalar()
 
     conn.scalar = AsyncMock(side_effect=_mock_scalar)
-    conn.rollback = AsyncMock()
+
+    async def _rollback() -> None:
+        if rollback_stalls:
+            await asyncio.sleep(100)
+        if rollback_fails is not None:
+            raise rollback_fails
+
+    conn.rollback = AsyncMock(side_effect=_rollback)
 
     ctx = AsyncMock()
     ctx.__aenter__ = AsyncMock(return_value=conn)
     ctx.__aexit__ = AsyncMock(return_value=False)
     engine.connect.return_value = ctx
-    engine.dispose = AsyncMock()
+
+    async def _dispose() -> None:
+        if dispose_stalls:
+            await asyncio.sleep(100)
+        if dispose_fails is not None:
+            raise dispose_fails
+
+    engine.dispose = AsyncMock(side_effect=_dispose)
     return engine
 
 
@@ -734,7 +752,7 @@ class TestMockedDatabaseChecks:
         assert report.repository_head == "0003"
         assert report.database_revision == "0003"
         assert report.postgres_major == 16
-        assert len(report.checks) == 5
+        assert len(report.checks) == 6
         assert all(c["status"] == "passed" for c in report.checks)
 
     def test_connection_exception_sanitized(self) -> None:
@@ -934,49 +952,144 @@ class TestCycleDetection:
             assert readiness._discover_repository_heads() == ["0002"]
 
 
-# --- Cleanup timeout ---
+# --- Adversarial cleanup matrix ---
 
 
-class TestCleanupTimeout:
-    def test_disposal_stall_does_not_hang(self) -> None:
-        engine = _mock_engine()
+def _run_with_mock(engine: MagicMock, timeout: float = 15) -> readiness.ReadinessReport:
+    with (
+        patch.object(readiness, "_discover_repository_heads", return_value=["0003"]),
+        patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
+    ):
+        return asyncio.run(readiness._run_checks(_FAKE_URL, "test", 1, timeout))
 
-        async def slow_dispose() -> None:
-            await asyncio.sleep(100)
 
-        engine.dispose = slow_dispose
-        with (
-            patch.object(
-                readiness, "_discover_repository_heads", return_value=["0003"]
-            ),
-            patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
-        ):
-            report = asyncio.run(readiness._run_checks(_FAKE_URL, "test", 1, 3))
+def _find_check(report: readiness.ReadinessReport, name: str) -> dict[str, Any] | None:
+    return next((c for c in report.checks if c["name"] == name), None)
+
+
+class TestCleanupFailClosed:
+    def test_clean_success(self) -> None:
+        report = _run_with_mock(_mock_engine())
         assert report.overall_status == "passed"
+        ro = _find_check(report, "readonly_transaction")
+        assert ro is not None and ro["status"] == "passed"
+        ec = _find_check(report, "engine_cleanup")
+        assert ec is not None and ec["status"] == "passed"
 
-    def test_rollback_is_bounded(self) -> None:
+    def test_rollback_timeout_fails_readiness(self) -> None:
+        engine = _mock_engine(rollback_stalls=True)
+        report = _run_with_mock(engine, timeout=5)
+        assert report.overall_status == "failed"
+        ro = _find_check(report, "readonly_transaction")
+        assert ro is not None
+        assert ro["status"] == "failed"
+        assert ro["failure_code"] == "readonly_cleanup_failed"
+        ec = _find_check(report, "engine_cleanup")
+        assert ec is not None
+
+    def test_rollback_exception_fails_readiness(self) -> None:
+        engine = _mock_engine(rollback_fails=RuntimeError("rollback boom"))
+        report = _run_with_mock(engine)
+        assert report.overall_status == "failed"
+        ro = _find_check(report, "readonly_transaction")
+        assert ro is not None
+        assert ro["status"] == "failed"
+        assert ro["failure_code"] == "readonly_cleanup_failed"
+
+    def test_disposal_timeout_fails_readiness(self) -> None:
+        engine = _mock_engine(dispose_stalls=True)
+        report = _run_with_mock(engine, timeout=5)
+        assert report.overall_status == "failed"
+        ec = _find_check(report, "engine_cleanup")
+        assert ec is not None
+        assert ec["status"] == "failed"
+        assert ec["failure_code"] == "engine_cleanup_failed"
+        ro = _find_check(report, "readonly_transaction")
+        assert ro is not None and ro["status"] == "passed"
+
+    def test_disposal_exception_fails_readiness(self) -> None:
+        engine = _mock_engine(dispose_fails=OSError("dispose boom"))
+        report = _run_with_mock(engine)
+        assert report.overall_status == "failed"
+        ec = _find_check(report, "engine_cleanup")
+        assert ec is not None
+        assert ec["status"] == "failed"
+        assert ec["failure_code"] == "engine_cleanup_failed"
+
+    def test_primary_failure_plus_disposal_failure(self) -> None:
+        engine = _mock_engine(
+            connect_fails=ConnectionRefusedError(),
+            dispose_fails=OSError("dispose too"),
+        )
+        report = _run_with_mock(engine)
+        assert report.overall_status == "failed"
+        conn = _find_check(report, "connection")
+        assert conn is not None and conn["status"] == "failed"
+        assert conn["failure_code"] == "connection_failed"
+        ec = _find_check(report, "engine_cleanup")
+        assert ec is not None and ec["status"] == "failed"
+
+    def test_rollback_failure_plus_disposal_failure(self) -> None:
+        engine = _mock_engine(
+            rollback_fails=RuntimeError("rb fail"),
+            dispose_fails=OSError("disp fail"),
+        )
+        report = _run_with_mock(engine)
+        assert report.overall_status == "failed"
+        ro = _find_check(report, "readonly_transaction")
+        assert ro is not None and ro["failure_code"] == "readonly_cleanup_failed"
+        ec = _find_check(report, "engine_cleanup")
+        assert ec is not None and ec["failure_code"] == "engine_cleanup_failed"
+
+    def test_disposal_attempted_exactly_once(self) -> None:
         engine = _mock_engine()
-        conn = engine.connect.return_value.__aenter__.return_value
-        conn.rollback = AsyncMock()
-        with (
-            patch.object(
-                readiness, "_discover_repository_heads", return_value=["0003"]
-            ),
-            patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
-        ):
-            report = asyncio.run(readiness._run_checks(_FAKE_URL, "test", 5, 15))
-        assert report.overall_status == "passed"
-        conn.rollback.assert_awaited()
+        _run_with_mock(engine)
+        engine.dispose.assert_awaited_once()
 
-    def test_cleanup_failure_does_not_produce_success(self) -> None:
+    def test_disposal_after_primary_failure(self) -> None:
         engine = _mock_engine(connect_fails=ConnectionRefusedError())
-        engine.dispose = AsyncMock()
-        with (
-            patch.object(
-                readiness, "_discover_repository_heads", return_value=["0003"]
-            ),
-            patch("sqlalchemy.ext.asyncio.create_async_engine", return_value=engine),
-        ):
+        _run_with_mock(engine)
+        engine.dispose.assert_awaited_once()
+
+    def test_no_cleanup_entry_without_engine(self) -> None:
+        with patch.object(readiness, "_discover_repository_heads", return_value=[]):
             report = asyncio.run(readiness._run_checks(_FAKE_URL, "test", 5, 15))
         assert report.overall_status == "failed"
-        engine.dispose.assert_awaited_once()
+        assert _find_check(report, "engine_cleanup") is None
+
+    def test_cleanup_sanitization(self) -> None:
+        url_fragment = "test_host_secret"
+        engine = _mock_engine(
+            dispose_fails=OSError(
+                _build_url("postgresql+asyncpg://", f"u:{url_fragment}@h/d")
+            ),
+        )
+        report = _run_with_mock(engine)
+        output = json.dumps(report.to_dict())
+        assert url_fragment not in output
+
+    def test_json_has_exactly_one_document(self) -> None:
+        engine = _mock_engine(rollback_fails=RuntimeError("x"))
+        report = _run_with_mock(engine)
+        output = json.dumps(report.to_dict())
+        assert output.count('"schema_version"') == 1
+
+    def test_check_ordering_is_deterministic(self) -> None:
+        engine = _mock_engine()
+        report = _run_with_mock(engine)
+        names = [c["name"] for c in report.checks]
+        assert names == [
+            "repository_head",
+            "connection",
+            "postgres_version",
+            "database_revision",
+            "readonly_transaction",
+            "engine_cleanup",
+        ]
+
+    def test_exit_code_matches_overall_status(self) -> None:
+        engine = _mock_engine(dispose_fails=OSError("boom"))
+        report = _run_with_mock(engine)
+        assert report.overall_status == "failed"
+        exit_code = 0 if report.overall_status == "passed" else 1
+        assert exit_code == 1

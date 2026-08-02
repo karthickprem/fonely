@@ -391,8 +391,9 @@ async def _clean_and_restore(pg_engine: AsyncEngine, database_url: str) -> None:
                 "business_users, businesses"
             )
             await conn.execute(text(f"TRUNCATE TABLE {tables_0004} RESTART IDENTITY CASCADE"))
-        elif rev == "0005":
+        elif rev in ("0005", "0006"):
             tables_0005 = (
+                "business_configuration_commits, business_onboarding_drafts, "
                 "inventory_operations, inventory_movements, inventory_reservations, "
                 "order_line_items, orders, inventory_balances, pending_actions, "
                 "products, business_users, businesses"
@@ -550,7 +551,7 @@ async def test_populated_migration_cycle(
 
     async with pg_engine.begin() as conn:
         rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-        assert rev == "0005"
+        assert rev == "0006"
 
         lines_after_upgrade = tuple((await conn.execute(text(line_query))).all())
         assert len(lines_after_upgrade) == 2
@@ -636,7 +637,7 @@ async def test_populated_migration_cycle(
 
     async with pg_engine.begin() as conn:
         rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-        assert rev == "0005"
+        assert rev == "0006"
 
         lines_after_reupgrade = tuple((await conn.execute(text(line_query))).all())
         assert len(lines_after_reupgrade) == 2

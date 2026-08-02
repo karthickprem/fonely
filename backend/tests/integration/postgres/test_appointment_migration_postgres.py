@@ -28,14 +28,18 @@ def _run_alembic(
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["DATABASE_URL"] = database_url
-    return subprocess.run(
+    result = subprocess.run(
         [str(BACKEND_ROOT / ".venv" / "bin" / "alembic"), *args],
         cwd=BACKEND_ROOT,
         env=env,
-        check=check,
+        check=False,
         capture_output=True,
         text=True,
     )
+    if check and result.returncode != 0:
+        stderr = result.stderr.replace(database_url, "[REDACTED_DATABASE_URL]")
+        pytest.fail(f"Alembic {' '.join(args)} failed:\n{stderr}")
+    return result
 
 
 def _appointment_payload(
@@ -827,7 +831,7 @@ async def test_appointment_payload_call_id_matcher_is_total(
         result = await connection.scalar(
             text(
                 "SELECT appointment_payload_call_id_matches("
-                "CAST(:payload AS jsonb), :expected_call_id)"
+                "CAST(:payload AS jsonb), CAST(:expected_call_id AS bigint))"
             ),
             {"payload": payload, "expected_call_id": expected_call_id},
         )
@@ -913,7 +917,8 @@ async def test_appointment_payload_positive_integer_matcher_is_total(
         result = await connection.scalar(
             text(
                 "SELECT appointment_payload_positive_integer_matches("
-                "CAST(:payload AS jsonb), :field_name, :expected_value)"
+                "CAST(:payload AS jsonb), CAST(:field_name AS text), "
+                "CAST(:expected_value AS integer))"
             ),
             {
                 "payload": payload,
@@ -934,7 +939,8 @@ async def test_appointment_payload_positive_integer_matcher_rejects_invalid_fiel
         result = await connection.scalar(
             text(
                 "SELECT appointment_payload_positive_integer_matches("
-                "'{\"target_appointment_id\": 1}'::jsonb, :field_name, 1)"
+                "'{\"target_appointment_id\": 1}'::jsonb, "
+                "CAST(:field_name AS text), 1)"
             ),
             {"field_name": field_name},
         )

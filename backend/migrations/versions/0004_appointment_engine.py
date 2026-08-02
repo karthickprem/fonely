@@ -822,6 +822,7 @@ def upgrade() -> None:
     )
     if not context.is_offline_mode():
         _backfill_allocations()
+        op.execute("SET CONSTRAINTS fk_allocation_business_appointment IMMEDIATE")
     op.create_exclude_constraint(
         "ex_resource_allocations_active_overlap",
         "resource_allocations",

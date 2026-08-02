@@ -804,6 +804,24 @@ def test_downgrade_preflight_fake_bind_rejects_each_lossy_state() -> None:
         assert bind.execute.call_count == failing_index + 1
 
 
+def test_capacity_allocation_backfill_flushes_named_fk_before_exclusion() -> None:
+    source = MIGRATION_0004.read_text()
+    online_block_start = source.index(
+        "if not context.is_offline_mode():\n        _backfill_allocations()"
+    )
+    backfill = source.index("_backfill_allocations()", online_block_start)
+    flush = source.index(
+        'op.execute("SET CONSTRAINTS fk_allocation_business_appointment IMMEDIATE")',
+        backfill,
+    )
+    exclusion = source.index("op.create_exclude_constraint(", flush)
+    online_block = source[online_block_start:exclusion]
+
+    assert backfill < flush < exclusion
+    assert "if not context.is_offline_mode():" in online_block
+    assert "SET CONSTRAINTS ALL" not in online_block
+
+
 def test_capacity_allocation_deferred_trigger_lifecycle_is_rendered() -> None:
     upgrade = _capture_upgrade().executed_sql
     source = MIGRATION_0004.read_text()

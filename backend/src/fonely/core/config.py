@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     # Readiness
     readiness_timeout_seconds: float = 3.0
 
+    # Conversation
+    conversation_timeout_seconds: float = 30.0
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 

@@ -45,9 +45,7 @@ class WhatsAppSender:
         client = self._client or httpx.AsyncClient()
         owns_client = self._client is None
         try:
-            response = await client.post(
-                url, json=body, headers=headers, timeout=10.0
-            )
+            response = await client.post(url, json=body, headers=headers, timeout=10.0)
             response.raise_for_status()
             data = response.json()
             msg_id = None
@@ -78,9 +76,7 @@ class WhatsAppSender:
                     "status": exc.response.status_code,
                 },
             )
-            return WhatsAppSendResult(
-                success=False, error=f"http_{exc.response.status_code}"
-            )
+            return WhatsAppSendResult(success=False, error=f"http_{exc.response.status_code}")
         except Exception:
             logger.warning("whatsapp_send_unknown_error")
             return WhatsAppSendResult(success=False, error="unknown")

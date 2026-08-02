@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fonely Voice R&D Lab</title>
+  <link rel="stylesheet" href="/voice-lab.css">
+</head>
+<body>
+
+  <div class="header">
+    <h1>Fonely Voice R&D Lab</h1>
+    <span class="tag">EXPERIMENTAL — Synthetic Data Only</span>
+  </div>
+
+  <div class="main-layout">
+    <div class="conversation-panel">
+      <div class="waveform-container">
+        <canvas id="waveformCanvas"></canvas>
+      </div>
+
+      <div class="chat-area" id="chatArea"></div>
+
+      <div class="status-line" id="statusLine">Connecting...</div>
+
+      <div class="controls-bar">
+        <button class="mic-button" id="micBtn" disabled title="Hold to speak (continuous mode) or click to toggle">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+            <line x1="12" y1="19" x2="12" y2="23"/>
+            <line x1="8" y1="23" x2="16" y2="23"/>
+          </svg>
+        </button>
+        <button class="interrupt-btn" id="interruptBtn" title="Interrupt">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <rect x="6" y="4" width="4" height="16"/>
+            <rect x="14" y="4" width="4" height="16"/>
+          </svg>
+        </button>
+        <input type="text" class="text-input" id="textInput" placeholder="Type in any language..." disabled>
+        <button class="send-btn" id="sendBtn" disabled>Send</button>
+      </div>
+    </div>
+
+    <div class="side-panel">
+      <h3>Clinic (Synthetic)</h3>
+      <div class="clinic-card">
+        <div class="name">Smile Dental Clinic</div>
+        <div class="detail">Aminjikarai, Chennai</div>
+        <div class="detail">Dr. Priya — General, Root Canal, Scaling</div>
+        <div class="detail">Dr. Arjun — Orthodontics, General</div>
+        <div class="detail">Mon–Sat: 10:00–13:00, 17:00–20:30</div>
+      </div>
+
+      <h3>Input Mode</h3>
+      <div class="mode-toggle">
+        <button id="modeContinuous" class="active">Continuous</button>
+        <button id="modePTT">Push-to-Talk</button>
+      </div>
+
+      <h3>Voice Settings</h3>
+      <div class="voice-selector">
+        <label>Speaker
+          <select id="voiceSelect">
+            <option value="priya">Priya</option>
+            <option value="kavitha">Kavitha</option>
+            <option value="shruti">Shruti</option>
+            <option value="shubh">Shubh</option>
+            <option value="soham">Soham</option>
+          </select>
+        </label>
+        <label>Language
+          <select id="langSelect">
+            <option value="ta-IN">Tamil (ta-IN)</option>
+            <option value="en-IN">English (en-IN)</option>
+          </select>
+        </label>
+        <label>Pace: <span id="paceValue">1.0</span>
+          <input type="range" id="paceSlider" min="0.7" max="1.3" step="0.1" value="1.0">
+        </label>
+      </div>
+
+      <h3>Last Turn Latency</h3>
+      <div class="latency-display" id="latencyDisplay">
+        <div class="row"><span class="label">STT</span><span class="value" id="latSTT">—</span></div>
+        <div class="row"><span class="label">LLM</span><span class="value" id="latLLM">—</span></div>
+        <div class="row"><span class="label">TTS First Audio</span><span class="value" id="latTTS">—</span></div>
+        <div class="row"><span class="label">End-to-End</span><span class="value" id="latE2E">—</span></div>
+        <div class="row"><span class="label">Interruption Stop</span><span class="value" id="latInt">—</span></div>
+      </div>
+
+      <h3>Session Metrics</h3>
+      <div class="metrics-summary" id="metricsSummary">
+        <div class="row"><span class="label">Turns</span><span id="metTurns">0</span></div>
+        <div class="row"><span class="label">E2E p50</span><span id="metE2Ep50">—</span></div>
+        <div class="row"><span class="label">E2E p95</span><span id="metE2Ep95">—</span></div>
+        <div class="row"><span class="label">Interruptions</span><span id="metInterruptions">0</span></div>
+        <div class="row"><span class="label">False Int. Rate</span><span id="metFalseRate">0%</span></div>
+      </div>
+
+      <button id="exportBtn" style="margin: 0 12px 12px; padding: 8px; width: calc(100% - 24px); background: #1a1a2e; border: 1px solid #2a2a4a; color: #888; font-size: 11px; border-radius: 6px; cursor: pointer;">
+        Export Metrics (JSON)
+      </button>
+    </div>
+  </div>
+
+  <script src="/voice-lab.js"></script>
+</body>
+</html>

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fonely Voice R&D Lab</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+  <div class="header">
+    <h1>Fonely Voice R&D Lab</h1>
+    <span class="tag">R&D — Synthetic Data Only</span>
+  </div>
+
+  <div class="main">
+    <div class="chat-panel">
+      <div class="chat" id="chat"></div>
+      <div class="status" id="status">Connecting...</div>
+      <div class="controls">
+        <button class="mic-btn" id="micBtn" disabled>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+            <path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/>
+          </svg>
+        </button>
+        <input type="text" id="textInput" placeholder="Type here..." disabled>
+        <button id="sendBtn" disabled>Send</button>
+      </div>
+    </div>
+
+    <div class="side">
+      <h3>Clinic (Synthetic)</h3>
+      <div class="card">
+        <b>Smile Dental Clinic</b><br>
+        Aminjikarai, Chennai<br>
+        Dr. Priya — General, Root Canal<br>
+        Dr. Arjun — Orthodontics<br>
+        Mon–Sat 10–1, 5–8:30
+      </div>
+
+      <h3>Voice</h3>
+      <div class="card">
+        <label>Speaker
+          <select id="voiceSelect">
+            <option value="kavitha">Kavitha</option>
+            <option value="priya">Priya</option>
+            <option value="shreya">Shreya</option>
+            <option value="mani">Mani</option>
+            <option value="gokul">Gokul</option>
+          </select>
+        </label>
+        <label>Language
+          <select id="langSelect">
+            <option value="ta-IN">Tamil</option>
+            <option value="en-IN">English</option>
+          </select>
+        </label>
+      </div>
+
+      <h3>Last Turn</h3>
+      <div class="card" id="latencyCard">
+        <div class="lat-row"><span>STT</span><span id="latSTT">—</span></div>
+        <div class="lat-row"><span>LLM</span><span id="latLLM">—</span></div>
+        <div class="lat-row"><span>TTS</span><span id="latTTS">—</span></div>
+        <div class="lat-row"><span>Total</span><span id="latTotal">—</span></div>
+      </div>
+
+      <h3>Waveform</h3>
+      <canvas id="waveform" height="50"></canvas>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

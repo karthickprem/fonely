@@ -1100,14 +1100,23 @@ async def test_creation_call_id_provenance_rejects_noncanonical_or_mismatch(
         await session.rollback()
 
 
+@pytest.mark.parametrize("status", ["confirmed", "completed", "no_show"])
 async def test_representable_0004_downgrades_and_reupgrades_without_fact_loss(
     pg_engine: AsyncEngine,
     postgres_database_url: str,
+    status: str,
 ) -> None:
     await _prepare_0003(pg_engine, postgres_database_url)
     async with pg_engine.begin() as connection:
-        await _seed_0003_appointment(connection, 1, start_at=START)
+        await _seed_0003_appointment(connection, 1, start_at=START, status=status)
     _run_alembic(postgres_database_url, "upgrade", "0004")
+
+    async with pg_engine.connect() as connection:
+        allocation_count = await connection.scalar(
+            text("SELECT count(*) FROM resource_allocations WHERE appointment_id = 1")
+        )
+    assert allocation_count == 1
+
     _run_alembic(postgres_database_url, "downgrade", "0003")
 
     async with pg_engine.connect() as connection:
@@ -1123,18 +1132,18 @@ async def test_representable_0004_downgrades_and_reupgrades_without_fact_loss(
     assert legacy.resource_id == 1
     assert legacy.start_at == START
     assert legacy.end_at == START + timedelta(minutes=30)
-    assert legacy.status == "confirmed"
+    assert legacy.status == status
     assert legacy.pending_action_id == 1
     assert legacy.held_until is None
 
     _run_alembic(postgres_database_url, "upgrade", "0004")
     async with pg_engine.connect() as connection:
         revision = await connection.scalar(text("SELECT version_num FROM alembic_version"))
-        allocation_count = await connection.scalar(
+        re_allocation_count = await connection.scalar(
             text("SELECT count(*) FROM resource_allocations WHERE appointment_id = 1")
         )
     assert revision == "0004"
-    assert allocation_count == 1
+    assert re_allocation_count == 1
 
 
 def _appointment_payload_facts(start_at: datetime) -> dict[str, object]:

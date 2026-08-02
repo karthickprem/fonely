@@ -358,15 +358,34 @@ async def test_cancelled_appointment_does_not_require_active_allocation(
 async def test_terminal_appointment_without_allocation_is_rejected(
     pg_session_factory: async_sessionmaker[AsyncSession], status: str
 ) -> None:
+    past = datetime(2020, 1, 1, 10, tzinfo=utcnow().tzinfo)
+    past_end = past + timedelta(minutes=30)
     async with pg_session_factory() as session:
         await _seed_appointment_catalog(session)
-        await _insert_confirmed_appointment(session)
         await session.execute(
-            text("UPDATE appointments SET status = :status, version = version + 1 WHERE id = 1"),
-            {"status": status},
+            text(
+                "INSERT INTO appointments "
+                "(id, business_id, resource_id, service_id, customer_phone, start_at, end_at, "
+                "effective_start_at, effective_end_at, service_name_snapshot, "
+                "resource_name_snapshot, duration_minutes_snapshot, "
+                "buffer_before_minutes_snapshot, buffer_after_minutes_snapshot, "
+                "business_timezone_snapshot, status, source, "
+                "idempotency_key, version, created_at, updated_at) "
+                "VALUES (1, 1, 1, 1, '+919123456789', :start, :end, :start, :end, "
+                "'Haircut', 'Priya', 30, 0, 0, 'Asia/Kolkata', CAST(:status AS text), "
+                "'owner_manual', 'appt-terminal-1', 1, now(), now())"
+            ),
+            {"start": past, "end": past_end, "status": status},
         )
-        with pytest.raises(IntegrityError):
+        with pytest.raises(IntegrityError) as error:
             await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        cause = error.value.orig
+        while cause is not None:
+            cn = getattr(cause, "constraint_name", None)
+            if cn is not None:
+                break
+            cause = getattr(cause, "__cause__", None)
+        assert cn == "ck_confirmed_appointment_active_allocation"
         await session.rollback()
 
 

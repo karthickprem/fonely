@@ -804,6 +804,23 @@ def test_downgrade_preflight_fake_bind_rejects_each_lossy_state() -> None:
         assert bind.execute.call_count == failing_index + 1
 
 
+def test_downgrade_capacity_status_matches_upgrade_backfill() -> None:
+    source = MIGRATION_0004.read_text()
+    capacity_statuses = "'confirmed', 'completed', 'no_show'"
+    backfill_section = source[
+        source.index("def _backfill_allocations") : source.index("def upgrade")
+    ]
+    assert capacity_statuses in backfill_section
+
+    downgrade_section = source[
+        source.index("def _preflight_downgrade") : source.index("def downgrade")
+    ]
+    assert "a.status NOT IN ('confirmed', 'completed', 'no_show')" in downgrade_section
+    assert "a.status IN ('confirmed', 'completed', 'no_show')" in downgrade_section
+    assert "a.status IS DISTINCT FROM 'confirmed'" not in downgrade_section
+    assert "a.status <> 'confirmed'" not in downgrade_section
+
+
 def test_capacity_allocation_backfill_flushes_named_fk_before_exclusion() -> None:
     source = MIGRATION_0004.read_text()
     online_block_start = source.index(

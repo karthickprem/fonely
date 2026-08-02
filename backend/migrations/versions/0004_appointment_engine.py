@@ -1641,7 +1641,7 @@ def _preflight_downgrade() -> None:
                LEFT JOIN appointments a
                  ON a.business_id = ra.business_id AND a.id = ra.appointment_id
                WHERE a.id IS NULL
-                  OR a.status IS DISTINCT FROM 'confirmed'
+                  OR a.status NOT IN ('confirmed', 'completed', 'no_show')
                   OR ra.allocation_type IS DISTINCT FROM 'appointment'
                   OR ra.status IS DISTINCT FROM 'active'
                   OR ra.source IS DISTINCT FROM 'customer_conversation'
@@ -1664,8 +1664,10 @@ def _preflight_downgrade() -> None:
                  ON ra.business_id = a.business_id
                 AND ra.appointment_id = a.id
                 AND ra.status = 'active'
-               WHERE (a.status = 'confirmed' AND ra.id IS NULL)
-                  OR (a.status <> 'confirmed' AND ra.id IS NOT NULL)
+               WHERE (a.status IN ('confirmed', 'completed', 'no_show')
+                      AND ra.id IS NULL)
+                  OR (a.status NOT IN ('confirmed', 'completed', 'no_show')
+                      AND ra.id IS NOT NULL)
                LIMIT 1""",
             "Migration 0004 downgrade requires canonical appointment-allocation correspondence",
         ),

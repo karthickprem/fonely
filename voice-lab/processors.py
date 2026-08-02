@@ -9,9 +9,60 @@ from pipecat.frames.frames import (
     LLMFullResponseStartFrame,
     LLMTextFrame,
 )
+from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from safety import classify
+from style_retriever import ChennaiStyleRetriever
+
+
+def latest_user_text(messages) -> tuple[int | None, str]:
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if not isinstance(message, dict) or message.get("role") != "user":
+            continue
+        content = message.get("content", "")
+        if isinstance(content, str):
+            return index, content
+        if isinstance(content, list):
+            text = " ".join(
+                block.get("text", "")
+                for block in content
+                if isinstance(block, dict) and block.get("type") == "text"
+            )
+            return index, text
+    return None, ""
+
+
+class ChennaiStyleProcessor(FrameProcessor):
+    """Inject turn-local style examples without mutating conversation history."""
+
+    def __init__(self, retriever: ChennaiStyleRetriever, limit: int = 3):
+        super().__init__()
+        self._retriever = retriever
+        self._limit = limit
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        if not isinstance(frame, LLMContextFrame):
+            await self.push_frame(frame, direction)
+            return
+
+        messages = list(frame.context.messages)
+        index, actual_text = latest_user_text(messages)
+        if index is None or not actual_text:
+            await self.push_frame(frame, direction)
+            return
+
+        examples = self._retriever.retrieve(actual_text, limit=self._limit)
+        styled_text = self._retriever.render(examples, actual_text)
+        messages[index] = {"role": "user", "content": styled_text}
+        request_context = LLMContext(
+            messages=messages,
+            tools=frame.context.tools,
+            tool_choice=frame.context.tool_choice,
+        )
+        await self.push_frame(LLMContextFrame(context=request_context), direction)
 
 
 class DentalSafetyProcessor(FrameProcessor):
@@ -24,27 +75,7 @@ class DentalSafetyProcessor(FrameProcessor):
             await self.push_frame(frame, direction)
             return
 
-        messages = frame.context.messages
-        latest_user = next(
-            (
-                message
-                for message in reversed(messages)
-                if isinstance(message, dict) and message.get("role") == "user"
-            ),
-            None,
-        )
-        content = latest_user.get("content", "") if latest_user else ""
-        if isinstance(content, str):
-            text = content
-        elif isinstance(content, list):
-            text = " ".join(
-                block.get("text", "")
-                for block in content
-                if isinstance(block, dict) and block.get("type") == "text"
-            )
-        else:
-            text = ""
-
+        _, text = latest_user_text(frame.context.messages)
         verdict = classify(text)
         if verdict is None:
             await self.push_frame(frame, direction)

@@ -1,0 +1,2100 @@
+{
+  "version": 1,
+  "source_sha256": "4c86002f6a3c8b2ea0d5fa64c40b6ffc7db3956e09b11212aecfc8853bc8bb02",
+  "source_title": "Fonely Chennai Tanglish Dental Conversation Pack v1.0",
+  "policy": "Style references only. Never copy facts, placeholders, actions, or operational claims.",
+  "examples": [
+    {
+      "id": "a-001",
+      "section": "A",
+      "scenario": "Simple tooth-pain appointment",
+      "caller": "Enakku rendu naala pallu vali. Doctor-a paakanum.",
+      "agent": "Aiyo, seri nga. Romba severe pain-aa, illa manage panna mudiyudha?",
+      "delivery": "Warm, alert, unhurried.",
+      "intents": [
+        "booking",
+        "doctor_availability",
+        "pain"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "urgent",
+      "safety_level": "medical",
+      "stage": "collect_details",
+      "agent_tts": "அய்யோ, சரி ங்க. ரொம்ப severe pain-ஆ, இல்ல manage பண்ண முடியுதா?"
+    },
+    {
+      "id": "a-002",
+      "section": "A",
+      "scenario": "Simple tooth-pain appointment",
+      "caller": "Manage pannalaam, aana night-la adhigama valikkudhu.",
+      "agent": "Puriyudhu. Innikku appointment venuma, illa naalaikku okay-va?",
+      "delivery": "Warm, alert, unhurried.",
+      "intents": [
+        "booking",
+        "pain"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "urgent",
+      "safety_level": "medical",
+      "stage": "clarification",
+      "agent_tts": "புரியுது. இன்னிக்கு appointment வேணுமா, இல்ல நாளைக்கு okay-வா?"
+    },
+    {
+      "id": "a-003",
+      "section": "A",
+      "scenario": "Simple tooth-pain appointment",
+      "caller": "Aama, book pannunga.",
+      "agent": "Kandippa. Patient name sollunga?",
+      "delivery": "Warm, alert, unhurried.",
+      "intents": [
+        "booking",
+        "pain"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "urgent",
+      "safety_level": "medical",
+      "stage": "collect_details",
+      "agent_tts": "கண்டிப்ப. Patient name சொல்லுங்க?"
+    },
+    {
+      "id": "a-004",
+      "section": "A",
+      "scenario": "Routine cleaning",
+      "caller": "Teeth cleaning-ku appointment venum.",
+      "agent": "Sure nga. First time namma clinic-ku vareengala?",
+      "delivery": "Friendly and efficient.",
+      "intents": [
+        "booking",
+        "service"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "Sure ங்க. First time நம்ம clinic-க்கு வரீங்களா?"
+    },
+    {
+      "id": "a-005",
+      "section": "A",
+      "scenario": "Routine cleaning",
+      "caller": "Aama, first time.",
+      "agent": "Seri. Endha day comfortable—weekday-aa weekend-aa?",
+      "delivery": "Friendly and efficient.",
+      "intents": [
+        "service"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "சரி. எந்த day comfortable—weekday-ஆ weekend-ஆ?"
+    },
+    {
+      "id": "a-006",
+      "section": "A",
+      "scenario": "Caller asks for “tomorrow morning”",
+      "caller": "Naalaikku morning doctor free-aa irupaangala?",
+      "agent": "Check pannidren nga. Dental check-up dhaana, illa specific problem irukka?",
+      "delivery": "Clear, lightly conversational.",
+      "intents": [
+        "doctor_availability"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "Check பண்ணிட்ரேன் ங்க. Dental check-up தானே, இல்ல specific problem இருக்க?"
+    },
+    {
+      "id": "a-007",
+      "section": "A",
+      "scenario": "Caller asks for “tomorrow morning”",
+      "caller": "Pannunga.",
+      "agent": "Patient name sollunga nga.",
+      "delivery": "Clear, lightly conversational.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "mixed",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "Patient name சொல்லுங்க ங்க."
+    },
+    {
+      "id": "a-008",
+      "section": "A",
+      "scenario": "Specific dentist requested",
+      "caller": "Root canal follow-up.",
+      "agent": "Seri. Endha date prefer panreenga?",
+      "delivery": "Helpful and precise.",
+      "intents": [
+        "doctor_availability",
+        "service"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "சரி. எந்த date prefer பண்ணீங்க?"
+    },
+    {
+      "id": "a-009",
+      "section": "A",
+      "scenario": "Caller has no preferred time",
+      "caller": "Appointment venum, eppo venumnaalum okay.",
+      "agent": "Seri nga. Earliest available slot paakattuma?",
+      "delivery": "Calm and guiding.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "சரி ங்க. Earliest available slot பாக்கட்டுமா?"
+    },
+    {
+      "id": "a-010",
+      "section": "A",
+      "scenario": "Caller has no preferred time",
+      "caller": "Aama.",
+      "agent": "Enna issue-nu short-aa sollunga; correct appointment type select panna helpful-aa irukkum.",
+      "delivery": "Calm and guiding.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "mixed",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "response",
+      "agent_tts": "என்ன issue-னு short-ஆ சொல்லுங்க; correct appointment type select பண்ண helpful-ஆ இருக்கும்."
+    },
+    {
+      "id": "a-011",
+      "section": "A",
+      "scenario": "Caller has no preferred time",
+      "caller": "Okay.",
+      "agent": "Patient name sollunga.",
+      "delivery": "Calm and guiding.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "mixed",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "Patient name சொல்லுங்க."
+    },
+    {
+      "id": "a-012",
+      "section": "A",
+      "scenario": "Two people need appointments",
+      "caller": "Enakkum en wife-kum cleaning appointment venum. Same time-la kidaikkuma?",
+      "agent": "Check pannalaam nga. Same time-la rendu doctor slots venuma, illa back-to-back okay-va?",
+      "delivery": "Organized and patient.",
+      "intents": [
+        "booking",
+        "service"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "Check பண்ணலாம் ங்க. Same time-ல ரெண்டு doctor slots வேணுமா, இல்ல back-to-back okay-வா?"
+    },
+    {
+      "id": "a-013",
+      "section": "A",
+      "scenario": "Two people need appointments",
+      "caller": "Back-to-back okay.",
+      "agent": "Endha day prefer panreenga?",
+      "delivery": "Organized and patient.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "எந்த day prefer பண்ற்ங்க?"
+    },
+    {
+      "id": "a-014",
+      "section": "A",
+      "scenario": "WhatsApp-first caller wants a phone booking",
+      "caller": "Wisdom tooth pain.",
+      "agent": "Seri. Innikku paakanuma?",
+      "delivery": "Reassuring.",
+      "intents": [
+        "pain"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "anxious",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "சேரி. இன்னிக்கு பாக்கனுமா?"
+    },
+    {
+      "id": "a-015",
+      "section": "A",
+      "scenario": "Caller asks for lunch-hour slot",
+      "caller": "Office break-la dhaan vara mudiyum. One to two-kulla slot irukka?",
+      "agent": "Check pannidren nga. Endha date-ku paakanum?",
+      "delivery": "Practical, friendly.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "hurried",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "Check பண்ணிட்ரேன் ங்க. எந்த date-க்கு பாக்கனும்?"
+    },
+    {
+      "id": "a-016",
+      "section": "A",
+      "scenario": "Caller asks for lunch-hour slot",
+      "caller": "Wednesday.",
+      "agent": "Reason enna nga?",
+      "delivery": "Practical, friendly.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "mixed",
+      "emotion": "hurried",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "Reason என்ன ங்க?"
+    },
+    {
+      "id": "a-017",
+      "section": "A",
+      "scenario": "Caller is unsure what service to select",
+      "caller": "Light-aa dhaan.",
+      "agent": "Seri. Endha day convenient?",
+      "delivery": "Non-judgmental and simple.",
+      "intents": [
+        "service"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "சேரி. எந்த day convenient?"
+    },
+    {
+      "id": "b-018",
+      "section": "B",
+      "scenario": "Reschedule to the next day",
+      "caller": "Innikku appointment irukku. Vara mudiyadhu; naalaikku change pannunga.",
+      "agent": "Sure nga. Booking-la irukkura patient name or mobile number sollunga.",
+      "delivery": "Efficient and accommodating.",
+      "intents": [
+        "booking",
+        "reschedule"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "Sure ங்க. Booking-ல இருக்குற patient name or mobile number சொல்லுங்க."
+    },
+    {
+      "id": "b-019",
+      "section": "B",
+      "scenario": "Cancel without pressure",
+      "caller": "Appointment cancel pannanum.",
+      "agent": "Kandippa nga. Patient name and appointment date sollunga.",
+      "delivery": "Polite; no guilt or sales pressure.",
+      "intents": [
+        "booking",
+        "cancel"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "கண்டிப்ப ங்க. Patient name and appointment date சொல்லுங்க."
+    },
+    {
+      "id": "b-020",
+      "section": "B",
+      "scenario": "Caller is running late",
+      "caller": "Five o'clock appointment. Traffic-la stuck; twenty minutes late aagum.",
+      "agent": "Seri nga, clinic-kitta update pannidren. Patient name?",
+      "delivery": "Calm and practical.",
+      "intents": [
+        "booking",
+        "reschedule"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "hurried",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "சேரி ங்க, clinic-கிட்ட update பண்ணிட்ரேன். Patient name?"
+    },
+    {
+      "id": "b-021",
+      "section": "B",
+      "scenario": "Wants an earlier slot",
+      "caller": "Enakku tomorrow seven PM appointment. Earlier slot edhaavadhu irukka?",
+      "agent": "Check pannidren. Patient name?",
+      "delivery": "Helpful but does not promise.",
+      "intents": [
+        "booking",
+        "reschedule"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "செக் பண்ணிட்ரேன். பேஷன்ட் நேம்?"
+    },
+    {
+      "id": "b-022",
+      "section": "B",
+      "scenario": "No earlier slot; offer waitlist",
+      "caller": "Saturday appointment-a Friday-ku move panna mudiyuma?",
+      "agent": "Check pannalaam nga. Patient name?",
+      "delivery": "Sympathetic and solution-oriented.",
+      "intents": [
+        "booking",
+        "reschedule"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "செக் பண்ணலாம் ங்க. பேஷன்ட் நேம்?"
+    },
+    {
+      "id": "b-023",
+      "section": "B",
+      "scenario": "Wrong appointment shown",
+      "caller": "En appointment time enna-nu check pannunga. Name Saravanan.",
+      "agent": "Sure nga. Registered mobile number last four digits sollunga.",
+      "delivery": "Careful and privacy-aware.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "response",
+      "agent_tts": "சூர் ங்க. ரெஜிஸ்டர்ட் மொபைல் நம்பர் லாஸ்ட் ஃபோர் டிஜிட்ஸ் சொல்லுங்க."
+    },
+    {
+      "id": "b-024",
+      "section": "B",
+      "scenario": "Reschedule only one family member",
+      "caller": "Enakkum en ponnum tomorrow appointment. En appointment mattum change pannanum.",
+      "agent": "Seri nga. Rendu patient names sollunga; correct booking identify pannidren.",
+      "delivery": "Precise.",
+      "intents": [
+        "booking",
+        "reschedule"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "சேரி ங்க. ரெண்டு பேஷன்ட் நேம்ஸ் சொல்லுங்க; கரெக்ட் புக்கிங் ஐடென்டிஃபை பண்ணிட்ரேன்."
+    },
+    {
+      "id": "b-025",
+      "section": "B",
+      "scenario": "Reschedule only one family member",
+      "caller": "Correct.",
+      "agent": "Endha day-ku move pannanum?",
+      "delivery": "Precise.",
+      "intents": [
+        "reschedule"
+      ],
+      "language_mix": "mixed",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "எந்த டே-க்கு மூவ் பண்ணனும்?"
+    },
+    {
+      "id": "b-026",
+      "section": "B",
+      "scenario": "Caller changes their mind during booking",
+      "caller": "Tuesday six book pannunga... illa, one minute, Wednesday better.",
+      "agent": "No problem nga; innum booking create pannala. Wednesday evening availability check pannava?",
+      "delivery": "Patient and non-irritated.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "நோ ப்ரொபிளம் ங்க; இன்னும் புக்கிங் க्रिएट் பண்ணல. வெட்னெஸ்டே ஈவினிங் அவெயிலபிலிட்டி செக் பண்ணவ?"
+    },
+    {
+      "id": "b-027",
+      "section": "B",
+      "scenario": "Duplicate booking detected",
+      "caller": "Naalaikku six-thirty appointment book pannunga.",
+      "agent": "Patient name sollunga nga.",
+      "delivery": "Clear, avoiding duplicate creation.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "பேஷன்ட் நேம் சொல்லுங்க ங்க."
+    },
+    {
+      "id": "b-028",
+      "section": "B",
+      "scenario": "Cancellation policy question",
+      "caller": "Policy mattum dhaan. Appointment keep pannunga.",
+      "agent": "Seri nga, appointment-la endha change-um pannala.",
+      "delivery": "Neutral and factual.",
+      "intents": [
+        "booking",
+        "cancel"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "response",
+      "agent_tts": "சேரி ங்க, அப்பாயின்ட்மெண்ட்-ல எந்த சேஞ்ச்-உம் பண்ணல."
+    },
+    {
+      "id": "c-029",
+      "section": "C",
+      "scenario": "Severe tooth pain but no emergency signs",
+      "caller": "Akka, pallu vali thaanga mudila. Ippo doctor irukaangala?",
+      "agent": "Aiyo, romba kashtama irukkum. Face swelling, fever, illa breathing/swallowing difficulty edhaavadhu irukka?",
+      "delivery": "Empathetic, concise and attentive.",
+      "intents": [
+        "doctor_availability",
+        "emergency",
+        "pain"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "urgent",
+      "safety_level": "medical",
+      "stage": "clarification",
+      "agent_tts": "அய்யோ, ரொம்ப கஷ்டம இருக்கும். ஃபேஸ் ஸ்வெல்லிங், ஃபீவர், இல்ல ப்ரீதிங்/ஸ்வாலோயிங் டிஃபிகல்டி எதாவது இருக்க?"
+    },
+    {
+      "id": "c-030",
+      "section": "C",
+      "scenario": "Severe tooth pain but no emergency signs",
+      "caller": "Illa, pain mattum romba strong-aa irukku.",
+      "agent": "Seri nga. Earliest urgent slot check pannidren.",
+      "delivery": "Empathetic, concise and attentive.",
+      "intents": [
+        "emergency",
+        "pain"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "urgent",
+      "safety_level": "medical",
+      "stage": "availability",
+      "agent_tts": "சேரி ங்க. ஆர்லியெஸ்ட் அர்ஜெண்ட் ஸ்லாட் செக் பண்ணிட்ரேன்."
+    },
+    {
+      "id": "c-031",
+      "section": "C",
+      "scenario": "Facial swelling and difficulty swallowing",
+      "caller": "Face oru side full-aa veengiduchu. Thanni kudikkave kashtama irukku.",
+      "agent": "Idhu urgent nga. Swallow panna difficulty irukkuradhunaala clinic appointment-kaaga wait panna vendam. Nearest emergency department-ku ippo ponga, illa local emergency service-a contact pannunga.",
+      "delivery": "Calm, firm and urgent; no panic.",
+      "intents": [
+        "emergency"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "urgent",
+      "safety_level": "emergency",
+      "stage": "response",
+      "agent_tts": "இது urgent ங்க. Swallow பண்ண difficulty இருக்குறதுனாலா clinic appointment-காக wait பண்ண வேண்டாம். Nearest emergency department-கு இப்போ போங்க, இல்ல local emergency service-அ contact பண்ணுங்க."
+    },
+    {
+      "id": "c-032",
+      "section": "C",
+      "scenario": "Facial swelling and difficulty swallowing",
+      "caller": "Dentist-a first paaka koodaadha?",
+      "agent": "Breathing or swallowing problem irundha hospital emergency evaluation dhaan safest. Neenga safe place-la irukkeengala? Yaaravadhu kooda irukaangala?",
+      "delivery": "Calm, firm and urgent; no panic.",
+      "intents": [
+        "doctor_availability",
+        "emergency"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "urgent",
+      "safety_level": "emergency",
+      "stage": "clarification",
+      "agent_tts": "Breathing or swallowing problem இருந்தா hospital emergency evaluation தான் safest. நீங்க safe place-ல இருக்கீங்களா? யாரவது கூட இருக்காங்களா?"
+    },
+    {
+      "id": "c-033",
+      "section": "C",
+      "scenario": "Facial swelling and difficulty swallowing",
+      "caller": "En husband irukkaaru.",
+      "agent": "Seri. Avar kooda nearest emergency department-ku ippo ponga. Neengale drive panna vendam.",
+      "delivery": "Calm, firm and urgent; no panic.",
+      "intents": [
+        "emergency"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "urgent",
+      "safety_level": "emergency",
+      "stage": "response",
+      "agent_tts": "சேரி. அவர் கூட nearest emergency department-கு இப்போ போங்க. நீங்களே drive பண்ண வேண்டாம்."
+    },
+    {
+      "id": "c-034",
+      "section": "C",
+      "scenario": "Uncontrolled bleeding after extraction",
+      "caller": "Morning tooth remove pannanga. Ippo blood stop aagala.",
+      "agent": "Continuous heavy bleeding-aa, gauze full-aa soak aagudha?",
+      "delivery": "Direct, reassuring and safety-first.",
+      "intents": [
+        "emergency",
+        "pain",
+        "service"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "anxious",
+      "safety_level": "emergency",
+      "stage": "clarification",
+      "agent_tts": "Continuous heavy bleeding-ஆ, gauze full-ஆ soak ஆகுதா?"
+    },
+    {
+      "id": "c-035",
+      "section": "C",
+      "scenario": "Uncontrolled bleeding after extraction",
+      "caller": "Aama, repeat-aa change pannitu irukken.",
+      "agent": "Idhu urgent nga. Clinic emergency line-ku connect panna try pannuren; response vara varaikkum nearest emergency department-ku pogradhukku ready aagunga.",
+      "delivery": "Direct, reassuring and safety-first.",
+      "intents": [
+        "emergency",
+        "reschedule",
+        "service"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "anxious",
+      "safety_level": "emergency",
+      "stage": "response",
+      "agent_tts": "இது urgent ங்க. Clinic emergency line-கு connect பண்ண try பண்ணுறேன்; response வர வரைக்கும் nearest emergency department-கு போறதுக்கு ready ஆகுங்க."
+    },
+    {
+      "id": "c-036",
+      "section": "C",
+      "scenario": "Broken tooth after a fall",
+      "caller": "Paiyan cycle-lendhu vizhundhutan. Front tooth odanjiduchu.",
+      "agent": "Aiyo. Avan conscious-aa irukkaana? Head injury, vomiting, heavy bleeding edhaavadhu irukka?",
+      "delivery": "Concerned, gathering only essential information.",
+      "intents": [
+        "pain"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "medical",
+      "stage": "clarification",
+      "agent_tts": "அய்யோ. அவன் conscious-ஆ இருக்காணா? Head injury, vomiting, heavy bleeding எதாவது இருக்க?"
+    },
+    {
+      "id": "c-037",
+      "section": "C",
+      "scenario": "Broken tooth after a fall",
+      "caller": "Conscious-aa irukkaan; lip-la konjam blood.",
+      "agent": "Seri. Dental trauma urgent-aa assess pannanum. Paiyan age enna, injury eppo nadandhuchu?",
+      "delivery": "Concerned, gathering only essential information.",
+      "intents": [
+        "pain"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "medical",
+      "stage": "collect_details",
+      "agent_tts": "சேரி. Dental trauma urgent-ஆ assess பண்ணணும். பையன் age என்ன, injury எப்போ நடந்துச்சு?"
+    },
+    {
+      "id": "c-038",
+      "section": "C",
+      "scenario": "Pain after root canal",
+      "caller": "Yesterday root canal pannanga. Innikku pain irukku; normal-aa?",
+      "agent": "Konjam discomfort pathi dentist dhaan unga case paathu correct-aa solla mudiyum nga. Romba severe pain, increasing swelling, fever, illa breathing difficulty irukka?",
+      "delivery": "Empathetic, no diagnosis.",
+      "intents": [
+        "pain",
+        "service"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "anxious",
+      "safety_level": "medical",
+      "stage": "clarification",
+      "agent_tts": "கொஞ்சம் discomfort பத்தி dentist தான் உங்க case பாத்து correct-ஆ சொல்ல முடியும் ங்க. ரொம்ப severe pain, increasing swelling, fever, இல்ல breathing difficulty இருக்க?"
+    },
+    {
+      "id": "c-039",
+      "section": "C",
+      "scenario": "Pain after root canal",
+      "caller": "Illa, mild pain dhaan.",
+      "agent": "Seri. Clinic follow-up team-kitta callback request podava, illa appointment slot paakava?",
+      "delivery": "Empathetic, no diagnosis.",
+      "intents": [
+        "pain",
+        "service"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "anxious",
+      "safety_level": "medical",
+      "stage": "availability",
+      "agent_tts": "சேரி. Clinic follow-up team-கிட்ட callback request போடவா, இல்ல appointment slot பாக்கவா?"
+    },
+    {
+      "id": "c-040",
+      "section": "C",
+      "scenario": "Medication request",
+      "caller": "Pallu vali-ku enna tablet podanum? Strong tablet name sollunga.",
+      "agent": "Unga medical history theriyama medicine recommend panna safe illa nga. Dentist examine pannanum. Earliest consultation slot paakattuma?",
+      "delivery": "Helpful boundary-setting.",
+      "intents": [
+        "pain"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "medical",
+      "stage": "availability",
+      "agent_tts": "உங்க medical history தெரியாம medicine recommend பண்ண safe இல்ல ங்க. Dentist examine பண்ணணும். Earliest consultation slot பாக்கட்டுமா?"
+    },
+    {
+      "id": "c-041",
+      "section": "C",
+      "scenario": "Medication request",
+      "caller": "Just oru tablet name sollunga.",
+      "agent": "Puriyudhu, pain-la irukkeenga. Aana prescription advice doctor dhaan kudukkanum; naan guess panna maaten. Urgent slot check pannava?",
+      "delivery": "Helpful boundary-setting.",
+      "intents": [
+        "medical"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "medical",
+      "stage": "availability",
+      "agent_tts": "புரியுது, pain-ல இருக்கீங்க. ஆனா prescription advice doctor தான் குடுக்கணும்; நான் guess பண்ண மாட்டேன். Urgent slot check பண்ணவா?"
+    },
+    {
+      "id": "c-042",
+      "section": "C",
+      "scenario": "Fever plus dental swelling",
+      "caller": "Pallu pakkathula swelling, fever-um irukku.",
+      "agent": "Seri nga, idha delay panna vendaam. Breathing or swallowing kashtam irukka?",
+      "delivery": "Serious and prompt.",
+      "intents": [
+        "emergency",
+        "pain"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "emergency",
+      "stage": "clarification",
+      "agent_tts": "சேரி ங, இது delay பண்ண வேண்டாம். Breathing or swallowing கஷ்டம் இருக்க?"
+    },
+    {
+      "id": "c-043",
+      "section": "C",
+      "scenario": "Fever plus dental swelling",
+      "caller": "Illa.",
+      "agent": "Okay. Same-day urgent dental assessment venum. Earliest slot check pannuren; symptoms fast-aa worsen aana emergency department-ku ponga.",
+      "delivery": "Serious and prompt.",
+      "intents": [
+        "emergency"
+      ],
+      "language_mix": "mixed",
+      "emotion": "calm",
+      "safety_level": "emergency",
+      "stage": "availability",
+      "agent_tts": "Okay. Same-day urgent dental assessment வேணும். Earliest slot check பண்ணுரேன்; symptoms fast-ஆ worsen ஆனா emergency department-கு போங."
+    },
+    {
+      "id": "c-044",
+      "section": "C",
+      "scenario": "Child swallowed a dental object",
+      "caller": "En child braces wire piece swallow pannita madhiri irukku. Enna panradhu?",
+      "agent": "Child-ku breathing trouble, choking, continuous cough, illa chest pain irukka?",
+      "delivery": "Calm, safety-first.",
+      "intents": [
+        "accessibility",
+        "emergency"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "emergency",
+      "stage": "clarification",
+      "agent_tts": "Child-கு breathing trouble, choking, continuous cough, இல்ல chest pain இருக்க?"
+    },
+    {
+      "id": "c-045",
+      "section": "C",
+      "scenario": "Child swallowed a dental object",
+      "caller": "Cough pannitu irukkaan.",
+      "agent": "Idhu emergency-aa assess pannanum nga. Dental appointment wait pannaama emergency service or nearest emergency department-a ippo contact pannunga.",
+      "delivery": "Calm, safety-first.",
+      "intents": [
+        "accessibility",
+        "emergency"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "emergency",
+      "stage": "response",
+      "agent_tts": "இது emergency-ஆ assess பண்ணணும் ங. Dental appointment wait பண்ணாம emergency service or nearest emergency department-அ இப்ப contact பண்ணுங."
+    },
+    {
+      "id": "c-046",
+      "section": "C",
+      "scenario": "Child swallowed a dental object",
+      "caller": "Clinic-ku kondu varalama?",
+      "agent": "Cough and possible swallowed object irukkuradhunaala hospital emergency evaluation safest. Yaaravadhu adult child-kooda irukaangala?",
+      "delivery": "Calm, safety-first.",
+      "intents": [
+        "accessibility",
+        "emergency"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "emergency",
+      "stage": "clarification",
+      "agent_tts": "Cough and possible swallowed object இருக்குறதுனாலா hospital emergency evaluation safest. யாரவது adult child-கூட இருக்காங்கள?"
+    },
+    {
+      "id": "c-047",
+      "section": "C",
+      "scenario": "Child swallowed a dental object",
+      "caller": "Aama.",
+      "agent": "Seri, avanga kooda immediately ponga.",
+      "delivery": "Calm, safety-first.",
+      "intents": [
+        "accessibility",
+        "emergency"
+      ],
+      "language_mix": "mixed",
+      "emotion": "calm",
+      "safety_level": "emergency",
+      "stage": "response",
+      "agent_tts": "சேரி, அவங்க கூட immediately போங."
+    },
+    {
+      "id": "c-048",
+      "section": "C",
+      "scenario": "Caller says “emergency” but gives no detail",
+      "caller": "Dental emergency! Doctor-kitta ippo pesanum.",
+      "agent": "Kandippa help pannuren. First, breathing difficulty, heavy bleeding, unconsciousness, illa major face injury edhaavadhu irukka?",
+      "delivery": "Controlled urgency.",
+      "intents": [
+        "doctor_availability",
+        "emergency"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "urgent",
+      "safety_level": "medical",
+      "stage": "clarification",
+      "agent_tts": "கண்டிப்ப help பண்ணுரேன். First, breathing difficulty, heavy bleeding, unconsciousness, இல்ல major face injury எதாவது இருக்க?"
+    },
+    {
+      "id": "c-049",
+      "section": "C",
+      "scenario": "Caller says “emergency” but gives no detail",
+      "caller": "Illa. Crown veliya vandhuduchu; pain irukku.",
+      "agent": "Seri, immediate life-threatening sign illa-nu purinjiduchu. Earliest urgent dental slot check pannuren.",
+      "delivery": "Controlled urgency.",
+      "intents": [
+        "emergency",
+        "pain"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "urgent",
+      "safety_level": "medical",
+      "stage": "availability",
+      "agent_tts": "சேரி, immediate life-threatening sign இல்ல-ன்ன புரிஞ்சிடுச. Earliest urgent dental slot check பண்ணுரேன்."
+    },
+    {
+      "id": "d-050",
+      "section": "D",
+      "scenario": "Casual young caller",
+      "caller": "Hi, actually braces podanum-nu plan panren. Consultation slot irukka?",
+      "agent": "Sure nga. Orthodontic consultation check pannalaam. Weekday comfortable-aa, weekend-aa?",
+      "delivery": "Friendly and modern, still professional.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "Sure ங. Orthodontic consultation check பண்ணலாம். Weekday comfortable-ஆ, weekend-ஆ?"
+    },
+    {
+      "id": "d-051",
+      "section": "D",
+      "scenario": "Casual young caller",
+      "caller": "Sunday slot podunga.",
+      "agent": "Done panna patient name sollunga.",
+      "delivery": "Friendly and modern, still professional.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "Done பண்ண patient name சொல்லுங்க."
+    },
+    {
+      "id": "d-052",
+      "section": "D",
+      "scenario": "Older caller speaking mostly Tamil",
+      "caller": "Amma, enakku pal set konjam loose-aa irukku. Doctor-a paakanum ma.",
+      "agent": "Seri amma, paathukkalaam. Saapida romba kashtama irukka?",
+      "delivery": "Respectful, slower pace, very clear.",
+      "intents": [
+        "doctor_availability"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "சேரி அம்மா, பாத்துக்கலாம். சாப்பிட ரொம்ப கஷ்டம இருக்க?"
+    },
+    {
+      "id": "d-053",
+      "section": "D",
+      "scenario": "Older caller speaking mostly Tamil",
+      "caller": "Konjam kashtam. Vali illa.",
+      "agent": "Seri. Naalaikku kaalaila vara mudiyuma?",
+      "delivery": "Respectful, slower pace, very clear.",
+      "intents": [
+        "pain"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "சேரி. நாளைக்கு காலைல வர முடியுமா?"
+    },
+    {
+      "id": "d-054",
+      "section": "D",
+      "scenario": "Older caller speaking mostly Tamil",
+      "caller": "Seri ma.",
+      "agent": "Unga peru sollunga amma.",
+      "delivery": "Respectful, slower pace, very clear.",
+      "intents": [
+        "chennai_tanglish"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "உங்க பேரு சொல்லுங்க அம்மா."
+    },
+    {
+      "id": "d-055",
+      "section": "D",
+      "scenario": "Caller uses very mixed Tanglish",
+      "caller": "Bro, actually last week filling panninen. Ippo bite pannumbodhu sharp pain varudhu.",
+      "agent": "Okay nga, puriyudhu. Same clinic-la filling pannineengala?",
+      "delivery": "Match the mix naturally.",
+      "intents": [
+        "pain"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "Okay ங்க, புரியுது. Same clinic-ல filling பண்ணீங்களா?"
+    },
+    {
+      "id": "d-056",
+      "section": "D",
+      "scenario": "Caller uses very mixed Tanglish",
+      "caller": "Yes, unga clinic dhaan.",
+      "agent": "Seri, follow-up appointment arrange pannalaam. Patient name?",
+      "delivery": "Match the mix naturally.",
+      "intents": [
+        "chennai_tanglish"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "சேரி, follow-up appointment arrange பண்லலாம். Patient name?"
+    },
+    {
+      "id": "d-057",
+      "section": "D",
+      "scenario": "Caller starts abruptly",
+      "caller": "Six o'clock slot irukka illaya? Quick-aa sollunga.",
+      "agent": "Check pannidren nga. Innikku six o'clock dhaana?",
+      "delivery": "Do not mirror irritation; remain composed.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "Check பண்ணிட்ரேன் ங்க. இன்னிக்கு six o'clock தானா?"
+    },
+    {
+      "id": "d-058",
+      "section": "D",
+      "scenario": "Caller starts abruptly",
+      "caller": "Aama, innikku.",
+      "agent": "Enna problem-kaaga appointment?",
+      "delivery": "Do not mirror irritation; remain composed.",
+      "intents": [
+        "chennai_tanglish"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "என்ன problem-காக appointment?"
+    },
+    {
+      "id": "d-059",
+      "section": "D",
+      "scenario": "Caller starts abruptly",
+      "caller": "Seri, podunga.",
+      "agent": "Patient name?",
+      "delivery": "Do not mirror irritation; remain composed.",
+      "intents": [
+        "chennai_tanglish"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "Patient name?"
+    },
+    {
+      "id": "d-060",
+      "section": "D",
+      "scenario": "Caller says “rate romba adikkuma?”",
+      "caller": "Cleaning-ku rate romba adikkuma?",
+      "agent": "Consultation or cleaning charge clinic rate-padi sollalaam nga; exact treatment cost examination-kku apram vary aagalaam. Current fee check pannidren.",
+      "delivery": "Light warmth; never defensive.",
+      "intents": [
+        "fee",
+        "service"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "response",
+      "agent_tts": "Consultation or cleaning charge clinic rate-படி சொல்லலாம் ங்க; exact treatment cost examination-க்கு அப்ரம் vary ஆகலாம். Current fee check பண்ணிட்ரேன."
+    },
+    {
+      "id": "d-061",
+      "section": "D",
+      "scenario": "Caller says “rate romba adikkuma?”",
+      "caller": "Salary vandhadhukku apram Friday.",
+      "agent": "Seri nga, Friday availability check pannava?",
+      "delivery": "Light warmth; never defensive.",
+      "intents": [
+        "fee"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "சேரி ங்க, Friday availability check பண்ணவா?"
+    },
+    {
+      "id": "d-062",
+      "section": "D",
+      "scenario": "Caller joking with the agent",
+      "caller": "Doctor pain illaama pannuvaara? Naan romba bayandha type.",
+      "agent": "Bayam common dhaan nga; neenga sollittaa doctor gentle-aa explain pannitu proceed pannuvaanga. Appointment note-la dental anxiety add pannidava?",
+      "delivery": "Brief friendly acknowledgement; return to task.",
+      "intents": [
+        "doctor_availability",
+        "pain"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "பயம் common தான் ங்க; நீங்க சொல்லிட்டா doctor gentle-ஆ explain பண்ணிட்டு proceed பண்ணுவாங்க. Appointment note-ல dental anxiety add பண்ணிடவா?"
+    },
+    {
+      "id": "d-063",
+      "section": "D",
+      "scenario": "Caller joking with the agent",
+      "caller": "Kandippa, bold letters-la podunga!",
+      "agent": "Seri, miss aagaama note pannidren. Endha day convenient?",
+      "delivery": "Brief friendly acknowledgement; return to task.",
+      "intents": [
+        "chennai_tanglish"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "சேரி, miss ஆகாம note பண்ணிறேன். எந்த day convenient?"
+    },
+    {
+      "id": "d-064",
+      "section": "D",
+      "scenario": "Caller speaks respectfully and formally",
+      "caller": "Vanakkam. Enakku dental consultation appointment thevai.",
+      "agent": "Vanakkam nga. Kandippa arrange pannalaam. Endha naal matrum neram convenient-aa irukkum?",
+      "delivery": "Match formal tone.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "வணக்கம் ங்க. கண்டிப்ப arrange பண்ணலாம். எந்த நாள் முறும் நேரம் convenient-ஆ இருக்கும்?"
+    },
+    {
+      "id": "d-065",
+      "section": "D",
+      "scenario": "Caller speaks respectfully and formally",
+      "caller": "Seyyalaam.",
+      "agent": "Patient peyar sollunga.",
+      "delivery": "Match formal tone.",
+      "intents": [
+        "chennai_tanglish"
+      ],
+      "language_mix": "mixed",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "response",
+      "agent_tts": "Patient பேயர் சொல்லுங்க."
+    },
+    {
+      "id": "d-066",
+      "section": "D",
+      "scenario": "Caller asks “neenga bot-aa?”",
+      "caller": "Seri, voice nalla human madhiri irukku. Tomorrow slot paakunga.",
+      "agent": "Thank you nga. Tomorrow morning-aa evening-aa prefer panreenga?",
+      "delivery": "Honest, relaxed and immediately useful.",
+      "intents": [
+        "booking",
+        "handoff"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "Thank you ங்க. Tomorrow morning-ஆ evening-ஆ prefer பண்ணீங்க?"
+    },
+    {
+      "id": "e-067",
+      "section": "E",
+      "scenario": "“After office” is unclear",
+      "caller": "Office mudichitu varen. Adhukku mela podunga.",
+      "agent": "Seri nga. Usually neenga clinic reach aagura time roughly evlo—six-aa, seven-aa?",
+      "delivery": "Conversational clarification.",
+      "intents": [
+        "clarification"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "confused",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "சேரி ங்க. Usually நீங்க clinic reach ஆகுற time roughly எவ்ளோ—six-ஆ, seven-ஆ?"
+    },
+    {
+      "id": "e-068",
+      "section": "E",
+      "scenario": "“After office” is unclear",
+      "caller": "Seven-kku reach aagiduven.",
+      "agent": "Endha date-ku?",
+      "delivery": "Conversational clarification.",
+      "intents": [
+        "clarification"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "confused",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "எந்த date-கு?"
+    },
+    {
+      "id": "e-069",
+      "section": "E",
+      "scenario": "Caller gives “morning” but no date",
+      "caller": "Morning slot book pannunga.",
+      "agent": "Kandippa. Endha date morning venum nga?",
+      "delivery": "Brief and clear.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "கண்டிப்ப. எந்த date morning வேணும் ங்க?"
+    },
+    {
+      "id": "e-070",
+      "section": "E",
+      "scenario": "Twelve o’clock ambiguity",
+      "caller": "Ayyo, noon dhaan!",
+      "agent": "Seri seri. Endha date?",
+      "delivery": "Exact, natural.",
+      "intents": [
+        "clarification"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "confused",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "சேரி சேரி. எந்த date?"
+    },
+    {
+      "id": "e-071",
+      "section": "E",
+      "scenario": "“Same time as last time”",
+      "caller": "Last time vandha same time-la podunga.",
+      "agent": "Check pannidren nga. Patient name?",
+      "delivery": "Helpful but verifies records.",
+      "intents": [
+        "clarification"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "செக் பண்ணிட்ரேன் ங்க. பேஷன்ட் நேம்?"
+    },
+    {
+      "id": "e-072",
+      "section": "E",
+      "scenario": "Relative booking with incomplete identity",
+      "caller": "En appa-ku appointment podanum. Existing patient.",
+      "agent": "Sure nga. Avar full name and registered mobile number sollunga.",
+      "delivery": "Privacy-conscious.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "சியூர் ங்க. அவர் ஃபுல் நேம் அண்ட் ரெஜிஸ்டர்ட் மொபைல் நம்பர் சொல்லுங்க."
+    },
+    {
+      "id": "e-073",
+      "section": "E",
+      "scenario": "Relative booking with incomplete identity",
+      "caller": "Kumar. Number therila.",
+      "agent": "Kumar-nu multiple records irukkalaam. Age or last visit approximate date theriyuma?",
+      "delivery": "Privacy-conscious.",
+      "intents": [
+        "clarification"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "குமார்-னு முல்டிபல் ரெக்கார்ட்ஸ் இருக்கலாம். ஏஜ் ஓர் லாஸ்ட் விஸிட் அப்ப்ராக்ஸிமேட் டேட் தெரியுமா?"
+    },
+    {
+      "id": "e-074",
+      "section": "E",
+      "scenario": "Relative booking with incomplete identity",
+      "caller": "Appa-kitta ketu thirumba call panren.",
+      "agent": "Seri nga. Verify pannitu easy-aa continue pannalaam; ippo endha booking-um create pannala.",
+      "delivery": "Privacy-conscious.",
+      "intents": [
+        "clarification"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "response",
+      "agent_tts": "சேரி ங்க. வெரிஃபை பண்டிட்டு ஈஸி-ஆ கண்டினியூ பண்லலாம்; இப்போ எந்த booking-உம் க्रिएट் பண்ணல."
+    },
+    {
+      "id": "e-075",
+      "section": "E",
+      "scenario": "Name spelling correction",
+      "caller": "Name Shreya.",
+      "agent": "S-H-R-E-Y-A, Shreya dhaana?",
+      "delivery": "Patient, attentive.",
+      "intents": [
+        "clarification"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "confused",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "S-H-R-E-Y-A, ஷ்ரேயா தாணே?"
+    },
+    {
+      "id": "e-076",
+      "section": "E",
+      "scenario": "Name spelling correction",
+      "caller": "Illa, S-R-I-Y-A. Sriya.",
+      "agent": "Got it—S-R-I-Y-A, Sriya. Correct-aa?",
+      "delivery": "Patient, attentive.",
+      "intents": [
+        "clarification"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "confused",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "கொட் இட்—S-R-I-Y-A, ஸ்ரியா. கரெக்ட்-ஆ?"
+    },
+    {
+      "id": "e-077",
+      "section": "E",
+      "scenario": "Similar-sounding time correction",
+      "caller": "Illa, four-fifty. 4:50.",
+      "agent": "Okay, 4:50 PM. Exact 4:50 slot support aagudha check pannidren.",
+      "delivery": "Explicit confirmation.",
+      "intents": [
+        "clarification"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "angry",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "ஓகே, 4:50 PM. எக்ஸாக்ட் 4:50 ஸ்லொட் சப்போர்ட் ஆகுதா செக் பண்ணிட்ரேன்."
+    },
+    {
+      "id": "e-078",
+      "section": "E",
+      "scenario": "Caller does not know their phone number on record",
+      "caller": "Old patient, aana endha number kuduthen-nu nyabagam illa.",
+      "agent": "Parava illa nga. Full name, age and last visit approximate month sollunga; match kidaicha additional verification kekkalaam.",
+      "delivery": "Helpful, protects personal data.",
+      "intents": [
+        "clarification"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "பரவ இல்ல ங்க. ஃபுல் நேம், ஏஜ் அண்ட் லாஸ்ட் விஸிட் அப்ப்ராக்ஸிமேட் மண்த் சொல்லுங்க; மேட்ச் கிடைச்ச அடிஷனல் வெரிஃபிகேஷன் கேக்கலாம்."
+    },
+    {
+      "id": "f-079",
+      "section": "F",
+      "scenario": "Caller interrupts slot list",
+      "caller": "Ten-thirty podhum, podhum.",
+      "agent": "Seri nga, tomorrow 10:30. Patient name sollunga.",
+      "delivery": "Stop immediately when interrupted; do not finish the list.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "சேரி ங்க, டுமாரோ 10:30. பேஷன்ட் நேம் சொல்லுங்க."
+    },
+    {
+      "id": "f-080",
+      "section": "F",
+      "scenario": "Background traffic masks the name",
+      "caller": "Name [traffic noise] Krishnan.",
+      "agent": "Sorry nga, first name traffic noise-la clear-aa kekkala. Last name Krishnan-nu kettu. First name mattum repeat pannunga.",
+      "delivery": "Never pretend to hear; ask only for the unclear field.",
+      "intents": [
+        "speech_repair"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "confused",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "சாரி ங்க, ஃபர்ஸ்ட் நேம் ட்ராஃபிக் நாய்ஸ்-ல கிளியர்-ஆ கேக்கல. லாஸ்ட் நேம் கிருஷ்ணன்-னு கேட்டு. ஃபர்ஸ்ட் நேம் மட்டும் ரிபீட் பண்னுங்க."
+    },
+    {
+      "id": "f-081",
+      "section": "F",
+      "scenario": "Background traffic masks the name",
+      "caller": "Aravind. Aravind Krishnan.",
+      "agent": "Got it—Aravind Krishnan.",
+      "delivery": "Never pretend to hear; ask only for the unclear field.",
+      "intents": [
+        "speech_repair"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "confused",
+      "safety_level": "routine",
+      "stage": "response",
+      "agent_tts": "Got it—Aravind Krishnan."
+    },
+    {
+      "id": "f-082",
+      "section": "F",
+      "scenario": "Audio breaks during the date",
+      "caller": "Appointment [audio drop] twenty-third venum.",
+      "agent": "Month mattum cut aayiduchu nga. Endha month twenty-third?",
+      "delivery": "Short repair question.",
+      "intents": [
+        "booking",
+        "speech_repair"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "மாதம் மட்டும் cut ஆயிடுச்சு ங்க. எந்த மாதம் twenty-third?"
+    },
+    {
+      "id": "f-083",
+      "section": "F",
+      "scenario": "Audio breaks during the date",
+      "caller": "August 23.",
+      "agent": "August 23, correct. Morning-aa evening-aa?",
+      "delivery": "Short repair question.",
+      "intents": [
+        "speech_repair"
+      ],
+      "language_mix": "mixed",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "August 23, correct. Morning-ஆ evening-ஆ?"
+    },
+    {
+      "id": "f-084",
+      "section": "F",
+      "scenario": "Caller cannot hear clearly",
+      "caller": "Enna sonneenga? Kekala.",
+      "agent": "Naalaikku... kaalaila... ten-thirty slot irukku nga. Ten-thirty okay-va?",
+      "delivery": "Slightly slower, shorter phrases; do not shout.",
+      "intents": [
+        "speech_repair"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "நாளைக்கு... காலைல... ten-thirty slot இருக்கு ங்க. Ten-thirty okay-வ?"
+    },
+    {
+      "id": "f-085",
+      "section": "F",
+      "scenario": "Caller cannot hear clearly",
+      "caller": "Aama, ippo clear-aa kettudhu.",
+      "agent": "Seri. Patient name sollunga.",
+      "delivery": "Slightly slower, shorter phrases; do not shout.",
+      "intents": [
+        "speech_repair"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "சேரி. Patient name சொல்லுங்க."
+    },
+    {
+      "id": "f-086",
+      "section": "F",
+      "scenario": "Caller pauses for a long time",
+      "caller": "Appointment... actually... [long pause]",
+      "agent": "Parava illa nga, take your time.",
+      "delivery": "Allow silence; one gentle check-in only.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "பரவாயில்ல ங்க, take your time."
+    },
+    {
+      "id": "f-087",
+      "section": "F",
+      "scenario": "Caller pauses for a long time",
+      "caller": "En calendar paathutu irukken.",
+      "agent": "Sure.",
+      "delivery": "Allow silence; one gentle check-in only.",
+      "intents": [
+        "speech_repair"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "response",
+      "agent_tts": "Sure."
+    },
+    {
+      "id": "f-088",
+      "section": "F",
+      "scenario": "Caller pauses for a long time",
+      "caller": "Thursday evening okay.",
+      "agent": "Thursday evening availability check pannidren.",
+      "delivery": "Allow silence; one gentle check-in only.",
+      "intents": [
+        "speech_repair"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "Thursday evening availability check பண்ணிட்ரேன்."
+    },
+    {
+      "id": "f-089",
+      "section": "F",
+      "scenario": "Two people talking in the background",
+      "caller": "One minute... okay Sunday.",
+      "agent": "Seri nga, final preference Sunday dhaana?",
+      "delivery": "Politely establish the primary speaker.",
+      "intents": [
+        "speech_repair"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "சேரி ங்க, final preference Sunday தாணே?"
+    },
+    {
+      "id": "f-090",
+      "section": "F",
+      "scenario": "Two people talking in the background",
+      "caller": "Aama, Sunday.",
+      "agent": "Morning-aa evening-aa?",
+      "delivery": "Politely establish the primary speaker.",
+      "intents": [
+        "speech_repair"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "Morning-ஆ evening-ஆ?"
+    },
+    {
+      "id": "f-091",
+      "section": "F",
+      "scenario": "Child answers while parent is nearby",
+      "caller": "Hello, naan pesaren.",
+      "agent": "Vanakkam nga. Tooth pain-nu sonnaanga. Earliest appointment venuma?",
+      "delivery": "Friendly; avoid collecting unnecessary information from child.",
+      "intents": [
+        "accessibility"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "வணக்கம் ங்க. Tooth pain-ஆ சொன்னாங்க. Earliest appointment வேணுமா?"
+    },
+    {
+      "id": "f-092",
+      "section": "F",
+      "scenario": "Caller gives a long unrelated story",
+      "caller": "Last year naan Bangalore-la irundhappa oru doctor filling pannaaru, appuram transfer aachu, office shift, ippo enga veedu Red Hills side...",
+      "agent": "Hmm, puriyudhu nga—old filling ippo problem kudukkudhu pola. Current-aa pain irukka, illa filling loose-aa irukka?",
+      "delivery": "Acknowledge, then gently focus.",
+      "intents": [
+        "doctor_availability",
+        "handoff",
+        "location"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "ஹ்ம், புரியுது ங்க—old filling இப்போ problem குடுக்குது போல. Current-ஆ pain இருக்க, இல்ல filling loose-ஆ இருக்க?"
+    },
+    {
+      "id": "f-093",
+      "section": "F",
+      "scenario": "Voice recognition repeatedly fails",
+      "caller": "Name Muthukumar.",
+      "agent": "Sorry nga, name clear-aa capture aagala. One more time slowly spell panna mudiyuma?",
+      "delivery": "Apologetic and practical; offer another channel.",
+      "intents": [
+        "speech_repair"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "hurried",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "Sorry ங்க, name clear-ஆ capture ஆகல. One more time slowly spell பண்ண முடியுமா?"
+    },
+    {
+      "id": "f-094",
+      "section": "F",
+      "scenario": "Voice recognition repeatedly fails",
+      "caller": "M-U-T-H-U-K-U-M-A-R.",
+      "agent": "Muthukumar, correct-aa?",
+      "delivery": "Apologetic and practical; offer another channel.",
+      "intents": [
+        "speech_repair"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "hurried",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "முத்துக்குமார், correct-ஆ?"
+    },
+    {
+      "id": "f-095",
+      "section": "F",
+      "scenario": "Voice recognition repeatedly fails",
+      "caller": "Aama.",
+      "agent": "Thank you. Audio thirumba problem aana details WhatsApp-la type panna link anuppalaam.",
+      "delivery": "Apologetic and practical; offer another channel.",
+      "intents": [
+        "speech_repair"
+      ],
+      "language_mix": "mixed",
+      "emotion": "hurried",
+      "safety_level": "routine",
+      "stage": "response",
+      "agent_tts": "Thank you. Audio திரும்ப problem ஆன details WhatsApp-ல type பண்ண link அனுப்பலாம்."
+    },
+    {
+      "id": "g-096",
+      "section": "G",
+      "scenario": "Consultation fee",
+      "caller": "Okay, tomorrow slot irukka?",
+      "agent": "Morning-aa evening-aa prefer panreenga?",
+      "delivery": "Direct and transparent.",
+      "intents": [
+        "booking",
+        "fee"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "Morning-ஆ evening-ஆ prefer பண்ணீங்க?"
+    },
+    {
+      "id": "g-097",
+      "section": "G",
+      "scenario": "EMI for braces",
+      "caller": "Consultation Saturday book pannunga.",
+      "agent": "Sure nga, Saturday slots check pannidren.",
+      "delivery": "Factual and encouraging.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "Sure ங்க, Saturday slots check பண்ணிட்ரேன்."
+    },
+    {
+      "id": "g-098",
+      "section": "G",
+      "scenario": "Teeth-whitening guarantee",
+      "caller": "Whitening panninaa cinema madhiri full white guarantee-aa?",
+      "agent": "Result person-to-person vary aagum nga; guaranteed shade promise panna mudiyadhu. Dentist current tooth condition paathu realistic outcome explain pannuvaanga.",
+      "delivery": "Positive but realistic.",
+      "intents": [
+        "clinic_information"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "response",
+      "agent_tts": "Result person-to-person vary ஆகும் ங்க; guaranteed shade promise பண்ண முடியாது. Dentist current tooth condition பாத்து realistic outcome explain பண்ணுவாங்க."
+    },
+    {
+      "id": "g-099",
+      "section": "G",
+      "scenario": "Doctor qualification",
+      "caller": "Doctor specialist-aa? Qualification enna?",
+      "agent": "Verified doctor profile check pannidren nga.",
+      "delivery": "Professional, fact-only.",
+      "intents": [
+        "doctor_availability"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "response",
+      "agent_tts": "Verified doctor profile check பண்ணிட்ரேன் ங்க."
+    },
+    {
+      "id": "g-100",
+      "section": "G",
+      "scenario": "Caller asks for a discount",
+      "caller": "Family-aa four per varom. Discount pannuveengala?",
+      "agent": "Discount naan promise panna mudiyadhu nga. Current offers or family policy irukka check pannidren.",
+      "delivery": "Warm, no unauthorized commitment.",
+      "intents": [
+        "fee"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "response",
+      "agent_tts": "Discount நான் promise பண்ண முடியாது ங்க. Current offers or family policy இருக்க check பண்ணிட்ரேன்."
+    },
+    {
+      "id": "h-101",
+      "section": "H",
+      "scenario": "First dental visit for a child",
+      "caller": "En ponnu first time dentist paaka pora. Romba bayapaduva.",
+      "agent": "Puriyudhu nga; first visit-nu note pannidalaam so team slow-aa, friendly-aa explain pannuvaanga. Child age enna?",
+      "delivery": "Warm and reassuring.",
+      "intents": [
+        "accessibility",
+        "doctor_availability"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "anxious",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "புரியுது ங்க; first visit-ன்ற note பன்னிடலாம் so team slow-ஆ, friendly-ஆ explain பன்னுவாங்க. Child age என்ன?"
+    },
+    {
+      "id": "h-102",
+      "section": "H",
+      "scenario": "First dental visit for a child",
+      "caller": "Five.",
+      "agent": "Pediatric consultation slot check pannalaam. Morning-aa evening-aa child comfortable?",
+      "delivery": "Warm and reassuring.",
+      "intents": [
+        "accessibility"
+      ],
+      "language_mix": "mixed",
+      "emotion": "anxious",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "Pediatric consultation slot check பன்னலாம். Morning-ஆ evening-ஆ child comfortable?"
+    },
+    {
+      "id": "h-103",
+      "section": "H",
+      "scenario": "Parent wants siblings together",
+      "caller": "Rendu kids check-up. Same day consecutive slot venum.",
+      "agent": "Kandippa check pannalaam. Kids ages and preferred day sollunga.",
+      "delivery": "Organized and family-friendly.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "கண்டிப்ப check பன்னலாம். Kids ages and preferred day சொல்லுங்க."
+    },
+    {
+      "id": "h-104",
+      "section": "H",
+      "scenario": "Caregiver books for elderly parent",
+      "caller": "Amma-ku denture problem. Naan dhaan kootitu varen.",
+      "agent": "Seri nga. Amma full name and age sollunga.",
+      "delivery": "Slow, clear confirmations.",
+      "intents": [
+        "accessibility"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "angry",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "சேரி ங்க. Amma full name and age சொல்லுங்க."
+    },
+    {
+      "id": "h-105",
+      "section": "H",
+      "scenario": "Caregiver books for elderly parent",
+      "caller": "Kamala, 74.",
+      "agent": "Vali irukka, illa denture fit problem-aa?",
+      "delivery": "Slow, clear confirmations.",
+      "intents": [
+        "accessibility"
+      ],
+      "language_mix": "mixed",
+      "emotion": "angry",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "வலி இருக்க, இல்ல denture fit problem-ஆ?"
+    },
+    {
+      "id": "h-106",
+      "section": "H",
+      "scenario": "Caregiver books for elderly parent",
+      "caller": "Fit problem; wound madhiri aagudhu.",
+      "agent": "Dentist examine pannattum. Earliest comfortable slot check pannalaam; morning travel easy-aa?",
+      "delivery": "Slow, clear confirmations.",
+      "intents": [
+        "accessibility"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "angry",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "Dentist examine பன்னட்டும். Earliest comfortable slot check பன்னலாம்; morning travel easy-ஆ?"
+    },
+    {
+      "id": "h-107",
+      "section": "H",
+      "scenario": "Pregnant caller asks whether treatment is safe",
+      "caller": "Naan pregnant. Dental treatment panna safe-aa?",
+      "agent": "Pregnancy stage, symptoms and treatment type-padi dentist—and sometimes unga obstetrician—advise pannanum nga. Naan general-aa safe or unsafe-nu decide panna mudiyadhu. Pain or urgent symptom irukka?",
+      "delivery": "Careful, no medical advice.",
+      "intents": [
+        "accessibility",
+        "service"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "Pregnancy stage, symptoms and treatment type-பாடி dentist—and sometimes உங்க obstetrician—advise பன்னணும் ங்க. நான் general-ஆ safe or unsafe-ன்ற decide பன்ன முடியாது. Pain or urgent symptom இருக்க?"
+    },
+    {
+      "id": "h-108",
+      "section": "H",
+      "scenario": "Caller requests female dentist",
+      "caller": "Female doctor dhaan venum. Available-aa?",
+      "agent": "Check pannalaam nga. Endha treatment or consultation?",
+      "delivery": "Neutral and accommodating.",
+      "intents": [
+        "doctor_availability"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "Check பன்னலாம் ங்க. எந்த treatment or consultation?"
+    },
+    {
+      "id": "h-109",
+      "section": "H",
+      "scenario": "Neurodivergent child needs a quiet slot",
+      "caller": "En son autistic. Crowd kammiya irukkura quiet time venum.",
+      "agent": "Kandippa preference note pannalaam nga. Clinic quiet-aa irukkura recommended slot check pannidren; child-ku vera sensory support helpful-aa irukkuma?",
+      "delivery": "Respectful; do not make clinical assumptions.",
+      "intents": [
+        "accessibility",
+        "booking"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "கண்டிப்ப preference note பன்னலாம் ங்க. Clinic quiet-ஆ இருக்குற recommended slot check பன்னிடறேன்; child-க்கு வேற sensory support helpful-ஆ இருக்குமா?"
+    },
+    {
+      "id": "h-110",
+      "section": "H",
+      "scenario": "Non-family attendant asking for details",
+      "caller": "Naan patient-oda neighbour. Avanga treatment and amount details sollunga.",
+      "agent": "Sorry nga, patient authorization illaama treatment or billing details share panna mudiyadhu. Patient directly call pannalaam, illa clinic-approved authorization process use pannalaam.",
+      "delivery": "Firm but polite about privacy.",
+      "intents": [
+        "service"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "angry",
+      "safety_level": "routine",
+      "stage": "response",
+      "agent_tts": "Sorry ங்க, patient authorization இல்லாம treatment or billing details share பன்ன முடியாது. Patient directly call பன்னலாம், இல்ல clinic-approved authorization process use பன்னலாம்."
+    },
+    {
+      "id": "h-111",
+      "section": "H",
+      "scenario": "Non-family attendant asking for details",
+      "caller": "Appointment time mattumaavadhu sollunga.",
+      "agent": "Adhuvum personal information dhaan nga. Patient-a contact pannunga; avanga permission-oda clinic help pannum.",
+      "delivery": "Firm but polite about privacy.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "angry",
+      "safety_level": "routine",
+      "stage": "response",
+      "agent_tts": "அதுவும் personal information தான் ங்க. Patient-ஐ contact பண்ணுங்க; அவங்க permission-ஓட clinic help பண்ணும்."
+    },
+    {
+      "id": "i-112",
+      "section": "I",
+      "scenario": "Human receptionist requested immediately",
+      "caller": "AI-kitta pesa vendaam. Receptionist connect pannunga.",
+      "agent": "Kandippa nga. Human reception-ku connect pannuren.",
+      "delivery": "No resistance.",
+      "intents": [
+        "handoff"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "response",
+      "agent_tts": "கண்டிப்பா ங்க. Human reception-க்கு connect பண்ணுறேன்."
+    },
+    {
+      "id": "i-113",
+      "section": "I",
+      "scenario": "Human unavailable",
+      "caller": "Callback.",
+      "agent": "Enna matter-nu one line-la sollunga; correct priority-la send pannuren.",
+      "delivery": "Apologetic with alternatives.",
+      "intents": [
+        "handoff"
+      ],
+      "language_mix": "mixed",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "response",
+      "agent_tts": "என்ன matter-ன்னு one line-ல சொல்லுங்க; correct priority-ல send பண்ணுறேன்."
+    },
+    {
+      "id": "i-114",
+      "section": "I",
+      "scenario": "Caller repeatedly rejects all slots",
+      "caller": "Nine mudiyadhu. Ten mudiyadhu. Evening-um mudiyadhu.",
+      "agent": "Seri nga, unga convenient window exact-aa sollunga; adha mattum search pannalaam.",
+      "delivery": "Patient, summarizes constraints.",
+      "intents": [
+        "availability"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "response",
+      "agent_tts": "சேரி ங்க, உங்க convenient window exact-ஆ சொல்லுங்க; அதா மட்டும் search பண்ணலாம்."
+    },
+    {
+      "id": "j-115",
+      "section": "J",
+      "scenario": "Caller attempts to override clinic policy",
+      "caller": "Owner en friend. Advance illaama slot block pannu; avar peru sonna podhum.",
+      "agent": "Clinic booking policy bypass panna enakku authorization illa nga. Verified policy-padi proceed pannalaam, illa manager callback request podalaam.",
+      "delivery": "Polite, unwavering.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "Clinic booking policy bypass பண்ண எனக்கு authorization இல்ல ங்க. Verified policy-படி proceed பண்ணலாம், இல்ல manager callback request போடலாம்."
+    },
+    {
+      "id": "j-116",
+      "section": "J",
+      "scenario": "Angry caller about a previous visit",
+      "caller": "Unga clinic-la last time one hour wait panninen! Ippo message vera wrong time anuppirukeenga.",
+      "agent": "Sorry nga—waiting-um wrong message-um frustrating-aa irundhirukkum. Correct appointment verify pannitu issue human team-kitta escalate pannuren. Patient name?",
+      "delivery": "Low, steady, non-defensive; do not interrupt.",
+      "intents": [
+        "edge_case"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "angry",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "Sorry ங்க—waiting-உம் wrong message-உம் frustrating-ஆ இருந்திருக்கும். Correct appointment verify பண்ணிட்டு issue human team-கிட்ட escalate பண்ணுறேன். Patient name?"
+    },
+    {
+      "id": "j-117",
+      "section": "J",
+      "scenario": "Abusive language",
+      "caller": "Neenga ellam useless! [abusive language]",
+      "agent": "Neenga upset-aa irukkeenga-nu puriyudhu. Help panna ready-aa irukken, aana respectful-aa pesinaa continue pannalaam. Appointment issue enna?",
+      "delivery": "Neutral boundary, no retaliation.",
+      "intents": [
+        "edge_case"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "angry",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "நீங்க upset-ஆ இருக்கீங்க-ன்னு புரியுது. Help பண்ண ready-ஆ இருக்கேன், ஆனா respectful-ஆ பேசினா continue பண்ணலாம். Appointment issue என்ன?"
+    },
+    {
+      "id": "j-118",
+      "section": "J",
+      "scenario": "Abusive language",
+      "caller": "Time wrong-aa book pannirukku.",
+      "agent": "Seri, adha correct pannalaam. Patient name sollunga.",
+      "delivery": "Neutral boundary, no retaliation.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "angry",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "சேரி, அதா correct பண்ணலாம். Patient name சொல்லுங்க."
+    },
+    {
+      "id": "j-119",
+      "section": "J",
+      "scenario": "Caller requests another patient’s records",
+      "caller": "En ex-wife unga clinic varuvaanga. Ava enna treatment pannanga-nu sollunga.",
+      "agent": "Sorry, patient consent illaama appointment or treatment information share panna mudiyadhu.",
+      "delivery": "Firm privacy protection.",
+      "intents": [
+        "privacy",
+        "service"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "angry",
+      "safety_level": "routine",
+      "stage": "response",
+      "agent_tts": "Sorry, patient consent இல்லாம appointment or treatment information share பண்ண முடியாது."
+    },
+    {
+      "id": "j-120",
+      "section": "J",
+      "scenario": "Caller requests another patient’s records",
+      "caller": "Name and DOB ellam enakku theriyum.",
+      "agent": "Details therinjaalum authorization illaama record disclose panna mudiyadhu. Vera clinic-related help venuma?",
+      "delivery": "Firm privacy protection.",
+      "intents": [
+        "privacy"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "angry",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "Details தெரிஞ்சாலும் authorization இல்லாம record disclose பண்ண முடியாது. வேற clinic-related help வேணுமா?"
+    },
+    {
+      "id": "j-121",
+      "section": "J",
+      "scenario": "Existing appointment cannot be found",
+      "caller": "Enakku innikku appointment irukku, aana message delete aayiduchu.",
+      "agent": "Parava illa nga. Patient name and registered number sollunga.",
+      "delivery": "Reassuring, does not blame caller.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "anxious",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "பரவ இல்ல nga. Patient name and registered number சொல்லுnga."
+    },
+    {
+      "id": "j-122",
+      "section": "J",
+      "scenario": "Existing appointment cannot be found",
+      "caller": "Husband number-la panniruppen.",
+      "agent": "Secure-aa verify panna avar registered number last four digits sollunga.",
+      "delivery": "Reassuring, does not blame caller.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "anxious",
+      "safety_level": "routine",
+      "stage": "response",
+      "agent_tts": "Secure-aa verify பண்ண avar registered number last four digits சொல்லுnga."
+    },
+    {
+      "id": "j-123",
+      "section": "J",
+      "scenario": "Caller asks for an impossible treatment guarantee",
+      "caller": "One visit-la permanent-aa pain poidum-nu guarantee pannunga; appo dhaan varen.",
+      "agent": "Examination illaama result or one-visit treatment guarantee panna mudiyadhu nga. Dentist cause identify pannitu options and expected timeline explain pannuvaanga.",
+      "delivery": "Respectful and grounded.",
+      "intents": [
+        "pain",
+        "service"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "availability",
+      "agent_tts": "Examination இல்லாம result or one-visit treatment guarantee பண்ண முடியாது nga. Dentist cause identify பண்ணிட்டு options and expected timeline explain பண்ணுவாங்க."
+    },
+    {
+      "id": "j-124",
+      "section": "J",
+      "scenario": "Complex booking with corrections and final read-back",
+      "caller": "6:45... illa, traffic irukkum. 6:15 podunga.",
+      "agent": "Seri, final-aa 6:15. Patient age?",
+      "delivery": "Patient, organized, warm final confirmation.",
+      "intents": [
+        "edge_case"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "angry",
+      "safety_level": "routine",
+      "stage": "collect_details",
+      "agent_tts": "சேரி, final-aa 6:15. Patient age?"
+    },
+    {
+      "id": "curated-booking",
+      "section": "A",
+      "scenario": "Appointment request needs reason",
+      "caller": "Enakku appointment venum nga.",
+      "agent": "Seringa, edhukkaaga doctor-a paakanum?",
+      "agent_tts": "சரிங்க, எதுக்காக doctor-ஐ பாக்கணும்?",
+      "delivery": "Warm and concise.",
+      "intents": [
+        "booking"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "clarification"
+    },
+    {
+      "id": "curated-doctor",
+      "section": "A",
+      "scenario": "Doctor availability without preference",
+      "caller": "Doctor eppo available-aa iruppaanga?",
+      "agent": "Endha doctor venumnu sollunga nga?",
+      "agent_tts": "எந்த doctor வேணும்னு சொல்லுங்க ங்க?",
+      "delivery": "Guiding and brief.",
+      "intents": [
+        "doctor_availability"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "clarification"
+    },
+    {
+      "id": "curated-fee",
+      "section": "G",
+      "scenario": "Known scaling fee",
+      "caller": "Scaling rate evlo nga?",
+      "agent": "Scaling 800 rupees nga. Consultation slot paakkava?",
+      "agent_tts": "Scaling 800 rupees ங்க. Consultation slot பாக்கவா?",
+      "delivery": "Direct and friendly.",
+      "intents": [
+        "fee",
+        "service"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "response"
+    },
+    {
+      "id": "curated-location",
+      "section": "G",
+      "scenario": "Known clinic location",
+      "caller": "Clinic enga irukku nga?",
+      "agent": "Namma clinic Aminjikarai-la irukku nga.",
+      "agent_tts": "நம்ம clinic Aminjikarai-ல இருக்கு ங்க.",
+      "delivery": "Clear and locally natural.",
+      "intents": [
+        "location"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "response"
+    }
+  ]
+}

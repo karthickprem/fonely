@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import math
 import os
+import re
+from pathlib import Path
 
 import aiohttp
 from loguru import logger
@@ -36,8 +38,11 @@ from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
-from processors import DentalSafetyProcessor
+from processors import ChennaiStyleProcessor, DentalSafetyProcessor
 from services import SarvamStreamingHttpTTSService
+from style_retriever import ChennaiStyleRetriever
+
+STYLE_CORPUS = Path(__file__).resolve().parent / "data" / "chennai_dental_style.json"
 
 SYSTEM_PROMPT = """You are Fonely, the virtual receptionist for the synthetic Smile Dental Clinic in Aminjikarai, Chennai.
 
@@ -46,10 +51,12 @@ Speak like a warm local Chennai receptionist, not a chatbot.
 - Write Tamil words in Tamil script; keep genuine English words in English.
 - Maximum 15 spoken words in exactly one sentence.
 - Ask exactly one short question per turn.
-- Never dump schedules, doctors, or services.
+- Never dump schedules, doctors, or services. Offer at most two slots in one turn.
 - Use natural Chennai phrases selectively: சரிங்க, அப்படியா, அட பாவம், okay.
 - No markdown, lists, or meta commentary.
 - This is a demo: never claim a booking was stored, a doctor was alerted, or staff was connected.
+- Turn-local <chennai_style_references> guide rhythm and warmth only. Never copy their facts, names, actions, slots, or promises.
+- Reference examples may use Roman Tamil; your spoken output must use Tamil script for Tamil words.
 
 Clinic facts, only when relevant:
 Dr. Priya: Mon-Sat, general, root canal, scaling, extraction.
@@ -58,14 +65,29 @@ Hours: 10-1 and 5-8:30, Mon-Sat. Sunday closed.
 Consultation ₹300; root canal ₹3500-5500; scaling ₹800; extraction ₹500-1500.
 Tomorrow: 10, 11, 5, 6:30, 7:30.
 
+Conversation policy:
+- Appointment request with no reason: ask only why they need to visit.
+- Doctor availability with no named doctor: ask only which doctor they prefer.
+- Location question: answer only the location; do not ask about booking.
+- Fee question: answer the known fee only; at most ask whether to check a consultation slot.
+- Never assign a slot to a specific doctor unless that doctor-slot pairing is explicitly in the facts. It is not currently available.
+- Never say a booking is confirmed; this lab has no booking tool.
+
 Good responses:
 "சரிங்க, எதுக்கு வரணும் சொல்லுங்க?"
-"Dr. Priya நாளைக்கு 6:30 free. வரீங்களா?"
+"எந்த doctor வேணும்னு சொல்லுங்க?"
+"நம்ம clinic Aminjikarai-ல இருக்கு."
+"Scaling ₹800. Consultation slot பாக்கவா?"
 "உங்க பேரு சொல்லுங்க."
 "Details note பண்ணிட்டேன்; இது demo மட்டும்."
 """
 
 GREETING = "வணக்கம், Smile Dental Clinic. நான் Fonely virtual receptionist. எப்படி help பண்ணலாம்?"
+
+
+async def clean_spoken_text(text: str, _aggregation_type) -> str:
+    """Fix narrow repeated-syllable glitches without rewriting content."""
+    return re.sub(r"^ச+ரிங்க", "சரிங்க", text.strip())
 
 
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
@@ -110,7 +132,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
                 model="claude-haiku-4-5",
                 system_instruction=SYSTEM_PROMPT,
                 max_tokens=80,
-                temperature=0.4,
+                temperature=0.2,
             ),
         )
         tts = SarvamStreamingHttpTTSService(
@@ -122,6 +144,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             temperature=temperature,
             sample_rate=24000,
         )
+        tts.add_text_transformer(clean_spoken_text)
 
         vad = SileroVADAnalyzer(
             sample_rate=16000,
@@ -159,12 +182,14 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         )
 
         safety = DentalSafetyProcessor()
+        style = ChennaiStyleProcessor(ChennaiStyleRetriever(STYLE_CORPUS))
         pipeline = Pipeline(
             [
                 transport.input(),
                 stt,
                 user_aggregator,
                 safety,
+                style,
                 llm,
                 tts,
                 transport.output(),

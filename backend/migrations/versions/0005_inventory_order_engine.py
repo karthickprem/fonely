@@ -392,6 +392,27 @@ def upgrade() -> None:
         )
     )
 
+    # --- Immutable order line items ---
+    op.execute(
+        sa.text(
+            """CREATE FUNCTION reject_order_line_item_mutation()
+               RETURNS trigger LANGUAGE plpgsql AS $$
+               BEGIN
+                   RAISE EXCEPTION USING ERRCODE = '23514',
+                       CONSTRAINT = 'ck_order_line_item_immutable',
+                       MESSAGE = 'order line items are immutable evidence';
+               END;
+               $$"""
+        )
+    )
+    op.execute(
+        sa.text(
+            """CREATE TRIGGER ck_order_line_item_immutable
+               BEFORE UPDATE OR DELETE ON order_line_items
+               FOR EACH ROW EXECUTE FUNCTION reject_order_line_item_mutation()"""
+        )
+    )
+
 
 def downgrade() -> None:
     _lock_affected_tables()
@@ -406,6 +427,10 @@ def downgrade() -> None:
                 "AS integer) END"
             )
         )
+
+    # --- Drop immutable order-line trigger ---
+    op.execute(sa.text("DROP TRIGGER ck_order_line_item_immutable ON order_line_items"))
+    op.execute(sa.text("DROP FUNCTION reject_order_line_item_mutation()"))
 
     # --- Drop append-only trigger ---
     op.execute(sa.text("DROP TRIGGER ck_inventory_movement_append_only ON inventory_movements"))

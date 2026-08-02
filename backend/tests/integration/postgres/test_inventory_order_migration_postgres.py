@@ -197,6 +197,134 @@ async def test_direct_inventory_idempotency_conflict(pg_session: AsyncSession) -
 
 
 # =============================================================================
+# Order line item immutability contracts
+# =============================================================================
+
+
+async def _seed_order_with_lines(session: AsyncSession) -> int:
+    """Seed a complete order with one line item. Returns the order ID."""
+    await seed(session)
+    await session.execute(
+        text(
+            "INSERT INTO business_users (business_id, phone, role, is_active) VALUES "
+            "(1, '+919222222222', 'owner', true)"
+        )
+    )
+    service = InventoryService(session)
+    await service.set_stock(
+        SetOwnerStockCommand(
+            actor=owner(), product_id=1, quantity="20", occurred_at=NOW, idempotency_key="seed-imm"
+        )
+    )
+    await session.execute(
+        text(
+            "INSERT INTO pending_actions "
+            "(id, business_id, action_type, payload_schema_version, proposed_payload, "
+            "status, expires_at, idempotency_key, version, payload_digest) VALUES "
+            "(1, 1, 'order', 1, :payload, 'confirmed', '2026-08-02T00:00:00+05:30', "
+            "'pa-imm', 3, 'abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234')"
+        ),
+        {
+            "payload": '{"schema_version":1,"action_type":"order","data":'
+            '{"customer_name":"X","customer_phone":"+919222222222",'
+            '"pickup_at":"2026-08-01T12:00:00+05:30",'
+            '"lines":[{"product_id":1,"quantity":"2"}]}}'
+        },
+    )
+    await session.execute(
+        text(
+            "INSERT INTO orders (id, business_id, customer_name, customer_phone, "
+            "total_amount, status, idempotency_key, pending_action_id) VALUES "
+            "(1, 1, 'Customer X', '+919222222222', 200.00, 'confirmed', 'ord-imm', 1)"
+        )
+    )
+    await session.execute(
+        text(
+            "INSERT INTO order_line_items "
+            "(id, business_id, order_id, product_id, product_name_snapshot, qty, unit, "
+            "price_per_unit_snapshot, subtotal) VALUES "
+            "(1, 1, 1, 1, 'Rice', 2.00, 'kg', 100.00, 200.00)"
+        )
+    )
+    return 1
+
+
+async def test_order_line_update_rejected(pg_session: AsyncSession) -> None:
+    await _seed_order_with_lines(pg_session)
+    with pytest.raises(IntegrityError, match="immutable evidence"):
+        await pg_session.execute(text("UPDATE order_line_items SET qty = 999 WHERE id = 1"))
+        await pg_session.flush()
+
+
+async def test_order_line_snapshot_update_rejected(pg_session: AsyncSession) -> None:
+    await _seed_order_with_lines(pg_session)
+    with pytest.raises(IntegrityError, match="immutable evidence"):
+        await pg_session.execute(
+            text("UPDATE order_line_items SET product_name_snapshot = 'Altered' WHERE id = 1")
+        )
+        await pg_session.flush()
+
+
+async def test_order_line_price_update_rejected(pg_session: AsyncSession) -> None:
+    await _seed_order_with_lines(pg_session)
+    with pytest.raises(IntegrityError, match="immutable evidence"):
+        await pg_session.execute(
+            text("UPDATE order_line_items SET price_per_unit_snapshot = 999.99 WHERE id = 1")
+        )
+        await pg_session.flush()
+
+
+async def test_order_line_delete_rejected(pg_session: AsyncSession) -> None:
+    await _seed_order_with_lines(pg_session)
+    with pytest.raises(IntegrityError, match="immutable evidence"):
+        await pg_session.execute(text("DELETE FROM order_line_items WHERE id = 1"))
+        await pg_session.flush()
+
+
+async def test_order_line_unchanged_after_rejected_mutation(pg_session: AsyncSession) -> None:
+    await _seed_order_with_lines(pg_session)
+    before = (
+        await pg_session.execute(
+            text(
+                "SELECT product_name_snapshot, qty, price_per_unit_snapshot, subtotal "
+                "FROM order_line_items WHERE id = 1"
+            )
+        )
+    ).one()
+    try:
+        await pg_session.execute(text("UPDATE order_line_items SET qty = 999 WHERE id = 1"))
+    except IntegrityError:
+        await pg_session.rollback()
+    await _seed_order_with_lines(pg_session)
+    after = (
+        await pg_session.execute(
+            text(
+                "SELECT product_name_snapshot, qty, price_per_unit_snapshot, subtotal "
+                "FROM order_line_items WHERE id = 1"
+            )
+        )
+    ).one()
+    assert tuple(before) == tuple(after)
+
+
+async def test_product_mutation_does_not_alter_line_snapshot(pg_session: AsyncSession) -> None:
+    await _seed_order_with_lines(pg_session)
+    await pg_session.execute(
+        text("UPDATE products SET price_per_unit = 999.99, name = 'New Rice' WHERE id = 1")
+    )
+    line = (
+        await pg_session.execute(
+            text(
+                "SELECT product_name_snapshot, price_per_unit_snapshot "
+                "FROM order_line_items WHERE id = 1"
+            )
+        )
+    ).one()
+    assert line[0] == "Rice"
+    assert line[1] == 100
+
+
+# =============================================================================
 # Populated migration cycle contracts
 # =============================================================================
 

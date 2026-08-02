@@ -1168,6 +1168,14 @@ def test_0005_append_only_trigger_is_rendered() -> None:
     assert "BEFORE UPDATE OR DELETE ON inventory_movements" in rendered
 
 
+def test_0005_order_line_immutability_trigger_is_rendered() -> None:
+    rendered = "\n".join(_capture_upgrade().executed_sql)
+    assert "reject_order_line_item_mutation" in rendered
+    assert "ck_order_line_item_immutable" in rendered
+    assert "order line items are immutable evidence" in rendered
+    assert "BEFORE UPDATE OR DELETE ON order_line_items" in rendered
+
+
 def test_0005_offline_guard_checks_order_line_items() -> None:
     source = MIGRATION_0005.read_text()
     offline_block = source[source.index("else:") : source.index("# --- Prerequisite")]

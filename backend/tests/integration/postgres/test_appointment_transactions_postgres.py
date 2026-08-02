@@ -277,25 +277,17 @@ async def test_replay_returns_same_appointment(
         await _seed_catalog(session)
         result1 = await _create_and_confirm(session)
         assert isinstance(result1, PreCommitAppointmentSuccess)
+        pa_id = result1.appointment.pending_action_id
+        pa_version = result1.pending_action_version
         await session.commit()
 
     async with pg_session_factory() as session:
         service = AppointmentService(session, validation=StubValidationPort())
-        proposal = await service.create_proposal(
-            CreatePendingAppointmentCommand(
-                actor=_actor(),
-                service_id=1,
-                start_at=START,
-                customer_phone="+919123456789",
-                expires_at=utcnow() + timedelta(minutes=15),
-                idempotency_key="test-appt-1",
-            )
-        )
         result2 = await service.confirm_and_commit(
             ConfirmPendingAppointmentCommand(
                 actor=_actor(),
-                pending_action_id=proposal.pending_action_id,
-                expected_version=proposal.version,
+                pending_action_id=pa_id,
+                expected_version=pa_version,
             )
         )
         assert isinstance(result2, PreCommitAppointmentSuccess)
@@ -310,11 +302,12 @@ async def test_adjacent_slots_succeed(
         await _seed_catalog(session)
         r1 = await _create_and_confirm(session, idempotency_key="slot-1", start_at=START)
         assert isinstance(r1, PreCommitAppointmentSuccess)
+        await session.commit()
 
+    async with pg_session_factory() as session:
         adjacent_start = END
         r2 = await _create_and_confirm(session, idempotency_key="slot-2", start_at=adjacent_start)
         assert isinstance(r2, PreCommitAppointmentSuccess)
-
         alloc_count = await session.scalar(select(func.count(ResourceAllocation.id)))
         assert alloc_count == 2
         await session.rollback()
@@ -335,7 +328,9 @@ async def test_different_resources_same_time_succeed(
 
         r1 = await _create_and_confirm(session, idempotency_key="res-1-slot")
         assert isinstance(r1, PreCommitAppointmentSuccess)
+        await session.commit()
 
+    async with pg_session_factory() as session:
         facts2 = _facts(resource_id=2)
         r2 = await _create_and_confirm(
             session,

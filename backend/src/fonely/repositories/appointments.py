@@ -49,11 +49,6 @@ class AppointmentRepository:
         resource_id: int,
     ) -> None:
         await self._session.execute(
-            select(text("1"))
-            .select_from(text("resources"))
-            .where(
-                text("business_id = :bid AND id = :rid"),
-            )
-            .with_for_update()
-            .params(bid=business_id, rid=resource_id)
+            text("SELECT 1 FROM resources WHERE business_id = :bid AND id = :rid FOR UPDATE"),
+            {"bid": business_id, "rid": resource_id},
         )

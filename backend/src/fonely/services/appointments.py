@@ -181,9 +181,7 @@ class AppointmentService:
                     "reason": data.reason,
                     "status": AppointmentStatus.CONFIRMED.value,
                     "source": AppointmentSource.CUSTOMER_CONVERSATION.value,
-                    "idempotency_key": begin_result.payload.get(
-                        "idempotency_key", f"pa-{context.pending_action_id}"
-                    ),
+                    "idempotency_key": f"pa-{context.pending_action_id}",
                     "pending_action_id": context.pending_action_id,
                     "call_id": data.call_id,
                 }

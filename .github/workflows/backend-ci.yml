@@ -104,6 +104,20 @@ jobs:
       - name: Alembic check
         run: .venv/bin/alembic check
 
+      - name: Readiness verifier unit tests
+        working-directory: .
+        run: backend/.venv/bin/python -m pytest scripts/tests/test_check_deployment_readiness.py -q
+
+      - name: Database deployment readiness check
+        working-directory: .
+        env:
+          FONELY_READINESS_DATABASE_URL: ${{ env.FONELY_TEST_DATABASE_URL }}
+          FONELY_READINESS_ENVIRONMENT: github-ci
+        run: |
+          output=$(backend/.venv/bin/python scripts/check-deployment-readiness.py)
+          echo "$output"
+          echo "$output" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['overall_status']=='passed', f'readiness failed: {d[\"overall_status\"]}'"
+
       - name: Unit and non-PostgreSQL tests
         run: .venv/bin/pytest -m "not postgres" -q
 

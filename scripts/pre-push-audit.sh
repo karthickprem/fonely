@@ -286,6 +286,16 @@ APPROVED_DATABASE_URLS: dict[str, set[str]] = {
         "postgresql+asyncpg://fonely_test_user:secret@{hostname}:5432/fonely_test",
         "postgresql+asyncpg://app_user:secret@localhost:5432/fonely_test",
     },
+    "scripts/tests/test_check_deployment_readiness.py": {
+        "postgresql+asyncpg://u:p@localhost/db",
+        "postgresql+asyncpg://secret_user:TopSecret123@prod.example.com/fonely",
+        "postgresql+asyncpg://u:secret@localhost:59999/db",
+        "postgresql+asyncpg://user:pass@host:5432/db",
+        "postgresql+asyncpg://u:p@h/d",
+    },
+    "docs/testing/STAGING_READINESS.md": {
+        "postgresql+asyncpg://fonely_test:fonely_test@localhost:5432/fonely_test",
+    },
     "scripts/pre-push-audit.sh": {
         "postgresql+asyncpg://user:password@localhost:5432/fonely",
         "postgresql+asyncpg://fonely_test:fonely_test_ci_only@localhost:5432/fonely_test",
@@ -295,6 +305,12 @@ APPROVED_DATABASE_URLS: dict[str, set[str]] = {
         "postgresql+asyncpg://fonely_test_user:secret@localhost:5432/{database_name}",
         "postgresql+asyncpg://fonely_test_user:secret@{hostname}:5432/fonely_test",
         "postgresql+asyncpg://app_user:secret@localhost:5432/fonely_test",
+        "postgresql+asyncpg://u:p@localhost/db",
+        "postgresql+asyncpg://secret_user:TopSecret123@prod.example.com/fonely",
+        "postgresql+asyncpg://u:secret@localhost:59999/db",
+        "postgresql+asyncpg://user:pass@host:5432/db",
+        "postgresql+asyncpg://u:p@h/d",
+        "postgresql+asyncpg://fonely_test:fonely_test@localhost:5432/fonely_test",
     },
 }
 

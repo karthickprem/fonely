@@ -60,6 +60,12 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: str = ""
 
+    # WhatsApp
+    whatsapp_verify_token: str = ""
+    whatsapp_access_token: str = ""
+    whatsapp_phone_number_id: str = ""
+    whatsapp_business_mappings: str = ""
+
     # Shutdown
     shutdown_timeout_seconds: float = 10.0
 

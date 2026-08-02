@@ -12,7 +12,7 @@ Deploy Fonely's backend for internal testing with real appointment flows.
 
 ```bash
 # 1. Configure
-cp .env.staging.template .env.staging
+cp docs/staging-env.template .env.staging
 # Edit .env.staging — set real passwords and secrets
 
 # 2. Start everything (PostgreSQL → migrate → backend)

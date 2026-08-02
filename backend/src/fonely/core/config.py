@@ -50,6 +50,19 @@ class Settings(BaseSettings):
     log_format: str = "text"
     log_level: str = "INFO"
 
+    # Rate limiting
+    rate_limit_per_minute: int = 60
+
+    # Request protection
+    max_request_body_bytes: int = 1_048_576
+    request_timeout_seconds: float = 30.0
+
+    # CORS
+    cors_origins: str = ""
+
+    # Shutdown
+    shutdown_timeout_seconds: float = 10.0
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 

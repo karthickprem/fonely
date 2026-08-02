@@ -3,7 +3,9 @@
 # NEVER commit real secrets.
 
 POSTGRES_PASSWORD=changeme-generate-a-real-password
-DATABASE_URL=postgresql+asyncpg://fonely:changeme-generate-a-real-password@postgres:5432/fonely
+# Construct DATABASE_URL from your actual credentials:
+# DATABASE_URL=postgresql+asyncpg://<user>:<password>@<host>:5432/<database>
+DATABASE_URL=
 INTERNAL_API_SECRET=changeme-generate-a-real-secret
 
 # Logging

@@ -92,7 +92,6 @@ class AppointmentService:
     ) -> AppointmentProposalResult:
         resolved_envelope = await self._resolve_envelope(command)
         assert isinstance(resolved_envelope.data, CreateAppointmentData)
-        facts = resolved_envelope.data.facts
 
         pa_result = await self._pa_service.create(
             CreatePendingActionCommand(
@@ -113,11 +112,15 @@ class AppointmentService:
                 )
             )
 
+        stored_envelope = PendingAppointmentEnvelope.model_validate(pa_result.payload)
+        assert isinstance(stored_envelope.data, CreateAppointmentData)
+        stored_facts = stored_envelope.data.facts
+
         return AppointmentProposalResult(
             pending_action_id=pa_result.id,
             version=pa_result.version,
             expires_at=pa_result.expires_at,
-            confirmation_facts=self._to_confirmation_facts(facts),
+            confirmation_facts=self._to_confirmation_facts(stored_facts),
         )
 
     async def confirm_and_commit(

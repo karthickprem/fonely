@@ -15,6 +15,7 @@ from fonely.domain.pending_actions.payloads import (
     CreateAppointmentData,
     PendingAppointmentEnvelope,
 )
+from fonely.domain.pending_actions.snapshots import canonical_payload_dict
 from fonely.models.enums import CallerRole
 from fonely.services.appointments import AppointmentService
 
@@ -76,6 +77,7 @@ async def test_create_proposal_returns_awaiting_confirmation() -> None:
     awaiting_result.version = 2
     awaiting_result.status = "awaiting_confirmation"
     awaiting_result.expires_at = START + timedelta(hours=1)
+    awaiting_result.payload = canonical_payload_dict(_resolved_envelope())
 
     pa_service_mock.create.return_value = create_result
     pa_service_mock.mark_awaiting_confirmation.return_value = awaiting_result
@@ -118,6 +120,7 @@ async def test_create_proposal_does_not_commit() -> None:
     awaiting_result.version = 2
     awaiting_result.status = "awaiting_confirmation"
     awaiting_result.expires_at = START + timedelta(hours=1)
+    awaiting_result.payload = canonical_payload_dict(_resolved_envelope())
 
     pa_service_mock.create.return_value = create_result
     pa_service_mock.mark_awaiting_confirmation.return_value = awaiting_result
@@ -150,6 +153,7 @@ async def test_proposal_validates_once() -> None:
     create_result.id = 1
     create_result.version = 2
     create_result.expires_at = START + timedelta(hours=1)
+    create_result.payload = canonical_payload_dict(_resolved_envelope())
 
     pa_service_mock.create.return_value = create_result
 

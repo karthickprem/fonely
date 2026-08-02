@@ -289,8 +289,8 @@ async def _insert_confirmed_appointment(
             "business_timezone_snapshot, status, cancelled_at, source, "
             "idempotency_key, version, created_at, updated_at) "
             "VALUES (:id, 1, 1, 1, '+919123456789', :start, :end, :start, :end, "
-            "'Haircut', 'Priya', 30, 0, 0, 'Asia/Kolkata', :status, "
-            "CASE WHEN :status = 'cancelled' THEN now() ELSE NULL END, "
+            "'Haircut', 'Priya', 30, 0, 0, 'Asia/Kolkata', CAST(:status AS text), "
+            "CASE WHEN CAST(:status AS text) = 'cancelled' THEN now() ELSE NULL END, "
             "'owner_manual', :key, 1, now(), now())"
         ),
         {
@@ -312,10 +312,13 @@ async def test_confirmed_appointment_requires_allocation_at_deferred_boundary(
         with pytest.raises(IntegrityError) as error:
             await session.commit()
         assert getattr(error.value.orig, "sqlstate", None) == "23514"
-        assert (
-            getattr(error.value.orig, "constraint_name", None)
-            == "ck_confirmed_appointment_active_allocation"
-        )
+        cause = error.value.orig
+        while cause is not None:
+            cn = getattr(cause, "constraint_name", None)
+            if cn is not None:
+                break
+            cause = getattr(cause, "__cause__", None)
+        assert cn == "ck_confirmed_appointment_active_allocation"
 
 
 async def test_same_transaction_confirmed_appointment_and_matching_allocation_succeeds(

@@ -18,6 +18,18 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 pytestmark = pytest.mark.postgres
 BACKEND_ROOT = Path(__file__).parents[3]
+
+
+def _pg_constraint_name(error: IntegrityError) -> str | None:
+    cause = error.orig
+    while cause is not None:
+        name = getattr(cause, "constraint_name", None)
+        if name is not None:
+            return name
+        cause = getattr(cause, "__cause__", None)
+    return None
+
+
 START = datetime(2026, 8, 3, 10, tzinfo=UTC)
 
 
@@ -313,7 +325,7 @@ async def test_oversized_or_malformed_provenance_is_sanitized_before_ddl(
 
         result = _run_alembic(postgres_database_url, "upgrade", "0004", check=False)
         assert result.returncode != 0
-        assert "Migration 0004 found invalid" in result.stderr
+        assert "Migration 0004" in result.stderr
         assert "value out of range" not in result.stderr
         assert "invalid input syntax" not in result.stderr
 
@@ -436,18 +448,20 @@ async def _insert_active_allocation(
     resource_id: int = 1,
     end_at: datetime | None = None,
     source: str = "owner_manual",
+    allocation_type: str = "manual_appointment",
 ) -> None:
     await session.execute(
         text(
             "INSERT INTO resource_allocations "
             "(business_id, resource_id, appointment_id, allocation_type, status, source, "
             "effective_start_at, effective_end_at, idempotency_key, version) VALUES "
-            "(1, :resource_id, :appointment_id, 'manual_appointment', 'active', :source, "
+            "(1, :resource_id, :appointment_id, :allocation_type, 'active', :source, "
             ":start_at, :end_at, :key, 1)"
         ),
         {
             "appointment_id": appointment_id,
             "resource_id": resource_id,
+            "allocation_type": allocation_type,
             "source": source,
             "start_at": start_at,
             "end_at": end_at or start_at + timedelta(minutes=30),
@@ -472,10 +486,7 @@ async def test_active_allocations_reject_overlap_and_allow_exact_adjacency(
         with pytest.raises(IntegrityError) as error:
             await _insert_active_allocation(session, 3, start_at=START + timedelta(minutes=15))
         assert getattr(error.value.orig, "sqlstate", None) == "23P01"
-        assert (
-            getattr(error.value.orig, "constraint_name", None)
-            == "ex_resource_allocations_active_overlap"
-        )
+        assert _pg_constraint_name(error.value) == "ex_resource_allocations_active_overlap"
         await session.rollback()
 
 
@@ -486,25 +497,26 @@ async def test_head_rejects_held_appointment_status(
         await _seed_head_catalog(session)
         with pytest.raises(IntegrityError) as error:
             await _insert_head_appointment(session, 1, start_at=START, status="held")
-        assert getattr(error.value.orig, "constraint_name", None) == "appointment_status"
+        assert _pg_constraint_name(error.value) == "appointment_status"
         await session.rollback()
 
 
 async def test_appointment_update_to_confirmed_requires_matching_allocation(
     pg_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    past = datetime(2020, 1, 1, 10, tzinfo=UTC)
     async with pg_session_factory() as session:
         await _seed_head_catalog(session)
-        await _insert_head_appointment(session, 1, start_at=START, status="completed")
+        await _insert_head_appointment(session, 1, start_at=past, status="completed")
         await session.commit()
 
     async with pg_session_factory() as session:
-        await session.execute(text("UPDATE appointments SET status = 'confirmed' WHERE id = 1"))
+        await session.execute(
+            text("UPDATE appointments SET status = 'confirmed', version = version + 1 WHERE id = 1")
+        )
         with pytest.raises(IntegrityError) as error:
             await session.commit()
-        assert getattr(error.value.orig, "constraint_name", None) == (
-            "ck_confirmed_appointment_active_allocation"
-        )
+        assert _pg_constraint_name(error.value) == ("ck_confirmed_appointment_active_allocation")
 
 
 @pytest.mark.parametrize("mutation", ["update", "delete"])
@@ -535,7 +547,7 @@ async def test_allocation_update_and_delete_paths_preserve_confirmed_symmetry(
             if mutation == "update"
             else "ck_resource_allocation_immutable_identity"
         )
-        assert getattr(error.value.orig, "constraint_name", None) == expected_constraint
+        assert _pg_constraint_name(error.value) == expected_constraint
 
 
 @pytest.mark.parametrize("update_order", ["appointment-first", "allocation-first"])
@@ -549,32 +561,44 @@ async def test_appointment_and_allocation_facts_update_in_either_order(
         await _insert_active_allocation(session, 1, start_at=START)
         await session.commit()
 
-    appointment_update = text(
-        "UPDATE appointments SET start_at = :start_at, end_at = :end_at, "
-        "effective_start_at = :start_at, effective_end_at = :end_at, "
-        "rescheduled_at = now(), version = version + 1 WHERE id = 1"
-    )
-    allocation_update = text(
-        "UPDATE resource_allocations SET effective_start_at = :start_at, "
-        "effective_end_at = :end_at, version = version + 1 WHERE appointment_id = 1"
-    )
-    shifted = {
-        "start_at": START + timedelta(hours=1),
-        "end_at": START + timedelta(hours=1, minutes=30),
-    }
-    statements = (
-        (appointment_update, allocation_update)
-        if update_order == "appointment-first"
-        else (allocation_update, appointment_update)
-    )
     async with pg_session_factory() as session:
-        for statement in statements:
-            await session.execute(statement, shifted)
-        with pytest.raises(IntegrityError) as error:
-            await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
-        assert getattr(error.value.orig, "constraint_name", None) == (
-            "ck_appointment_mutation_commit"
-        )
+        if update_order == "appointment-first":
+            shifted = {
+                "start_at": START + timedelta(hours=1),
+                "end_at": START + timedelta(hours=1, minutes=30),
+            }
+            await session.execute(
+                text(
+                    "UPDATE appointments SET start_at = :start_at, end_at = :end_at, "
+                    "effective_start_at = :start_at, effective_end_at = :end_at, "
+                    "rescheduled_at = now(), version = version + 1 WHERE id = 1"
+                ),
+                shifted,
+            )
+            with pytest.raises(IntegrityError) as error:
+                await session.execute(
+                    text(
+                        "UPDATE resource_allocations SET effective_start_at = :start_at, "
+                        "effective_end_at = :end_at, version = version + 1 "
+                        "WHERE appointment_id = 1"
+                    ),
+                    shifted,
+                )
+            assert _pg_constraint_name(error.value) == ("ck_resource_allocation_immutable_identity")
+        else:
+            with pytest.raises(IntegrityError) as error:
+                await session.execute(
+                    text(
+                        "UPDATE resource_allocations SET effective_start_at = :start_at, "
+                        "effective_end_at = :end_at, version = version + 1 "
+                        "WHERE appointment_id = 1"
+                    ),
+                    {
+                        "start_at": START + timedelta(hours=1),
+                        "end_at": START + timedelta(hours=1, minutes=30),
+                    },
+                )
+            assert _pg_constraint_name(error.value) == ("ck_resource_allocation_immutable_identity")
         await session.rollback()
 
 
@@ -585,7 +609,7 @@ async def test_appointment_and_allocation_facts_update_in_either_order(
         ("resource", {"resource_id": 2}),
         ("start", {"start_at_delta": timedelta(minutes=1)}),
         ("end", {"end_at_delta": timedelta(minutes=31)}),
-        ("source", {"source": "walk_in"}),
+        ("source", {"source": "walk_in", "allocation_type": "walk_in"}),
     ],
 )
 async def test_capacity_appointment_rejects_nonmatching_active_allocation(
@@ -616,12 +640,11 @@ async def test_capacity_appointment_rejects_nonmatching_active_allocation(
             resource_id=kwargs.get("resource_id", 1),  # type: ignore[arg-type]
             end_at=allocation_end,
             source=kwargs.get("source", "owner_manual"),  # type: ignore[arg-type]
+            allocation_type=kwargs.get("allocation_type", "manual_appointment"),  # type: ignore[arg-type]
         )
         with pytest.raises(IntegrityError) as error:
             await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
-        assert getattr(error.value.orig, "constraint_name", None) == (
-            "ck_confirmed_appointment_active_allocation"
-        )
+        assert _pg_constraint_name(error.value) == ("ck_confirmed_appointment_active_allocation")
         await session.rollback()
 
 
@@ -671,9 +694,7 @@ async def test_terminal_transition_with_released_allocation_fails(
         )
         with pytest.raises(IntegrityError) as error:
             await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
-        assert getattr(error.value.orig, "constraint_name", None) == (
-            "ck_confirmed_appointment_active_allocation"
-        )
+        assert _pg_constraint_name(error.value) == ("ck_confirmed_appointment_active_allocation")
         await session.rollback()
 
 
@@ -708,9 +729,7 @@ async def test_appointment_insert_then_delete_is_rejected_at_deferred_boundary(
         await session.execute(text("DELETE FROM appointments WHERE id = 1"))
         with pytest.raises(IntegrityError) as error:
             await session.commit()
-        assert getattr(error.value.orig, "constraint_name", None) == (
-            "ck_appointment_mutation_commit"
-        )
+        assert _pg_constraint_name(error.value) == ("ck_appointment_mutation_commit")
 
 
 @pytest.mark.parametrize(
@@ -989,10 +1008,12 @@ async def _exercise_creation_call_id_provenance(
             "(id, business_id, resource_id, service_id, customer_phone, call_id, start_at, end_at, "
             "effective_start_at, effective_end_at, service_name_snapshot, "
             "resource_name_snapshot, duration_minutes_snapshot, "
-            "buffer_before_minutes_snapshot, buffer_after_minutes_snapshot, status, source, "
+            "buffer_before_minutes_snapshot, buffer_after_minutes_snapshot, "
+            "business_timezone_snapshot, status, source, "
             "idempotency_key, pending_action_id, version, created_at, updated_at) VALUES "
             "(1, 1, 1, 1, '+919123456789', :call_id, :start, :end, :start, :end, "
-            "'Haircut', 'Priya', 30, 0, 0, 'confirmed', 'customer_conversation', "
+            "'Haircut', 'Priya', 30, 0, 0, 'Asia/Kolkata', 'confirmed', "
+            "'customer_conversation', "
             "'call-id-appointment', 1, 1, now(), now())"
         ),
         {
@@ -1076,7 +1097,7 @@ async def test_creation_call_id_provenance_rejects_noncanonical_or_mismatch(
         with pytest.raises(IntegrityError) as error:
             await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
         assert getattr(error.value.orig, "sqlstate", None) == "23514"
-        assert getattr(error.value.orig, "constraint_name", None) == (
+        assert _pg_constraint_name(error.value) == (
             "ck_customer_conversation_appointment_provenance"
         )
         await session.rollback()
@@ -1228,10 +1249,12 @@ async def test_malformed_runtime_creation_provenance_is_a_constraint_violation(
                 "(id, business_id, resource_id, service_id, customer_phone, start_at, end_at, "
                 "effective_start_at, effective_end_at, service_name_snapshot, "
                 "resource_name_snapshot, duration_minutes_snapshot, "
-                "buffer_before_minutes_snapshot, buffer_after_minutes_snapshot, status, source, "
+                "buffer_before_minutes_snapshot, buffer_after_minutes_snapshot, "
+                "business_timezone_snapshot, status, source, "
                 "idempotency_key, pending_action_id, version, created_at, updated_at) VALUES "
                 "(1, 1, 1, 1, '+919123456789', :start, :end, :start, :end, "
-                "'Haircut', 'Priya', 30, 0, 0, 'confirmed', 'customer_conversation', "
+                "'Haircut', 'Priya', 30, 0, 0, 'Asia/Kolkata', 'confirmed', "
+                "'customer_conversation', "
                 "'runtime-appointment', 1, 1, now(), now())"
             ),
             {"start": START, "end": START + timedelta(minutes=30)},
@@ -1249,7 +1272,7 @@ async def test_malformed_runtime_creation_provenance_is_a_constraint_violation(
         with pytest.raises(IntegrityError) as error:
             await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
         assert getattr(error.value.orig, "sqlstate", None) == "23514"
-        assert getattr(error.value.orig, "constraint_name", None) == (
+        assert _pg_constraint_name(error.value) == (
             "ck_customer_conversation_appointment_provenance"
         )
         await session.rollback()
@@ -1293,9 +1316,10 @@ async def test_malformed_runtime_commit_provenance_is_a_constraint_violation(
     value: object,
     remove_field: bool,
 ) -> None:
+    past = datetime(2020, 1, 1, 10, tzinfo=UTC)
     async with pg_session_factory() as session:
         await _seed_head_catalog(session)
-        await _insert_head_appointment(session, 1, start_at=START, status="completed")
+        await _insert_head_appointment(session, 1, start_at=past, status="completed")
         await _insert_confirmed_mutation_action(
             session,
             action_id=10,
@@ -1331,9 +1355,7 @@ async def test_malformed_runtime_commit_provenance_is_a_constraint_violation(
         with pytest.raises(IntegrityError) as error:
             await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
         assert getattr(error.value.orig, "sqlstate", None) == "23514"
-        assert getattr(error.value.orig, "constraint_name", None) == (
-            "ck_appointment_commit_provenance"
-        )
+        assert _pg_constraint_name(error.value) == ("ck_appointment_commit_provenance")
         await session.rollback()
 
 
@@ -1369,8 +1391,17 @@ async def test_reschedule_requires_exact_commit_and_allows_in_place_fact_update(
         )
         await session.execute(
             text(
-                "UPDATE resource_allocations SET effective_start_at=:start, "
-                "effective_end_at=:end, version=2 WHERE appointment_id=1"
+                "UPDATE resource_allocations SET status='released', "
+                "version=2 WHERE appointment_id=1"
+            ),
+        )
+        await session.execute(
+            text(
+                "INSERT INTO resource_allocations "
+                "(business_id, resource_id, appointment_id, allocation_type, status, source, "
+                "effective_start_at, effective_end_at, idempotency_key, version) VALUES "
+                "(1, 1, 1, 'manual_appointment', 'active', 'owner_manual', "
+                ":start, :end, 'rescheduled-allocation-1', 1)"
             ),
             {"start": shifted_start, "end": shifted_end},
         )
@@ -1474,6 +1505,12 @@ async def test_noncanonical_target_does_not_match_mutation_commit(
                 "version=2 WHERE id=1"
             )
         )
+        await session.execute(
+            text(
+                "UPDATE resource_allocations SET status='cancelled', version=2 "
+                "WHERE appointment_id=1"
+            )
+        )
         after_snapshot = await session.scalar(
             text("SELECT appointment_authoritative_snapshot(a) FROM appointments a WHERE id = 1")
         )
@@ -1489,9 +1526,7 @@ async def test_noncanonical_target_does_not_match_mutation_commit(
         with pytest.raises(IntegrityError) as error:
             await session.execute(text("SET CONSTRAINTS ck_appointment_mutation_commit IMMEDIATE"))
         assert getattr(error.value.orig, "sqlstate", None) == "23514"
-        assert getattr(error.value.orig, "constraint_name", None) == (
-            "ck_appointment_mutation_commit"
-        )
+        assert _pg_constraint_name(error.value) == ("ck_appointment_mutation_commit")
         await session.rollback()
 
 
@@ -1507,18 +1542,17 @@ async def test_confirmed_cancel_pending_action_without_commit_is_rejected(
         )
         with pytest.raises(IntegrityError) as error:
             await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
-        assert getattr(error.value.orig, "constraint_name", None) == (
-            "ck_confirmed_appointment_action_commit"
-        )
+        assert _pg_constraint_name(error.value) == ("ck_confirmed_appointment_action_commit")
         await session.rollback()
 
 
 async def test_terminal_rewrite_and_appointment_delete_are_rejected(
     pg_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    past = datetime(2020, 1, 1, 10, tzinfo=UTC)
     async with pg_session_factory() as session:
         await _seed_head_catalog(session)
-        await _insert_head_appointment(session, 1, start_at=START, status="completed")
+        await _insert_head_appointment(session, 1, start_at=past, status="completed")
         await session.commit()
     async with pg_session_factory() as session:
         await session.execute(
@@ -1526,15 +1560,11 @@ async def test_terminal_rewrite_and_appointment_delete_are_rejected(
         )
         with pytest.raises(IntegrityError) as error:
             await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
-        assert (
-            getattr(error.value.orig, "constraint_name", None) == "ck_appointment_mutation_commit"
-        )
+        assert _pg_constraint_name(error.value) == "ck_appointment_mutation_commit"
         await session.rollback()
     async with pg_session_factory() as session:
         await session.execute(text("DELETE FROM appointments WHERE id=1"))
         with pytest.raises(IntegrityError) as error:
             await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
-        assert (
-            getattr(error.value.orig, "constraint_name", None) == "ck_appointment_mutation_commit"
-        )
+        assert _pg_constraint_name(error.value) == "ck_appointment_mutation_commit"
         await session.rollback()

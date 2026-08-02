@@ -159,6 +159,7 @@ async def _create_and_confirm(
         CreatePendingAppointmentCommand(
             actor=a,
             service_id=1,
+            resource_id=1,
             start_at=start_at,
             customer_phone=a.normalized_phone,
             expires_at=utcnow() + timedelta(minutes=15),
@@ -187,6 +188,7 @@ async def test_proposal_creates_pending_action_without_appointment(
             CreatePendingAppointmentCommand(
                 actor=_actor(),
                 service_id=1,
+                resource_id=1,
                 start_at=START,
                 customer_phone="+919123456789",
                 expires_at=utcnow() + timedelta(minutes=15),
@@ -308,6 +310,7 @@ async def test_unrelated_customer_cannot_confirm(
             CreatePendingAppointmentCommand(
                 actor=_actor(),
                 service_id=1,
+                resource_id=1,
                 start_at=START,
                 customer_phone="+919123456789",
                 expires_at=utcnow() + timedelta(minutes=15),
@@ -340,6 +343,7 @@ async def test_cross_tenant_confirm_forbidden(
             CreatePendingAppointmentCommand(
                 actor=_actor(),
                 service_id=1,
+                resource_id=1,
                 start_at=START,
                 customer_phone="+919123456789",
                 expires_at=utcnow() + timedelta(minutes=15),

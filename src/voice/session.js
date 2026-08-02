@@ -1,273 +1,241 @@
-import { SarvamSTTStream } from './providers/sarvam-stt.js';
-import { SarvamTTSStream, restTTS } from './providers/sarvam-tts.js';
-import { AudioScheduler } from './audio-scheduler.js';
+/*
+  Sarvam API connectivity results (2026-08-02):
+    REST STT:       WORKS (POST multipart WAV → JSON {transcript, language_code})
+    REST TTS:       WORKS (POST JSON → JSON {audios[0]: base64 PCM})
+    Stream TTS:     WORKS (POST JSON → raw PCM stream, content-type audio/pcm)
+    WebSocket STT:  FAILS (error: "audio must not be None" — wrong frame format)
+    WebSocket TTS:  FAILS (closes immediately after config, code 1000)
+
+  Decision: REST STT + REST TTS. Audio format is raw PCM signed 16-bit LE.
+*/
+
 import { TurnController } from './turn-controller.js';
 import { createSpeakablePlan } from './speakable-plan.js';
 import { chatWithLLM, checkSafetyRules, getGreeting } from './dental-demo.js';
 import { createTurnMetrics, monotonicNow, SessionTelemetry } from './telemetry.js';
 
-const MAX_MESSAGE_BYTES = 64 * 1024;
+const SARVAM_API_KEY = process.env.SARVAM_API_KEY;
+const TTS_SAMPLE_RATE = 22050;
 
+// --- REST STT ---
+async function transcribe(pcmBuffer) {
+  const wavHeader = Buffer.alloc(44);
+  const dataLen = pcmBuffer.length;
+  wavHeader.write('RIFF', 0);
+  wavHeader.writeUInt32LE(36 + dataLen, 4);
+  wavHeader.write('WAVE', 8);
+  wavHeader.write('fmt ', 12);
+  wavHeader.writeUInt32LE(16, 16);
+  wavHeader.writeUInt16LE(1, 20);
+  wavHeader.writeUInt16LE(1, 22);
+  wavHeader.writeUInt32LE(16000, 24);
+  wavHeader.writeUInt32LE(32000, 28);
+  wavHeader.writeUInt16LE(2, 32);
+  wavHeader.writeUInt16LE(16, 34);
+  wavHeader.write('data', 36);
+  wavHeader.writeUInt32LE(dataLen, 40);
+
+  const wav = Buffer.concat([wavHeader, pcmBuffer]);
+  const form = new FormData();
+  form.append('file', new Blob([wav], { type: 'audio/wav' }), 'audio.wav');
+  form.append('model', 'saaras:v3');
+  form.append('language_code', 'unknown');
+
+  const res = await fetch('https://api.sarvam.ai/speech-to-text', {
+    method: 'POST',
+    headers: { 'api-subscription-key': SARVAM_API_KEY },
+    body: form,
+  });
+
+  if (!res.ok) throw new Error('STT HTTP ' + res.status);
+  const data = await res.json();
+  return { transcript: (data.transcript || '').trim(), language: data.language_code };
+}
+
+// --- REST TTS ---
+async function synthesize(text, language, speaker) {
+  const res = await fetch('https://api.sarvam.ai/text-to-speech', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'api-subscription-key': SARVAM_API_KEY,
+    },
+    body: JSON.stringify({
+      text,
+      target_language_code: language,
+      model: 'bulbul:v3',
+      speaker,
+      speech_sample_rate: TTS_SAMPLE_RATE,
+      output_audio_codec: 'linear16',
+      pace: 1.0,
+    }),
+  });
+
+  if (!res.ok) throw new Error('TTS HTTP ' + res.status + ': ' + (await res.text()).substring(0, 200));
+  const data = await res.json();
+  if (!data.audios?.[0]) throw new Error('TTS returned no audio');
+  return data.audios[0]; // base64 PCM
+}
+
+// --- Session handler ---
 export function handleVoiceLabSession(ws) {
   const sessionId = crypto.randomUUID();
   const telemetry = new SessionTelemetry(sessionId);
   const messages = [];
-  let turnMetrics = null;
   let turnId = 0;
   let generationId = 0;
-  let currentSpeaker = 'priya';
+  let currentSpeaker = 'kavitha';
   let currentLanguage = 'ta-IN';
   let processing = false;
+  let agentSpeaking = false;
 
-  const stt = new SarvamSTTStream({ sessionId, sampleRate: 16000 });
-  const tts = new SarvamTTSStream({ speaker: currentSpeaker, language: currentLanguage });
-  const scheduler = new AudioScheduler({ sampleRate: 24000 });
-  const turnController = new TurnController();
-
-  const send = (event) => {
-    if (ws.readyState === ws.OPEN || ws.readyState === 1) {
-      ws.send(JSON.stringify(event));
-    }
+  const send = (msg) => {
+    if (ws.readyState === 1) ws.send(JSON.stringify(msg));
   };
 
+  console.log(`[SESSION] ${sessionId.substring(0, 8)} started`);
   send({ type: 'session_start', sessionId });
 
-  stt.on('ready', () => send({ type: 'stt_ready' }));
-  tts.on('ready', () => send({ type: 'tts_ready' }));
-
-  stt.on('partial', (event) => {
-    send({
-      type: 'stt_partial',
-      transcript: event.transcript,
-      language: event.language,
-      turnId: event.turnId,
-    });
-  });
-
-  stt.on('final', (event) => {
-    if (turnMetrics) {
-      turnMetrics.sttFinalTs = event.timestamp;
-      turnMetrics.sttLanguage = event.language;
-    }
-    send({
-      type: 'stt_final',
-      transcript: event.transcript,
-      language: event.language,
-      turnId: event.turnId,
-    });
-    turnController.onFinalTranscript(event.transcript);
-  });
-
-  stt.on('error', (err) => {
-    send({ type: 'stt_error', message: err.message });
-  });
-
-  tts.on('audio_chunk', (event) => {
-    if (event.generationId < generationId) return;
-    send({
-      type: 'audio_chunk',
-      audio: event.audio.toString('base64'),
-      sampleRate: event.sampleRate,
-      generationId: event.generationId,
-    });
-  });
-
-  tts.on('first_audio', (event) => {
-    if (turnMetrics) turnMetrics.ttsFirstAudioTs = event.timestamp;
-    send({
-      type: 'tts_first_audio',
-      generationId: event.generationId,
-      latencyMs: event.latencyMs,
-    });
-  });
-
-  tts.on('synthesis_complete', (event) => {
-    send({
-      type: 'tts_complete',
-      generationId: event.generationId,
-      totalMs: event.totalMs,
-    });
-  });
-
-  tts.on('error', (err) => {
-    send({ type: 'tts_error', message: err.message });
-  });
-
-  turnController.on('turn_end', async (event) => {
-    if (processing) return;
-    processing = true;
-
-    turnId = event.turnId;
-    if (turnMetrics) {
-      turnMetrics.micEndTs = event.micEndTs;
-      turnMetrics.sttFinalTs = event.sttFinalTs;
-    }
-
+  // --- Speak a text and send audio to browser ---
+  async function speak(text, genId) {
+    agentSpeaking = true;
+    send({ type: 'agent_speaking', speaking: true });
     try {
-      await processUserTurn(event.transcript);
+      const plan = createSpeakablePlan(text, {
+        lang: currentLanguage.startsWith('ta') ? 'ta' : 'en',
+        turnIndex: turnId,
+      });
+
+      for (const chunk of plan.chunks) {
+        if (generationId > genId) break;
+        const t0 = monotonicNow();
+        const audioB64 = await synthesize(chunk.text, chunk.language, currentSpeaker);
+        const ms = (monotonicNow() - t0).toFixed(0);
+        const bytes = Math.round(audioB64.length * 0.75);
+        console.log(`[TTS] ${ms}ms, ${bytes}b: "${chunk.text.substring(0, 50)}"`);
+        send({
+          type: 'audio',
+          audio: audioB64,
+          sampleRate: TTS_SAMPLE_RATE,
+          generationId: genId,
+        });
+      }
+      send({ type: 'audio_done', generationId: genId });
+    } catch (e) {
+      console.error('[TTS] Error:', e.message);
+      send({ type: 'error', message: 'TTS failed: ' + e.message });
     } finally {
-      processing = false;
+      agentSpeaking = false;
+      send({ type: 'agent_speaking', speaking: false });
     }
-  });
-
-  turnController.on('interruption', (event) => {
-    generationId = event.generationId;
-    tts.cancelGeneration(event.generationId - 1);
-    scheduler.cancelGeneration(event.generationId - 1);
-
-    if (turnMetrics) {
-      turnMetrics.interruptionTs = event.timestamp;
-      turnMetrics.interrupted = true;
-      turnMetrics.audioStopTs = monotonicNow();
-    }
-
-    send({
-      type: 'interruption',
-      generationId: event.generationId,
-      timestamp: event.timestamp,
-    });
-  });
-
-  turnController.on('false_interruption', (event) => {
-    if (turnMetrics) turnMetrics.falseInterruption = true;
-    send({ type: 'false_interruption', generationId: event.generationId });
-  });
-
-  turnController.on('silence_timeout', () => {
-    send({ type: 'silence_prompt' });
-  });
-
-  async function processUserTurn(transcript) {
-    generationId++;
-    turnMetrics = createTurnMetrics(turnId, generationId);
-    turnMetrics.micEndTs = monotonicNow();
-
-    const safety = checkSafetyRules(transcript);
-    let responseText;
-
-    if (!safety.safe) {
-      const lang = currentLanguage.startsWith('ta') ? 'ta' : 'en';
-      responseText = lang === 'ta' ? safety.responseTa : safety.response;
-      send({ type: 'safety_triggered', safetyType: safety.type });
-    } else {
-      messages.push({ role: 'user', content: transcript });
-      turnMetrics.llmStartTs = monotonicNow();
-      responseText = await chatWithLLM(messages);
-      turnMetrics.llmEndTs = monotonicNow();
-      messages.push({ role: 'assistant', content: responseText });
-    }
-
-    send({
-      type: 'transcript',
-      role: 'assistant',
-      text: responseText,
-      turnId,
-      generationId,
-    });
-
-    const plan = createSpeakablePlan(responseText, {
-      lang: currentLanguage.startsWith('ta') ? 'ta' : 'en',
-      turnIndex: turnId,
-    });
-
-    send({
-      type: 'speakable_plan',
-      plan: { ...plan, generationId },
-    });
-
-    turnController.onAgentSpeakStart(generationId);
-
-    for (const chunk of plan.chunks) {
-      if (generationId > turnMetrics.generationId) break;
-
-      try {
-        tts.speak(chunk.text, generationId);
-      } catch {
-        try {
-          const result = await restTTS(chunk.text, {
-            language: chunk.language,
-            speaker: currentSpeaker,
-          });
-          send({
-            type: 'audio_chunk',
-            audio: result.audio.toString('base64'),
-            sampleRate: result.sampleRate,
-            generationId,
-          });
-        } catch (e) {
-          send({ type: 'tts_error', message: e.message });
-        }
-      }
-    }
-
-    tts.on('synthesis_complete', function onComplete(event) {
-      if (event.generationId === generationId) {
-        turnController.onAgentSpeakEnd(generationId);
-        turnMetrics.playbackEndTs = monotonicNow();
-        const latency = telemetry.recordTurn(turnMetrics);
-        send({ type: 'turn_metrics', metrics: latency });
-        tts.off('synthesis_complete', onComplete);
-      }
-    });
   }
 
-  ws.on('message', async (raw) => {
-    if (raw.length > MAX_MESSAGE_BYTES) {
-      send({ type: 'error', message: 'Message too large' });
-      return;
-    }
+  // --- Process a user turn ---
+  async function processUserTurn(transcript, sttLanguage) {
+    if (processing) return;
+    processing = true;
+    turnId++;
+    generationId++;
+    const myGen = generationId;
+    const turnMetrics = createTurnMetrics(turnId, myGen);
+    turnMetrics.micEndTs = monotonicNow();
 
-    let msg;
     try {
-      msg = JSON.parse(raw.toString());
-    } catch {
-      send({ type: 'error', message: 'Invalid JSON' });
-      return;
+      send({ type: 'transcript', role: 'user', text: transcript, language: sttLanguage });
+
+      // Safety check (deterministic)
+      const safety = checkSafetyRules(transcript);
+      let responseText;
+
+      if (!safety.safe) {
+        responseText = currentLanguage.startsWith('ta') ? safety.responseTa : safety.response;
+        send({ type: 'safety_triggered', safetyType: safety.type });
+      } else {
+        messages.push({ role: 'user', content: transcript });
+        turnMetrics.llmStartTs = monotonicNow();
+        send({ type: 'status', text: 'Thinking...' });
+        responseText = await chatWithLLM(messages);
+        turnMetrics.llmEndTs = monotonicNow();
+        messages.push({ role: 'assistant', content: responseText });
+      }
+
+      console.log(`[LLM] "${responseText.substring(0, 80)}"`);
+      send({ type: 'transcript', role: 'assistant', text: responseText });
+
+      turnMetrics.ttsFirstAudioTs = monotonicNow();
+      await speak(responseText, myGen);
+      turnMetrics.playbackEndTs = monotonicNow();
+
+      const latency = telemetry.recordTurn(turnMetrics);
+      send({ type: 'turn_metrics', metrics: latency });
+    } catch (e) {
+      console.error('[TURN] Error:', e.message);
+      send({ type: 'error', message: e.message });
+    } finally {
+      processing = false;
+      send({ type: 'status', text: 'Ready — click mic or type' });
     }
+  }
+
+  // --- WebSocket message handler ---
+  ws.on('message', async (raw) => {
+    let msg;
+    try { msg = JSON.parse(raw.toString()); } catch { return; }
 
     switch (msg.type) {
       case 'greeting': {
         const greeting = getGreeting();
         messages.push({ role: 'assistant', content: greeting });
-        send({ type: 'transcript', role: 'assistant', text: greeting, turnId: 0, generationId: 0 });
+        send({ type: 'transcript', role: 'assistant', text: greeting });
+        speak(greeting, 0);
+        break;
+      }
 
-        const plan = createSpeakablePlan(greeting, { turnIndex: 0 });
-        for (const chunk of plan.chunks) {
-          tts.speak(chunk.text, 0);
+      case 'audio_complete': {
+        if (processing || agentSpeaking) {
+          send({ type: 'status', text: 'Please wait...' });
+          break;
+        }
+        const pcm = Buffer.from(msg.audio, 'base64');
+        console.log(`[STT] Received ${pcm.length} bytes`);
+
+        if (pcm.length < 6400) { // < 0.2s at 16kHz
+          send({ type: 'status', text: 'Too short — speak longer' });
+          break;
+        }
+
+        send({ type: 'status', text: 'Transcribing...' });
+        try {
+          const t0 = monotonicNow();
+          const result = await transcribe(pcm);
+          const ms = (monotonicNow() - t0).toFixed(0);
+          console.log(`[STT] ${ms}ms: "${result.transcript}" [${result.language}]`);
+
+          if (!result.transcript) {
+            send({ type: 'status', text: 'Could not hear clearly — try again' });
+            break;
+          }
+
+          send({ type: 'stt_result', transcript: result.transcript, language: result.language });
+          await processUserTurn(result.transcript, result.language);
+        } catch (e) {
+          console.error('[STT] Error:', e.message);
+          send({ type: 'error', message: 'STT failed: ' + e.message });
+          send({ type: 'status', text: 'STT error — try again' });
         }
         break;
       }
 
-      case 'audio': {
-        stt.sendAudio(msg.data);
-        turnController.onVoiceActivity(true);
-        break;
-      }
-
-      case 'audio_end': {
-        stt.flush();
-        turnController.onVoiceActivity(false);
-        break;
-      }
-
-      case 'vad': {
-        turnController.onVoiceActivity(msg.active);
-        break;
-      }
-
       case 'text': {
-        if (processing) return;
         const text = (msg.text || '').trim();
-        if (!text) return;
-        send({ type: 'transcript', role: 'user', text, turnId });
-        turnController.onFinalTranscript(text);
+        if (!text) break;
+        await processUserTurn(text, null);
         break;
       }
 
       case 'interrupt': {
         generationId++;
-        tts.cancelGeneration(generationId - 1);
-        turnController.onVoiceActivity(true);
+        agentSpeaking = false;
         send({ type: 'interrupted', generationId });
         break;
       }
@@ -275,7 +243,6 @@ export function handleVoiceLabSession(ws) {
       case 'set_voice': {
         if (msg.speaker) currentSpeaker = msg.speaker;
         if (msg.language) currentLanguage = msg.language;
-        tts.updateVoice({ speaker: currentSpeaker, language: currentLanguage, pace: msg.pace });
         send({ type: 'voice_updated', speaker: currentSpeaker, language: currentLanguage });
         break;
       }
@@ -284,30 +251,10 @@ export function handleVoiceLabSession(ws) {
         send({ type: 'session_metrics', metrics: telemetry.exportSanitized() });
         break;
       }
-
-      case 'get_clinic': {
-        const { getClinicInfo } = await import('./dental-demo.js');
-        send({ type: 'clinic_info', clinic: getClinicInfo() });
-        break;
-      }
-
-      case 'ping': {
-        send({ type: 'pong' });
-        break;
-      }
-
-      default:
-        send({ type: 'error', message: 'Unknown message type: ' + msg.type });
     }
   });
 
   ws.on('close', () => {
-    console.log(`[VOICE-LAB] Session ${sessionId} ended`);
-    stt.close();
-    tts.close();
-    turnController.destroy();
+    console.log(`[SESSION] ${sessionId.substring(0, 8)} ended`);
   });
-
-  stt.connect();
-  tts.connect();
 }

@@ -28,7 +28,8 @@ export class SarvamTTSStream extends EventEmitter {
   }
 
   connect() {
-    if (this.closed) return;
+    if (this.closed || this.connected || this._connecting) return;
+    this._connecting = true;
 
     this.ws = new WebSocket(SARVAM_TTS_WS_URL, {
       headers: { 'api-subscription-key': this.apiKey },
@@ -43,6 +44,7 @@ export class SarvamTTSStream extends EventEmitter {
 
     this.ws.on('open', () => {
       this.connected = true;
+      this._connecting = false;
       this.reconnectCount = 0;
       clearTimeout(readyTimeout);
 
@@ -60,7 +62,9 @@ export class SarvamTTSStream extends EventEmitter {
         },
       }));
 
+      console.log('[TTS] Connected and configured');
       this.emit('ready');
+      this._processQueue();
     });
 
     this.ws.on('message', (raw) => {
@@ -78,13 +82,10 @@ export class SarvamTTSStream extends EventEmitter {
 
     this.ws.on('close', (code) => {
       this.connected = false;
+      this._connecting = false;
       clearTimeout(readyTimeout);
+      console.log(`[TTS] Closed: ${code}`);
       this.emit('disconnected', { code });
-
-      if (!this.closed && this.reconnectCount < MAX_RECONNECTS) {
-        this.reconnectCount++;
-        setTimeout(() => this.connect(), RECONNECT_DELAY_MS * this.reconnectCount);
-      }
     });
   }
 
@@ -130,6 +131,9 @@ export class SarvamTTSStream extends EventEmitter {
 
     if (!this.connected || this.speaking) {
       this.pendingChunks.push({ text, generationId: this.currentGenerationId });
+      if (!this.connected && !this.closed) {
+        this.connect();
+      }
       return;
     }
 

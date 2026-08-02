@@ -163,100 +163,96 @@ class AppointmentService:
             facts.resource_id,
         )
 
-        savepoint = await self._session.begin_nested()
+        overlap_exc: IntegrityError | None = None
         try:
-            appointment = await self._repo.insert(
-                {
-                    "business_id": command.actor.business_id,
-                    "resource_id": facts.resource_id,
-                    "service_id": facts.service_id,
-                    "customer_name": data.customer_name,
-                    "customer_phone": data.customer_phone,
-                    "start_at": facts.start_at,
-                    "end_at": facts.end_at,
-                    "effective_start_at": facts.effective_start_at,
-                    "effective_end_at": facts.effective_end_at,
-                    "service_name_snapshot": facts.service_name,
-                    "resource_name_snapshot": facts.resource_name,
-                    "duration_minutes_snapshot": facts.duration_minutes,
-                    "buffer_before_minutes_snapshot": facts.buffer_before_minutes,
-                    "buffer_after_minutes_snapshot": facts.buffer_after_minutes,
-                    "price_snapshot": (
-                        Decimal(str(facts.price)) if facts.price is not None else None
-                    ),
-                    "business_timezone_snapshot": facts.business_timezone,
-                    "reason": data.reason,
-                    "status": AppointmentStatus.CONFIRMED.value,
-                    "source": AppointmentSource.CUSTOMER_CONVERSATION.value,
-                    "idempotency_key": f"pa-{context.pending_action_id}",
-                    "pending_action_id": context.pending_action_id,
-                    "call_id": data.call_id,
-                }
-            )
-
-            await self._repo.insert_allocation(
-                {
-                    "business_id": command.actor.business_id,
-                    "resource_id": facts.resource_id,
-                    "appointment_id": appointment.id,
-                    "pending_action_id": context.pending_action_id,
-                    "allocation_type": ResourceAllocationType.APPOINTMENT.value,
-                    "status": ResourceAllocationStatus.ACTIVE.value,
-                    "source": ResourceAllocationSource.CUSTOMER_CONVERSATION.value,
-                    "effective_start_at": facts.effective_start_at,
-                    "effective_end_at": facts.effective_end_at,
-                    "idempotency_key": f"appt-{appointment.id}",
-                }
-            )
-
-            await self._repo.force_constraints(
-                set_constraints_immediate_sql(APPOINTMENT_CREATE_PRE_COMPLETION_CONSTRAINTS)
-            )
-            await self._repo.force_constraints(
-                _restore_deferred_sql(APPOINTMENT_CREATE_PRE_COMPLETION_CONSTRAINTS)
-            )
-
-            complete_result = await self._pa_service.complete_commit(
-                CompleteCommitCommand(
-                    context=committing_context,
-                    committed_entity_type="appointment",
-                    committed_entity_id=appointment.id,
+            async with self._session.begin_nested():
+                appointment = await self._repo.insert(
+                    {
+                        "business_id": command.actor.business_id,
+                        "resource_id": facts.resource_id,
+                        "service_id": facts.service_id,
+                        "customer_name": data.customer_name,
+                        "customer_phone": data.customer_phone,
+                        "start_at": facts.start_at,
+                        "end_at": facts.end_at,
+                        "effective_start_at": facts.effective_start_at,
+                        "effective_end_at": facts.effective_end_at,
+                        "service_name_snapshot": facts.service_name,
+                        "resource_name_snapshot": facts.resource_name,
+                        "duration_minutes_snapshot": facts.duration_minutes,
+                        "buffer_before_minutes_snapshot": facts.buffer_before_minutes,
+                        "buffer_after_minutes_snapshot": facts.buffer_after_minutes,
+                        "price_snapshot": (
+                            Decimal(str(facts.price)) if facts.price is not None else None
+                        ),
+                        "business_timezone_snapshot": facts.business_timezone,
+                        "reason": data.reason,
+                        "status": AppointmentStatus.CONFIRMED.value,
+                        "source": AppointmentSource.CUSTOMER_CONVERSATION.value,
+                        "idempotency_key": f"pa-{context.pending_action_id}",
+                        "pending_action_id": context.pending_action_id,
+                        "call_id": data.call_id,
+                    }
                 )
-            )
 
-            await self._repo.force_constraints(
-                set_constraints_immediate_sql(APPOINTMENT_CREATE_POST_COMPLETION_CONSTRAINTS)
-            )
-            await self._repo.force_constraints(
-                _restore_deferred_sql(APPOINTMENT_CREATE_POST_COMPLETION_CONSTRAINTS)
-            )
+                await self._repo.insert_allocation(
+                    {
+                        "business_id": command.actor.business_id,
+                        "resource_id": facts.resource_id,
+                        "appointment_id": appointment.id,
+                        "pending_action_id": context.pending_action_id,
+                        "allocation_type": ResourceAllocationType.APPOINTMENT.value,
+                        "status": ResourceAllocationStatus.ACTIVE.value,
+                        "source": ResourceAllocationSource.CUSTOMER_CONVERSATION.value,
+                        "effective_start_at": facts.effective_start_at,
+                        "effective_end_at": facts.effective_end_at,
+                        "idempotency_key": f"appt-{appointment.id}",
+                    }
+                )
 
-            await savepoint.commit()
+                await self._repo.force_constraints(
+                    set_constraints_immediate_sql(APPOINTMENT_CREATE_PRE_COMPLETION_CONSTRAINTS)
+                )
+                await self._repo.force_constraints(
+                    _restore_deferred_sql(APPOINTMENT_CREATE_PRE_COMPLETION_CONSTRAINTS)
+                )
 
-        except BaseException as exc:
-            if savepoint.is_active:
-                try:
-                    await savepoint.rollback()
-                except BaseException as rollback_exc:
-                    raise rollback_exc from exc
+                complete_result = await self._pa_service.complete_commit(
+                    CompleteCommitCommand(
+                        context=committing_context,
+                        committed_entity_type="appointment",
+                        committed_entity_id=appointment.id,
+                    )
+                )
 
-            if isinstance(exc, IntegrityError) and (
+                await self._repo.force_constraints(
+                    set_constraints_immediate_sql(APPOINTMENT_CREATE_POST_COMPLETION_CONSTRAINTS)
+                )
+                await self._repo.force_constraints(
+                    _restore_deferred_sql(APPOINTMENT_CREATE_POST_COMPLETION_CONSTRAINTS)
+                )
+        except IntegrityError as exc:
+            if (
                 getattr(exc.orig, "sqlstate", None) == _OVERLAP_SQLSTATE
                 and _pg_constraint_name(exc) == _OVERLAP_CONSTRAINT
             ):
-                fail_result = await self._pa_service.fail_commit(
-                    FailCommitCommand(
-                        context=committing_context,
-                        error_code="resource_unavailable",
-                        retryable=True,
-                    )
+                overlap_exc = exc
+            else:
+                raise
+
+        if overlap_exc is not None:
+            fail_result = await self._pa_service.fail_commit(
+                FailCommitCommand(
+                    context=committing_context,
+                    error_code="resource_unavailable",
+                    retryable=True,
                 )
-                return PreCommitAppointmentFailure(
-                    pending_action_id=context.pending_action_id,
-                    pending_action_version=fail_result.version,
-                    error_code=AppointmentCommitFailureCode.RESOURCE_UNAVAILABLE,
-                )
-            raise
+            )
+            return PreCommitAppointmentFailure(
+                pending_action_id=context.pending_action_id,
+                pending_action_version=fail_result.version,
+                error_code=AppointmentCommitFailureCode.RESOURCE_UNAVAILABLE,
+            )
 
         return PreCommitAppointmentSuccess(
             appointment=AppointmentConfirmationResult(

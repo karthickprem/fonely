@@ -79,40 +79,38 @@ async def send_message(
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
-    session = factory()
-    try:
-        gateway = SarvamModelGateway()
-        service = ConversationService(session, gateway)
-        turn = await service.process_message(
-            conversation_id=conversation_id,
-            business_id=ctx.business_id,
-            actor=actor,
-            user_message=body.message,
-        )
-        return TurnResponse(
-            turn_id=turn.turn_id,
-            conversation_id=turn.conversation_id,
-            state=turn.state.value,
-            user_message=turn.user_message,
-            assistant_response=turn.assistant_response,
-            collected_facts=turn.collected_facts,
-            missing_facts=turn.missing_facts,
-            intent=turn.intent.value,
-            safety_classification=turn.safety_classification,
-            proposal_id=turn.proposal_id,
-            proposal_version=turn.proposal_version,
-        )
-    except Exception as exc:
-        logger.warning(
-            "conversation_failed",
-            extra={
-                "correlation_id": _get_correlation_id(request),
-                "error_type": type(exc).__name__,
-            },
-        )
-        raise HTTPException(status_code=500, detail="Internal error") from None
-    finally:
-        await session.close()
+    async with factory() as session:
+        try:
+            gateway = SarvamModelGateway()
+            service = ConversationService(session, gateway)
+            turn = await service.process_message(
+                conversation_id=conversation_id,
+                business_id=ctx.business_id,
+                actor=actor,
+                user_message=body.message,
+            )
+            return TurnResponse(
+                turn_id=turn.turn_id,
+                conversation_id=turn.conversation_id,
+                state=turn.state.value,
+                user_message=turn.user_message,
+                assistant_response=turn.assistant_response,
+                collected_facts=turn.collected_facts,
+                missing_facts=turn.missing_facts,
+                intent=turn.intent.value,
+                safety_classification=turn.safety_classification,
+                proposal_id=turn.proposal_id,
+                proposal_version=turn.proposal_version,
+            )
+        except Exception as exc:
+            logger.warning(
+                "conversation_failed",
+                extra={
+                    "correlation_id": _get_correlation_id(request),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise HTTPException(status_code=500, detail="Internal error") from None
 
 
 @router.get("/conversations/{conversation_id}", response_model=ConversationResponse)

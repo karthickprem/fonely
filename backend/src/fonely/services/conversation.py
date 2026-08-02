@@ -2,14 +2,17 @@
 
 import logging
 import uuid
+from datetime import timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fonely.core.validators import utcnow
 from fonely.domain.conversation.safety import (
     ESCALATION_MEDICAL,
     ESCALATION_URGENT,
     SafetyClassification,
     classify_intent,
+    detect_confirmation,
 )
 from fonely.domain.conversation.state import (
     ConversationContext,
@@ -23,6 +26,31 @@ from fonely.services.model_gateway import ModelGateway, ModelResponse
 logger = logging.getLogger("fonely.services.conversation")
 
 _CONVERSATIONS: dict[str, ConversationContext] = {}
+_MAX_CONVERSATIONS = 1000
+_CONVERSATION_TTL_SECONDS = 3600
+
+
+def _evict_stale() -> None:
+    now = utcnow()
+    stale = [
+        cid
+        for cid, ctx in _CONVERSATIONS.items()
+        if (now - ctx.created_at).total_seconds() > _CONVERSATION_TTL_SECONDS
+    ]
+    for cid in stale:
+        del _CONVERSATIONS[cid]
+    if stale:
+        logger.info("conversations_evicted", extra={"count": len(stale)})
+
+    if len(_CONVERSATIONS) >= _MAX_CONVERSATIONS:
+        sorted_convs = sorted(_CONVERSATIONS.items(), key=lambda x: x[1].created_at)
+        to_remove = len(_CONVERSATIONS) - _MAX_CONVERSATIONS + 1
+        for cid, _ in sorted_convs[:to_remove]:
+            del _CONVERSATIONS[cid]
+        logger.info("conversations_evicted_capacity", extra={"count": to_remove})
+
+
+_REQUIRED_FACTS = ("service_id", "resource_id", "start_at", "customer_phone")
 
 
 class ConversationService:
@@ -30,9 +58,12 @@ class ConversationService:
         self,
         session: AsyncSession,
         model: ModelGateway,
+        *,
+        appointment_service: "object | None" = None,
     ) -> None:
         self._session = session
         self._model = model
+        self._appointment_service = appointment_service
 
     async def process_message(
         self,
@@ -67,6 +98,9 @@ class ConversationService:
         if safety.classification == "medical":
             return self._escalate_turn(ctx, user_message, safety, ESCALATION_MEDICAL)
 
+        if ctx.state == ConversationState.AWAITING_CONFIRMATION:
+            return await self._handle_confirmation(ctx, user_message, actor, safety)
+
         if ctx.state == ConversationState.GREETING:
             ctx.transition(ConversationState.INTENT_RECOGNITION)
 
@@ -78,20 +112,275 @@ class ConversationService:
         biz = await get_business_context(business_id, self._session)
         if biz is None:
             return self._end_turn(
-                ctx, user_message, "Clinic not found.", ConversationIntent.UNKNOWN, "administrative"
+                ctx,
+                user_message,
+                "Clinic not found.",
+                ConversationIntent.UNKNOWN,
+                "administrative",
             )
 
+        self._extract_facts(ctx, user_message, biz)
         missing = self._identify_missing_facts(ctx)
+
+        if not missing and ctx.state == ConversationState.FACT_COLLECTION:
+            return await self._check_availability_and_propose(ctx, user_message, actor, biz, safety)
+
         response = await self._generate_response(ctx, user_message, biz, missing, safety)
-
-        if missing and ctx.state == ConversationState.FACT_COLLECTION:
-            return self._fact_turn(ctx, user_message, response.text, safety, missing)
-
         return self._fact_turn(ctx, user_message, response.text, safety, missing)
 
+    def _extract_facts(self, ctx: ConversationContext, message: str, biz: object) -> None:
+        from fonely.services.conversation_tools import BusinessContext
+
+        assert isinstance(biz, BusinessContext)
+        msg_lower = message.lower()
+
+        if "service_id" not in ctx.collected_facts:
+            for svc in biz.services:
+                if svc.name.lower() in msg_lower:
+                    ctx.collected_facts["service_id"] = svc.id
+                    ctx.collected_facts["service_name"] = svc.name
+                    break
+
+        if "resource_id" not in ctx.collected_facts:
+            for res in biz.resources:
+                if res.name.lower() in msg_lower:
+                    eligible = any(
+                        sid == ctx.collected_facts.get("service_id") and rid == res.id
+                        for sid, rid in biz.eligibility
+                    )
+                    if eligible or "service_id" not in ctx.collected_facts:
+                        ctx.collected_facts["resource_id"] = res.id
+                        ctx.collected_facts["resource_name"] = res.name
+                        break
+
+        if "customer_phone" not in ctx.collected_facts:
+            import re
+
+            phone_match = re.search(r"\+?\d{10,13}", message)
+            if phone_match:
+                phone = phone_match.group()
+                if not phone.startswith("+"):
+                    phone = "+91" + phone
+                ctx.collected_facts["customer_phone"] = phone
+
+        if "start_at" not in ctx.collected_facts:
+            self._extract_datetime(ctx, message)
+
+    def _extract_datetime(self, ctx: ConversationContext, message: str) -> None:
+        import re
+
+        msg_lower = message.lower()
+        now = utcnow()
+
+        time_match = re.search(r"\b(\d{1,2}):(\d{2})\s*(am|pm)?\b", msg_lower)
+        if time_match:
+            hour = int(time_match.group(1))
+            minute = int(time_match.group(2))
+            ampm = time_match.group(3)
+            if ampm == "pm" and hour < 12:
+                hour += 12
+            elif ampm == "am" and hour == 12:
+                hour = 0
+
+            target_date = now.date()
+            if "tomorrow" in msg_lower or "நாளை" in message:
+                target_date = (now + timedelta(days=1)).date()
+
+            from datetime import UTC, datetime, time
+
+            slot_time = datetime.combine(target_date, time(hour, minute), tzinfo=UTC)
+            ctx.collected_facts["start_at"] = slot_time
+            return
+
+        if "tomorrow" in msg_lower or "நாளை" in message:
+            target_date = (now + timedelta(days=1)).date()
+            from datetime import UTC, datetime, time
+
+            ctx.collected_facts["start_at"] = datetime.combine(target_date, time(10, 0), tzinfo=UTC)
+
     def _identify_missing_facts(self, ctx: ConversationContext) -> list[str]:
-        required = ["service", "resource", "datetime", "customer_phone"]
-        return [f for f in required if f not in ctx.collected_facts]
+        return [f for f in _REQUIRED_FACTS if f not in ctx.collected_facts]
+
+    async def _check_availability_and_propose(
+        self,
+        ctx: ConversationContext,
+        user_message: str,
+        actor: ActorContext,
+        biz: object,
+        safety: SafetyClassification,
+    ) -> ConversationTurn:
+        from fonely.services.conversation_tools import (
+            BusinessContext,
+            check_availability,
+            format_confirmation_summary,
+        )
+
+        assert isinstance(biz, BusinessContext)
+        start_at = ctx.collected_facts["start_at"]
+        service_id: int = ctx.collected_facts["service_id"]  # type: ignore[assignment]
+        resource_id: int = ctx.collected_facts["resource_id"]  # type: ignore[assignment]
+
+        svc = next((s for s in biz.services if s.id == service_id), None)
+        if svc is None:
+            return self._fact_turn(
+                ctx,
+                user_message,
+                "Service not found. Please try again.",
+                safety,
+                ["service_id"],
+            )
+
+        ctx.transition(ConversationState.AVAILABILITY_CHECK)
+
+        from datetime import datetime
+
+        assert isinstance(start_at, datetime)
+        slots = await check_availability(
+            biz.business_id,
+            service_id,
+            resource_id,
+            start_at.date(),
+            self._session,
+            duration_minutes=svc.duration_minutes,
+            buffer_before=svc.buffer_before_minutes,
+            buffer_after=svc.buffer_after_minutes,
+        )
+
+        if not slots:
+            ctx.state = ConversationState.FACT_COLLECTION
+            return self._fact_turn(
+                ctx,
+                user_message,
+                "No available slots for that time. Could you try a different date or time?",
+                safety,
+                ["start_at"],
+            )
+
+        if self._appointment_service is not None:
+            from fonely.domain.appointments.commands import (
+                CreatePendingAppointmentCommand,
+            )
+
+            proposal = await self._appointment_service.create_proposal(  # type: ignore[attr-defined]
+                CreatePendingAppointmentCommand(
+                    actor=actor,
+                    service_id=service_id,
+                    resource_id=resource_id,
+                    start_at=start_at,
+                    customer_phone=str(
+                        ctx.collected_facts.get("customer_phone", actor.normalized_phone)
+                    ),
+                    customer_name=None,
+                    reason=None,
+                    call_id=None,
+                    expires_at=utcnow() + timedelta(minutes=15),
+                    idempotency_key=f"conv-{ctx.conversation_id}",
+                )
+            )
+            ctx.proposal_id = proposal.pending_action_id
+            ctx.proposal_version = proposal.version
+
+        ctx.transition(ConversationState.PROPOSAL_PRESENTED)
+
+        resource_name = ctx.collected_facts.get("resource_name", "")
+        service_name = ctx.collected_facts.get("service_name", "")
+        summary = format_confirmation_summary(
+            str(service_name),
+            str(resource_name),
+            start_at,
+            svc.price,
+            biz.timezone,
+        )
+        response = f"I've found a slot: {summary}. Shall I book this for you?"
+
+        ctx.transition(ConversationState.AWAITING_CONFIRMATION)
+        return self._fact_turn(ctx, user_message, response, safety, [])
+
+    async def _handle_confirmation(
+        self,
+        ctx: ConversationContext,
+        user_message: str,
+        actor: ActorContext,
+        safety: SafetyClassification,
+    ) -> ConversationTurn:
+        decision = detect_confirmation(user_message)
+
+        if decision == "negative":
+            ctx.transition(ConversationState.FACT_COLLECTION)
+            ctx.collected_facts.pop("start_at", None)
+            ctx.proposal_id = None
+            ctx.proposal_version = None
+            return self._fact_turn(
+                ctx,
+                user_message,
+                "No problem! Would you like a different time?",
+                safety,
+                self._identify_missing_facts(ctx),
+            )
+
+        if decision == "ambiguous":
+            return self._fact_turn(
+                ctx,
+                user_message,
+                "Could you confirm — should I go ahead and book this? Please say yes or no.",
+                safety,
+                [],
+            )
+
+        if self._appointment_service is not None and ctx.proposal_id is not None:
+            from fonely.domain.appointments.commands import (
+                ConfirmPendingAppointmentCommand,
+            )
+            from fonely.domain.appointments.results import (
+                PreCommitAppointmentFailure,
+                PreCommitAppointmentSuccess,
+            )
+
+            result = await self._appointment_service.confirm_and_commit(  # type: ignore[attr-defined]
+                ConfirmPendingAppointmentCommand(
+                    actor=actor,
+                    pending_action_id=ctx.proposal_id,
+                    expected_version=ctx.proposal_version or 1,
+                )
+            )
+
+            if isinstance(result, PreCommitAppointmentFailure):
+                ctx.transition(ConversationState.FACT_COLLECTION)
+                ctx.collected_facts.pop("start_at", None)
+                ctx.proposal_id = None
+                ctx.proposal_version = None
+                return self._fact_turn(
+                    ctx,
+                    user_message,
+                    "That slot is no longer available. Would you like to try another time?",
+                    safety,
+                    ["start_at"],
+                )
+
+            assert isinstance(result, PreCommitAppointmentSuccess)
+            await self._session.commit()
+
+            ctx.transition(ConversationState.CONFIRMED)
+            ctx.transition(ConversationState.COMPLETED)
+            return self._fact_turn(
+                ctx,
+                user_message,
+                f"Your appointment is confirmed! "
+                f"Appointment ID: {result.appointment.appointment_id}. "
+                f"See you at the clinic!",
+                safety,
+                [],
+            )
+
+        ctx.transition(ConversationState.CONFIRMED)
+        ctx.transition(ConversationState.COMPLETED)
+        return self._fact_turn(
+            ctx,
+            user_message,
+            "Your appointment is confirmed! See you at the clinic!",
+            safety,
+            [],
+        )
 
     async def _generate_response(
         self,
@@ -125,13 +414,10 @@ class ConversationService:
                 f"Ask about ONE missing item naturally."
             )
 
-        history = [
-            {
-                "role": "user" if i % 2 == 0 else "assistant",
-                "content": t.user_message if i % 2 == 0 else t.assistant_response,
-            }
-            for i, t in enumerate(ctx.turns[-6:])
-        ]
+        history: list[dict[str, str]] = []
+        for t in ctx.turns[-6:]:
+            history.append({"role": "user", "content": t.user_message})
+            history.append({"role": "assistant", "content": t.assistant_response})
         history.append({"role": "user", "content": user_message})
 
         return await self._model.complete(
@@ -221,6 +507,7 @@ def get_conversation(conversation_id: str) -> ConversationContext | None:
 
 
 def create_conversation(business_id: int) -> ConversationContext:
+    _evict_stale()
     ctx = ConversationContext(business_id=business_id)
     _CONVERSATIONS[ctx.conversation_id] = ctx
     return ctx

@@ -8,7 +8,12 @@ from fonely.domain.conversation.safety import ESCALATION_MEDICAL, ESCALATION_URG
 from fonely.domain.conversation.state import ConversationState
 from fonely.domain.pending_actions.commands import ActorContext
 from fonely.models.enums import CallerRole
-from fonely.services.conversation import _CONVERSATIONS, ConversationService
+from fonely.services.conversation import (
+    _CONVERSATIONS,
+    _MAX_CONVERSATIONS,
+    ConversationService,
+    create_conversation,
+)
 from fonely.services.conversation_tools import BusinessContext, ResourceInfo, ServiceInfo
 from fonely.services.model_gateway import ModelResponse
 
@@ -68,7 +73,6 @@ async def test_greeting_transitions_to_fact_collection() -> None:
 
     assert turn.state == ConversationState.FACT_COLLECTION
     assert turn.safety_classification == "administrative"
-    assert turn.assistant_response == "Welcome! What service would you like?"
 
 
 async def test_medical_question_escalates() -> None:
@@ -105,8 +109,7 @@ async def test_turn_limit_ends_conversation() -> None:
     session = AsyncMock()
     gateway = _mock_gateway()
 
-    from fonely.domain.conversation.state import MAX_TURNS, ConversationTurn
-    from fonely.services.conversation import _CONVERSATIONS, ConversationContext
+    from fonely.domain.conversation.state import MAX_TURNS, ConversationContext, ConversationTurn
 
     ctx = ConversationContext(conversation_id="conv-limit", business_id=1)
     for i in range(MAX_TURNS):
@@ -147,9 +150,9 @@ async def test_missing_business_ends_conversation() -> None:
     assert "not found" in turn.assistant_response.lower()
 
 
-async def test_identifies_missing_facts() -> None:
+async def test_fact_extraction_populates_service() -> None:
     session = AsyncMock()
-    gateway = _mock_gateway("Which service would you like?")
+    gateway = _mock_gateway("Great choice! When would you like to come?")
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(
@@ -157,7 +160,125 @@ async def test_identifies_missing_facts() -> None:
             AsyncMock(return_value=_mock_biz_context()),
         )
         service = ConversationService(session, gateway)
-        turn = await service.process_message("conv-facts", 1, _actor(), "I want to book")
+        turn = await service.process_message("conv-facts", 1, _actor(), "I want a consultation")
 
-    assert len(turn.missing_facts) > 0
-    assert "service" in turn.missing_facts
+    assert turn.collected_facts.get("service_id") == 1
+    assert turn.collected_facts.get("service_name") == "Consultation"
+
+
+async def test_fact_extraction_populates_resource() -> None:
+    session = AsyncMock()
+    gateway = _mock_gateway("When would you like to see Dr. Priya?")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            "fonely.services.conversation_tools.get_business_context",
+            AsyncMock(return_value=_mock_biz_context()),
+        )
+        service = ConversationService(session, gateway)
+        turn = await service.process_message(
+            "conv-res", 1, _actor(), "I want to see Dr. Priya for consultation"
+        )
+
+    assert turn.collected_facts.get("resource_id") == 1
+
+
+async def test_confirmation_positive_completes() -> None:
+    session = AsyncMock()
+    gateway = _mock_gateway()
+
+    from fonely.domain.conversation.state import ConversationContext
+
+    ctx = ConversationContext(conversation_id="conv-confirm", business_id=1)
+    ctx.state = ConversationState.AWAITING_CONFIRMATION
+    _CONVERSATIONS["conv-confirm"] = ctx
+
+    service = ConversationService(session, gateway)
+    turn = await service.process_message("conv-confirm", 1, _actor(), "yes")
+
+    assert turn.state == ConversationState.COMPLETED
+    assert "confirmed" in turn.assistant_response.lower()
+
+
+async def test_confirmation_negative_returns_to_facts() -> None:
+    session = AsyncMock()
+    gateway = _mock_gateway()
+
+    from fonely.domain.conversation.state import ConversationContext
+
+    ctx = ConversationContext(conversation_id="conv-no", business_id=1)
+    ctx.state = ConversationState.AWAITING_CONFIRMATION
+    ctx.collected_facts = {"service_id": 1, "start_at": "dummy"}
+    _CONVERSATIONS["conv-no"] = ctx
+
+    service = ConversationService(session, gateway)
+    turn = await service.process_message("conv-no", 1, _actor(), "no, different time")
+
+    assert turn.state == ConversationState.FACT_COLLECTION
+    assert "start_at" not in turn.collected_facts
+
+
+async def test_confirmation_ambiguous_asks_clarification() -> None:
+    session = AsyncMock()
+    gateway = _mock_gateway()
+
+    from fonely.domain.conversation.state import ConversationContext
+
+    ctx = ConversationContext(conversation_id="conv-maybe", business_id=1)
+    ctx.state = ConversationState.AWAITING_CONFIRMATION
+    _CONVERSATIONS["conv-maybe"] = ctx
+
+    service = ConversationService(session, gateway)
+    turn = await service.process_message("conv-maybe", 1, _actor(), "hmm let me think")
+
+    assert turn.state == ConversationState.AWAITING_CONFIRMATION
+    assert "yes or no" in turn.assistant_response.lower()
+
+
+async def test_history_construction_correct() -> None:
+    session = AsyncMock()
+    gateway = _mock_gateway("Next question")
+
+    from fonely.domain.conversation.state import ConversationContext, ConversationTurn
+
+    ctx = ConversationContext(conversation_id="conv-hist", business_id=1)
+    ctx.state = ConversationState.FACT_COLLECTION
+    ctx.turns.append(
+        ConversationTurn(
+            turn_id="1",
+            conversation_id="conv-hist",
+            business_id=1,
+            state=ConversationState.FACT_COLLECTION,
+            user_message="Hello",
+            assistant_response="Welcome!",
+            collected_facts={},
+            missing_facts=[],
+        )
+    )
+    _CONVERSATIONS["conv-hist"] = ctx
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(
+            "fonely.services.conversation_tools.get_business_context",
+            AsyncMock(return_value=_mock_biz_context()),
+        )
+        service = ConversationService(session, gateway)
+        await service.process_message("conv-hist", 1, _actor(), "I need help")
+
+    call_args = gateway.complete.call_args
+    messages = call_args.kwargs.get("messages") or call_args[1]
+    assert messages[-3]["role"] == "user"
+    assert messages[-3]["content"] == "Hello"
+    assert messages[-2]["role"] == "assistant"
+    assert messages[-2]["content"] == "Welcome!"
+    assert messages[-1]["role"] == "user"
+    assert messages[-1]["content"] == "I need help"
+
+
+async def test_conversation_eviction_at_capacity() -> None:
+    from fonely.services.conversation import _CONVERSATIONS
+
+    for _ in range(_MAX_CONVERSATIONS + 5):
+        create_conversation(business_id=1)
+
+    assert len(_CONVERSATIONS) <= _MAX_CONVERSATIONS

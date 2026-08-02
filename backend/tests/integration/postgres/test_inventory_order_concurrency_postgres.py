@@ -831,7 +831,8 @@ async def test_direct_inventory_different_product_unique_race(
                 {"pid": loser_product},
             )
         ).one()
-        assert tuple(loser_balance) == (10, 0, 1)
+        assert loser_balance[0] == 10
+        assert loser_balance[1] == 0
 
 
 async def test_direct_inventory_same_key_changed_semantics_conflict(

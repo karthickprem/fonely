@@ -221,9 +221,9 @@ async def test_0002_migrates_populated_0001_database(
     assert nullable == "NO"
 
 
-async def test_migrations_through_0004_are_applied(pg_session: AsyncSession) -> None:
+async def test_migrations_through_head_are_applied(pg_session: AsyncSession) -> None:
     revision = await pg_session.scalar(text("SELECT version_num FROM alembic_version"))
-    assert revision == "0004"
+    assert revision == "0005"
 
 
 @pytest.mark.parametrize(
@@ -601,7 +601,7 @@ async def test_session_fixture_keeps_database_at_current_head(
 ) -> None:
     """Session fixture keeps the database at the current head during tests."""
     revision = await pg_session.scalar(text("SELECT version_num FROM alembic_version"))
-    assert revision == "0004"
+    assert revision == "0005"
 
 
 async def test_retry_after_idempotency_is_tenant_scoped(pg_session: AsyncSession) -> None:

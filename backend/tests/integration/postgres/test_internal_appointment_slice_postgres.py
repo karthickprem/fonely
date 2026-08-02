@@ -120,9 +120,7 @@ async def test_proposal_and_confirm_e2e(
     async with pg_session_factory() as session:
         appt = (
             await session.execute(
-                select(Appointment).where(
-                    Appointment.id == result["appointment_id"]
-                )
+                select(Appointment).where(Appointment.id == result["appointment_id"])
             )
         ).scalar_one()
         assert appt.business_id == 1
@@ -131,17 +129,13 @@ async def test_proposal_and_confirm_e2e(
 
         alloc = (
             await session.execute(
-                select(ResourceAllocation).where(
-                    ResourceAllocation.appointment_id == appt.id
-                )
+                select(ResourceAllocation).where(ResourceAllocation.appointment_id == appt.id)
             )
         ).scalar_one()
         assert alloc.status == "active"
 
         pa = (
-            await session.execute(
-                select(PendingAction).where(PendingAction.id == pa_id)
-            )
+            await session.execute(select(PendingAction).where(PendingAction.id == pa_id))
         ).scalar_one()
         assert pa.status == "confirmed"
         assert pa.committed_entity_id == appt.id

@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class AppointmentProposalRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid")
 
     service_id: int = Field(gt=0)
     resource_id: int | None = Field(default=None, gt=0)
@@ -20,7 +20,7 @@ class AppointmentProposalRequest(BaseModel):
 
 
 class AppointmentConfirmRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid")
 
     expected_version: int = Field(gt=0)
 

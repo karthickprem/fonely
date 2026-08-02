@@ -770,6 +770,203 @@ async def test_lossy_0004_downgrade_is_rejected_atomically(
             )
 
 
+@pytest.mark.parametrize(
+    ("payload", "expected_call_id", "expected_result"),
+    [
+        (None, None, False),
+        (None, 1, False),
+        ("[]", None, False),
+        ("{}", None, False),
+        ('{"call_id": null}', None, True),
+        ('{"call_id": null}', 1, False),
+        ('{"call_id": 1}', 1, True),
+        ('{"call_id": 2147483647}', 2147483647, True),
+        ('{"call_id": 7}', 8, False),
+        ('{"call_id": "7"}', 7, False),
+        ('{"call_id": 0}', None, False),
+        ('{"call_id": -1}', None, False),
+        ('{"call_id": 1.0}', 1, False),
+        ('{"call_id": 2147483648}', None, False),
+        ('{"call_id": 10000000000000000000000000000000000000000}', None, False),
+        ('{"call_id": -10000000000000000000000000000000000000000}', None, False),
+        ('{"call_id": true}', None, False),
+        ('{"call_id": {}}', None, False),
+        ('{"call_id": []}', None, False),
+    ],
+    ids=[
+        "sql-null-null",
+        "sql-null-value",
+        "non-object",
+        "missing",
+        "json-null-null",
+        "json-null-value",
+        "one",
+        "maximum",
+        "mismatch",
+        "numeric-string",
+        "zero",
+        "negative",
+        "decimal",
+        "above-maximum",
+        "positive-overflow",
+        "negative-overflow",
+        "boolean",
+        "object",
+        "array",
+    ],
+)
+async def test_appointment_payload_call_id_matcher_is_total(
+    pg_engine: AsyncEngine,
+    payload: str | None,
+    expected_call_id: int | None,
+    expected_result: bool,
+) -> None:
+    async with pg_engine.connect() as connection:
+        result = await connection.scalar(
+            text(
+                "SELECT appointment_payload_call_id_matches("
+                "CAST(:payload AS jsonb), :expected_call_id)"
+            ),
+            {"payload": payload, "expected_call_id": expected_call_id},
+        )
+    assert result is expected_result
+    assert result is not None
+
+
+async def _exercise_creation_call_id_provenance(
+    session: AsyncSession,
+    *,
+    payload_call_id: object,
+    appointment_call_id: int | None,
+    missing_key: bool = False,
+) -> None:
+    await _seed_head_catalog(session)
+    if appointment_call_id is not None:
+        await session.execute(
+            text("INSERT INTO calls (id, business_id) VALUES (:id, 1)"),
+            {"id": appointment_call_id},
+        )
+    payload = _appointment_payload(
+        1,
+        start_at=START,
+        end_at=START + timedelta(minutes=30),
+    )
+    data = payload["data"]
+    assert isinstance(data, dict)
+    if missing_key:
+        data.pop("call_id")
+    else:
+        data["call_id"] = payload_call_id
+    await session.execute(
+        text(
+            "INSERT INTO pending_actions "
+            "(id, business_id, action_type, payload_schema_version, proposed_payload, "
+            "payload_digest, status, expires_at, idempotency_key, committed_entity_type, "
+            "committed_entity_id, version) VALUES "
+            "(1, 1, 'appointment', 1, CAST(:payload AS jsonb), :digest, 'confirmed', "
+            "now() + interval '15 minutes', 'call-id-create', 'appointment', 1, 1)"
+        ),
+        {"payload": json.dumps(payload), "digest": "2" * 64},
+    )
+    await session.execute(
+        text(
+            "INSERT INTO appointments "
+            "(id, business_id, resource_id, service_id, customer_phone, call_id, start_at, end_at, "
+            "effective_start_at, effective_end_at, service_name_snapshot, "
+            "resource_name_snapshot, duration_minutes_snapshot, "
+            "buffer_before_minutes_snapshot, buffer_after_minutes_snapshot, status, source, "
+            "idempotency_key, pending_action_id, version, created_at, updated_at) VALUES "
+            "(1, 1, 1, 1, '+919123456789', :call_id, :start, :end, :start, :end, "
+            "'Haircut', 'Priya', 30, 0, 0, 'confirmed', 'customer_conversation', "
+            "'call-id-appointment', 1, 1, now(), now())"
+        ),
+        {
+            "call_id": appointment_call_id,
+            "start": START,
+            "end": START + timedelta(minutes=30),
+        },
+    )
+    await session.execute(
+        text(
+            "INSERT INTO resource_allocations "
+            "(business_id, resource_id, appointment_id, pending_action_id, allocation_type, "
+            "source, effective_start_at, effective_end_at, idempotency_key, version) VALUES "
+            "(1, 1, 1, 1, 'appointment', 'customer_conversation', :start, :end, "
+            "'call-id-allocation', 1)"
+        ),
+        {"start": START, "end": START + timedelta(minutes=30)},
+    )
+
+
+@pytest.mark.parametrize(
+    ("payload_call_id", "appointment_call_id"),
+    [(7, 7), (None, None)],
+    ids=["matching-number", "matching-null"],
+)
+async def test_creation_call_id_provenance_accepts_canonical_match(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+    payload_call_id: object,
+    appointment_call_id: int | None,
+) -> None:
+    async with pg_session_factory() as session:
+        await _exercise_creation_call_id_provenance(
+            session,
+            payload_call_id=payload_call_id,
+            appointment_call_id=appointment_call_id,
+        )
+        await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        await session.rollback()
+
+
+@pytest.mark.parametrize(
+    ("payload_call_id", "appointment_call_id", "missing_key"),
+    [
+        (None, None, True),
+        ("7", 7, False),
+        (None, 7, False),
+        (7, None, False),
+        (7, 8, False),
+        (1.0, 1, False),
+        (2147483648, None, False),
+        ({}, None, False),
+        ([], None, False),
+        (True, None, False),
+    ],
+    ids=[
+        "missing",
+        "numeric-string",
+        "null-versus-number",
+        "number-versus-null",
+        "number-mismatch",
+        "decimal",
+        "overflow",
+        "object",
+        "array",
+        "boolean",
+    ],
+)
+async def test_creation_call_id_provenance_rejects_noncanonical_or_mismatch(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+    payload_call_id: object,
+    appointment_call_id: int | None,
+    missing_key: bool,
+) -> None:
+    async with pg_session_factory() as session:
+        await _exercise_creation_call_id_provenance(
+            session,
+            payload_call_id=payload_call_id,
+            appointment_call_id=appointment_call_id,
+            missing_key=missing_key,
+        )
+        with pytest.raises(IntegrityError) as error:
+            await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        assert getattr(error.value.orig, "sqlstate", None) == "23514"
+        assert getattr(error.value.orig, "constraint_name", None) == (
+            "ck_customer_conversation_appointment_provenance"
+        )
+        await session.rollback()
+
+
 async def test_representable_0004_downgrades_and_reupgrades_without_fact_loss(
     pg_engine: AsyncEngine,
     postgres_database_url: str,

@@ -1016,6 +1016,44 @@ def upgrade() -> None:
            $$"""
     )
     op.execute(
+        r"""CREATE FUNCTION appointment_payload_call_id_matches(
+               payload_data jsonb, expected_call_id bigint)
+           RETURNS boolean LANGUAGE plpgsql STABLE AS $$
+           DECLARE
+               call_id_value jsonb;
+               call_id_text text;
+               parsed_call_id bigint;
+           BEGIN
+               IF payload_data IS NULL
+                  OR jsonb_typeof(payload_data) IS DISTINCT FROM 'object' THEN
+                   RETURN FALSE;
+               END IF;
+               IF NOT (payload_data ? 'call_id') THEN
+                   RETURN FALSE;
+               END IF;
+               call_id_value := payload_data->'call_id';
+               IF call_id_value = 'null'::jsonb THEN
+                   RETURN expected_call_id IS NULL;
+               END IF;
+               IF jsonb_typeof(call_id_value) IS DISTINCT FROM 'number' THEN
+                   RETURN FALSE;
+               END IF;
+               call_id_text := payload_data->>'call_id';
+               IF call_id_text IS NULL OR call_id_text !~ '^[1-9][0-9]*$' THEN
+                   RETURN FALSE;
+               END IF;
+               IF NOT COALESCE(pg_input_is_valid(call_id_text, 'bigint'), FALSE) THEN
+                   RETURN FALSE;
+               END IF;
+               parsed_call_id := call_id_text::bigint;
+               IF parsed_call_id < 1 OR parsed_call_id > 2147483647 THEN
+                   RETURN FALSE;
+               END IF;
+               RETURN COALESCE(parsed_call_id = expected_call_id, FALSE);
+           END;
+           $$"""
+    )
+    op.execute(
         """CREATE FUNCTION enforce_appointment_provenance()
            RETURNS trigger LANGUAGE plpgsql AS $$
            DECLARE
@@ -1044,13 +1082,8 @@ def upgrade() -> None:
                         IS DISTINCT FROM NEW.customer_name
                   OR payload_data->>'reason'
                         IS DISTINCT FROM NEW.reason
-                  OR (payload_data->'call_id' IS DISTINCT FROM 'null'::jsonb
-                      AND NOT COALESCE(pg_input_is_valid(
-                              payload_data->>'call_id', 'bigint'), FALSE))
-                  OR CASE WHEN payload_data->'call_id' = 'null'::jsonb THEN NULL
-                          WHEN pg_input_is_valid(payload_data->>'call_id', 'bigint')
-                          THEN (payload_data->>'call_id')::bigint END
-                        IS DISTINCT FROM NEW.call_id THEN
+                  OR appointment_payload_call_id_matches(
+                         payload_data, NEW.call_id) IS NOT TRUE THEN
                    RAISE EXCEPTION USING ERRCODE = '23514',
                        CONSTRAINT = 'ck_customer_conversation_appointment_provenance',
                        MESSAGE = 'customer-conversation appointment requires matching '
@@ -1639,6 +1672,7 @@ def downgrade() -> None:
     op.drop_table("appointment_commits")
     op.execute("DROP TRIGGER ck_customer_conversation_appointment_provenance ON appointments")
     op.execute("DROP FUNCTION enforce_appointment_provenance()")
+    op.execute("DROP FUNCTION appointment_payload_call_id_matches(jsonb, bigint)")
     op.execute("DROP FUNCTION appointment_payload_facts_match(jsonb, appointments)")
     op.execute(
         "DROP TRIGGER ck_confirmed_appointment_active_allocation_from_allocation "

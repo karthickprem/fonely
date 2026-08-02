@@ -652,19 +652,54 @@ def test_upgrade_preflight_guards_every_provenance_cast_at_source() -> None:
     assert source.index("_preflight_upgrade()") < source.index('op.execute("CREATE EXTENSION')
 
 
-def test_runtime_provenance_helper_precedes_and_simplifies_create_trigger() -> None:
+def test_appointment_revision_chain_has_single_0004_head() -> None:
+    migrations = [
+        _load_migration(path, f"fonely_chain_{path.stem}")
+        for path in sorted(MIGRATIONS_DIR.glob("*.py"))
+        if path.name != "__init__.py"
+    ]
+    revisions = {migration.revision for migration in migrations}
+    parent_revisions = {
+        migration.down_revision for migration in migrations if migration.down_revision is not None
+    }
+    heads = revisions - parent_revisions
+
+    assert heads == {"0004"}
+    assert {migration.revision: migration.down_revision for migration in migrations} == {
+        "0001": None,
+        "0002": "0001",
+        "0003": "0002",
+        "0004": "0003",
+    }
+
+
+def test_runtime_provenance_helpers_precede_and_simplify_create_trigger() -> None:
     source = MIGRATION_0004.read_text()
-    helper_start = source.index("CREATE FUNCTION appointment_payload_facts_match")
+    facts_helper_start = source.index("CREATE FUNCTION appointment_payload_facts_match")
+    call_id_helper_start = source.index("CREATE FUNCTION appointment_payload_call_id_matches(")
     create_start = source.index("CREATE FUNCTION enforce_appointment_provenance")
     create_end = source.index(
         "CREATE CONSTRAINT TRIGGER ck_customer_conversation_appointment_provenance"
     )
+    call_id_helper = source[call_id_helper_start:create_start]
     create_function = source[create_start:create_end]
 
-    assert helper_start < create_start
+    assert facts_helper_start < call_id_helper_start < create_start
+    assert (
+        "appointment_payload_call_id_matches(\n"
+        "               payload_data jsonb, expected_call_id bigint)"
+    ) in call_id_helper
+    assert "RETURNS boolean LANGUAGE plpgsql STABLE" in call_id_helper
+    assert "STRICT" not in call_id_helper
+    assert "RETURN COALESCE(parsed_call_id = expected_call_id, FALSE)" in call_id_helper
     assert "appointment_payload_facts_match(" in create_function
     assert "payload_data->'facts', NEW) IS NOT TRUE" in create_function
+    assert "appointment_payload_call_id_matches(" in create_function
+    assert "payload_data, NEW.call_id) IS NOT TRUE" in create_function
     assert "payload_data->'facts'->>'service_id'" not in create_function
+    assert "payload_data->>'call_id'" not in create_function
+    assert "CASE" not in create_function
+    assert "::bigint" not in create_function
     assert "customer-conversation appointment requires matching" in create_function
     assert create_function.count("BEGIN") == 1
     assert create_function.count("END IF;") == 3
@@ -683,7 +718,7 @@ def test_runtime_provenance_casts_remain_fail_closed() -> None:
         "pg_input_is_valid(facts->>'resource_id', 'bigint')",
         "facts->>'start_at', 'timestamp with time zone'",
         "facts->>'end_at', 'timestamp with time zone'",
-        "THEN (payload_data->>'call_id')::bigint END",
+        "parsed_call_id := call_id_text::bigint",
         "THEN (pending_data->>'target_appointment_id')::bigint END",
         "THEN (pending_data->>'target_expected_version')::integer END",
     ):
@@ -695,12 +730,15 @@ def test_runtime_provenance_casts_remain_fail_closed() -> None:
 def test_provenance_helper_downgrade_order_is_dependency_safe() -> None:
     source = MIGRATION_0004.read_text()
     downgrade = source[source.index("def downgrade") :]
-    assert downgrade.index(
-        "DROP TRIGGER ck_customer_conversation_appointment_provenance"
-    ) < downgrade.index("DROP FUNCTION enforce_appointment_provenance()")
-    assert downgrade.index("DROP FUNCTION enforce_appointment_provenance()") < downgrade.index(
+    trigger_drop = downgrade.index("DROP TRIGGER ck_customer_conversation_appointment_provenance")
+    trigger_function_drop = downgrade.index("DROP FUNCTION enforce_appointment_provenance()")
+    call_id_helper_drop = downgrade.index(
+        "DROP FUNCTION appointment_payload_call_id_matches(jsonb, bigint)"
+    )
+    facts_helper_drop = downgrade.index(
         "DROP FUNCTION appointment_payload_facts_match(jsonb, appointments)"
     )
+    assert trigger_drop < trigger_function_drop < call_id_helper_drop < facts_helper_drop
 
 
 def test_downgrade_preflight_fake_bind_rejects_each_lossy_state() -> None:

@@ -424,6 +424,31 @@ async def test_populated_migration_cycle(
         assert movement_count == 5
 
 
+async def _assert_migration_rejected(
+    pg_engine: AsyncEngine,
+    database_url: str,
+    direction: str,
+    target: str,
+    expected_match: str,
+) -> None:
+    """Assert migration fails with expected message, always restoring head afterward."""
+    assertion_error: BaseException | None = None
+    try:
+        with pytest.raises(RuntimeError, match=expected_match):
+            _run_alembic(database_url, direction, target)
+    except BaseException as exc:
+        assertion_error = exc
+    finally:
+        try:
+            await _clean_and_restore(pg_engine, database_url)
+        except Exception as cleanup_exc:
+            if assertion_error is not None:
+                raise cleanup_exc from assertion_error
+            raise
+    if assertion_error is not None:
+        raise assertion_error
+
+
 async def test_preflight_rejects_cross_tenant_product_reference(
     pg_engine: AsyncEngine, postgres_database_url: str
 ) -> None:
@@ -454,9 +479,9 @@ async def test_preflight_rejects_cross_tenant_product_reference(
             )
         )
 
-    with pytest.raises(RuntimeError, match="cross-tenant product reference"):
-        _run_alembic(url, "upgrade", "head")
-    await _clean_and_restore(pg_engine, url)
+    await _assert_migration_rejected(
+        pg_engine, url, "upgrade", "head", "cross-tenant product reference"
+    )
 
 
 async def test_preflight_rejects_duplicate_line_item_product(
@@ -496,9 +521,9 @@ async def test_preflight_rejects_duplicate_line_item_product(
             )
         )
 
-    with pytest.raises(RuntimeError, match="duplicate order line items"):
-        _run_alembic(url, "upgrade", "head")
-    await _clean_and_restore(pg_engine, url)
+    await _assert_migration_rejected(
+        pg_engine, url, "upgrade", "head", "duplicate order line items"
+    )
 
 
 async def test_preflight_rejects_invalid_balance_version(
@@ -530,9 +555,7 @@ async def test_preflight_rejects_invalid_balance_version(
             )
         )
 
-    with pytest.raises(RuntimeError, match="version"):
-        _run_alembic(url, "upgrade", "head")
-    await _clean_and_restore(pg_engine, url)
+    await _assert_migration_rejected(pg_engine, url, "upgrade", "head", "version")
 
 
 async def test_downgrade_preflight_rejects_inventory_operations(
@@ -575,6 +598,6 @@ async def test_downgrade_preflight_rejects_inventory_operations(
             )
         )
 
-    with pytest.raises(RuntimeError, match="inventory operation records"):
-        _run_alembic(url, "downgrade", "0004")
-    await _clean_and_restore(pg_engine, url)
+    await _assert_migration_rejected(
+        pg_engine, url, "downgrade", "0004", "inventory operation records"
+    )

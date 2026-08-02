@@ -697,57 +697,139 @@ async def test_direct_inventory_post_serialization_replay(
     assert movement_count == 1
 
 
-async def test_direct_inventory_different_product_same_key_conflict(
+async def direct_inventory_product_worker(
+    factory: async_sessionmaker[AsyncSession],
+    *,
+    product_id: int,
+    quantity: str,
+    key: str,
+    pid_ready: asyncio.Future[int],
+    gate: asyncio.Event,
+) -> tuple[str, object]:
+    """Worker that waits at gate before calling set_stock, ensuring both sessions
+    have opened transactions and done their initial operation lookup before either
+    proceeds to lock products."""
+    async with factory() as session:
+        await install_transaction_timeouts(session)
+        pid_ready.set_result(await backend_pid(session))
+        await gate.wait()
+        try:
+            result = await InventoryService(session).set_stock(
+                SetOwnerStockCommand(
+                    actor=owner(),
+                    product_id=product_id,
+                    quantity=quantity,
+                    occurred_at=NOW,
+                    idempotency_key=key,
+                )
+            )
+            await session.commit()
+            return ("success", result)
+        except InventoryIdempotencyConflictError as exc:
+            await session.rollback()
+            return ("conflict", exc)
+        except Exception as exc:
+            await session.rollback()
+            return ("error", exc)
+
+
+async def test_direct_inventory_different_product_unique_race(
     pg_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    """Same key + different products → different digests (product_id is in digest).
-    One succeeds, the other gets InventoryIdempotencyConflictError. One operation only."""
+    """Different products + same key → different digests. Product locks do NOT
+    serialize the sessions, so both reach operation insert. One wins the unique
+    constraint; the loser hits real PostgreSQL 23505 on uq_inv_op_idempotency,
+    its savepoint rolls back the movement/balance, and the service returns a
+    typed InventoryIdempotencyConflictError after rereading the winner."""
     async with pg_session_factory() as setup:
         await install_transaction_timeouts(setup)
         await seed(setup, quantity="10")
 
-    async with pg_session_factory() as first_session:
-        await install_transaction_timeouts(first_session)
-        await InventoryService(first_session).set_stock(
-            SetOwnerStockCommand(
-                actor=owner(),
-                product_id=1,
-                quantity="5",
-                occurred_at=NOW,
-                idempotency_key="cross-product-key",
-            )
+    loop = asyncio.get_running_loop()
+    gate = asyncio.Event()
+    p1_ready: asyncio.Future[int] = loop.create_future()
+    p2_ready: asyncio.Future[int] = loop.create_future()
+    task1 = asyncio.create_task(
+        direct_inventory_product_worker(
+            pg_session_factory,
+            product_id=1,
+            quantity="3",
+            key="unique-race-key",
+            pid_ready=p1_ready,
+            gate=gate,
         )
-        await first_session.commit()
+    )
+    task2 = asyncio.create_task(
+        direct_inventory_product_worker(
+            pg_session_factory,
+            product_id=2,
+            quantity="3",
+            key="unique-race-key",
+            pid_ready=p2_ready,
+            gate=gate,
+        )
+    )
+    try:
+        pid1 = await asyncio.wait_for(p1_ready, timeout=3)
+        pid2 = await asyncio.wait_for(p2_ready, timeout=3)
+        assert pid1 != pid2
+        gate.set()
+        results = await asyncio.wait_for(asyncio.gather(task1, task2), timeout=15)
+    finally:
+        await cancel_task(task1)
+        await cancel_task(task2)
 
-    async with pg_session_factory() as second_session:
-        await install_transaction_timeouts(second_session)
-        with pytest.raises(InventoryIdempotencyConflictError):
-            await InventoryService(second_session).set_stock(
-                SetOwnerStockCommand(
-                    actor=owner(),
-                    product_id=2,
-                    quantity="5",
-                    occurred_at=NOW,
-                    idempotency_key="cross-product-key",
-                )
-            )
+    kinds = sorted(r[0] for r in results)
+    assert kinds == ["conflict", "success"], f"Expected one success + one conflict, got {kinds}"
 
     async with pg_session_factory() as verify:
         await install_transaction_timeouts(verify)
         op_count = await verify.scalar(
             text(
                 "SELECT count(*) FROM inventory_operations "
-                "WHERE idempotency_key = 'cross-product-key'"
+                "WHERE idempotency_key = 'unique-race-key'"
             )
         )
-        movement_count = await verify.scalar(
+        assert op_count == 1
+
+        winner_product = await verify.scalar(
+            text(
+                "SELECT product_id FROM inventory_operations "
+                "WHERE idempotency_key = 'unique-race-key'"
+            )
+        )
+        winner_movements = await verify.scalar(
             text(
                 "SELECT count(*) FROM inventory_movements "
-                "WHERE business_id = 1 AND movement_type = 'manual_adjustment'"
-            )
+                "WHERE business_id = 1 AND product_id = :pid "
+                "AND movement_type = 'manual_adjustment'"
+            ),
+            {"pid": winner_product},
         )
-    assert op_count == 1
-    assert movement_count == 1
+        assert winner_movements == 1
+
+        loser_product = 2 if winner_product == 1 else 1
+        loser_movements = await verify.scalar(
+            text(
+                "SELECT count(*) FROM inventory_movements "
+                "WHERE business_id = 1 AND product_id = :pid "
+                "AND movement_type = 'manual_adjustment'"
+            ),
+            {"pid": loser_product},
+        )
+        assert loser_movements == 0
+
+        loser_balance = (
+            await verify.execute(
+                text(
+                    "SELECT on_hand_qty, reserved_qty, version "
+                    "FROM inventory_balances "
+                    "WHERE business_id = 1 AND product_id = :pid"
+                ),
+                {"pid": loser_product},
+            )
+        ).one()
+        assert tuple(loser_balance) == (10, 0, 1)
 
 
 async def test_direct_inventory_same_key_changed_semantics_conflict(

@@ -1,5 +1,9 @@
+pipecat-ai[sarvam]==1.7.0
+anthropic[aiohttp]==0.120.2
+aiortc==1.15.0
 fastapi>=0.115.0
 uvicorn>=0.30.0
 python-dotenv>=1.0.0
-websockets>=12.0
 aiohttp>=3.9.0
+onnxruntime>=1.24.0
+soxr>=1.0.0

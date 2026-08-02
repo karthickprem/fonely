@@ -16,21 +16,17 @@ MEDICAL_PATTERNS = [
 ]
 
 URGENT_RESPONSE_TA = (
-    "இது urgent-ஆ தெரியுது. உடனே hospital-க்கு போங்க அல்லது emergency number-ல "
-    "call பண்ணுங்க. Doctor-கிட்டயும் alert பண்றேன்."
+    "இது urgent-ஆ இருக்கலாம். உடனே hospital போங்க அல்லது emergency services-ஐ call பண்ணுங்க."
 )
 URGENT_RESPONSE_EN = (
-    "This sounds urgent. Please seek immediate medical care or call emergency services. "
-    "I will alert the doctor."
+    "This may be urgent. Please seek immediate medical care or call emergency services."
 )
 
 MEDICAL_RESPONSE_TA = (
-    "நான் medical advice தர இயலாது. Clinic staff-கிட்ட connect பண்றேன், "
-    "அவங்க properly help பண்ணுவாங்க."
+    "நான் medical advice தர முடியாது. Clinic-ஐ நேரடியாக call பண்ணுங்க."
 )
 MEDICAL_RESPONSE_EN = (
-    "I cannot give medical advice. Let me connect you with the clinic staff "
-    "who can help you properly."
+    "I cannot give medical advice. Please call the clinic directly for help."
 )
 
 

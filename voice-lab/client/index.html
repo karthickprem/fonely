@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Fonely Continuous Voice Lab</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>Fonely Voice Lab</h1>
+        <p>Continuous Tamil · Tanglish · Indian English</p>
+      </div>
+      <span class="badge">Synthetic clinic · R&amp;D only</span>
+    </header>
+
+    <main>
+      <section class="conversation">
+        <div class="orb" id="orb"><span id="status">Disconnected</span></div>
+        <div class="transcript" id="transcript">
+          <p class="placeholder">Connect once, then speak naturally. No push-to-talk.</p>
+        </div>
+        <div class="voice-controls">
+          <label>Voice
+            <select id="voice">
+              <option value="priya">Priya</option>
+              <option value="shreya">Shreya</option>
+              <option value="ritu">Ritu</option>
+              <option value="neha">Neha</option>
+              <option value="roopa">Roopa</option>
+            </select>
+          </label>
+          <label>Pace
+            <select id="pace">
+              <option value="0.85">Warm · 0.85</option>
+              <option value="0.95" selected>Natural · 0.95</option>
+              <option value="1.05">Quick · 1.05</option>
+            </select>
+          </label>
+          <label>Expression
+            <select id="temperature">
+              <option value="0.35">Consistent · 0.35</option>
+              <option value="0.55" selected>Natural · 0.55</option>
+              <option value="0.75">Expressive · 0.75</option>
+            </select>
+          </label>
+        </div>
+        <div class="controls">
+          <button id="connect">Connect</button>
+          <button id="mic" disabled>Mute mic</button>
+        </div>
+        <p class="hint">Headphones give the cleanest barge-in test. Laptop echo cancellation is browser-dependent.</p>
+      </section>
+
+      <aside>
+        <h2>Live session</h2>
+        <dl>
+          <div><dt>Transport</dt><dd id="transport">SmallWebRTC</dd></div>
+          <div><dt>Mic</dt><dd id="mic-state">Off</dd></div>
+          <div><dt>User → bot</dt><dd id="latency">—</dd></div>
+          <div><dt>Barge-in</dt><dd id="barge-in">—</dd></div>
+          <div><dt>RTT</dt><dd id="rtt">—</dd></div>
+          <div><dt>Jitter</dt><dd id="jitter">—</dd></div>
+          <div><dt>Packet loss</dt><dd id="loss">—</dd></div>
+        </dl>
+        <h2>Pipeline</h2>
+        <ol>
+          <li>Sarvam Saaras v3 streaming STT</li>
+          <li>Claude Haiku streaming response</li>
+          <li>Sarvam Bulbul v3 streaming PCM</li>
+          <li>Silero VAD + Smart Turn endpointing</li>
+        </ol>
+      </aside>
+    </main>
+
+    <audio id="bot-audio" autoplay></audio>
+    <script type="module" src="/src/app.js"></script>
+  </body>
+</html>

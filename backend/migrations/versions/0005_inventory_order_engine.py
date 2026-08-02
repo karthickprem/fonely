@@ -14,7 +14,6 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import context, op
-from sqlalchemy.dialects import postgresql
 
 revision: str = "0005"
 down_revision: str | Sequence[str] | None = "0004"
@@ -189,12 +188,8 @@ def upgrade() -> None:
         )
 
     # --- Prerequisite unique constraints for tenant-composite FKs ---
-    op.create_unique_constraint(
-        "uq_products_business_id_id", "products", ["business_id", "id"]
-    )
-    op.create_unique_constraint(
-        "uq_orders_business_id_id", "orders", ["business_id", "id"]
-    )
+    op.create_unique_constraint("uq_products_business_id_id", "products", ["business_id", "id"])
+    op.create_unique_constraint("uq_orders_business_id_id", "orders", ["business_id", "id"])
     op.create_unique_constraint(
         "uq_inv_reservations_business_id_id", "inventory_reservations", ["business_id", "id"]
     )
@@ -203,16 +198,16 @@ def upgrade() -> None:
     )
 
     # --- InventoryBalance hardening ---
-    op.create_check_constraint(
-        "ck_inv_balance_version", "inventory_balances", "version > 0"
-    )
+    op.create_check_constraint("ck_inv_balance_version", "inventory_balances", "version > 0")
     op.drop_constraint(
         "inventory_balances_product_id_fkey", "inventory_balances", type_="foreignkey"
     )
     op.create_foreign_key(
         "fk_inv_balance_business_product",
-        "inventory_balances", "products",
-        ["business_id", "product_id"], ["business_id", "id"],
+        "inventory_balances",
+        "products",
+        ["business_id", "product_id"],
+        ["business_id", "id"],
     )
 
     # --- InventoryReservation tenant-composite FKs ---
@@ -221,16 +216,20 @@ def upgrade() -> None:
     )
     op.create_foreign_key(
         "fk_inv_res_business_product",
-        "inventory_reservations", "products",
-        ["business_id", "product_id"], ["business_id", "id"],
+        "inventory_reservations",
+        "products",
+        ["business_id", "product_id"],
+        ["business_id", "id"],
     )
     op.drop_constraint(
         "inventory_reservations_order_id_fkey", "inventory_reservations", type_="foreignkey"
     )
     op.create_foreign_key(
         "fk_inv_res_business_order",
-        "inventory_reservations", "orders",
-        ["business_id", "order_id"], ["business_id", "id"],
+        "inventory_reservations",
+        "orders",
+        ["business_id", "order_id"],
+        ["business_id", "id"],
     )
     op.drop_constraint(
         "inventory_reservations_pending_action_id_fkey",
@@ -239,8 +238,10 @@ def upgrade() -> None:
     )
     op.create_foreign_key(
         "fk_inv_res_business_pending_action",
-        "inventory_reservations", "pending_actions",
-        ["business_id", "pending_action_id"], ["business_id", "id"],
+        "inventory_reservations",
+        "pending_actions",
+        ["business_id", "pending_action_id"],
+        ["business_id", "id"],
     )
 
     # --- InventoryMovement tenant-composite FKs ---
@@ -249,73 +250,83 @@ def upgrade() -> None:
     )
     op.create_foreign_key(
         "fk_inv_mov_business_product",
-        "inventory_movements", "products",
-        ["business_id", "product_id"], ["business_id", "id"],
+        "inventory_movements",
+        "products",
+        ["business_id", "product_id"],
+        ["business_id", "id"],
     )
     op.drop_constraint(
         "inventory_movements_order_id_fkey", "inventory_movements", type_="foreignkey"
     )
     op.create_foreign_key(
         "fk_inv_mov_business_order",
-        "inventory_movements", "orders",
-        ["business_id", "order_id"], ["business_id", "id"],
+        "inventory_movements",
+        "orders",
+        ["business_id", "order_id"],
+        ["business_id", "id"],
     )
     op.drop_constraint(
         "inventory_movements_reservation_id_fkey", "inventory_movements", type_="foreignkey"
     )
     op.create_foreign_key(
         "fk_inv_mov_business_reservation",
-        "inventory_movements", "inventory_reservations",
-        ["business_id", "reservation_id"], ["business_id", "id"],
+        "inventory_movements",
+        "inventory_reservations",
+        ["business_id", "reservation_id"],
+        ["business_id", "id"],
     )
     op.drop_constraint(
         "inventory_movements_pending_action_id_fkey", "inventory_movements", type_="foreignkey"
     )
     op.create_foreign_key(
         "fk_inv_mov_business_pending_action",
-        "inventory_movements", "pending_actions",
-        ["business_id", "pending_action_id"], ["business_id", "id"],
+        "inventory_movements",
+        "pending_actions",
+        ["business_id", "pending_action_id"],
+        ["business_id", "id"],
     )
 
     # --- Order tenant-composite FKs ---
     op.drop_constraint("orders_pending_action_id_fkey", "orders", type_="foreignkey")
     op.create_foreign_key(
         "fk_order_business_pending_action",
-        "orders", "pending_actions",
-        ["business_id", "pending_action_id"], ["business_id", "id"],
+        "orders",
+        "pending_actions",
+        ["business_id", "pending_action_id"],
+        ["business_id", "id"],
     )
     op.drop_constraint("orders_call_id_fkey", "orders", type_="foreignkey")
     op.create_foreign_key(
         "fk_order_business_call",
-        "orders", "calls",
-        ["business_id", "call_id"], ["business_id", "id"],
+        "orders",
+        "calls",
+        ["business_id", "call_id"],
+        ["business_id", "id"],
     )
 
     # --- OrderLineItem hardening ---
     op.create_unique_constraint(
         "uq_line_item_order_product", "order_line_items", ["order_id", "product_id"]
     )
-    op.add_column(
-        "order_line_items", sa.Column("business_id", sa.Integer(), nullable=True)
-    )
+    op.add_column("order_line_items", sa.Column("business_id", sa.Integer(), nullable=True))
     if not context.is_offline_mode():
         _backfill_line_item_business_id()
     op.alter_column("order_line_items", "business_id", nullable=False)
-    op.drop_constraint(
-        "order_line_items_order_id_fkey", "order_line_items", type_="foreignkey"
-    )
-    op.drop_constraint(
-        "order_line_items_product_id_fkey", "order_line_items", type_="foreignkey"
-    )
+    op.drop_constraint("order_line_items_order_id_fkey", "order_line_items", type_="foreignkey")
+    op.drop_constraint("order_line_items_product_id_fkey", "order_line_items", type_="foreignkey")
     op.create_foreign_key(
         "fk_line_item_business_order",
-        "order_line_items", "orders",
-        ["business_id", "order_id"], ["business_id", "id"],
+        "order_line_items",
+        "orders",
+        ["business_id", "order_id"],
+        ["business_id", "id"],
     )
     op.create_foreign_key(
         "fk_line_item_business_product",
-        "order_line_items", "products",
-        ["business_id", "product_id"], ["business_id", "id"],
+        "order_line_items",
+        "products",
+        ["business_id", "product_id"],
+        ["business_id", "id"],
     )
 
     # --- Movement coherence check ---
@@ -404,62 +415,74 @@ def downgrade() -> None:
     op.drop_table("inventory_operations")
 
     # --- Drop movement coherence check ---
-    op.drop_constraint(
-        "ck_inv_mov_available_coherence", "inventory_movements", type_="check"
-    )
+    op.drop_constraint("ck_inv_mov_available_coherence", "inventory_movements", type_="check")
 
     # --- Restore OrderLineItem ---
     op.drop_constraint("fk_line_item_business_product", "order_line_items", type_="foreignkey")
     op.drop_constraint("fk_line_item_business_order", "order_line_items", type_="foreignkey")
     op.create_foreign_key(
         "order_line_items_order_id_fkey",
-        "order_line_items", "orders",
-        ["order_id"], ["id"],
+        "order_line_items",
+        "orders",
+        ["order_id"],
+        ["id"],
     )
     op.create_foreign_key(
         "order_line_items_product_id_fkey",
-        "order_line_items", "products",
-        ["product_id"], ["id"],
+        "order_line_items",
+        "products",
+        ["product_id"],
+        ["id"],
     )
     op.drop_column("order_line_items", "business_id")
     op.drop_constraint("uq_line_item_order_product", "order_line_items", type_="unique")
 
     # --- Restore Order FKs ---
     op.drop_constraint("fk_order_business_call", "orders", type_="foreignkey")
-    op.create_foreign_key(
-        "orders_call_id_fkey", "orders", "calls", ["call_id"], ["id"]
-    )
+    op.create_foreign_key("orders_call_id_fkey", "orders", "calls", ["call_id"], ["id"])
     op.drop_constraint("fk_order_business_pending_action", "orders", type_="foreignkey")
     op.create_foreign_key(
         "orders_pending_action_id_fkey",
-        "orders", "pending_actions",
-        ["pending_action_id"], ["id"],
+        "orders",
+        "pending_actions",
+        ["pending_action_id"],
+        ["id"],
     )
 
     # --- Restore InventoryMovement FKs ---
-    op.drop_constraint("fk_inv_mov_business_pending_action", "inventory_movements", type_="foreignkey")
+    op.drop_constraint(
+        "fk_inv_mov_business_pending_action", "inventory_movements", type_="foreignkey"
+    )
     op.create_foreign_key(
         "inventory_movements_pending_action_id_fkey",
-        "inventory_movements", "pending_actions",
-        ["pending_action_id"], ["id"],
+        "inventory_movements",
+        "pending_actions",
+        ["pending_action_id"],
+        ["id"],
     )
     op.drop_constraint("fk_inv_mov_business_reservation", "inventory_movements", type_="foreignkey")
     op.create_foreign_key(
         "inventory_movements_reservation_id_fkey",
-        "inventory_movements", "inventory_reservations",
-        ["reservation_id"], ["id"],
+        "inventory_movements",
+        "inventory_reservations",
+        ["reservation_id"],
+        ["id"],
     )
     op.drop_constraint("fk_inv_mov_business_order", "inventory_movements", type_="foreignkey")
     op.create_foreign_key(
         "inventory_movements_order_id_fkey",
-        "inventory_movements", "orders",
-        ["order_id"], ["id"],
+        "inventory_movements",
+        "orders",
+        ["order_id"],
+        ["id"],
     )
     op.drop_constraint("fk_inv_mov_business_product", "inventory_movements", type_="foreignkey")
     op.create_foreign_key(
         "inventory_movements_product_id_fkey",
-        "inventory_movements", "products",
-        ["product_id"], ["id"],
+        "inventory_movements",
+        "products",
+        ["product_id"],
+        ["id"],
     )
 
     # --- Restore InventoryReservation FKs ---
@@ -468,37 +491,41 @@ def downgrade() -> None:
     )
     op.create_foreign_key(
         "inventory_reservations_pending_action_id_fkey",
-        "inventory_reservations", "pending_actions",
-        ["pending_action_id"], ["id"],
+        "inventory_reservations",
+        "pending_actions",
+        ["pending_action_id"],
+        ["id"],
     )
     op.drop_constraint("fk_inv_res_business_order", "inventory_reservations", type_="foreignkey")
     op.create_foreign_key(
         "inventory_reservations_order_id_fkey",
-        "inventory_reservations", "orders",
-        ["order_id"], ["id"],
+        "inventory_reservations",
+        "orders",
+        ["order_id"],
+        ["id"],
     )
     op.drop_constraint("fk_inv_res_business_product", "inventory_reservations", type_="foreignkey")
     op.create_foreign_key(
         "inventory_reservations_product_id_fkey",
-        "inventory_reservations", "products",
-        ["product_id"], ["id"],
+        "inventory_reservations",
+        "products",
+        ["product_id"],
+        ["id"],
     )
 
     # --- Restore InventoryBalance ---
-    op.drop_constraint(
-        "fk_inv_balance_business_product", "inventory_balances", type_="foreignkey"
-    )
+    op.drop_constraint("fk_inv_balance_business_product", "inventory_balances", type_="foreignkey")
     op.create_foreign_key(
         "inventory_balances_product_id_fkey",
-        "inventory_balances", "products",
-        ["product_id"], ["id"],
+        "inventory_balances",
+        "products",
+        ["product_id"],
+        ["id"],
     )
     op.drop_constraint("ck_inv_balance_version", "inventory_balances", type_="check")
 
     # --- Drop prerequisite UQs (reverse order) ---
-    op.drop_constraint(
-        "uq_inv_movements_business_id_id", "inventory_movements", type_="unique"
-    )
+    op.drop_constraint("uq_inv_movements_business_id_id", "inventory_movements", type_="unique")
     op.drop_constraint(
         "uq_inv_reservations_business_id_id", "inventory_reservations", type_="unique"
     )

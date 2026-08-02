@@ -3,11 +3,13 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 from tests.unit.phase_c_fakes import (
     FakeInventoryRepository,
     FakePendingActionService,
@@ -501,3 +503,291 @@ def test_cross_tenant_owner_commit_is_rejected_by_command() -> None:
             occurred_at=NOW,
             idempotency_key="wrong-tenant",
         )
+
+
+# =============================================================================
+# _is_unique_violation classifier
+# =============================================================================
+
+
+class TestIsUniqueViolation:
+    def _make_exc(
+        self,
+        *,
+        sqlstate: str | None = "23505",
+        constraint_name: str | None = "uq_inv_op_idempotency",
+        use_cause_chain: bool = False,
+    ) -> IntegrityError:
+        from types import SimpleNamespace
+
+        from sqlalchemy.exc import IntegrityError as SA_IntegrityError
+
+        if use_cause_chain:
+            asyncpg_inner = SimpleNamespace(
+                sqlstate=sqlstate,
+                constraint_name=constraint_name,
+            )
+            driver = SimpleNamespace(
+                sqlstate=sqlstate,
+                constraint_name=None,
+                __cause__=asyncpg_inner,
+            )
+        else:
+            driver = SimpleNamespace(
+                sqlstate=sqlstate,
+                constraint_name=constraint_name,
+                __cause__=None,
+            )
+        exc = SA_IntegrityError("test", {}, Exception("inner"))
+        exc.orig = driver  # type: ignore[assignment]
+        return exc
+
+    def test_exact_sqlstate_and_constraint_recovers(self) -> None:
+        from fonely.services.inventory import _is_unique_violation
+
+        exc = self._make_exc()
+        assert _is_unique_violation(exc, "uq_inv_op_idempotency") is True
+
+    def test_same_sqlstate_wrong_constraint_reraises(self) -> None:
+        from fonely.services.inventory import _is_unique_violation
+
+        exc = self._make_exc(constraint_name="uq_order_idempotency")
+        assert _is_unique_violation(exc, "uq_inv_op_idempotency") is False
+
+    def test_constraint_text_only_in_message_reraises(self) -> None:
+        from types import SimpleNamespace
+
+        from sqlalchemy.exc import IntegrityError as SA_IntegrityError
+
+        from fonely.services.inventory import _is_unique_violation
+
+        driver = SimpleNamespace(
+            sqlstate="23505",
+            constraint_name="some_other_constraint",
+            __cause__=None,
+        )
+        exc = SA_IntegrityError(
+            'duplicate key value violates unique constraint "uq_inv_op_idempotency"',
+            {},
+            Exception("inner"),
+        )
+        exc.orig = driver  # type: ignore[assignment]
+        assert _is_unique_violation(exc, "uq_inv_op_idempotency") is False
+
+    def test_missing_diagnostic_reraises(self) -> None:
+        from fonely.services.inventory import _is_unique_violation
+
+        exc = self._make_exc(constraint_name=None)
+        assert _is_unique_violation(exc, "uq_inv_op_idempotency") is False
+
+    def test_missing_orig_reraises(self) -> None:
+        from sqlalchemy.exc import IntegrityError as SA_IntegrityError
+
+        from fonely.services.inventory import _is_unique_violation
+
+        exc = SA_IntegrityError("test", {}, Exception("inner"))
+        exc.orig = None  # type: ignore[assignment]
+        assert _is_unique_violation(exc, "uq_inv_op_idempotency") is False
+
+    def test_wrong_sqlstate_reraises(self) -> None:
+        from fonely.services.inventory import _is_unique_violation
+
+        exc = self._make_exc(sqlstate="23503")
+        assert _is_unique_violation(exc, "uq_inv_op_idempotency") is False
+
+    def test_asyncpg_cause_chain_recovers(self) -> None:
+        from fonely.services.inventory import _is_unique_violation
+
+        exc = self._make_exc(use_cause_chain=True)
+        assert _is_unique_violation(exc, "uq_inv_op_idempotency") is True
+
+    def test_cause_chain_wrong_constraint_reraises(self) -> None:
+        from fonely.services.inventory import _is_unique_violation
+
+        exc = self._make_exc(constraint_name="wrong_constraint", use_cause_chain=True)
+        assert _is_unique_violation(exc, "uq_inv_op_idempotency") is False
+
+
+# =============================================================================
+# Savepoint uniqueness recovery (controlled boundary test)
+# =============================================================================
+
+
+class TestSavepointUniquenessRecovery:
+    """Exercises the IntegrityError → winner-reread recovery path by injecting
+    a real SQLSTATE/constraint_name diagnostic at the insert_operation boundary."""
+
+    @staticmethod
+    def _make_unique_violation() -> IntegrityError:
+        from types import SimpleNamespace
+
+        from sqlalchemy.exc import IntegrityError as SA_IntegrityError
+
+        driver = SimpleNamespace(
+            sqlstate="23505",
+            constraint_name="uq_inv_op_idempotency",
+            __cause__=None,
+        )
+        exc = SA_IntegrityError(
+            "duplicate key value violates unique constraint",
+            {},
+            Exception("inner"),
+        )
+        exc.orig = driver  # type: ignore[assignment]
+        return exc
+
+    @staticmethod
+    def _make_wrong_unique_violation() -> IntegrityError:
+        from types import SimpleNamespace
+
+        from sqlalchemy.exc import IntegrityError as SA_IntegrityError
+
+        driver = SimpleNamespace(
+            sqlstate="23505",
+            constraint_name="uq_some_other_constraint",
+            __cause__=None,
+        )
+        exc = SA_IntegrityError(
+            "duplicate key value violates unique constraint",
+            {},
+            Exception("inner"),
+        )
+        exc.orig = driver  # type: ignore[assignment]
+        return exc
+
+    async def test_exact_constraint_triggers_replay(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        authorization_allowed(monkeypatch)
+        state = state_with_stock(on_hand="10")
+        service = service_for(state)
+        winner_digest = DirectInventoryRequestSignature(
+            business_id=1,
+            operation="set",
+            product_id=1,
+            quantity=Decimal("5"),
+            occurred_at=NOW,
+            note=None,
+        ).digest
+        winner_movement = SimpleNamespace(
+            id=1,
+            business_id=1,
+            product_id=1,
+            business_date=BUSINESS_DATE,
+            movement_type=InventoryMovementType.MANUAL_ADJUSTMENT.value,
+            on_hand_delta=Decimal("5"),
+            reserved_delta=Decimal("0"),
+            on_hand_after=Decimal("5"),
+            reserved_after=Decimal("0"),
+            available_after=Decimal("5"),
+        )
+        state.movements[1] = winner_movement
+        winner_op = SimpleNamespace(
+            id=99,
+            business_id=1,
+            idempotency_key="race-key",
+            operation="set",
+            product_id=1,
+            request_digest=winner_digest,
+            movement_id=1,
+        )
+
+        lookup_count = 0
+        insert_count = 0
+
+        async def staged_lookup(
+            self_repo: object, business_id: int, idempotency_key: str
+        ) -> SimpleNamespace | None:
+            nonlocal lookup_count
+            lookup_count += 1
+            if lookup_count <= 2:
+                return None
+            return winner_op
+
+        async def insert_then_fail(self_repo: object, values: dict[str, Any]) -> SimpleNamespace:
+            nonlocal insert_count
+            insert_count += 1
+            raise TestSavepointUniquenessRecovery._make_unique_violation()
+
+        monkeypatch.setattr(FakeInventoryRepository, "get_operation_by_key", staged_lookup)
+        monkeypatch.setattr(FakeInventoryRepository, "insert_operation", insert_then_fail)
+
+        result = await service.set_stock(
+            SetOwnerStockCommand(
+                actor=actor(),
+                product_id=1,
+                quantity="5",
+                occurred_at=NOW,
+                idempotency_key="race-key",
+            )
+        )
+        assert result.idempotent_replay is True
+        assert result.movement_id == 1
+        assert insert_count == 1
+        assert lookup_count == 3
+
+    async def test_wrong_constraint_is_not_swallowed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        authorization_allowed(monkeypatch)
+        state = state_with_stock(on_hand="10")
+        service = service_for(state)
+
+        async def insert_wrong_violation(
+            self_repo: object, values: dict[str, Any]
+        ) -> SimpleNamespace:
+            raise TestSavepointUniquenessRecovery._make_wrong_unique_violation()
+
+        monkeypatch.setattr(FakeInventoryRepository, "insert_operation", insert_wrong_violation)
+
+        with pytest.raises(IntegrityError):
+            await service.set_stock(
+                SetOwnerStockCommand(
+                    actor=actor(),
+                    product_id=1,
+                    quantity="5",
+                    occurred_at=NOW,
+                    idempotency_key="wrong-constraint-key",
+                )
+            )
+
+    async def test_changed_digest_after_recovery_raises_conflict(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        authorization_allowed(monkeypatch)
+        state = state_with_stock(on_hand="10")
+        service = service_for(state)
+        winner_op = SimpleNamespace(
+            id=99,
+            business_id=1,
+            idempotency_key="conflict-race-key",
+            operation="set",
+            product_id=1,
+            request_digest="different_digest_from_winner",
+            movement_id=1,
+        )
+
+        lookup_count = 0
+
+        async def staged_lookup(
+            self_repo: object, business_id: int, idempotency_key: str
+        ) -> SimpleNamespace | None:
+            nonlocal lookup_count
+            lookup_count += 1
+            if lookup_count <= 2:
+                return None
+            return winner_op
+
+        async def insert_unique_fail(self_repo: object, values: dict[str, Any]) -> SimpleNamespace:
+            raise TestSavepointUniquenessRecovery._make_unique_violation()
+
+        monkeypatch.setattr(FakeInventoryRepository, "get_operation_by_key", staged_lookup)
+        monkeypatch.setattr(FakeInventoryRepository, "insert_operation", insert_unique_fail)
+
+        with pytest.raises(InventoryIdempotencyConflictError, match="conflicts"):
+            await service.set_stock(
+                SetOwnerStockCommand(
+                    actor=actor(),
+                    product_id=1,
+                    quantity="5",
+                    occurred_at=NOW,
+                    idempotency_key="conflict-race-key",
+                )
+            )
+        assert lookup_count == 3

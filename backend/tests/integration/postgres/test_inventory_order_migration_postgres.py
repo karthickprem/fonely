@@ -207,6 +207,27 @@ def _alembic_env(database_url: str) -> dict[str, str]:
     return env
 
 
+async def _clean_and_restore(pg_engine: AsyncEngine, database_url: str) -> None:
+    """Remove all test data at the current revision and upgrade to head."""
+    async with pg_engine.begin() as conn:
+        rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
+        if rev == "0004":
+            tables_0004 = (
+                "inventory_movements, inventory_reservations, order_line_items, "
+                "orders, inventory_balances, pending_actions, products, "
+                "business_users, businesses"
+            )
+            await conn.execute(text(f"TRUNCATE TABLE {tables_0004} RESTART IDENTITY CASCADE"))
+        elif rev == "0005":
+            tables_0005 = (
+                "inventory_operations, inventory_movements, inventory_reservations, "
+                "order_line_items, orders, inventory_balances, pending_actions, "
+                "products, business_users, businesses"
+            )
+            await conn.execute(text(f"TRUNCATE TABLE {tables_0005} RESTART IDENTITY CASCADE"))
+    _run_alembic(database_url, "upgrade", "head")
+
+
 def _run_alembic(database_url: str, *args: str) -> subprocess.CompletedProcess[str]:
     env = _alembic_env(database_url)
     result = subprocess.run(
@@ -435,6 +456,7 @@ async def test_preflight_rejects_cross_tenant_product_reference(
 
     with pytest.raises(RuntimeError, match="cross-tenant product reference"):
         _run_alembic(url, "upgrade", "head")
+    await _clean_and_restore(pg_engine, url)
 
 
 async def test_preflight_rejects_duplicate_line_item_product(
@@ -476,6 +498,7 @@ async def test_preflight_rejects_duplicate_line_item_product(
 
     with pytest.raises(RuntimeError, match="duplicate order line items"):
         _run_alembic(url, "upgrade", "head")
+    await _clean_and_restore(pg_engine, url)
 
 
 async def test_preflight_rejects_invalid_balance_version(
@@ -509,6 +532,7 @@ async def test_preflight_rejects_invalid_balance_version(
 
     with pytest.raises(RuntimeError, match="version"):
         _run_alembic(url, "upgrade", "head")
+    await _clean_and_restore(pg_engine, url)
 
 
 async def test_downgrade_preflight_rejects_inventory_operations(
@@ -553,3 +577,4 @@ async def test_downgrade_preflight_rejects_inventory_operations(
 
     with pytest.raises(RuntimeError, match="inventory operation records"):
         _run_alembic(url, "downgrade", "0004")
+    await _clean_and_restore(pg_engine, url)

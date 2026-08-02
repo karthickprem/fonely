@@ -651,9 +651,12 @@ async def direct_inventory_worker(
             return ("error", exc)
 
 
-async def test_direct_inventory_same_key_race_one_effect(
+async def test_direct_inventory_post_serialization_replay(
     pg_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    """Same product + same key + same digest: product locks serialize the sessions,
+    so the loser finds the winner's operation during the post-lock recheck.
+    Both return equivalent success; one operation, one movement."""
     async with pg_session_factory() as setup:
         await install_transaction_timeouts(setup)
         await seed(setup, quantity="10")
@@ -694,6 +697,59 @@ async def test_direct_inventory_same_key_race_one_effect(
     assert movement_count == 1
 
 
+async def test_direct_inventory_different_product_same_key_conflict(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Same key + different products → different digests (product_id is in digest).
+    One succeeds, the other gets InventoryIdempotencyConflictError. One operation only."""
+    async with pg_session_factory() as setup:
+        await install_transaction_timeouts(setup)
+        await seed(setup, quantity="10")
+
+    async with pg_session_factory() as first_session:
+        await install_transaction_timeouts(first_session)
+        await InventoryService(first_session).set_stock(
+            SetOwnerStockCommand(
+                actor=owner(),
+                product_id=1,
+                quantity="5",
+                occurred_at=NOW,
+                idempotency_key="cross-product-key",
+            )
+        )
+        await first_session.commit()
+
+    async with pg_session_factory() as second_session:
+        await install_transaction_timeouts(second_session)
+        with pytest.raises(InventoryIdempotencyConflictError):
+            await InventoryService(second_session).set_stock(
+                SetOwnerStockCommand(
+                    actor=owner(),
+                    product_id=2,
+                    quantity="5",
+                    occurred_at=NOW,
+                    idempotency_key="cross-product-key",
+                )
+            )
+
+    async with pg_session_factory() as verify:
+        await install_transaction_timeouts(verify)
+        op_count = await verify.scalar(
+            text(
+                "SELECT count(*) FROM inventory_operations "
+                "WHERE idempotency_key = 'cross-product-key'"
+            )
+        )
+        movement_count = await verify.scalar(
+            text(
+                "SELECT count(*) FROM inventory_movements "
+                "WHERE business_id = 1 AND movement_type = 'manual_adjustment'"
+            )
+        )
+    assert op_count == 1
+    assert movement_count == 1
+
+
 async def test_direct_inventory_same_key_changed_semantics_conflict(
     pg_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -716,7 +772,7 @@ async def test_direct_inventory_same_key_changed_semantics_conflict(
 
     async with pg_session_factory() as second_session:
         await install_transaction_timeouts(second_session)
-        try:
+        with pytest.raises(InventoryIdempotencyConflictError):
             await InventoryService(second_session).set_stock(
                 SetOwnerStockCommand(
                     actor=owner(),
@@ -726,6 +782,3 @@ async def test_direct_inventory_same_key_changed_semantics_conflict(
                     idempotency_key="conflict-key",
                 )
             )
-            pytest.fail("Expected InventoryIdempotencyConflictError")
-        except InventoryIdempotencyConflictError:
-            pass

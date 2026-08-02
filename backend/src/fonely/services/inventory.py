@@ -51,6 +51,21 @@ from fonely.services.authorization import require_owner_or_manager
 from fonely.services.pending_actions import PendingActionService
 
 
+def _is_unique_violation(exc: IntegrityError, constraint_name: str) -> bool:
+    driver = exc.orig
+    if driver is None:
+        return False
+    if getattr(driver, "sqlstate", None) != "23505":
+        return False
+    name: str | None = getattr(driver, "constraint_name", None)
+    if name is not None:
+        return name == constraint_name
+    cause = driver.__cause__
+    if cause is not None:
+        return bool(getattr(cause, "constraint_name", None) == constraint_name)
+    return False
+
+
 class InventoryService:
     """Coordinates inventory policy without committing or rolling back the session."""
 
@@ -513,9 +528,7 @@ class InventoryService:
                     available_after=movement.available_after,
                 )
         except IntegrityError as exc:
-            if getattr(exc.orig, "sqlstate", None) == "23505" and "uq_inv_op_idempotency" in str(
-                exc
-            ):
+            if _is_unique_violation(exc, "uq_inv_op_idempotency"):
                 winner = await self._repo.get_operation_by_key(business_id, idempotency_key)
                 if winner is None:
                     raise InventoryIdempotencyConflictError(

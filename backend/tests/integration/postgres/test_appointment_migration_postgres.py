@@ -501,22 +501,16 @@ async def test_head_rejects_held_appointment_status(
         await session.rollback()
 
 
-async def test_appointment_update_to_confirmed_requires_matching_allocation(
+async def test_confirmed_appointment_without_allocation_is_rejected(
     pg_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
-    past = datetime(2020, 1, 1, 10, tzinfo=UTC)
     async with pg_session_factory() as session:
         await _seed_head_catalog(session)
-        await _insert_head_appointment(session, 1, start_at=past, status="completed")
-        await session.commit()
-
-    async with pg_session_factory() as session:
-        await session.execute(
-            text("UPDATE appointments SET status = 'confirmed', version = version + 1 WHERE id = 1")
-        )
+        await _insert_head_appointment(session, 1, start_at=START)
         with pytest.raises(IntegrityError) as error:
-            await session.commit()
-        assert _pg_constraint_name(error.value) == ("ck_confirmed_appointment_active_allocation")
+            await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        assert _pg_constraint_name(error.value) == "ck_confirmed_appointment_active_allocation"
+        await session.rollback()
 
 
 @pytest.mark.parametrize("mutation", ["update", "delete"])
@@ -538,16 +532,16 @@ async def test_allocation_update_and_delete_paths_preserve_confirmed_symmetry(
                     "version = version + 1 WHERE appointment_id = 1"
                 )
             )
+            with pytest.raises(IntegrityError) as error:
+                await session.commit()
+            assert _pg_constraint_name(error.value) == "ck_confirmed_appointment_active_allocation"
         else:
-            await session.execute(text("DELETE FROM resource_allocations WHERE appointment_id = 1"))
-        with pytest.raises(IntegrityError) as error:
-            await session.commit()
-        expected_constraint = (
-            "ck_confirmed_appointment_active_allocation"
-            if mutation == "update"
-            else "ck_resource_allocation_immutable_identity"
-        )
-        assert _pg_constraint_name(error.value) == expected_constraint
+            with pytest.raises(IntegrityError) as error:
+                await session.execute(
+                    text("DELETE FROM resource_allocations WHERE appointment_id = 1")
+                )
+            assert _pg_constraint_name(error.value) == "ck_resource_allocation_immutable_identity"
+            await session.rollback()
 
 
 @pytest.mark.parametrize("update_order", ["appointment-first", "allocation-first"])
@@ -987,6 +981,9 @@ async def _exercise_creation_call_id_provenance(
     )
     data = payload["data"]
     assert isinstance(data, dict)
+    facts = data["facts"]
+    assert isinstance(facts, dict)
+    facts["price"] = None
     if missing_key:
         data.pop("call_id")
     else:
@@ -1320,6 +1317,7 @@ async def test_malformed_runtime_commit_provenance_is_a_constraint_violation(
     async with pg_session_factory() as session:
         await _seed_head_catalog(session)
         await _insert_head_appointment(session, 1, start_at=past, status="completed")
+        await _insert_active_allocation(session, 1, start_at=past)
         await _insert_confirmed_mutation_action(
             session,
             action_id=10,

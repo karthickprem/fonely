@@ -267,6 +267,8 @@ APPROVED_DATABASE_URLS: dict[str, set[str]] = {
     },
     ".github/workflows/backend-ci.yml": {
         "postgresql+asyncpg://fonely_test:fonely_test_ci_only@localhost:5432/fonely_test",
+        "postgresql://fonely_test:fonely_test_ci_only@localhost:5432/fonely_test",
+        "postgresql://fonely_test:fonely_test_ci_only@localhost:5432/fonely_test_restore",
     },
     "docs/testing/POSTGRESQL.md": {
         "postgresql+asyncpg://fonely_test:fonely_test_local_only@localhost:55432/fonely_test",
@@ -295,6 +297,8 @@ APPROVED_DATABASE_URLS: dict[str, set[str]] = {
         "postgresql+asyncpg://fonely_test_user:secret@localhost:5432/{database_name}",
         "postgresql+asyncpg://fonely_test_user:secret@{hostname}:5432/fonely_test",
         "postgresql+asyncpg://app_user:secret@localhost:5432/fonely_test",
+        "postgresql://fonely_test:fonely_test_ci_only@localhost:5432/fonely_test",
+        "postgresql://fonely_test:fonely_test_ci_only@localhost:5432/fonely_test_restore",
     },
 }
 

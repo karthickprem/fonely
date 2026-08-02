@@ -128,3 +128,50 @@ jobs:
 
       - name: Migration upgrade to head (verify re-upgrade)
         run: .venv/bin/alembic upgrade head
+
+      - name: Backup-restore verification unit tests
+        working-directory: .
+        run: backend/.venv/bin/python -m pytest scripts/tests/test_verify_backup_restore.py -q
+
+      - name: Backup-restore verification (live)
+        working-directory: .
+        env:
+          PGHOST: localhost
+          PGPORT: "5432"
+          PGUSER: fonely_test
+          PGPASSWORD: fonely_test_ci_only
+        run: |
+          set -euo pipefail
+
+          # Seed synthetic data into the source database
+          psql -d fonely_test -c "
+            INSERT INTO businesses (id, name, category, primary_contact_phone, timezone, subscription)
+            VALUES (1, 'Test Salon A', 'salon', '+919000000001', 'Asia/Kolkata', 'trial'),
+                   (2, 'Test Salon B', 'salon', '+919000000002', 'Asia/Kolkata', 'trial')
+            ON CONFLICT DO NOTHING;
+            INSERT INTO business_users (business_id, phone, role, is_active)
+            VALUES (1, '+919000000001', 'owner', true),
+                   (2, '+919000000002', 'owner', true)
+            ON CONFLICT DO NOTHING;
+            INSERT INTO services (id, business_id, name, duration_minutes, buffer_before_minutes, buffer_after_minutes, price, is_active)
+            VALUES (1, 1, 'Haircut', 30, 0, 0, 500.00, true),
+                   (2, 2, 'Facial', 45, 5, 5, 800.00, true)
+            ON CONFLICT DO NOTHING;
+            INSERT INTO resources (id, business_id, name, resource_type, is_active)
+            VALUES (1, 1, 'Priya', 'staff', true),
+                   (2, 2, 'Mira', 'staff', true)
+            ON CONFLICT DO NOTHING;
+          "
+
+          # Create disposable restore database
+          createdb fonely_test_restore
+
+          # Run the backup-restore verifier
+          FONELY_BACKUP_SOURCE_URL="postgresql://fonely_test:fonely_test_ci_only@localhost:5432/fonely_test" \
+          FONELY_BACKUP_RESTORE_URL="postgresql://fonely_test:fonely_test_ci_only@localhost:5432/fonely_test_restore" \
+          FONELY_BACKUP_ENVIRONMENT="github-ci" \
+          backend/.venv/bin/python scripts/verify-backup-restore.py | tee /dev/stderr | \
+          python3 -c "import json,sys; d=json.load(sys.stdin); assert d['overall_status']=='passed', 'backup-restore failed'"
+
+          # Cleanup
+          dropdb --if-exists fonely_test_restore

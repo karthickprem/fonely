@@ -5,6 +5,8 @@ from dataclasses import dataclass
 
 import httpx
 
+from fonely.core.resilience import CircuitOpenError, ResilientClient
+
 logger = logging.getLogger("fonely.services.whatsapp_sender")
 
 _API_BASE = "https://graph.facebook.com/v21.0"
@@ -23,11 +25,20 @@ class WhatsAppSender:
         access_token: str,
         phone_number_id: str,
         *,
-        client: httpx.AsyncClient | None = None,
+        client: httpx.AsyncClient | ResilientClient | None = None,
     ) -> None:
         self._access_token = access_token
         self._phone_number_id = phone_number_id
-        self._client = client
+        if isinstance(client, ResilientClient):
+            self._resilient = client
+        else:
+            self._resilient = ResilientClient(
+                "whatsapp",
+                timeout=10.0,
+                max_retries=2,
+                circuit_breaker_threshold=5,
+                client=client,
+            )
 
     async def send_text(self, to: str, message: str) -> WhatsAppSendResult:
         url = f"{_API_BASE}/{self._phone_number_id}/messages"
@@ -42,10 +53,8 @@ class WhatsAppSender:
             "Authorization": f"Bearer {self._access_token}",
         }
 
-        client = self._client or httpx.AsyncClient()
-        owns_client = self._client is None
         try:
-            response = await client.post(url, json=body, headers=headers, timeout=10.0)
+            response = await self._resilient.post(url, json=body, headers=headers)
             response.raise_for_status()
             data = response.json()
             msg_id = None
@@ -62,6 +71,9 @@ class WhatsAppSender:
                 },
             )
             return WhatsAppSendResult(success=True, message_id=msg_id)
+        except CircuitOpenError:
+            logger.warning("whatsapp_circuit_open")
+            return WhatsAppSendResult(success=False, error="circuit_open")
         except httpx.TimeoutException:
             logger.warning(
                 "whatsapp_send_timeout",
@@ -80,6 +92,3 @@ class WhatsAppSender:
         except Exception:
             logger.warning("whatsapp_send_unknown_error")
             return WhatsAppSendResult(success=False, error="unknown")
-        finally:
-            if owns_client:
-                await client.aclose()

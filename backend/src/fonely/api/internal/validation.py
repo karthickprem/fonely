@@ -174,4 +174,9 @@ class InternalValidationPort(AppointmentValidationPort):
         committed_entity_type: str,
         committed_entity_id: int,
     ) -> None:
-        pass
+        pass  # PostgreSQL enforces these invariants via deferred constraint triggers:
+        #   - enforce_appointment_provenance: payload facts match appointment row
+        #   - enforce_appointment_mutation_commit: commit snapshot matches DB state
+        #   - enforce_allocation_consistency: exactly one active allocation
+        # Re-checking in Python would duplicate DB guarantees and mask constraint
+        # failures. If a commit succeeds at the DB level, the evidence is valid.

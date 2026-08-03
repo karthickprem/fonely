@@ -23,6 +23,8 @@ class Settings(BaseSettings):
     exotel_api_token: str = ""
     exotel_sid: str = ""
     exotel_phone_number: str = ""
+    exotel_webhook_secret: str = ""
+    exotel_number_mappings: str = ""
 
     # Database — async PostgreSQL in production, async SQLite for tests
     database_url: str = "postgresql+asyncpg://localhost:5432/fonely"

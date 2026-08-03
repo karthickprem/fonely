@@ -86,6 +86,13 @@ def create_app() -> FastAPI:
 
         app.include_router(whatsapp_router)
 
+    if settings.exotel_webhook_secret:
+        from fonely.api.channels.exotel import router as exotel_router
+        from fonely.services.exotel_config import ExotelNumberMapping
+
+        app.state.exotel_mapping = ExotelNumberMapping()
+        app.include_router(exotel_router)
+
     @app.get("/metrics")
     async def metrics_endpoint(request: Request) -> Response:
         from fonely.core.metrics import metrics

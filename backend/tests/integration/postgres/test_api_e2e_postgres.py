@@ -160,34 +160,11 @@ async def test_full_booking_through_http(
             turn1 = r2.json()
             assert turn1["state"] == "fact_collection"
 
-            now = utcnow()
-            target = now + timedelta(days=1)
-            if target.isoweekday() == 7:
-                target += timedelta(days=1)
-            slot_start = datetime.combine(target.date(), time(10, 30), tzinfo=UTC)
-
-            ctx = _CONVERSATIONS[conv_id]
-            ctx.collected_facts["service_id"] = 1
-            ctx.collected_facts["service_name"] = "General Consultation"
-            ctx.collected_facts["resource_id"] = 1
-            ctx.collected_facts["resource_name"] = "Dr. Priya"
-            ctx.collected_facts["customer_phone"] = "+919123456789"
-            ctx.collected_facts["start_at"] = slot_start
-
-            r3 = await client.post(
-                f"/internal/v1/conversations/{conv_id}/messages",
-                json={"message": "yes that works"},
-                headers=_AUTH_HEADERS,
-            )
-            assert r3.status_code == 200, f"Message 2 failed: {r3.text}"
-            turn2 = r3.json()
-            assert turn2["state"] in (
-                "availability_check",
-                "proposal_presented",
-                "awaiting_confirmation",
-            ), f"Unexpected state after availability: {turn2['state']}"
-
-            assert ctx.proposal_id is not None, "Availability step did not create proposal"
+    now = utcnow()
+    target = now + timedelta(days=1)
+    if target.isoweekday() == 7:
+        target += timedelta(days=1)
+    slot_start = datetime.combine(target.date(), time(10, 30), tzinfo=UTC)
 
     async with pg_session_factory() as session:
         from fonely.api.internal.validation import InternalValidationPort
@@ -197,6 +174,13 @@ async def test_full_booking_through_http(
         from fonely.services.conversation import ConversationService
 
         ctx = _CONVERSATIONS[conv_id]
+        ctx.collected_facts["service_id"] = 1
+        ctx.collected_facts["service_name"] = "General Consultation"
+        ctx.collected_facts["resource_id"] = 1
+        ctx.collected_facts["resource_name"] = "Dr. Priya"
+        ctx.collected_facts["customer_phone"] = "+919123456789"
+        ctx.collected_facts["start_at"] = slot_start
+
         actor = ActorContext(
             business_id=1,
             normalized_phone="+919123456789",
@@ -205,6 +189,15 @@ async def test_full_booking_through_http(
         validation = InternalValidationPort(session)
         appt_service = AppointmentService(session, validation=validation)
         conv_service = ConversationService(session, gateway, appointment_service=appt_service)
+
+        turn_avail = await conv_service.process_message(conv_id, 1, actor, "yes that works")
+        assert ctx.proposal_id is not None, "Availability step did not create proposal"
+        assert turn_avail.state.value in (
+            "availability_check",
+            "proposal_presented",
+            "awaiting_confirmation",
+        )
+
         turn_confirm = await conv_service.process_message(conv_id, 1, actor, "yes")
         assert turn_confirm.state.value == "completed"
         assert "confirmed" in turn_confirm.assistant_response.lower()

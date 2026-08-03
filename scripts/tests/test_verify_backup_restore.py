@@ -63,10 +63,10 @@ def _parse_output(result: subprocess.CompletedProcess[str]) -> dict[str, Any]:
 
 _BASE_EVIDENCE: dict[str, str] = {
     "revision": "0004",
-    "businesses": "1|Salon A|salon|+910000000001|Asia/Kolkata|trial\n2|Salon B|salon|+910000000002|Asia/Kolkata|trial",
+    "businesses": "1|Smile Dental|dental_clinic|+910000000001|Asia/Kolkata|trial\n2|Care Dental|dental_clinic|+910000000002|Asia/Kolkata|trial",
     "business_users": "1|+910000000001|owner|t\n2|+910000000002|owner|t",
-    "services": "1|1|Haircut|30|0|0|500.00|t\n2|2|Facial|45|5|5|800.00|t",
-    "resources": "1|1|Priya|staff|t\n2|2|Mira|staff|t",
+    "services": "1|1|General Consultation|30|0|0|500.00|t\n2|2|Teeth Cleaning|45|5|5|800.00|t",
+    "resources": "1|1|Dr. Priya|dentist|t\n2|2|Dr. Meera|dentist|t",
     "schema_functions": "myfunc||CREATE FUNCTION myfunc() ...",
     "schema_tables": "businesses|id|integer|NO\nbusinesses|name|varchar|NO",
 }
@@ -410,7 +410,7 @@ class TestProductionEvidenceDigest:
                 _make_query_fn(
                     {
                         "businesses": _BASE_EVIDENCE["businesses"].replace(
-                            "Salon A", "Salon X"
+                            "Smile Dental", "Other Dental"
                         )
                     }
                 )
@@ -514,7 +514,7 @@ class TestProductionEvidenceDigest:
         restored = br._compute_digest(
             br._collect_evidence(
                 _make_query_fn(
-                    {"businesses": "1|Changed|salon|+910000000001|Asia/Kolkata|trial"}
+                    {"businesses": "1|Changed|dental_clinic|+910000000001|Asia/Kolkata|trial"}
                 )
             )
         )
@@ -531,12 +531,12 @@ class TestProductionEvidenceDigest:
 
 class TestEvidencePathNoLeak:
     def test_evidence_values_never_in_failure_output(self) -> None:
-        synthetic_name = "LeakTestSalon" + "XYZ"
+        synthetic_name = "LeakTestClinic" + "XYZ"
         synthetic_phone = "+910000099999"
 
         evidence = {
             **_BASE_EVIDENCE,
-            "businesses": f"1|{synthetic_name}|salon|{synthetic_phone}|Asia/Kolkata|trial",
+            "businesses": f"1|{synthetic_name}|dental_clinic|{synthetic_phone}|Asia/Kolkata|trial",
         }
 
         captured_queries: list[str] = []

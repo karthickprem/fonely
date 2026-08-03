@@ -18,6 +18,7 @@ from fonely.core.config import settings
 from fonely.core.validators import utcnow
 from fonely.models.schema import Appointment, PendingAction, ResourceAllocation
 from fonely.services.conversation import _CONVERSATIONS
+from fonely.services.conversation_persistence import ConversationPersistenceService
 from fonely.services.model_gateway import ModelResponse
 
 pytestmark = pytest.mark.postgres
@@ -135,29 +136,20 @@ async def test_full_booking_through_http(
         app.state.session_factory = pg_session_factory  # type: ignore[union-attr]
         app.state.model_gateway = gateway  # type: ignore[union-attr]
         transport = ASGITransport(app=app)  # type: ignore[arg-type]
+        async with pg_session_factory() as persist_session:
+            persistence = ConversationPersistenceService(persist_session)
+            ctx_created = await persistence.load_or_create(1, "+919123456789")
+            conv_id = ctx_created.conversation_id
+            _CONVERSATIONS[conv_id] = ctx_created
+            await persist_session.commit()
+
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            r = await client.post(
-                "/internal/v1/conversations",
-                json={"business_id": 1},
+            r = await client.get(
+                f"/internal/v1/conversations/{conv_id}",
                 headers=_AUTH_HEADERS,
             )
-            assert r.status_code == 201, f"Create conversation failed: {r.text}"
-            data = r.json()
-            conv_id = data["conversation_id"]
-            assert data["state"] == "greeting"
-
-            async with pg_session_factory() as seed_session:
-                await seed_session.execute(
-                    text(
-                        "INSERT INTO conversations "
-                        "(id, business_id, customer_phone, state, collected_facts, "
-                        "turn_count, expires_at) "
-                        "VALUES (:id, 1, '+919123456789', 'greeting', '{}', 0, "
-                        "NOW() + INTERVAL '1 hour')"
-                    ),
-                    {"id": conv_id},
-                )
-                await seed_session.commit()
+            assert r.status_code == 200, f"Get conversation failed: {r.text}"
+            assert r.json()["state"] == "greeting"
 
             r2 = await client.post(
                 f"/internal/v1/conversations/{conv_id}/messages",
@@ -252,28 +244,14 @@ async def test_medical_escalation_through_http(
         app.state.session_factory = pg_session_factory  # type: ignore[union-attr]
         app.state.model_gateway = gateway  # type: ignore[union-attr]
         transport = ASGITransport(app=app)  # type: ignore[arg-type]
+        async with pg_session_factory() as persist_session:
+            persistence = ConversationPersistenceService(persist_session)
+            ctx_created = await persistence.load_or_create(1, "+919123456789")
+            conv_id = ctx_created.conversation_id
+            _CONVERSATIONS[conv_id] = ctx_created
+            await persist_session.commit()
+
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            r = await client.post(
-                "/internal/v1/conversations",
-                json={"business_id": 1},
-                headers=_AUTH_HEADERS,
-            )
-            assert r.status_code == 201
-            conv_id = r.json()["conversation_id"]
-
-            async with pg_session_factory() as seed_session:
-                await seed_session.execute(
-                    text(
-                        "INSERT INTO conversations "
-                        "(id, business_id, customer_phone, state, collected_facts, "
-                        "turn_count, expires_at) "
-                        "VALUES (:id, 1, '+919123456789', 'greeting', '{}', 0, "
-                        "NOW() + INTERVAL '1 hour')"
-                    ),
-                    {"id": conv_id},
-                )
-                await seed_session.commit()
-
             r2 = await client.post(
                 f"/internal/v1/conversations/{conv_id}/messages",
                 json={"message": "I want to book"},

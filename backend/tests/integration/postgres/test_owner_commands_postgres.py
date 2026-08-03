@@ -9,9 +9,20 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fonely.services.model_gateway import ModelResponse
-from fonely.services.owner_commands import OwnerCommandService, get_daily_context
+from fonely.services.owner_commands import (
+    _OWNER_PENDING,
+    OwnerCommandService,
+    get_daily_context,
+)
 
 pytestmark = pytest.mark.postgres
+
+
+@pytest.fixture(autouse=True)
+def _clear_pending():
+    _OWNER_PENDING.clear()
+    yield
+    _OWNER_PENDING.clear()
 
 
 def _mock_gateway(response_json: dict) -> AsyncMock:
@@ -62,7 +73,7 @@ async def test_doctor_leave_creates_exception_and_cancels(
             "INSERT INTO pending_actions "
             "(id, business_id, action_type, payload_schema_version, proposed_payload, "
             "status, expires_at, idempotency_key, version, payload_digest) VALUES "
-            "(1, 1, 'appointment', 1, :payload, 'confirmed', :exp, 'pa-1', 3, "
+            "(1000, 1, 'appointment', 1, :payload, 'confirmed', :exp, 'pa-1', 3, "
             "'aaaa1111bbbb2222cccc3333dddd4444eeee5555ffff6666aaaa7777bbbb8888')"
         ),
         {
@@ -84,7 +95,18 @@ async def test_doctor_leave_creates_exception_and_cancels(
             "status, source, idempotency_key, pending_action_id, version) VALUES "
             "(1, 1, 1, 1, 'Karthick', '+919123456789', :start, :end, :start, :end, "
             "'Consultation', 'Dr. Priya', 20, 0, 0, 'Asia/Kolkata', "
-            "'confirmed', 'customer_conversation', 'pa-1', 1, 1)"
+            "'confirmed', 'customer_conversation', 'pa-1', 1000, 1)"
+        ),
+        {"start": tomorrow_10am, "end": tomorrow_10am + timedelta(minutes=20)},
+    )
+    await pg_session.execute(
+        text(
+            "INSERT INTO resource_allocations "
+            "(business_id, resource_id, appointment_id, allocation_type, "
+            "status, source, effective_start_at, effective_end_at, "
+            "idempotency_key, pending_action_id, version) VALUES "
+            "(1, 1, 1, 'appointment', 'active', 'customer_conversation', "
+            ":start, :end, 'alloc-1', 1000, 1)"
         ),
         {"start": tomorrow_10am, "end": tomorrow_10am + timedelta(minutes=20)},
     )
@@ -93,12 +115,19 @@ async def test_doctor_leave_creates_exception_and_cancels(
         {"command": "doctor_leave", "doctor_name": "Dr. Priya", "date": "tomorrow"}
     )
     service = OwnerCommandService(pg_session, gateway)
-    result = await service.process_command(1, "+914428350001", "Dr. Priya leave tomorrow")
 
+    preview = await service.process_command(1, "+914428350001", "Dr. Priya leave tomorrow")
+    assert preview.command_type == "doctor_leave"
+    assert preview.affected_appointments == 1
+    assert "Karthick" in preview.response_text
+    assert "YES" in preview.response_text
+
+    appt_before = await pg_session.scalar(text("SELECT status FROM appointments WHERE id = 1"))
+    assert appt_before == "confirmed"
+
+    result = await service.process_command(1, "+914428350001", "yes")
     assert result.command_type == "doctor_leave"
     assert result.success is True
-    assert result.affected_appointments == 1
-    assert "Karthick" in result.response_text
 
     exc_count = await pg_session.scalar(
         text("SELECT count(*) FROM schedule_exceptions WHERE resource_id = 1")
@@ -112,6 +141,7 @@ async def test_doctor_leave_creates_exception_and_cancels(
 async def test_get_summary_returns_appointment_list(
     pg_session: AsyncSession,
 ) -> None:
+    _OWNER_PENDING.clear()
     await _seed_clinic(pg_session)
 
     tomorrow = (datetime.now(UTC) + timedelta(days=1)).date()
@@ -124,7 +154,7 @@ async def test_get_summary_returns_appointment_list(
             "INSERT INTO pending_actions "
             "(id, business_id, action_type, payload_schema_version, proposed_payload, "
             "status, expires_at, idempotency_key, version, payload_digest) VALUES "
-            "(1, 1, 'appointment', 1, :payload, 'confirmed', :exp, 'pa-sum', 3, "
+            "(1000, 1, 'appointment', 1, :payload, 'confirmed', :exp, 'pa-sum', 3, "
             "'bbbb1111cccc2222dddd3333eeee4444ffff5555aaaa6666bbbb7777cccc8888')"
         ),
         {
@@ -143,7 +173,7 @@ async def test_get_summary_returns_appointment_list(
             "status, source, idempotency_key, pending_action_id, version) VALUES "
             "(1, 1, 1, 1, 'Karthick', '+919123456789', :start, :end, :start, :end, "
             "'Consultation', 'Dr. Priya', 20, 0, 0, 'Asia/Kolkata', "
-            "'confirmed', 'customer_conversation', 'pa-sum', 1, 1)"
+            "'confirmed', 'customer_conversation', 'pa-sum', 1000, 1)"
         ),
         {"start": tomorrow_10am, "end": tomorrow_10am + timedelta(minutes=20)},
     )
@@ -160,6 +190,7 @@ async def test_get_summary_returns_appointment_list(
 
 
 async def test_add_offer_creates_daily_context(pg_session: AsyncSession) -> None:
+    _OWNER_PENDING.clear()
     await _seed_clinic(pg_session)
 
     gateway = _mock_gateway({"command": "add_offer", "description": "Free consultation this week"})
@@ -180,6 +211,7 @@ async def test_add_offer_creates_daily_context(pg_session: AsyncSession) -> None
 
 
 async def test_unknown_command_returns_help(pg_session: AsyncSession) -> None:
+    _OWNER_PENDING.clear()
     await _seed_clinic(pg_session)
 
     gateway = _mock_gateway({"command": "unknown"})

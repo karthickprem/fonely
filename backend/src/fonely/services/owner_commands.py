@@ -42,6 +42,26 @@ class OwnerCommandResult:
     details: list[str] = field(default_factory=list)
 
 
+@dataclass
+class PendingOwnerCommand:
+    command_type: str
+    parsed: ParsedOwnerCommand
+    preview_text: str
+    affected_count: int
+    business_id: int
+    owner_phone: str
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    expires_at: datetime = field(default_factory=lambda: datetime.now(UTC) + timedelta(minutes=5))
+
+
+_OWNER_PENDING: dict[tuple[int, str], PendingOwnerCommand] = {}
+
+_DESTRUCTIVE_COMMANDS = frozenset({"doctor_leave", "close_clinic", "close_early"})
+
+_CONFIRM_PATTERN = frozenset({"yes", "yeah", "confirm", "ok", "okay", "seri", "சரி", "ஆமா"})
+_REJECT_PATTERN = frozenset({"no", "nope", "cancel", "வேண்டாம்"})
+
+
 class OwnerCommandService:
     def __init__(self, session: AsyncSession, model: ModelGateway) -> None:
         self._session = session
@@ -50,13 +70,21 @@ class OwnerCommandService:
     async def process_command(
         self, business_id: int, owner_phone: str, message: str
     ) -> OwnerCommandResult:
+        key = (business_id, owner_phone)
+        pending = _OWNER_PENDING.get(key)
+
+        if pending is not None:
+            if pending.expires_at < datetime.now(UTC):
+                del _OWNER_PENDING[key]
+            else:
+                return await self._handle_confirmation_response(key, pending, message)
+
         doctor_names = await self._get_doctor_names(business_id)
         parsed = await self._parser.parse(message, doctor_names)
 
-        if parsed.command == "doctor_leave":
-            return await self._handle_doctor_leave(business_id, owner_phone, parsed)
-        if parsed.command == "close_clinic":
-            return await self._handle_close_clinic(business_id, owner_phone, parsed)
+        if parsed.command in _DESTRUCTIVE_COMMANDS:
+            return await self._preview_destructive(business_id, owner_phone, parsed)
+
         if parsed.command == "get_summary":
             return await self._handle_get_summary(business_id, parsed)
         if parsed.command == "add_offer":
@@ -67,8 +95,6 @@ class OwnerCommandService:
             return await self._handle_add_context(
                 business_id, owner_phone, parsed, DailyContextType.NOTE
             )
-        if parsed.command == "close_early":
-            return await self._handle_close_early(business_id, owner_phone, parsed)
 
         return OwnerCommandResult(
             command_type="unknown",
@@ -76,7 +102,129 @@ class OwnerCommandService:
             response_text=_UNKNOWN_RESPONSE,
         )
 
-    async def _handle_doctor_leave(
+    async def _preview_destructive(
+        self,
+        business_id: int,
+        owner_phone: str,
+        parsed: ParsedOwnerCommand,
+    ) -> OwnerCommandResult:
+        target_date = self._resolve_date(parsed.date)
+        tz_name = await self._get_business_timezone(business_id)
+        tz = ZoneInfo(tz_name)
+
+        if parsed.command == "doctor_leave":
+            resource = await self._resolve_resource(business_id, parsed.doctor_name)
+            if resource is None:
+                names = await self._get_doctor_names(business_id)
+                return OwnerCommandResult(
+                    command_type="doctor_leave",
+                    success=False,
+                    response_text=f"Could not find doctor '{parsed.doctor_name}'. "
+                    f"Available: {', '.join(names)}",
+                )
+            affected = await self._get_resource_appointments(
+                business_id, resource.id, target_date, tz
+            )
+            date_str = target_date.strftime("%b %d")
+            preview = f"Mark {resource.name} on leave for {date_str}."
+        elif parsed.command == "close_early":
+            if not parsed.close_time:
+                return OwnerCommandResult(
+                    command_type="close_early",
+                    success=False,
+                    response_text="Please specify a close time.",
+                )
+            try:
+                parts = parsed.close_time.split(":")
+                new_close = dt_time(int(parts[0]), int(parts[1]) if len(parts) > 1 else 0)
+            except (ValueError, IndexError):
+                return OwnerCommandResult(
+                    command_type="close_early",
+                    success=False,
+                    response_text=f"Could not understand '{parsed.close_time}'.",
+                )
+            affected = await self._get_appointments_after(business_id, target_date, new_close, tz)
+            close_str = new_close.strftime("%-I:%M %p")
+            date_str = target_date.strftime("%b %d")
+            preview = f"Close clinic early at {close_str} on {date_str}."
+        else:
+            affected = await self._get_all_appointments(business_id, target_date, tz)
+            date_str = target_date.strftime("%b %d")
+            preview = f"Close clinic on {date_str}."
+
+        if affected:
+            lines = [f"{preview} This will cancel {len(affected)} appointment(s):"]
+            for appt_info in affected:
+                lines.append(
+                    f"  - {appt_info['time']} {appt_info['patient']} ({appt_info['service']})"
+                )
+            lines.append("Reply YES to confirm or NO to cancel.")
+            preview_text = "\n".join(lines)
+        else:
+            preview_text = f"{preview} No appointments will be affected.\nReply YES to confirm."
+
+        pending = PendingOwnerCommand(
+            command_type=parsed.command,
+            parsed=parsed,
+            preview_text=preview_text,
+            affected_count=len(affected),
+            business_id=business_id,
+            owner_phone=owner_phone,
+        )
+        _OWNER_PENDING[(business_id, owner_phone)] = pending
+
+        return OwnerCommandResult(
+            command_type=parsed.command,
+            success=True,
+            response_text=preview_text,
+            affected_appointments=len(affected),
+        )
+
+    async def _handle_confirmation_response(
+        self,
+        key: tuple[int, str],
+        pending: PendingOwnerCommand,
+        message: str,
+    ) -> OwnerCommandResult:
+        word = message.strip().lower().split()[0] if message.strip() else ""
+
+        if word in _REJECT_PATTERN:
+            del _OWNER_PENDING[key]
+            return OwnerCommandResult(
+                command_type=pending.command_type,
+                success=True,
+                response_text="Cancelled. No changes made.",
+            )
+
+        if word not in _CONFIRM_PATTERN:
+            return OwnerCommandResult(
+                command_type=pending.command_type,
+                success=False,
+                response_text="Please reply YES to confirm or NO to cancel.",
+            )
+
+        del _OWNER_PENDING[key]
+
+        if pending.command_type == "doctor_leave":
+            return await self._execute_doctor_leave(
+                pending.business_id, pending.owner_phone, pending.parsed
+            )
+        if pending.command_type == "close_clinic":
+            return await self._execute_close_clinic(
+                pending.business_id, pending.owner_phone, pending.parsed
+            )
+        if pending.command_type == "close_early":
+            return await self._execute_close_early(
+                pending.business_id, pending.owner_phone, pending.parsed
+            )
+
+        return OwnerCommandResult(
+            command_type=pending.command_type,
+            success=False,
+            response_text="Something went wrong. Please try again.",
+        )
+
+    async def _execute_doctor_leave(
         self, business_id: int, owner_phone: str, parsed: ParsedOwnerCommand
     ) -> OwnerCommandResult:
         resource = await self._resolve_resource(business_id, parsed.doctor_name)
@@ -124,7 +272,7 @@ class OwnerCommandService:
             details=[c["patient"] for c in cancelled],
         )
 
-    async def _handle_close_clinic(
+    async def _execute_close_clinic(
         self, business_id: int, owner_phone: str, parsed: ParsedOwnerCommand
     ) -> OwnerCommandResult:
         target_date = self._resolve_date(parsed.date)
@@ -154,7 +302,7 @@ class OwnerCommandService:
             affected_patients=len(cancelled),
         )
 
-    async def _handle_close_early(
+    async def _execute_close_early(
         self, business_id: int, owner_phone: str, parsed: ParsedOwnerCommand
     ) -> OwnerCommandResult:
         from fonely.models.schema import OperatingSchedule
@@ -506,6 +654,105 @@ class OwnerCommandService:
                 )
         return cancelled
 
+    async def _get_resource_appointments(
+        self,
+        business_id: int,
+        resource_id: int,
+        target_date: date,
+        tz: ZoneInfo,
+    ) -> list[dict[str, str]]:
+        appointments = (
+            (
+                await self._session.execute(
+                    select(Appointment).where(
+                        Appointment.business_id == business_id,
+                        Appointment.resource_id == resource_id,
+                        Appointment.status == "confirmed",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        result: list[dict[str, str]] = []
+        for appt in appointments:
+            if appt.start_at.astimezone(tz).date() != target_date:
+                continue
+            result.append(
+                {
+                    "time": appt.start_at.astimezone(tz).strftime("%-I:%M %p"),
+                    "patient": appt.customer_name or "Patient",
+                    "service": appt.service_name_snapshot,
+                }
+            )
+        return result
+
+    async def _get_all_appointments(
+        self,
+        business_id: int,
+        target_date: date,
+        tz: ZoneInfo,
+    ) -> list[dict[str, str]]:
+        appointments = (
+            (
+                await self._session.execute(
+                    select(Appointment).where(
+                        Appointment.business_id == business_id,
+                        Appointment.status == "confirmed",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        result: list[dict[str, str]] = []
+        for appt in appointments:
+            if appt.start_at.astimezone(tz).date() != target_date:
+                continue
+            result.append(
+                {
+                    "time": appt.start_at.astimezone(tz).strftime("%-I:%M %p"),
+                    "patient": appt.customer_name or "Patient",
+                    "service": appt.service_name_snapshot,
+                }
+            )
+        return result
+
+    async def _get_appointments_after(
+        self,
+        business_id: int,
+        target_date: date,
+        after_time: dt_time,
+        tz: ZoneInfo,
+    ) -> list[dict[str, str]]:
+        appointments = (
+            (
+                await self._session.execute(
+                    select(Appointment).where(
+                        Appointment.business_id == business_id,
+                        Appointment.status == "confirmed",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        result: list[dict[str, str]] = []
+        for appt in appointments:
+            local_dt = appt.start_at.astimezone(tz)
+            if local_dt.date() != target_date:
+                continue
+            if local_dt.time() < after_time:
+                continue
+            result.append(
+                {
+                    "time": local_dt.strftime("%-I:%M %p"),
+                    "patient": appt.customer_name or "Patient",
+                    "service": appt.service_name_snapshot,
+                }
+            )
+        return result
+
     async def _cancel_via_service(
         self,
         business_id: int,
@@ -554,41 +801,12 @@ class OwnerCommandService:
                 )
                 return True
         except Exception:
-            logger.info(
-                "owner_cancel_service_fallback",
+            logger.warning(
+                "owner_cancel_failed",
                 extra={"appointment_id": appointment_id},
                 exc_info=True,
             )
-            return await self._cancel_direct(business_id, appointment_id)
-
-    async def _cancel_direct(self, business_id: int, appointment_id: int) -> bool:
-        from sqlalchemy import update
-
-        from fonely.models.schema import ResourceAllocation
-
-        now = datetime.now(UTC)
-        result = await self._session.execute(
-            update(Appointment)
-            .where(
-                Appointment.id == appointment_id,
-                Appointment.business_id == business_id,
-                Appointment.status == "confirmed",
-            )
-            .values(status="cancelled", cancelled_at=now)
-        )
-        if getattr(result, "rowcount", 0) == 0:
             return False
-        await self._session.execute(
-            update(ResourceAllocation)
-            .where(
-                ResourceAllocation.appointment_id == appointment_id,
-                ResourceAllocation.business_id == business_id,
-                ResourceAllocation.status == "active",
-            )
-            .values(status="cancelled", updated_at=now)
-        )
-        await self._session.flush()
-        return True
 
 
 async def get_daily_context(

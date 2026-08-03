@@ -176,6 +176,14 @@ class NotificationStatus(enum.StrEnum):
     DEAD_LETTER = "dead_letter"
 
 
+class InboundEventStatus(enum.StrEnum):
+    RECEIVED = "received"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    DEAD_LETTER = "dead_letter"
+
+
 class DailyContextType(enum.StrEnum):
     OFFER = "offer"
     NOTE = "note"

@@ -1031,6 +1031,20 @@ class ConversationService:
                 f"Ask about ONE missing item naturally."
             )
 
+        try:
+            from datetime import date
+
+            from fonely.services.owner_commands import get_daily_context
+
+            today = date.today()
+            daily_contexts = await get_daily_context(biz.business_id, today, self._session)
+            if daily_contexts:
+                system_prompt += "\n\nToday's updates from the clinic owner:\n"
+                for dc in daily_contexts:
+                    system_prompt += f"- {dc.content}\n"
+        except Exception:
+            pass
+
         history: list[dict[str, str]] = []
         for t in ctx.turns[-6:]:
             history.append({"role": "user", "content": t.user_message})

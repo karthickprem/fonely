@@ -19,6 +19,8 @@ class ConversationState(enum.StrEnum):
     COMPLETED = "completed"
     ESCALATED = "escalated"
     ENDED = "ended"
+    CANCEL_SELECTION = "cancel_selection"
+    RESCHEDULE_SELECTION = "reschedule_selection"
 
 
 class ConversationIntent(enum.StrEnum):
@@ -42,6 +44,8 @@ _VALID_TRANSITIONS: dict[ConversationState, frozenset[ConversationState]] = {
     ConversationState.INTENT_RECOGNITION: frozenset(
         {
             ConversationState.FACT_COLLECTION,
+            ConversationState.CANCEL_SELECTION,
+            ConversationState.RESCHEDULE_SELECTION,
             ConversationState.ESCALATED,
             ConversationState.ENDED,
         }
@@ -81,6 +85,18 @@ _VALID_TRANSITIONS: dict[ConversationState, frozenset[ConversationState]] = {
     ConversationState.COMPLETED: frozenset(),
     ConversationState.ESCALATED: frozenset({ConversationState.ENDED}),
     ConversationState.ENDED: frozenset(),
+    ConversationState.CANCEL_SELECTION: frozenset(
+        {
+            ConversationState.AWAITING_CONFIRMATION,
+            ConversationState.ENDED,
+        }
+    ),
+    ConversationState.RESCHEDULE_SELECTION: frozenset(
+        {
+            ConversationState.FACT_COLLECTION,
+            ConversationState.ENDED,
+        }
+    ),
 }
 
 MAX_TURNS = 20

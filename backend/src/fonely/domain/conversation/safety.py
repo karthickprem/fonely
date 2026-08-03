@@ -108,6 +108,30 @@ _NEGATIVE_CONFIRM = re.compile(
 )
 
 
+_CANCEL_INTENT = re.compile(
+    r"\bcancel\b.{0,20}\b(appointment|booking)\b|"
+    r"\b(appointment|booking)\b.{0,20}\bcancel\b|"
+    r"\bdon'?t\s+want\s+(the|my)\s+appointment\b|"
+    r"appointment\s*cancel\s*பண்ணுங்க|"
+    r"appointment\s*-?a?\s*cancel\s*பண்ணணும்|"
+    r"appointment\s*வேண்டாம்|"
+    r"cancel\s*பண்ணுங்க",
+    re.IGNORECASE,
+)
+
+_RESCHEDULE_INTENT = re.compile(
+    r"\breschedule\b|"
+    r"\b(change|move|shift|postpone)\b.{0,20}\b(appointment|booking|time)\b|"
+    r"\b(appointment|booking)\b.{0,20}\b(change|move|shift|postpone)\b|"
+    r"appointment\s*-?a?\s*change\s*பண்ணணும்|"
+    r"vera\s*time\s*-?la\s*maathikunum|"
+    r"postpone\s*பண்ணணும்|"
+    r"appointment\s*-?a?\s*(maathikunum|மாத்திக்கணும்)|"
+    r"change\s*பண்ணுங்க",
+    re.IGNORECASE,
+)
+
+
 @dataclass(frozen=True)
 class SafetyClassification:
     intent: ConversationIntent
@@ -137,6 +161,20 @@ def classify_intent(message: str) -> SafetyClassification:
 
     admin_matches = sum(1 for p in _ADMINISTRATIVE_PATTERNS if p.search(message))
     if admin_matches > 0:
+        if _CANCEL_INTENT.search(message):
+            return SafetyClassification(
+                intent=ConversationIntent.CANCEL_APPOINTMENT,
+                classification="administrative",
+                confidence=min(0.7 + admin_matches * 0.1, 0.95),
+                reasoning="Cancel intent detected",
+            )
+        if _RESCHEDULE_INTENT.search(message):
+            return SafetyClassification(
+                intent=ConversationIntent.RESCHEDULE,
+                classification="administrative",
+                confidence=min(0.7 + admin_matches * 0.1, 0.95),
+                reasoning="Reschedule intent detected",
+            )
         booking_patterns = re.compile(
             r"\b(book|schedule|appointment)\b|"
             r"appointment\s*போடணும்|book\s*பண்ணணும்",

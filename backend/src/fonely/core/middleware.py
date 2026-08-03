@@ -46,6 +46,12 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             )
 
         self._requests[client_ip].append(now)
+
+        if len(self._requests) > 1000:
+            stale_ips = [ip for ip, ts in self._requests.items() if not ts or ts[-1] < window_start]
+            for ip in stale_ips:
+                del self._requests[ip]
+
         return await call_next(request)
 
 
@@ -56,12 +62,21 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         content_length = request.headers.get("content-length")
-        if content_length and int(content_length) > self._max_bytes:
-            return Response(
-                content=json.dumps({"error": "request_too_large"}),
-                status_code=413,
-                media_type="application/json",
-            )
+        if content_length:
+            try:
+                if int(content_length) > self._max_bytes:
+                    return Response(
+                        content=json.dumps({"error": "request_too_large"}),
+                        status_code=413,
+                        media_type="application/json",
+                    )
+            except (ValueError, OverflowError):
+                return Response(
+                    content=json.dumps({"error": "invalid_content_length"}),
+                    status_code=400,
+                    media_type="application/json",
+                )
+            return await call_next(request)
         return await call_next(request)
 
 
@@ -141,10 +156,7 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         from fonely.core.metrics import metrics, normalize_path
 
         path = normalize_path(request.url.path)
-        metrics.set_gauge(
-            "http_requests_active",
-            metrics.gauge_value("http_requests_active") + 1,
-        )
+        metrics.increment_gauge("http_requests_active")
         start = time.monotonic()
         try:
             response = await call_next(request)
@@ -159,10 +171,7 @@ class MetricsMiddleware(BaseHTTPMiddleware):
                 {"method": request.method, "path": path, "status": status},
             )
             metrics.observe("http_request_duration_ms", duration_ms, {"path": path})
-            metrics.set_gauge(
-                "http_requests_active",
-                max(0, metrics.gauge_value("http_requests_active") - 1),
-            )
+            metrics.decrement_gauge("http_requests_active")
         return response
 
 

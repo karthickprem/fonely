@@ -11,10 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fonely.api.internal.validation import InternalValidationPort
 from fonely.core.config import settings
+from fonely.domain.conversation.state import ConversationState
 from fonely.domain.pending_actions.commands import ActorContext
 from fonely.models.enums import CallerRole
 from fonely.services.appointments import AppointmentService
-from fonely.services.conversation import ConversationService, find_or_create_conversation
+from fonely.services.conversation import ConversationService, find_or_create_conversation_persistent
 from fonely.services.whatsapp_config import WhatsAppBusinessMapping
 from fonely.services.whatsapp_sender import WhatsAppSender
 
@@ -147,8 +148,6 @@ async def _handle_message(
         record_count=1,
     )
 
-    ctx = find_or_create_conversation(business_id, sender_phone)
-
     phone_formatted = f"+{sender_phone}" if not sender_phone.startswith("+") else sender_phone
     actor = ActorContext(
         business_id=business_id,
@@ -167,6 +166,10 @@ async def _handle_message(
 
     async with session_factory() as session:
         try:
+            ctx = await find_or_create_conversation_persistent(
+                business_id, phone_formatted, session
+            )
+
             validation = InternalValidationPort(session)
             appt_service = AppointmentService(session, validation=validation)
             conv_service = ConversationService(session, gateway, appointment_service=appt_service)
@@ -176,11 +179,20 @@ async def _handle_message(
                 actor,
                 text_body,
             )
+            if ctx.state in (ConversationState.COMPLETED, ConversationState.ENDED):
+                from fonely.services.conversation_persistence import (
+                    ConversationPersistenceService,
+                )
+
+                persistence = ConversationPersistenceService(session)
+                await persistence.mark_completed(ctx.conversation_id)
+
+            await session.commit()
             await sender.send_text(sender_phone, turn.assistant_response)
         except Exception:
             logger.warning(
                 "whatsapp_message_processing_error",
-                extra={"conversation_id": ctx.conversation_id},
+                extra={"phone_suffix": sender_phone[-4:]},
             )
             await sender.send_text(
                 sender_phone,

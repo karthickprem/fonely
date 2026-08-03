@@ -1,6 +1,10 @@
 """WhatsApp webhook handler — thin adapter to ConversationService."""
 
+import hashlib
+import hmac
+import json
 import logging
+from collections import OrderedDict
 
 from fastapi import APIRouter, BackgroundTasks, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -18,8 +22,24 @@ logger = logging.getLogger("fonely.api.channels.whatsapp")
 
 router = APIRouter(prefix="/webhooks/whatsapp", tags=["whatsapp"])
 
-_PROCESSED_MESSAGE_IDS: set[str] = set()
+_PROCESSED_MESSAGE_IDS: OrderedDict[str, None] = OrderedDict()
 _MAX_PROCESSED_IDS = 10000
+
+
+def _verify_webhook_signature(body: bytes, signature: str, secret: str) -> bool:
+    if not signature.startswith("sha256="):
+        return False
+    expected = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(signature, expected)
+
+
+def _is_duplicate(message_id: str) -> bool:
+    if message_id in _PROCESSED_MESSAGE_IDS:
+        return True
+    _PROCESSED_MESSAGE_IDS[message_id] = None
+    if len(_PROCESSED_MESSAGE_IDS) > _MAX_PROCESSED_IDS:
+        _PROCESSED_MESSAGE_IDS.popitem(last=False)
+    return False
 
 
 @router.get("")
@@ -28,7 +48,7 @@ async def verify_webhook(request: Request) -> Response:
     token = request.query_params.get("hub.verify_token")
     challenge = request.query_params.get("hub.challenge", "")
 
-    if mode == "subscribe" and token == settings.whatsapp_verify_token:
+    if mode == "subscribe" and hmac.compare_digest(token or "", settings.whatsapp_verify_token):
         return Response(content=challenge, media_type="text/plain")
 
     return Response(status_code=403)
@@ -40,7 +60,13 @@ async def handle_webhook(
     background_tasks: BackgroundTasks,
 ) -> Response:
     try:
-        payload = await request.json()
+        body = await request.body()
+        if settings.whatsapp_app_secret:
+            sig = request.headers.get("X-Hub-Signature-256", "")
+            if not _verify_webhook_signature(body, sig, settings.whatsapp_app_secret):
+                logger.warning("whatsapp_invalid_signature")
+                return Response(status_code=200)
+        payload = json.loads(body)
     except Exception:
         return Response(status_code=200)
 
@@ -77,16 +103,12 @@ async def _handle_message(
     if not sender_phone or not message_id:
         return
 
-    if len(_PROCESSED_MESSAGE_IDS) >= _MAX_PROCESSED_IDS:
-        _PROCESSED_MESSAGE_IDS.clear()
-
-    if message_id in _PROCESSED_MESSAGE_IDS:
+    if _is_duplicate(message_id):
         logger.info(
             "whatsapp_duplicate_message",
             extra={"message_id": message_id},
         )
         return
-    _PROCESSED_MESSAGE_IDS.add(message_id)
 
     sender = _get_sender(app)
     if sender is None:

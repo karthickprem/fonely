@@ -218,13 +218,14 @@ class OwnerCommandService:
         self, business_id: int, target_date: date
     ) -> OperatingSchedule | None:
         dow = target_date.weekday()
-        return await self._session.scalar(
+        result: OperatingSchedule | None = await self._session.scalar(
             select(OperatingSchedule).where(
                 OperatingSchedule.business_id == business_id,
                 OperatingSchedule.resource_id.is_(None),
                 OperatingSchedule.day_of_week == dow,
             )
         )
+        return result
 
     async def _cancel_appointments_after(
         self,

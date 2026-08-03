@@ -334,6 +334,7 @@ class ConversationService:
                 resource_id_val,
                 start,
                 self._session,
+                timezone=biz.timezone,
             )
             if not is_valid:
                 del ctx.collected_facts["start_at"]

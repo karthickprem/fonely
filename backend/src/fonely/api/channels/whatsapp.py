@@ -7,6 +7,7 @@ import logging
 from collections import OrderedDict
 
 from fastapi import APIRouter, BackgroundTasks, Request, Response
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fonely.api.internal.validation import InternalValidationPort
@@ -147,15 +148,7 @@ async def _handle_message(
         record_count=1,
     )
 
-    ctx = find_or_create_conversation(business_id, sender_phone)
-
     phone_formatted = f"+{sender_phone}" if not sender_phone.startswith("+") else sender_phone
-    actor = ActorContext(
-        business_id=business_id,
-        normalized_phone=phone_formatted,
-        verified_role=CallerRole.CUSTOMER,
-        session_id=None,
-    )
 
     factory = getattr(app, "state", None)
     if factory is None:
@@ -167,6 +160,22 @@ async def _handle_message(
 
     async with session_factory() as session:
         try:
+            if await _is_owner(business_id, phone_formatted, session):
+                from fonely.services.owner_commands import OwnerCommandService
+
+                owner_svc = OwnerCommandService(session, gateway)
+                result = await owner_svc.process_command(business_id, phone_formatted, text_body)
+                await session.commit()
+                await sender.send_text(sender_phone, result.response_text)
+                return
+
+            ctx = find_or_create_conversation(business_id, sender_phone)
+            actor = ActorContext(
+                business_id=business_id,
+                normalized_phone=phone_formatted,
+                verified_role=CallerRole.CUSTOMER,
+                session_id=None,
+            )
             validation = InternalValidationPort(session)
             appt_service = AppointmentService(session, validation=validation)
             conv_service = ConversationService(session, gateway, appointment_service=appt_service)
@@ -180,12 +189,30 @@ async def _handle_message(
         except Exception:
             logger.warning(
                 "whatsapp_message_processing_error",
-                extra={"conversation_id": ctx.conversation_id},
+                extra={"business_id": business_id},
             )
             await sender.send_text(
                 sender_phone,
                 "Sorry, something went wrong. Please try again.",
             )
+
+
+async def _is_owner(business_id: int, phone: str, session: AsyncSession) -> bool:
+    try:
+        from fonely.models.enums import BusinessUserRole
+        from fonely.models.schema import BusinessUser
+
+        owner = await session.scalar(
+            select(BusinessUser).where(
+                BusinessUser.business_id == business_id,
+                BusinessUser.phone == phone,
+                BusinessUser.role == BusinessUserRole.OWNER.value,
+                BusinessUser.is_active.is_(True),
+            )
+        )
+        return isinstance(owner, BusinessUser)
+    except Exception:
+        return False
 
 
 def _get_sender(app: object) -> WhatsAppSender | None:

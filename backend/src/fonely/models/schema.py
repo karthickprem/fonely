@@ -46,6 +46,7 @@ from fonely.models.enums import (
     CallerRole,
     CallOutcome,
     Capability,
+    DailyContextType,
     InventoryMovementType,
     InventoryReservationStatus,
     LanguageStatus,
@@ -1228,3 +1229,27 @@ class DBConversationTurn(Base):
     proposal_id: Mapped[int | None] = mapped_column(Integer)
     latency_ms: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# =============================================================================
+# Daily Context
+# =============================================================================
+
+
+class BusinessDailyContext(Base):
+    __tablename__ = "business_daily_context"
+    __table_args__ = (Index("ix_daily_context_lookup", "business_id", "context_date", "active"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    context_date: Mapped[date] = mapped_column(Date, nullable=False)
+    context_type: Mapped[str] = mapped_column(
+        enum_type(DailyContextType, "daily_context_type"), nullable=False
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
+    created_by_phone: Mapped[str | None] = mapped_column(String(20))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

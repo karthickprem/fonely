@@ -230,14 +230,19 @@ class TestPendingActionProtection:
         pa_result = await pg_session.execute(
             text(
                 "INSERT INTO pending_actions "
-                "(business_id, action_type, status, proposed_payload, "
+                "(business_id, action_type, payload_schema_version, "
+                " proposed_payload, payload_digest, status, "
                 " committed_entity_type, committed_entity_id, "
+                " expires_at, idempotency_key, "
                 " created_at, updated_at, version) "
-                "VALUES (1, 'appointment', 'confirmed', '{}'::jsonb, "
-                " 'appointment', 1, :old, :old, 1) "
+                "VALUES (1, 'appointment', 1, "
+                " '{}'::jsonb, 'test-digest', 'confirmed', "
+                " 'appointment', 1, "
+                " :expires, 'retention-test-pa', "
+                " :old, :old, 1) "
                 "RETURNING id"
             ),
-            {"old": old},
+            {"old": old, "expires": now + timedelta(hours=1)},
         )
         pa_id = pa_result.scalar_one()
 

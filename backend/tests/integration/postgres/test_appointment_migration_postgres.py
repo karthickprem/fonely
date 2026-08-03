@@ -697,10 +697,11 @@ async def test_premature_terminal_transition_rejected(
     pg_session_factory: async_sessionmaker[AsyncSession],
     status: str,
 ) -> None:
+    future_start = datetime.now(UTC) + timedelta(days=7)
     async with pg_session_factory() as session:
         await _seed_head_catalog(session)
-        await _insert_head_appointment(session, 1, start_at=START)
-        await _insert_active_allocation(session, 1, start_at=START)
+        await _insert_head_appointment(session, 1, start_at=future_start)
+        await _insert_active_allocation(session, 1, start_at=future_start)
         await session.commit()
 
     async with pg_session_factory() as session:

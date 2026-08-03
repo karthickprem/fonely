@@ -314,7 +314,8 @@ class ConversationService:
                 logger.warning("llm_fact_extraction_failed", exc_info=True)
 
     async def _validate_facts(self, ctx: ConversationContext, biz: object) -> None:
-        from fonely.services.conversation_tools import BusinessContext, validate_slot_time
+        from fonely.services.availability import AvailabilityService
+        from fonely.services.conversation_tools import BusinessContext
 
         assert isinstance(biz, BusinessContext)
 
@@ -329,13 +330,22 @@ class ConversationService:
                 return
 
             resource_id_val: int | None = ctx.collected_facts.get("resource_id")  # type: ignore[assignment]
-            is_valid, _reason = await validate_slot_time(
-                biz.business_id,
-                resource_id_val,
-                start,
-                self._session,
-                timezone=biz.timezone,
-            )
+            if resource_id_val is not None:
+                service_id_val: int | None = ctx.collected_facts.get("service_id")  # type: ignore[assignment]
+                dur = 30
+                if service_id_val is not None:
+                    svc_info = next((s for s in biz.services if s.id == service_id_val), None)
+                    if svc_info is not None:
+                        dur = svc_info.duration_minutes
+                avail_svc = AvailabilityService(self._session)
+                is_valid, _reason = await avail_svc.is_slot_available(
+                    biz.business_id,
+                    resource_id_val,
+                    start,
+                    duration_minutes=dur,
+                )
+            else:
+                is_valid = True
             if not is_valid:
                 del ctx.collected_facts["start_at"]
                 return
@@ -676,9 +686,9 @@ class ConversationService:
         biz: object,
         safety: SafetyClassification,
     ) -> ConversationTurn:
+        from fonely.services.availability import AvailabilityService
         from fonely.services.conversation_tools import (
             BusinessContext,
-            check_availability,
             format_confirmation_summary,
         )
 
@@ -702,14 +712,12 @@ class ConversationService:
         from datetime import datetime
 
         assert isinstance(start_at, datetime)
-        slots = await check_availability(
+        avail_svc = AvailabilityService(self._session)
+        slots = await avail_svc.get_available_slots(
             biz.business_id,
-            service_id,
             resource_id,
             start_at.date(),
-            self._session,
-            timezone=biz.timezone,
-            duration_minutes=svc.duration_minutes,
+            service_duration_minutes=svc.duration_minutes,
             buffer_before=svc.buffer_before_minutes,
             buffer_after=svc.buffer_after_minutes,
         )

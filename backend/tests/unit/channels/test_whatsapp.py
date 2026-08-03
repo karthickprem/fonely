@@ -1,4 +1,8 @@
-"""Tests for the WhatsApp inbound adapter."""
+"""Tests for the WhatsApp inbound adapter.
+
+The webhook handler now persists events to whatsapp_inbound_events
+before returning 200. Processing happens in the inbound worker.
+"""
 
 import json
 import logging
@@ -8,29 +12,8 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from fonely.api.channels.whatsapp import (
-    _PROCESSED_MESSAGE_IDS,
-    _handle_message,
-    router,
-)
-from fonely.services.conversation import _CONVERSATIONS, _PHONE_INDEX
+from fonely.api.channels.whatsapp import router
 from fonely.services.whatsapp_config import WhatsAppBusinessMapping
-
-
-@pytest.fixture(autouse=True)
-def _clear_dedup():
-    _PROCESSED_MESSAGE_IDS.clear()
-    yield
-    _PROCESSED_MESSAGE_IDS.clear()
-
-
-@pytest.fixture(autouse=True)
-def _clear_conversations():
-    _CONVERSATIONS.clear()
-    _PHONE_INDEX.clear()
-    yield
-    _CONVERSATIONS.clear()
-    _PHONE_INDEX.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -40,13 +23,28 @@ def _patch_settings():
         mock_settings.whatsapp_access_token = "test-access"
         mock_settings.whatsapp_phone_number_id = "12345"
         mock_settings.whatsapp_business_mappings = ""
+        mock_settings.whatsapp_app_secret = ""
         yield mock_settings
 
 
-def _make_app() -> FastAPI:
+def _make_app(*, insert_rowcount: int = 1) -> tuple[FastAPI, MagicMock]:
     app = FastAPI()
     app.include_router(router)
-    return app
+
+    mock_session = AsyncMock()
+    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+    mock_session.__aexit__ = AsyncMock(return_value=None)
+    mock_session.commit = AsyncMock()
+
+    insert_result = MagicMock()
+    insert_result.rowcount = insert_rowcount
+    mock_session.execute = AsyncMock(return_value=insert_result)
+
+    mock_factory = MagicMock()
+    mock_factory.return_value = mock_session
+
+    app.state.session_factory = mock_factory
+    return app, mock_session
 
 
 def _webhook_payload(
@@ -66,21 +64,14 @@ def _webhook_payload(
     if message_type == "text":
         message["text"] = {"body": text}
     return {
-        "object": "whatsapp_business_account",
         "entry": [
             {
-                "id": "BUSINESS_ACCOUNT_ID",
                 "changes": [
                     {
                         "value": {
-                            "messaging_product": "whatsapp",
-                            "metadata": {
-                                "display_phone_number": "15550000000",
-                                "phone_number_id": phone_number_id,
-                            },
+                            "metadata": {"phone_number_id": phone_number_id},
                             "messages": [message],
                         },
-                        "field": "messages",
                     }
                 ],
             }
@@ -91,7 +82,7 @@ def _webhook_payload(
 class TestWebhookVerification:
     @pytest.mark.asyncio
     async def test_valid_verification(self):
-        app = _make_app()
+        app, _ = _make_app()
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             r = await client.get(
@@ -107,7 +98,7 @@ class TestWebhookVerification:
 
     @pytest.mark.asyncio
     async def test_invalid_token_returns_403(self):
-        app = _make_app()
+        app, _ = _make_app()
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             r = await client.get(
@@ -122,7 +113,7 @@ class TestWebhookVerification:
 
     @pytest.mark.asyncio
     async def test_missing_mode_returns_403(self):
-        app = _make_app()
+        app, _ = _make_app()
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             r = await client.get(
@@ -135,21 +126,50 @@ class TestWebhookVerification:
             assert r.status_code == 403
 
 
-class TestWebhookIncoming:
+class TestWebhookPersistence:
     @pytest.mark.asyncio
-    async def test_post_returns_200_immediately(self):
-        app = _make_app()
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client:
-            r = await client.post(
-                "/webhooks/whatsapp",
-                json=_webhook_payload(),
-            )
-            assert r.status_code == 200
+    async def test_post_persists_and_returns_200(self):
+        app, mock_session = _make_app()
+        with patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as map_cls:
+            mock_map = MagicMock()
+            mock_map.get_business_id.return_value = 1
+            map_cls.return_value = mock_map
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                r = await client.post("/webhooks/whatsapp", json=_webhook_payload())
+        assert r.status_code == 200
+        mock_session.execute.assert_awaited()
+        mock_session.commit.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_duplicate_not_committed(self):
+        app, mock_session = _make_app(insert_rowcount=0)
+        with patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as map_cls:
+            mock_map = MagicMock()
+            mock_map.get_business_id.return_value = 1
+            map_cls.return_value = mock_map
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                r = await client.post("/webhooks/whatsapp", json=_webhook_payload())
+        assert r.status_code == 200
+        mock_session.commit.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_unknown_business_skipped(self):
+        app, mock_session = _make_app()
+        with patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as map_cls:
+            mock_map = MagicMock()
+            mock_map.get_business_id.return_value = None
+            map_cls.return_value = mock_map
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                r = await client.post("/webhooks/whatsapp", json=_webhook_payload())
+        assert r.status_code == 200
+        mock_session.execute.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_invalid_json_returns_200(self):
-        app = _make_app()
+        app, _ = _make_app()
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             r = await client.post(
@@ -157,7 +177,7 @@ class TestWebhookIncoming:
                 content=b"not json",
                 headers={"content-type": "application/json"},
             )
-            assert r.status_code == 200
+        assert r.status_code == 200
 
 
 class TestWhatsAppBusinessMapping:
@@ -251,233 +271,58 @@ class TestWhatsAppSender:
         assert result.error == "http_401"
 
 
-def _mock_app(
-    *,
-    process_message_return: object | None = None,
-    process_message_side_effect: Exception | None = None,
-) -> MagicMock:
-    mock_turn = MagicMock()
-    mock_turn.assistant_response = "Welcome! How can I help?"
-
-    mock_session = AsyncMock()
-    mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_session.__aexit__ = AsyncMock(return_value=None)
-    mock_session.add = MagicMock()
-    mock_session.get = AsyncMock(return_value=None)
-
-    dedup_result = MagicMock()
-    dedup_result.rowcount = 1
-    dedup_result.scalar_one_or_none = MagicMock(return_value=None)
-    mock_session.execute = AsyncMock(return_value=dedup_result)
-
-    mock_factory = MagicMock()
-    mock_factory.return_value = mock_session
-
-    app = MagicMock()
-    app.state.session_factory = mock_factory
-    app.state.model_gateway = MagicMock()
-    app.state.http_client = None
-    return app
-
-
-class TestMessageHandling:
-    @pytest.mark.asyncio
-    async def test_non_text_message_sends_polite_response(self):
-        with patch("fonely.api.channels.whatsapp._get_sender") as mock_get:
-            mock_sender = AsyncMock()
-            mock_get.return_value = mock_sender
-            app = MagicMock()
-
-            msg = {
-                "id": "wamid.img1",
-                "from": "919876543210",
-                "type": "image",
-                "timestamp": "1690000000",
-            }
-            await _handle_message(msg, "12345", app)
-
-            mock_sender.send_text.assert_called_once()
-            call_args = mock_sender.send_text.call_args
-            assert "text messages" in call_args[0][1]
-
-    @pytest.mark.asyncio
-    async def test_duplicate_message_not_reprocessed(self):
-        from fonely.domain.conversation.state import ConversationContext
-
-        with patch("fonely.api.channels.whatsapp._get_sender") as mock_get:
-            mock_sender = AsyncMock()
-            mock_get.return_value = mock_sender
-
-            with patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as mock_map_cls:
-                mock_map = MagicMock()
-                mock_map.get_business_id.return_value = 1
-                mock_map_cls.return_value = mock_map
-
-                app = _mock_app()
-
-                with (
-                    patch("fonely.api.channels.whatsapp.ConversationService") as mock_conv_cls,
-                    patch(
-                        "fonely.api.channels.whatsapp.find_or_create_conversation_persistent",
-                        new=AsyncMock(return_value=ConversationContext(business_id=1)),
-                    ),
-                ):
-                    mock_conv = AsyncMock()
-                    mock_turn = MagicMock()
-                    mock_turn.assistant_response = "Hello"
-                    mock_conv.process_message = AsyncMock(return_value=mock_turn)
-                    mock_conv_cls.return_value = mock_conv
-
-                    msg = {
-                        "id": "wamid.dup1",
-                        "from": "919876543210",
-                        "type": "text",
-                        "text": {"body": "Hi"},
-                        "timestamp": "1690000000",
-                    }
-
-                    await _handle_message(msg, "12345", app)
-                    await _handle_message(msg, "12345", app)
-
-                    assert mock_conv.process_message.call_count == 1
-
-    @pytest.mark.asyncio
-    async def test_unknown_phone_number_id_returns_silently(self):
-        with patch("fonely.api.channels.whatsapp._get_sender") as mock_get:
-            mock_sender = AsyncMock()
-            mock_get.return_value = mock_sender
-
-            with patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as mock_map_cls:
-                mock_map = MagicMock()
-                mock_map.get_business_id.return_value = None
-                mock_map_cls.return_value = mock_map
-
-                app = MagicMock()
-                msg = {
-                    "id": "wamid.unknown1",
-                    "from": "919876543210",
-                    "type": "text",
-                    "text": {"body": "Hi"},
-                    "timestamp": "1690000000",
-                }
-                await _handle_message(msg, "unknown_phone", app)
-
-                mock_sender.send_text.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_text_message_calls_process_message(self):
-        from fonely.domain.conversation.state import ConversationContext
-
-        with patch("fonely.api.channels.whatsapp._get_sender") as mock_get:
-            mock_sender = AsyncMock()
-            mock_get.return_value = mock_sender
-
-            with patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as mock_map_cls:
-                mock_map = MagicMock()
-                mock_map.get_business_id.return_value = 1
-                mock_map_cls.return_value = mock_map
-
-                app = _mock_app()
-
-                with (
-                    patch("fonely.api.channels.whatsapp.ConversationService") as mock_conv_cls,
-                    patch(
-                        "fonely.api.channels.whatsapp.find_or_create_conversation_persistent",
-                        new=AsyncMock(return_value=ConversationContext(business_id=1)),
-                    ),
-                ):
-                    mock_turn = MagicMock()
-                    mock_turn.assistant_response = "Welcome to the clinic!"
-                    mock_conv = AsyncMock()
-                    mock_conv.process_message = AsyncMock(return_value=mock_turn)
-                    mock_conv_cls.return_value = mock_conv
-
-                    msg = {
-                        "id": "wamid.text1",
-                        "from": "919876543210",
-                        "type": "text",
-                        "text": {"body": "appointment book pannunga"},
-                        "timestamp": "1690000000",
-                    }
-                    await _handle_message(msg, "12345", app)
-
-                    mock_conv.process_message.assert_called_once()
-                    call_args = mock_conv.process_message.call_args
-                    assert call_args[0][1] == 1
-                    assert call_args[0][3] == "appointment book pannunga"
-
-                    mock_sender.send_text.assert_called_once_with(
-                        "919876543210", "Welcome to the clinic!"
-                    )
-
-    @pytest.mark.asyncio
-    async def test_process_message_error_sends_fallback(self):
-        from fonely.domain.conversation.state import ConversationContext
-
-        with patch("fonely.api.channels.whatsapp._get_sender") as mock_get:
-            mock_sender = AsyncMock()
-            mock_get.return_value = mock_sender
-
-            with patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as mock_map_cls:
-                mock_map = MagicMock()
-                mock_map.get_business_id.return_value = 1
-                mock_map_cls.return_value = mock_map
-
-                app = _mock_app()
-
-                with (
-                    patch("fonely.api.channels.whatsapp.ConversationService") as mock_conv_cls,
-                    patch(
-                        "fonely.api.channels.whatsapp.find_or_create_conversation_persistent",
-                        new=AsyncMock(return_value=ConversationContext(business_id=1)),
-                    ),
-                ):
-                    mock_conv = AsyncMock()
-                    mock_conv.process_message = AsyncMock(side_effect=RuntimeError("db error"))
-                    mock_conv_cls.return_value = mock_conv
-
-                    msg = {
-                        "id": "wamid.err1",
-                        "from": "919876543210",
-                        "type": "text",
-                        "text": {"body": "hello"},
-                        "timestamp": "1690000000",
-                    }
-                    await _handle_message(msg, "12345", app)
-
-                    mock_sender.send_text.assert_called_once()
-                    assert "went wrong" in mock_sender.send_text.call_args[0][1]
-
-
 class TestConversationContinuity:
     def test_same_phone_returns_same_conversation(self):
-        from fonely.services.conversation import find_or_create_conversation
+        from fonely.services.conversation import (
+            _CONVERSATIONS,
+            _PHONE_INDEX,
+            find_or_create_conversation,
+        )
 
+        _CONVERSATIONS.clear()
+        _PHONE_INDEX.clear()
         ctx1 = find_or_create_conversation(1, "919876543210")
         ctx2 = find_or_create_conversation(1, "919876543210")
         assert ctx1.conversation_id == ctx2.conversation_id
 
     def test_different_phone_returns_different_conversation(self):
-        from fonely.services.conversation import find_or_create_conversation
+        from fonely.services.conversation import (
+            _CONVERSATIONS,
+            _PHONE_INDEX,
+            find_or_create_conversation,
+        )
 
+        _CONVERSATIONS.clear()
+        _PHONE_INDEX.clear()
         ctx1 = find_or_create_conversation(1, "919876543210")
         ctx2 = find_or_create_conversation(1, "919876500000")
         assert ctx1.conversation_id != ctx2.conversation_id
 
     def test_different_business_returns_different_conversation(self):
-        from fonely.services.conversation import find_or_create_conversation
+        from fonely.services.conversation import (
+            _CONVERSATIONS,
+            _PHONE_INDEX,
+            find_or_create_conversation,
+        )
 
+        _CONVERSATIONS.clear()
+        _PHONE_INDEX.clear()
         ctx1 = find_or_create_conversation(1, "919876543210")
         ctx2 = find_or_create_conversation(2, "919876543210")
         assert ctx1.conversation_id != ctx2.conversation_id
 
     def test_completed_conversation_starts_new(self):
         from fonely.domain.conversation.state import ConversationState
-        from fonely.services.conversation import find_or_create_conversation
+        from fonely.services.conversation import (
+            _CONVERSATIONS,
+            _PHONE_INDEX,
+            find_or_create_conversation,
+        )
 
+        _CONVERSATIONS.clear()
+        _PHONE_INDEX.clear()
         ctx1 = find_or_create_conversation(1, "919876543210")
         ctx1.state = ConversationState.COMPLETED
-
         ctx2 = find_or_create_conversation(1, "919876543210")
         assert ctx2.conversation_id != ctx1.conversation_id
 
@@ -525,9 +370,6 @@ class TestPIISafety:
             await sender.send_text("919876543210", "Hello")
 
         assert "super-secret-token-123" not in caplog.text
-
-
-# --- Security hardening tests ---
 
 
 class TestWebhookSignatureVerification:
@@ -586,35 +428,6 @@ class TestWebhookSignatureVerification:
                     content=b'{"entry":[]}',
                 )
         assert response.status_code == 200
-
-
-class TestBoundedDedupSet:
-    def test_eviction_preserves_recent_ids(self) -> None:
-        from fonely.api.channels.whatsapp import (
-            _PROCESSED_MESSAGE_IDS,
-            _is_duplicate_in_memory,
-            _mark_processed_in_memory,
-        )
-
-        _PROCESSED_MESSAGE_IDS.clear()
-        for i in range(15):
-            assert _is_duplicate_in_memory(f"msg-{i}") is False
-            _mark_processed_in_memory(f"msg-{i}")
-
-        assert _is_duplicate_in_memory("msg-14") is True
-        assert _is_duplicate_in_memory("msg-0") is False or "msg-0" in _PROCESSED_MESSAGE_IDS
-
-    def test_duplicate_detected(self) -> None:
-        from fonely.api.channels.whatsapp import (
-            _PROCESSED_MESSAGE_IDS,
-            _is_duplicate_in_memory,
-            _mark_processed_in_memory,
-        )
-
-        _PROCESSED_MESSAGE_IDS.clear()
-        assert _is_duplicate_in_memory("unique-msg") is False
-        _mark_processed_in_memory("unique-msg")
-        assert _is_duplicate_in_memory("unique-msg") is True
 
 
 class TestConstantTimeVerifyToken:

@@ -46,5 +46,18 @@ services:
       retries: 3
       start_period: 5s
 
+  inbound-worker:
+    build:
+      context: backend
+    command: [".venv/bin/python", "run_inbound_worker.py"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:-}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
 volumes:
   fonely_pgdata:

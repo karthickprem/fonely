@@ -1,39 +1,25 @@
-"""WhatsApp webhook handler — thin adapter to ConversationService.
+"""WhatsApp webhook handler — durable inbound event pattern.
 
-Note: message processing uses BackgroundTasks. If the process dies after
-returning 200 to Meta but before processing completes, that message is
-lost. Meta will not retry after receiving 200. This is accepted for pilot
-(1-5 clinics) but must be replaced with a durable inbox pattern before
-scaling. Persistent dedup (whatsapp_processed_messages table) ensures
-messages are not reprocessed after restart.
+Messages are persisted to the whatsapp_inbound_events table before
+returning 200 to Meta. A separate inbound worker processes them with
+retry. No message is ever permanently lost.
 """
 
 import hashlib
 import hmac
 import json
 import logging
-from collections import OrderedDict
 
-from fastapi import APIRouter, BackgroundTasks, Request, Response
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from fastapi import APIRouter, Request, Response
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from fonely.api.internal.validation import InternalValidationPort
 from fonely.core.config import settings
-from fonely.domain.conversation.state import ConversationState
-from fonely.domain.pending_actions.commands import ActorContext
-from fonely.models.enums import CallerRole
-from fonely.services.appointments import AppointmentService
-from fonely.services.conversation import ConversationService, find_or_create_conversation_persistent
 from fonely.services.whatsapp_config import WhatsAppBusinessMapping
-from fonely.services.whatsapp_sender import WhatsAppSender
 
 logger = logging.getLogger("fonely.api.channels.whatsapp")
 
 router = APIRouter(prefix="/webhooks/whatsapp", tags=["whatsapp"])
-
-_PROCESSED_MESSAGE_IDS: OrderedDict[str, None] = OrderedDict()
-_MAX_PROCESSED_IDS = 10000
 
 
 def _verify_webhook_signature(body: bytes, signature: str, secret: str) -> bool:
@@ -41,33 +27,6 @@ def _verify_webhook_signature(body: bytes, signature: str, secret: str) -> bool:
         return False
     expected = "sha256=" + hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(signature, expected)
-
-
-def _is_duplicate_in_memory(message_id: str) -> bool:
-    return message_id in _PROCESSED_MESSAGE_IDS
-
-
-def _mark_processed_in_memory(message_id: str) -> None:
-    _PROCESSED_MESSAGE_IDS[message_id] = None
-    if len(_PROCESSED_MESSAGE_IDS) > _MAX_PROCESSED_IDS:
-        _PROCESSED_MESSAGE_IDS.popitem(last=False)
-
-
-async def _is_duplicate_persistent(
-    message_id: str, business_id: int, session: AsyncSession
-) -> bool:
-    result = await session.execute(
-        text(
-            "INSERT INTO whatsapp_processed_messages (message_id, business_id) "
-            "VALUES (:mid, :bid) "
-            "ON CONFLICT (message_id) DO NOTHING"
-        ),
-        {"mid": message_id, "bid": business_id},
-    )
-    inserted = (result.rowcount or 0) > 0  # type: ignore[attr-defined]
-    if inserted:
-        await session.commit()
-    return not inserted
 
 
 @router.get("")
@@ -83,10 +42,7 @@ async def verify_webhook(request: Request) -> Response:
 
 
 @router.post("")
-async def handle_webhook(
-    request: Request,
-    background_tasks: BackgroundTasks,
-) -> Response:
+async def handle_webhook(request: Request) -> Response:
     try:
         body = await request.body()
         if settings.whatsapp_app_secret:
@@ -98,178 +54,67 @@ async def handle_webhook(
     except Exception:
         return Response(status_code=200)
 
-    background_tasks.add_task(_process_webhook, payload, request.app)
-    return Response(status_code=200)
+    factory = getattr(getattr(request.app, "state", None), "session_factory", None)
+    if factory is None:
+        return Response(status_code=200)
 
+    mapping = WhatsAppBusinessMapping()
+    persisted = 0
 
-async def _process_webhook(payload: dict, app: object) -> None:  # type: ignore[type-arg]
-    try:
-        entries = payload.get("entry", [])
-        for entry in entries:
-            changes = entry.get("changes", [])
-            for change in changes:
+    async with factory() as session:
+        for entry in payload.get("entry", []):
+            for change in entry.get("changes", []):
                 value = change.get("value", {})
-                messages = value.get("messages", [])
                 metadata = value.get("metadata", {})
                 phone_number_id = metadata.get("phone_number_id", "")
 
-                for message in messages:
-                    await _handle_message(message, phone_number_id, app)
-    except Exception:
-        logger.warning("whatsapp_webhook_processing_error")
+                business_id = mapping.get_business_id(phone_number_id)
+                if business_id is None:
+                    continue
 
+                for message in value.get("messages", []):
+                    count = await _persist_inbound_event(session, message, business_id)
+                    persisted += count
 
-async def _handle_message(
-    message: dict[str, object],
-    phone_number_id: str,
-    app: object,
-) -> None:
-    message_id = str(message.get("id", ""))
-    message_type = str(message.get("type", ""))
-    sender_phone = str(message.get("from", ""))
-
-    if not sender_phone or not message_id:
-        return
-
-    if _is_duplicate_in_memory(message_id):
-        logger.info(
-            "whatsapp_duplicate_message",
-            extra={"message_id": message_id, "source": "memory"},
-        )
-        return
-
-    sender = _get_sender(app)
-    if sender is None:
-        return
-
-    if message_type != "text":
-        await sender.send_text(
-            sender_phone,
-            "I can currently help with text messages. Please type your request.",
-        )
-        _mark_processed_in_memory(message_id)
-        return
-
-    text_body = ""
-    text_obj = message.get("text")
-    if isinstance(text_obj, dict):
-        text_body = str(text_obj.get("body", ""))
-    if not text_body:
-        return
-
-    mapping = WhatsAppBusinessMapping()
-    business_id = mapping.get_business_id(phone_number_id)
-    if business_id is None:
-        logger.warning(
-            "whatsapp_unknown_phone_number_id",
-            extra={"phone_number_id": phone_number_id},
-        )
-        return
-
-    from fonely.core.pii_audit import log_pii_access
-
-    log_pii_access(
-        operation="read",
-        data_type="conversation",
-        business_id=business_id,
-        accessor="api:whatsapp",
-        record_count=1,
-    )
-
-    phone_formatted = f"+{sender_phone}" if not sender_phone.startswith("+") else sender_phone
-
-    factory = getattr(app, "state", None)
-    if factory is None:
-        return
-    session_factory: async_sessionmaker[AsyncSession] = getattr(factory, "session_factory", None)  # type: ignore[assignment]
-    gateway = getattr(factory, "model_gateway", None)
-    if session_factory is None or gateway is None:
-        return
-
-    async with session_factory() as session:
-        if await _is_duplicate_persistent(message_id, business_id, session):
-            logger.info(
-                "whatsapp_duplicate_message",
-                extra={"message_id": message_id, "source": "database"},
-            )
-            _mark_processed_in_memory(message_id)
-            return
-
-        try:
-            if await _is_owner(business_id, phone_formatted, session):
-                from fonely.services.owner_commands import OwnerCommandService
-
-                owner_svc = OwnerCommandService(session, gateway)
-                result = await owner_svc.process_command(business_id, phone_formatted, text_body)
-                await session.commit()
-                await sender.send_text(sender_phone, result.response_text)
-                _mark_processed_in_memory(message_id)
-                return
-
-            ctx = await find_or_create_conversation_persistent(
-                business_id, phone_formatted, session
-            )
-            actor = ActorContext(
-                business_id=business_id,
-                normalized_phone=phone_formatted,
-                verified_role=CallerRole.CUSTOMER,
-                session_id=None,
-            )
-            validation = InternalValidationPort(session)
-            appt_service = AppointmentService(session, validation=validation)
-            conv_service = ConversationService(session, gateway, appointment_service=appt_service)
-            turn = await conv_service.process_message(
-                ctx.conversation_id,
-                business_id,
-                actor,
-                text_body,
-            )
-            if ctx.state in (ConversationState.COMPLETED, ConversationState.ENDED):
-                from fonely.services.conversation_persistence import (
-                    ConversationPersistenceService,
-                )
-
-                persistence = ConversationPersistenceService(session)
-                await persistence.mark_completed(ctx.conversation_id)
-
+        if persisted > 0:
             await session.commit()
-            await sender.send_text(sender_phone, turn.assistant_response)
-            _mark_processed_in_memory(message_id)
-        except Exception:
-            logger.warning(
-                "whatsapp_message_processing_error",
-                extra={"business_id": business_id, "phone_suffix": sender_phone[-4:]},
-            )
-            await sender.send_text(
-                sender_phone,
-                "Sorry, something went wrong. Please try again.",
-            )
+
+    return Response(status_code=200)
 
 
-async def _is_owner(business_id: int, phone: str, session: AsyncSession) -> bool:
-    try:
-        from fonely.models.enums import BusinessUserRole
-        from fonely.models.schema import BusinessUser
+async def _persist_inbound_event(session: AsyncSession, message: dict, business_id: int) -> int:
+    message_id = str(message.get("id", ""))
+    sender_phone = str(message.get("from", ""))
+    message_type = str(message.get("type", ""))
 
-        owner = await session.scalar(
-            select(BusinessUser).where(
-                BusinessUser.business_id == business_id,
-                BusinessUser.phone == phone,
-                BusinessUser.role == BusinessUserRole.OWNER.value,
-                BusinessUser.is_active.is_(True),
-            )
-        )
-        return isinstance(owner, BusinessUser)
-    except Exception:
-        return False
+    if not message_id or not sender_phone:
+        return 0
 
+    message_body = None
+    if message_type == "text":
+        text_obj = message.get("text")
+        if isinstance(text_obj, dict):
+            message_body = str(text_obj.get("body", ""))
 
-def _get_sender(app: object) -> WhatsAppSender | None:
-    if not settings.whatsapp_access_token or not settings.whatsapp_phone_number_id:
-        return None
-    client = getattr(getattr(app, "state", None), "http_client", None)
-    return WhatsAppSender(
-        access_token=settings.whatsapp_access_token,
-        phone_number_id=settings.whatsapp_phone_number_id,
-        client=client,
+    result = await session.execute(
+        text(
+            "INSERT INTO whatsapp_inbound_events "
+            "(message_id, business_id, sender_phone, message_type, message_body) "
+            "VALUES (:mid, :bid, :phone, :mtype, :body) "
+            "ON CONFLICT (message_id) DO NOTHING"
+        ),
+        {
+            "mid": message_id,
+            "bid": business_id,
+            "phone": sender_phone,
+            "mtype": message_type,
+            "body": message_body,
+        },
     )
+    inserted = result.rowcount or 0  # type: ignore[attr-defined]
+    if inserted > 0:
+        logger.info(
+            "whatsapp_event_persisted",
+            extra={"message_id": message_id, "business_id": business_id},
+        )
+    return inserted

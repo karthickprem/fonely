@@ -123,7 +123,8 @@ async def clean_database(
         async with pg_engine.begin() as connection:
             await connection.execute(
                 text(
-                    "TRUNCATE TABLE whatsapp_processed_messages, "
+                    "TRUNCATE TABLE whatsapp_inbound_events, "
+                    "whatsapp_processed_messages, "
                     "business_daily_context, "
                     "conversation_turns, conversations, "
                     "notification_outbox, "

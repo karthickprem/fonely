@@ -47,8 +47,8 @@ async def _seed_clinic(session: AsyncSession, target_date: date) -> None:
     await session.execute(
         text(
             "INSERT INTO operating_schedules "
-            "(business_id, resource_id, day_of_week, open_time, close_time) "
-            "VALUES (1, NULL, :dow, '17:00', '20:30')"
+            "(business_id, resource_id, day_of_week, open_time, close_time, is_active) "
+            "VALUES (1, NULL, :dow, '17:00', '20:30', true)"
         ),
         {"dow": dow},
     )

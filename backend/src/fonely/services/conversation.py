@@ -707,6 +707,7 @@ class ConversationService:
             resource_id,
             start_at.date(),
             self._session,
+            timezone=biz.timezone,
             duration_minutes=svc.duration_minutes,
             buffer_before=svc.buffer_before_minutes,
             buffer_after=svc.buffer_after_minutes,

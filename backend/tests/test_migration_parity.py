@@ -34,6 +34,7 @@ MIGRATION_0007 = MIGRATIONS_DIR / "0007_notification_outbox.py"
 MIGRATION_0008 = MIGRATIONS_DIR / "0008_conversation_persistence.py"
 MIGRATION_0009 = MIGRATIONS_DIR / "0009_daily_context.py"
 MIGRATION_0010 = MIGRATIONS_DIR / "0010_whatsapp_message_dedup.py"
+MIGRATION_0011 = MIGRATIONS_DIR / "0011_conversation_turn_unique.py"
 
 
 class OperationRecorder:
@@ -232,6 +233,7 @@ def _capture_upgrade() -> OperationRecorder:
         (MIGRATION_0008, "fonely_migration_0008"),
         (MIGRATION_0009, "fonely_migration_0009"),
         (MIGRATION_0010, "fonely_migration_0010"),
+        (MIGRATION_0011, "fonely_migration_0011"),
     ):
         module = _load_migration(path, name)
         module.op = recorder
@@ -256,6 +258,9 @@ def _capture_downgrade() -> OperationRecorder:
     recorder = _capture_upgrade()
     recorder.dropped_tables.clear()
     recorder.operations.clear()
+    module_0011 = _load_migration(MIGRATION_0011, "fonely_migration_0011_down")
+    module_0011.op = recorder
+    module_0011.downgrade()
     module_0010 = _load_migration(MIGRATION_0010, "fonely_migration_0010_down")
     module_0010.op = recorder
     module_0010.downgrade()
@@ -713,7 +718,7 @@ def test_revision_chain_has_single_head() -> None:
     }
     heads = revisions - parent_revisions
 
-    assert heads == {"0010"}
+    assert heads == {"0011"}
     assert {migration.revision: migration.down_revision for migration in migrations} == {
         "0001": None,
         "0002": "0001",
@@ -725,6 +730,7 @@ def test_revision_chain_has_single_head() -> None:
         "0008": "0007",
         "0009": "0008",
         "0010": "0009",
+        "0011": "0010",
     }
 
 

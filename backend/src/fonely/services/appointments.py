@@ -765,14 +765,47 @@ class AppointmentService:
             business_timezone=appointment.business_timezone_snapshot,  # type: ignore[attr-defined]
         )
 
+    @staticmethod
+    def _canonical_utc(ts: datetime | None) -> str | None:
+        if ts is None:
+            return None
+        utc = ts.astimezone(tz=__import__("datetime").timezone.utc)
+        if utc.microsecond == 0:
+            return utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+        return utc.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
     def _authoritative_snapshot(self, appointment: object) -> dict[str, object]:
+        a = appointment
+        price = getattr(a, "price_snapshot", None)
         return {
-            "appointment_id": appointment.id,  # type: ignore[attr-defined]
-            "business_id": appointment.business_id,  # type: ignore[attr-defined]
-            "service_id": appointment.service_id,  # type: ignore[attr-defined]
-            "resource_id": appointment.resource_id,  # type: ignore[attr-defined]
-            "status": appointment.status,  # type: ignore[attr-defined]
-            "version": appointment.version,  # type: ignore[attr-defined]
+            "appointment_id": a.id,  # type: ignore[attr-defined]
+            "business_id": a.business_id,  # type: ignore[attr-defined]
+            "service_id": a.service_id,  # type: ignore[attr-defined]
+            "service_name": a.service_name_snapshot,  # type: ignore[attr-defined]
+            "resource_id": a.resource_id,  # type: ignore[attr-defined]
+            "resource_name": a.resource_name_snapshot,  # type: ignore[attr-defined]
+            "customer_name": a.customer_name,  # type: ignore[attr-defined]
+            "customer_phone": a.customer_phone,  # type: ignore[attr-defined]
+            "start_at": self._canonical_utc(a.start_at),  # type: ignore[attr-defined]
+            "end_at": self._canonical_utc(a.end_at),  # type: ignore[attr-defined]
+            "effective_start_at": self._canonical_utc(a.effective_start_at),  # type: ignore[attr-defined]
+            "effective_end_at": self._canonical_utc(a.effective_end_at),  # type: ignore[attr-defined]
+            "duration_minutes": a.duration_minutes_snapshot,  # type: ignore[attr-defined]
+            "buffer_before_minutes": a.buffer_before_minutes_snapshot,  # type: ignore[attr-defined]
+            "buffer_after_minutes": a.buffer_after_minutes_snapshot,  # type: ignore[attr-defined]
+            "price": str(price) if price is not None else None,
+            "business_timezone": a.business_timezone_snapshot,  # type: ignore[attr-defined]
+            "reason": a.reason,  # type: ignore[attr-defined]
+            "status": a.status,  # type: ignore[attr-defined]
+            "source": a.source,  # type: ignore[attr-defined]
+            "idempotency_key": a.idempotency_key,  # type: ignore[attr-defined]
+            "pending_action_id": a.pending_action_id,  # type: ignore[attr-defined]
+            "call_id": a.call_id,  # type: ignore[attr-defined]
+            "version": a.version,  # type: ignore[attr-defined]
+            "cancelled_at": self._canonical_utc(a.cancelled_at),  # type: ignore[attr-defined]
+            "rescheduled_at": self._canonical_utc(a.rescheduled_at),  # type: ignore[attr-defined]
+            "created_at": self._canonical_utc(a.created_at),  # type: ignore[attr-defined]
+            "updated_at": self._canonical_utc(a.updated_at),  # type: ignore[attr-defined]
         }
 
     def _to_scheduling_facts(self, facts: AppointmentFacts) -> ConfirmationSchedulingFacts:

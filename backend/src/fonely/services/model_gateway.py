@@ -8,6 +8,7 @@ from typing import Protocol
 import httpx
 
 from fonely.core.config import settings
+from fonely.core.resilience import CircuitOpenError, ResilientClient
 
 logger = logging.getLogger("fonely.services.model_gateway")
 
@@ -45,13 +46,24 @@ class SarvamModelGateway:
         self,
         *,
         timeout: float = 15.0,
-        client: httpx.AsyncClient | None = None,
+        client: httpx.AsyncClient | ResilientClient | None = None,
     ) -> None:
         self._url = settings.sarvam_llm_url
         self._model = settings.sarvam_llm_model
         self._api_key = settings.sarvam_api_key
         self._timeout = timeout
-        self._client = client
+        if isinstance(client, ResilientClient):
+            self._resilient = client
+            self._client = None
+        else:
+            self._resilient = ResilientClient(
+                "sarvam_llm",
+                timeout=timeout,
+                max_retries=2,
+                circuit_breaker_threshold=5,
+                client=client,
+            )
+            self._client = client
 
     async def complete(
         self,
@@ -80,18 +92,26 @@ class SarvamModelGateway:
 
         from fonely.core.metrics import metrics
 
-        client = self._client or httpx.AsyncClient()
-        owns_client = self._client is None
         try:
-            response = await client.post(
+            response = await self._resilient.post(
                 self._url,
                 json=body,
                 headers=headers,
-                timeout=self._timeout,
             )
             response.raise_for_status()
             data = response.json()
             metrics.increment("llm_requests_total", {"provider": "sarvam", "outcome": "success"})
+        except CircuitOpenError:
+            metrics.increment("llm_requests_total", {"provider": "sarvam", "outcome": "circuit_open"})
+            logger.warning(
+                "model_circuit_open",
+                extra={"model": self._model},
+            )
+            return ModelResponse(
+                text="I'm having trouble connecting right now. "
+                "Please try again in a moment or call the clinic directly.",
+                model="fallback",
+            )
         except httpx.TimeoutException:
             metrics.increment("llm_requests_total", {"provider": "sarvam", "outcome": "timeout"})
             logger.warning(
@@ -109,9 +129,6 @@ class SarvamModelGateway:
                 },
             )
             raise
-        finally:
-            if owns_client:
-                await client.aclose()
 
         latency = (time.monotonic() - start) * 1000
         metrics.observe("llm_request_duration_ms", latency, {"provider": "sarvam"})

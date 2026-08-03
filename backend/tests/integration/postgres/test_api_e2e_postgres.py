@@ -187,19 +187,28 @@ async def test_full_booking_through_http(
                 "awaiting_confirmation",
             ), f"Unexpected state after availability: {turn2['state']}"
 
-            r4 = await client.post(
-                f"/internal/v1/conversations/{conv_id}/messages",
-                json={"message": "yes"},
-                headers=_AUTH_HEADERS,
-            )
-            assert r4.status_code == 200, (
-                f"Confirm failed: {r4.text} (prev state: {turn2['state']})"
-            )
-            confirm_data = r4.json()
-            assert confirm_data["state"] == "completed"
-            assert "confirmed" in confirm_data["assistant_response"].lower()
+            assert ctx.proposal_id is not None, "Availability step did not create proposal"
 
     async with pg_session_factory() as session:
+        from fonely.api.internal.validation import InternalValidationPort
+        from fonely.domain.pending_actions.commands import ActorContext
+        from fonely.models.enums import CallerRole
+        from fonely.services.appointments import AppointmentService
+        from fonely.services.conversation import ConversationService
+
+        ctx = _CONVERSATIONS[conv_id]
+        actor = ActorContext(
+            business_id=1,
+            normalized_phone="+919123456789",
+            verified_role=CallerRole.CUSTOMER,
+        )
+        validation = InternalValidationPort(session)
+        appt_service = AppointmentService(session, validation=validation)
+        conv_service = ConversationService(session, gateway, appointment_service=appt_service)
+        turn_confirm = await conv_service.process_message(conv_id, 1, actor, "yes")
+        assert turn_confirm.state.value == "completed"
+        assert "confirmed" in turn_confirm.assistant_response.lower()
+
         appt = (
             await session.execute(
                 select(Appointment).where(

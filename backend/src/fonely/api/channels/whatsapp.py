@@ -159,6 +159,10 @@ async def _handle_message(
     if session_factory is None or gateway is None:
         return
 
+    if await _is_duplicate_persistent(message_id, business_id, session_factory):
+        logger.info("whatsapp_duplicate_message_db", extra={"message_id": message_id})
+        return
+
     async with session_factory() as session:
         try:
             if await _is_owner(business_id, phone_formatted, session):
@@ -223,6 +227,29 @@ async def _is_owner(business_id: int, phone: str, session: AsyncSession) -> bool
             )
         )
         return isinstance(owner, BusinessUser)
+    except Exception:
+        return False
+
+
+async def _is_duplicate_persistent(
+    message_id: str,
+    business_id: int,
+    session_factory: async_sessionmaker[AsyncSession],
+) -> bool:
+    from sqlalchemy import text
+
+    try:
+        async with session_factory() as session:
+            result = await session.execute(
+                text(
+                    "INSERT INTO whatsapp_processed_messages "
+                    "(message_id, business_id) VALUES (:mid, :bid) "
+                    "ON CONFLICT DO NOTHING"
+                ),
+                {"mid": message_id, "bid": business_id},
+            )
+            await session.commit()
+            return getattr(result, "rowcount", 0) == 0
     except Exception:
         return False
 

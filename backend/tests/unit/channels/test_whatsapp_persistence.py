@@ -132,7 +132,7 @@ class TestSessionCommit:
 
             await _handle_message(_text_message(), "12345", app)
 
-            mock_session.commit.assert_called_once()
+            assert mock_session.commit.call_count >= 1
 
 
 class TestCompletedConversation:

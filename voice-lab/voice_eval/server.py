@@ -51,7 +51,12 @@ class AnnotationUpdate(BaseModel):
     reviewed_revision: int
 
 
-def create_app(data_root: Path, collection_mode: str = "disabled", access_token: str | None = None) -> FastAPI:
+def create_app(
+    data_root: Path,
+    collection_mode: str = "disabled",
+    access_token: str | None = None,
+    trusted_host: str | None = None,
+) -> FastAPI:
     root = data_root.resolve(strict=True)
     worktree = Path(__file__).resolve().parents[2]
     if root == worktree or root.is_relative_to(worktree):
@@ -77,10 +82,19 @@ def create_app(data_root: Path, collection_mode: str = "disabled", access_token:
     @app.middleware("http")
     async def local_security(request: Request, call_next):
         host = request.url.hostname or ""
-        if host not in {"127.0.0.1", "localhost", "::1", "testserver"}:
-            return __import__("fastapi").responses.JSONResponse({"detail": "loopback host required"}, status_code=403)
+        allowed_hosts = {"127.0.0.1", "localhost", "::1", "testserver"}
+        if trusted_host:
+            allowed_hosts.add(trusted_host)
+        if host not in allowed_hosts:
+            return __import__("fastapi").responses.JSONResponse({"detail": "untrusted host"}, status_code=403)
         origin = request.headers.get("origin")
-        if origin and origin not in {"http://127.0.0.1", "http://localhost", "http://testserver"} and not origin.startswith(("http://127.0.0.1:", "http://localhost:")):
+        allowed_origins = {"http://127.0.0.1", "http://localhost", "http://testserver"}
+        if trusted_host:
+            allowed_origins.add(f"http://{trusted_host}")
+        valid_origin = not origin or origin in allowed_origins or any(
+            origin.startswith(f"{base}:") for base in allowed_origins
+        )
+        if not valid_origin:
             return __import__("fastapi").responses.JSONResponse({"detail": "invalid origin"}, status_code=403)
         if request.url.path.startswith("/api/") and request.headers.get("x-voice-eval-token") != token:
             return __import__("fastapi").responses.JSONResponse({"detail": "invalid token"}, status_code=401)

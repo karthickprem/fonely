@@ -146,7 +146,7 @@ def main() -> int:
     report = sub.add_parser("report")
     report.add_argument("--manifest", required=True); report.add_argument("--data-root", required=True); report.add_argument("--results", required=True); report.add_argument("--report-id", required=True); report.add_argument("--output", required=True); report.add_argument("--expected-modes", default="transcribe,codemix")
     serve = sub.add_parser("serve")
-    serve.add_argument("--data-root", required=True); serve.add_argument("--host", default="127.0.0.1"); serve.add_argument("--port", type=int, default=3010); serve.add_argument("--collection-mode", default="disabled")
+    serve.add_argument("--data-root", required=True); serve.add_argument("--host", default="127.0.0.1"); serve.add_argument("--port", type=int, default=3010); serve.add_argument("--collection-mode", default="disabled"); serve.add_argument("--trusted-host")
     args = parser.parse_args()
     if args.command == "validate":
         fixtures = validate_manifest(Path(args.manifest), Path(args.data_root)); print(f"Validated {len(fixtures)} fixtures"); return 0
@@ -154,18 +154,22 @@ def main() -> int:
     if args.command == "report": return build_report(args)
     if args.command == "serve":
         if args.host not in {"127.0.0.1", "localhost", "::1"}:
-            raise ValueError("Voice evaluation UI is loopback-only")
+            if args.host != "0.0.0.0" or not args.trusted_host:
+                raise ValueError("non-loopback bind requires --host 0.0.0.0 and --trusted-host")
+        if args.trusted_host and not __import__("re").fullmatch(r"[A-Za-z0-9.-]{1,253}", args.trusted_host):
+            raise ValueError("invalid trusted host")
         import secrets
         import uvicorn
         from voice_eval.server import create_app
         token = secrets.token_urlsafe(32)
         data_root = Path(args.data_root)
         data_root.mkdir(parents=True, exist_ok=True)
-        print(f"Open http://{args.host}:{args.port}/#token={token}")
-        if args.collection_mode == "founder_recording":
+        display_host = args.trusted_host or args.host
+        print(f"Open http://{display_host}:{args.port}/#token={token}")
+        if args.collection_mode == "founder_recording" and not args.trusted_host:
             print(f"Remote browser: ssh -N -L {args.port}:127.0.0.1:{args.port} xhdctallapa40")
             print(f"Then open http://127.0.0.1:{args.port}/#token={token}")
-        uvicorn.run(create_app(data_root, args.collection_mode, token), host=args.host, port=args.port)
+        uvicorn.run(create_app(data_root, args.collection_mode, token, args.trusted_host), host=args.host, port=args.port)
         return 0
     return 2
 

@@ -28,13 +28,24 @@ python voice-lab/voice_eval/cli.py serve \
   --collection-mode founder_recording
 ```
 
-From a different computer, create a local tunnel:
+If Chrome microphone permission is already available on the internal hostname, start in narrowly trusted-host mode:
+
+```bash
+python voice-lab/voice_eval/cli.py serve \
+  --host 0.0.0.0 --trusted-host xhdctallapa40 --port 3049 \
+  --data-root /scratch/karthick/fonely-founder-recording-data \
+  --collection-mode founder_recording
+```
+
+Open the exact `http://xhdctallapa40:3049/#token=...` URL printed by the server.
+
+If microphone access on the hostname is unavailable, keep loopback mode and use an SSH tunnel:
 
 ```bash
 ssh -N -L 3049:127.0.0.1:3049 xhdctallapa40
 ```
 
-Open the exact `http://127.0.0.1:3049/#token=...` URL printed by the server. The fragment token is required and removed from browser history after loading.
+Then open the printed token URL as `http://127.0.0.1:3049/#token=...`. The fragment token is required and removed from browser history after loading.
 
 The studio records one of 50 fictional prompts at a time, captures source-rate Float32 audio, resamples it to canonical 16 kHz mono PCM16 WAV, shows waveform/peak/clipping/silence diagnostics, allows replay/re-record, and uploads only after explicit Accept. Progress is reconstructed from committed external recordings, not browser local storage.
 

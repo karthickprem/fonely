@@ -284,6 +284,19 @@ def test_founder_studio_requires_governance_and_persists_recording(tmp_path):
     asyncio.run(run())
 
 
+def test_explicit_internal_host_is_narrowly_allowed(tmp_path):
+    async def run():
+        import httpx
+
+        app = create_app(tmp_path, "disabled", "token", "xhdctallapa40")
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://xhdctallapa40:3049", headers={"x-voice-eval-token": "token", "origin": "http://xhdctallapa40:3049"}) as client:
+            assert (await client.get("/api/config")).status_code == 200
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://other-host:3049", headers={"x-voice-eval-token": "token"}) as client:
+            assert (await client.get("/api/config")).status_code == 403
+
+    asyncio.run(run())
+
+
 def test_loopback_server_rejects_real_collection(tmp_path):
     with pytest.raises(ValueError):
         create_app(tmp_path, "real_collection")

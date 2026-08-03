@@ -1,256 +1,329 @@
 # Fonely — Product and Engineering Roadmap
 
-> **Document status:** This is the durable product strategy and phase roadmap. Product flows are targets, not claims of current functionality. See [STATUS.md](STATUS.md) for current evidence and blockers.
+> **Document status:** Living product strategy and phase roadmap. Updated 2026-08-03. Product flows are targets unless marked "implemented." See [STATUS.md](STATUS.md) for current evidence.
 
 ## Product thesis
 
-Fonely aims to be a multilingual AI front desk for Indian small businesses. It should answer inbound calls, understand customers in their language, safely handle enquiries and confirmed transactions, and notify owners without requiring a dashboard or technical setup.
+Fonely is a **multilingual AI virtual receptionist** for Indian dental clinics (expanding to other MSMEs). It is not a one-time-setup chatbot — it learns daily from the clinic owner and handles both WhatsApp messages and voice calls on the same number.
 
-The initial customer hypothesis includes appointment businesses such as clinics and salons and finite-stock pickup businesses such as meat/fish shops and bakeries. The first vertical will be selected by credible design-partner commitment and willingness to pay, not by architecture preference.
+The first commercial pilot targets independent urban dental clinics with 1–3 dentists in Chennai.
+
+**Core product promise:** "Never lose a patient enquiry because nobody answered the phone."
+
+**Key differentiators:**
+- Natural Tamil/Tanglish/Indian-English conversation
+- Deterministic bookings — zero hallucinated appointments
+- Same number handles WhatsApp + voice calls
+- Clinic owner updates context daily via WhatsApp (leave, schedule changes, offers)
+- Dental safety boundary — never gives medical advice, escalates appropriately
+- MSME pricing with capped usage, not enterprise SaaS
 
 ## Core safety principle
 
 **The model is the ears and mouth. The database is the source of truth. Deterministic code is the gatekeeper.**
 
 The model must not:
-
 - Invent stock, prices, schedules, or availability.
 - Calculate authoritative totals.
 - Write business tables directly.
 - Call internal commit operations.
 - Announce transaction success before the deterministic engine commits.
 
-## Target transaction path
+## Two user roles on the same number
 
-```text
-Caller speaks
-→ speech-to-text
-→ model selects a validated public tool
-→ application injects tenant and verified caller context
-→ PendingAction proposal is created or revised
-→ caller hears the authoritative confirmation snapshot
-→ caller confirms
-→ deterministic engine commits in PostgreSQL
-→ committed result is returned
-→ text-to-speech announces success
-→ owner receives a notification
+### Patient (books appointments)
+```
+Patient WhatsApps or calls +91 44 XXXX XXXX
+→ Fonely greets in their language
+→ Understands intent (booking, enquiry, cancellation)
+→ Collects facts conversationally (service, doctor, time)
+→ Checks real availability from database
+→ Proposes slot with exact price
+→ Patient confirms
+→ Appointment committed to PostgreSQL
+→ Patient gets WhatsApp confirmation
+→ Clinic owner gets notification
 ```
 
-The production backend currently implements the generic pending-action lifecycle for orders and owner stock-update payloads. It does not yet implement the Phase C inventory/order engine, Phase D appointment engine, or production provider/tool dispatcher.
+### Clinic owner (manages the day)
+```
+Owner WhatsApps the same number (identified by registered phone)
+→ "Dr. Priya is on leave tomorrow"
+→ Fonely creates ScheduleException, stops booking Dr. Priya
+→ Automatically cancels affected appointments
+→ Notifies affected patients
+
+→ "Close early today at 5 PM"
+→ Fonely adjusts today's schedule
+→ Stops offering slots after 5 PM
+
+→ "Show me tomorrow's appointments"
+→ Fonely sends structured summary
+
+→ "New patient special: consultation free this week"
+→ Fonely updates offer context for conversations
+```
+
+Owner commands use the same proposal/confirmation pattern as bookings — no accidental changes.
+
+## Channel architecture
+
+```
++91 44 XXXX XXXX (Fonely clinic number)
+  ├── WhatsApp message → webhook → ConversationService → PostgreSQL
+  ├── WhatsApp from owner phone → OwnerCommandService → PostgreSQL
+  └── Phone call → Exotel → Voice pipeline → ConversationService → PostgreSQL
+
+All channels → same booking engine, same availability, same safety rules
+```
+
+## Target transaction path
+
+```
+Caller speaks or types
+→ Safety boundary check (deterministic, not LLM)
+→ Fact extraction (Tanglish-aware, LLM + deterministic resolver)
+→ Availability check from OperatingSchedule + ScheduleException
+→ PendingAction proposal created
+→ Caller hears/reads the authoritative confirmation snapshot
+→ Caller confirms (deterministic detection, not LLM judgment)
+→ Deterministic engine commits in PostgreSQL
+→ Committed result returned
+→ Notification outbox event created (same transaction)
+→ Background worker sends WhatsApp confirmation
+→ Owner receives notification
+```
 
 ## Lifecycle-safe public-tool contract
 
 The versioned target contract is `evals/tool-contract.v1.json`.
 
-Inventory/order tools:
-
-- `check_inventory`
-- `create_pending_order`
-- `revise_pending_order`
-- `confirm_pending_order`
-- `cancel_pending_order`
-
-Appointment tools:
-
+Patient tools:
 - `check_availability`
 - `create_pending_appointment`
-- `revise_pending_appointment`
 - `confirm_pending_appointment`
 - `cancel_pending_appointment`
 - `reschedule_appointment`
-
-Information and escalation:
-
 - `get_business_information`
 - `escalate_to_owner`
 
-Owner operations use proposal/confirmation pairs, including stock, price, and schedule updates.
+Owner tools (via WhatsApp commands):
+- `update_schedule` — mark leave, change hours, add exceptions
+- `cancel_appointments_bulk` — cancel all for a doctor/day
+- `get_daily_summary` — tomorrow's appointment list
+- `update_offers` — temporary promotions
+- `manage_staff` — add/deactivate resources
 
-Internal operations such as `begin_commit`, `complete_commit`, `fail_commit`, `internal_get`, and `internal_get_active` are application-engine operations and must never be LLM-callable.
+Internal operations (`begin_commit`, `complete_commit`, etc.) must never be LLM-callable.
 
-These names define a target public boundary; they do not imply that every adapter or deterministic engine is currently implemented.
+## Development phases
 
-## Implemented data foundation
+### Phase A — Production backend foundation ✅ COMPLETE
+- Python backend, tenant-aware ORM, Alembic migrations 0001–0003
+- Strict values, enums, safe database/session foundations
+- PostgreSQL CI green
 
-The authoritative schema is the SQLAlchemy ORM and Alembic migrations, not a duplicated SQL sketch:
+### Phase B — PendingAction lifecycle ✅ COMPLETE
+- Proposal, confirmation, commit, failure, cancellation, expiry
+- Idempotency, optimistic concurrency, canonical digests
+- Actor authorization, committed-entity linkage
 
-- `backend/src/fonely/models/schema.py`
-- `backend/src/fonely/models/enums.py`
-- `backend/migrations/versions/0001_initial_schema.py`
-- `backend/migrations/versions/0002_pending_action_state_machine.py`
-- `backend/migrations/versions/0003_committed_entity_linkage.py`
+### Phase C — Inventory and order engine ✅ COMPLETE
+- Migration 0005, deterministic inventory/order transactions
+- Append-only movements, immutable line items (trigger-enforced)
+- Lock ordering, concurrency race tests, populated roundtrip
+- Note: not needed for dental pilot but foundation for future verticals
 
-The foundation models businesses, capabilities/locales/users, operating schedules and exceptions, products, services/resources, inventory balances/reservations/movements, orders and line items, appointments, calls, pending actions, and owner audit events.
+### Phase D — Appointment and scheduling engine ✅ COMPLETE
+- Migration 0004, services/resources/eligibility/schedules
+- Create, confirm, cancel, reschedule — all PostgreSQL-proven
+- Exclusion constraints for overlap prevention
+- Savepoint-managed, caller-owned transactions
+- Immutable appointment commit evidence
 
-Database tables existing in the foundation does not mean their Phase C/D transaction engines are implemented.
+### Phase E — Conversation and channel layer ✅ MOSTLY COMPLETE
+- Conversation state machine (10 states, explicit transitions)
+- Tamil/Tanglish/English safety boundary (deterministic regex)
+- LLM-based Tanglish fact extraction + deterministic resolver
+- Confirmation detection (Tamil + English)
+- Provider-neutral model gateway (Sarvam, injectable)
+- Internal text API (appointment proposals + confirm)
+- WhatsApp inbound adapter (webhook, dedup, signature verification)
+- Conversation persistence (migration 0008, survives restart)
+- Provider resilience (circuit breaker, retry, graceful degradation)
+- In-process metrics and alerting
 
-## Nine development phases
+Remaining:
+- Session commit gap in HTTP conversation route (P1)
+- E2E HTTP booking flow proven but uses direct service call for final steps
 
-### Phase A — Production backend foundation
+### Phase F — Production voice pipeline 🔄 IN PROGRESS
+- Pipecat + Sarvam STT + Claude Haiku LLM + Sarvam TTS
+- Browser voice lab (Dev4, R&D branch)
+- Chrome proof: 1.26s speech-end to bot-start
+- Silero VAD + Smart Turn automatic endpointing
 
-Scope:
+Remaining:
+- Voice quality tuning for natural Tamil
+- Exotel telephony integration
+- Same-number WhatsApp + voice routing
 
-- Python backend package and configuration.
-- Tenant-aware ORM schema.
-- Alembic migrations and parity checks.
-- Strict values, enums, quantities, money, and timestamps.
-- Safe database/session foundations.
+### Phase G — Owner experience ❌ NOT STARTED
+- Owner identification by registered phone
+- Owner command parser ("Dr. Priya leave tomorrow" → ScheduleException)
+- Dynamic daily context (transient updates the LLM can reference)
+- Proactive daily briefing
+- Bulk appointment cancellation from owner command
+- Owner notification preferences
 
-Status: implemented and locally verified; final foundation gate depends on green PostgreSQL CI.
+This is a core product differentiator, not an afterthought.
 
-### Phase B — PendingAction lifecycle
+### Phase H — Onboarding and configuration ✅ MOSTLY COMPLETE
+- Migration 0006, onboarding draft → review → approve → activate
+- Dental clinic fixture (Smile Dental, 5 services, 2 dentists, schedules)
+- Owner-only approval, optimistic versioning, idempotent submission
+- Activation writes Services/Resources/Eligibility/Schedules
 
-Scope:
+Remaining:
+- Photo/PDF/spreadsheet import adapters
+- WhatsApp-guided onboarding
+- Test-mode activation and readiness checks
 
-- Proposal, revision, confirmation, commit, failure, cancellation, rejection, and expiry states.
-- Idempotency and optimistic concurrency.
-- Canonical payload digests and confirmation snapshots.
-- Actor authorization and trusted internal commit boundary.
-- Exact committed-entity linkage.
+### Phase I — Notifications ✅ MOSTLY COMPLETE
+- Migration 0007, transactional outbox
+- Outbox events in same transaction as appointment
+- Background worker with retry, backoff, dead-letter
+- LoggingNotificationSender (placeholder)
 
-Status: implemented through B.1 hardening and migration `0003`.
+Remaining:
+- Real WhatsApp notification sender
+- Message templates (Meta approval required)
+- SMS fallback
+- Owner daily summary notification
 
-### Phase C — Inventory and order engine
+### Phase J — Production operations 🔄 PARTIAL
+- Structured JSON logging with correlation ID
+- Rate limiting, CORS, security headers, request protection
+- Structured error handling (no stack traces leaked)
+- Dockerfile, Docker Compose staging
+- Deployment readiness verifier, backup/restore verification
+- In-process metrics (/metrics endpoint)
+- Alert thresholds (/health/alerts)
 
-Scope:
+Remaining:
+- Staging deployment (blocked: no Docker on dev machine)
+- Monitoring/APM integration
+- CI/CD pipeline
+- Load/soak testing
+- Incident response runbook
 
-- Owner stock set/add and walk-in sale.
-- Atomic inventory reservations.
-- Multi-item all-or-nothing confirmation.
-- Price snapshots and authoritative totals.
-- Reservation cancellation/expiry release.
-- Pickup completion and inventory ledger consistency.
-- Final-stock concurrency behavior.
+### Phase K — Privacy and compliance 🔄 IN PROGRESS
+- Conversation turns store message hash, not text
+- PII-safe logging throughout
+- Data retention policies (Dev2 working)
+- Tenant isolation on all queries
 
-Gate: PostgreSQL CI must be green and a design-partner/vertical decision must justify this as the first engine.
+Remaining:
+- Automated PII cleanup
+- PII access audit logging
+- Data export for patient requests
+- Consent management
+- Clinical safety review by a practicing dentist
 
-### Phase D — Appointment and scheduling engine
+### Phase L — Payments and provisioning ❌ NOT STARTED
+- Subscription provisioning and entitlements
+- Capped usage plans (included minutes + overage)
+- Business/number activation
+- Billing records
 
-Scope:
+### Phase M — Controlled pilot ❌ NOT STARTED
+- 3–5 consenting dental clinics in Chennai
+- Tamil/Tanglish + Indian English
+- One provider path, manual monitoring
+- Human fallback, owner feedback
+- Measurable go/no-go: booking completion rate, naturalness score
 
-- Services, durations, buffers, resources, eligibility, schedules, breaks, and exceptions.
-- Deterministic availability.
-- Temporary holds and expiry.
-- Database-enforced non-overlap.
-- Confirmation, cancellation, and safe rescheduling.
-- Time-zone and exact interval-boundary rules.
+## Pricing model (hypothesis, not validated)
 
-Gate: explicit founder priority and an approved implementation specification. Dev3 may implement this phase only after assignment.
+Capped usage plans:
+- Pilot: ₹2,999/month — 200 included minutes
+- Starter: ₹4,999/month — 500 included minutes
+- Growth: ₹7,999/month — 1,000 included minutes
+- Overage: ₹5–6/min
 
-### Phase E — Provider-independent AI and public-tool boundary
+A good receptionist handles a booking in 60–120 seconds. Human-like ≠ long conversations.
 
-Scope:
+## Provider strategy
 
-- Typed STT, model, and TTS ports.
-- Strict public-tool registry and dispatcher.
-- Structured tool validation and typed results.
-- Provider timeout, cancellation, usage, and error contracts.
-- Permanent exclusion of internal operations.
+Provider-independent voice layer — one provider per entire call, route at call start:
 
-Status: target architecture only. No production dispatcher exists.
+```
+Voice Session Manager
+  ├── Sarvam STT + Claude/Sarvam LLM + Sarvam TTS (production default)
+  ├── OpenAI Realtime Mini (premium/demo)
+  └── Future Provider Adapter
 
-### Phase F — Production voice pipeline
+STT and TTS dominate cost. LLM is <5% of call cost.
+```
 
-Scope:
-
-- Telephony audio transport.
-- Streaming STT and TTS.
-- Conversation orchestration.
-- Barge-in, silence/noise, low-confidence clarification, disconnect recovery, and latency controls.
-- No-success-before-commit behavior.
-
-Status: a feasibility prototype exists under `src/` and `public/`; production implementation is not started.
-
-### Phase G — WhatsApp owner experience
-
-Scope:
-
-- Business onboarding/configuration.
-- Owner stock/schedule management through safe proposal/confirmation flows.
-- Transaction notifications and daily summaries.
-- Human escalation and correction workflows.
-
-Status: not implemented.
-
-### Phase H — Payments and provisioning
-
-Scope:
-
-- Subscription provisioning and entitlements.
-- Business/number activation.
-- Quotas, overage handling, and billing records.
-- No autonomous end-customer payment in the initial pilot.
-
-Status: not implemented.
-
-### Phase I — Controlled pilot
-
-Scope:
-
-- A small set of consenting design-partner businesses.
-- One primary vertical, one deterministic transaction, Tamil/Tanglish plus Indian English, one provider path, and manual monitoring.
-- Incident response, human fallback, owner feedback, and measurable go/no-go criteria.
-
-Status: not started.
-
-## Pilot scope hypothesis
-
-Begin with one thin vertical slice and expand only after evidence:
-
-- Approximately 3–5 initial design partners, expandable to 5–10 after stability.
-- Inbound calls only.
-- Business-hours, overflow, or after-hours forwarding.
-- One deterministic transaction type.
-- Manual transcript review with consent and PII controls.
-- Human owner escalation.
-- No diagnosis or medication advice.
-- No autonomous payment.
-- No outbound marketing.
-
-A credible design partner shares real configuration, participates in weekly testing, accepts monitored calls under consent, provides feedback, and demonstrates willingness to pay after a trial.
-
-## Evaluation and quality gates
-
-The QA.3 corpus contains 211 synthetic cases and 377 turns with zero structural tool-contract mismatches. It is useful for requirements and structural conformance but is not proof of:
-
-- Native-language quality.
-- Clinical correctness.
-- Provider accuracy.
-- Real caller behavior.
-- Pilot readiness.
-
-Required evidence layers are described in `docs/qa/TEST_STRATEGY.md`.
-
-## Provider and pricing policy
-
-Provider names, capabilities, quotas, and prices change. Any selection or cost model must include a dated authoritative source and measured usage. Existing prototype integrations or earlier price estimates are not durable commercial facts.
-
-Current policy:
-
-- Keep domain services provider-independent.
-- Compare providers using the same reviewed corpus and real-call samples.
-- Measure STT/TTS/model/telephony usage and cost per successful transaction.
-- Treat customer prices and margin targets as founder hypotheses until pilot data exists.
+Do NOT:
+- Demo with premium voice and ship a worse production voice
+- Switch providers mid-call (voice/pace changes)
+- Build a custom speech model (use existing providers)
+- Commit to a provider before A/B testing with real Tamil speakers
 
 ## What the pilot does not require
 
-- Mobile application.
-- Large web dashboard.
-- CRM integrations.
-- Outbound calling or marketing.
-- Delivery logistics.
-- General workflow DSL.
-- Microservices, Kafka, Kubernetes, multi-region deployment, or every Indian language.
-- Multiple verticals before one succeeds.
+- Mobile application
+- Large web dashboard
+- CRM integrations
+- Outbound calling or marketing
+- Delivery logistics
+- General workflow DSL
+- Microservices, Kafka, Kubernetes
+- Multi-region deployment
+- Every Indian language
+- Multiple verticals before one succeeds
+- Custom speech/voice model
 
-## Current next sequence
+## Current sequence (as of 2026-08-03)
 
-1. Finish Dev2's PostgreSQL CI correction and obtain a green run including migration downgrade/re-upgrade.
-2. Independently review Dev1's repository-audit hardening and Dev2's CI correction.
-3. Merge focused changes without crossing ownership boundaries.
-4. Secure a credible design-partner commitment.
-5. Authorize the selected deterministic engine.
-6. Implement one thin end-to-end slice.
-7. Measure reliability, latency, cost, owner correction, and willingness to pay.
+```
+✅ Done:
+  Phases A–D: Backend foundation through appointment engine
+  Phase E: Conversation orchestrator with WhatsApp adapter
+  Phase H: Onboarding persistence with dental fixture
+  Phase I: Notification outbox
+  Phase J: Staging infrastructure (built, not deployed)
 
-See [STATUS.md](STATUS.md) for the current evidence snapshot.
+🔄 Active:
+  Dev1: Observability bug fixes
+  Dev2: Data retention and privacy
+  Dev3: Session commit fix + HTTP E2E test
+  Dev4: Pipecat voice lab
+
+📋 Next priority:
+  1. Fix known bugs (observability, session commit)
+  2. Phase G: Owner command system (critical product differentiator)
+  3. Phase F: Voice quality tuning + Exotel integration
+  4. Deploy to staging (needs Docker-capable machine)
+  5. Meta WhatsApp Business API setup
+  6. Real dental clinic configuration and testing
+  7. Controlled pilot with 3–5 clinics
+```
+
+## Decision checklist
+
+For every significant change ask:
+1. What customer problem does this solve?
+2. Which invariant must never break?
+3. Is this foundation, domain behavior, application orchestration, or adapter logic?
+4. Does PostgreSQL need to enforce it?
+5. What happens under retry, concurrency, rollback, and partial provider failure?
+6. How is tenant isolation preserved?
+7. How will operators observe, diagnose, support, and repair it?
+8. What are the scalability and cost implications?
+9. Can a small team operate it safely?
+10. Is it needed now or merely conceivable?
+11. What exact evidence will validate it?
+12. Does the plan document cover this, or are we improvising?

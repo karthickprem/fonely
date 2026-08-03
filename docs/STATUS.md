@@ -1,155 +1,124 @@
 # Fonely — Current Project Status
 
-**Evidence snapshot:** 2026-08-01 CI timestamps, reviewed on 2026-08-01 in the current project session.
-
-This is the authoritative volatile-status document. Product strategy lives in `PLAN.md`; historical checkpoints live under `docs/daily/`.
+**Evidence snapshot:** 2026-08-03. See [PLAN.md](PLAN.md) for product strategy.
 
 ## Executive status
 
-```text
-Phase A — Backend foundation:               implemented; PostgreSQL CI gate passed
-Phase B/B.1 — PendingAction lifecycle:      implemented through migration 0003
-QA.3 — Structural evaluation conformance:   passing (211 cases / 377 turns / 0 mismatches)
-PostgreSQL CI:                              green on run 30687004089
-Phase C — Inventory/order engine:           technically eligible for specification/authorization; not started
-Later phases:                               not started as production implementation
+```
+Main branch:     973fd13 (+ 468cbaa resilience pending CI verification)
+Alembic head:    0008
+Migrations:      0001–0008 (schema, pending actions, linkage, appointments,
+                 inventory/orders, onboarding, notifications, conversations)
+Tables:          28
+Source lines:    ~15,000
+Test lines:      ~21,000
+Tests:           1,326 collected (1,050+ non-PG, 280 PG integration)
+CI:              Green
+First vertical:  Dental clinics (Chennai)
 ```
 
-Fonely is not production-ready, provider-validated, clinically reviewed, or pilot-validated.
+## What's production-proven (PostgreSQL-tested)
 
-## Repository evidence
+| Capability | Evidence |
+|-----------|----------|
+| Appointment create + confirm | Full lifecycle, overlap exclusion, savepoint recovery |
+| Appointment cancel | Lifecycle, tenant isolation, idempotency |
+| Appointment reschedule | Lifecycle, atomicity on conflict, evidence preservation |
+| Onboarding lifecycle | Submit → review → approve → activate → writes operational tables |
+| Notification outbox | Same-transaction evidence, rollback, worker delivery, dead-letter |
+| Conversation persistence | Restart survival, phone continuity, expired cleanup |
+| Conversation booking flow | Facts → availability → propose → confirm → committed appointment |
+| E2E API route test | HTTP request through FastAPI → committed PostgreSQL row |
+| Migration roundtrips | All 8 migrations upgrade/downgrade/re-upgrade proven |
+| Backup/restore | Disposable PG dump/restore with content verification |
 
-```text
-main baseline:                 231cabb  docs: record initial repository push
-Dev2 cache correction:         8d75733  ci: update cache action pin
-Dev2 loop-scope correction:    b5d7312  test(postgres): align async fixture loop scope
-Alembic head:                  0003
+## What's built but not PostgreSQL-proven
+
+| Capability | Gap |
+|-----------|-----|
+| Observability metrics | In-process metrics — histogram memory leak, gauge race condition, path normalization bug (fixes assigned to Dev1) |
+
+## What's built as adapters (no database interaction)
+
+| Capability | Tests |
+|-----------|-------|
+| WhatsApp webhook handler | 31 unit tests, HMAC signature verification |
+| WhatsApp Cloud API sender | Timeout handling, PII-safe logging |
+| Model gateway (Sarvam) | Provider resilience, circuit breaker, retry |
+| Tanglish fact extraction | 28 unit tests, Tamil numeral/date/time resolution |
+| Safety boundary | English + Tamil/Tanglish medical/urgent classification |
+| Structured error handling | Known exceptions mapped, no stack traces leaked |
+| Rate limiting | Per-IP sliding window, health endpoints exempt |
+| Security headers | nosniff, DENY, HSTS, no-store |
+
+## What's NOT built
+
+| Gap | Priority | Phase |
+|-----|----------|-------|
+| Owner command system (daily updates) | P0 — core differentiator | G |
+| Real WhatsApp notification sender | P1 | I |
+| Voice pipeline (production) | P1 | F |
+| Staging deployment | P1 — blocked on Docker | J |
+| Session commit in HTTP route | P1 — known bug | E |
+| Data retention automated cleanup | P1 — Dev2 working | K |
+| Exotel telephony integration | P2 | F |
+| Meta WhatsApp Business API setup | P2 — external | E |
+| Privacy/consent management | P2 | K |
+| Cancellation/rescheduling in conversation | P2 | E |
+| Photo/PDF onboarding import | P3 | H |
+| Payments/provisioning | P3 | L |
+| Engineer handoff documentation | P2 | — |
+
+## Active developer assignments
+
+| Developer | Task | Status |
+|-----------|------|--------|
+| Dev1 | Observability bug fixes (histogram leak, gauge race, path normalization) | Working |
+| Dev2 | Data retention and privacy (cleanup service, PII audit) | Working |
+| Dev3 | Session commit fix + full HTTP E2E test | Assigned |
+| Dev4 | Pipecat voice lab (Sarvam STT + Claude Haiku + Sarvam TTS) | R&D branch |
+
+## Production bugs found after merge (lessons)
+
+| Bug | Found by | Root cause |
+|-----|----------|-----------|
+| False confirmation (no DB row) | Independent reviewer | None fallback in ConversationService |
+| Validation port crash on cancel/reschedule | Dev2 PostgreSQL tests | assert CreateAppointmentData only |
+| Snapshot format mismatch | Dev2 PostgreSQL tests | Python dict ≠ PG function output |
+| Reschedule allocation FK violation | Dev2 PostgreSQL tests | Wrong PendingAction ID used |
+| Session commit gap in HTTP route | Dev3 E2E test | async with session never commits |
+
+All found because PostgreSQL tests caught what unit tests couldn't.
+
+## Known code quality issues (not yet fixed)
+
+- Histogram stores all values forever (memory leak) — Dev1 fixing
+- Gauge increment/decrement not atomic — Dev1 fixing
+- Path normalization matches embedded digits (/v1 → /v{id}) — Dev1 fixing
+- Rate limit IP dict grows unbounded — Dev1 fixing
+- Content-Length header not validated — Dev1 fixing
+- 429 retry double-waits (Retry-After + backoff) — minor
+- ResilientClient counter increments not thread-safe — minor
+
+## Infrastructure
+
+| Component | Status |
+|-----------|--------|
+| Dockerfile | Built, non-root, healthcheck |
+| Docker Compose staging | Built, PG16 + migration init |
+| Deployment runbook | Written |
+| Docker on dev machine | NOT AVAILABLE |
+| Staging server | NOT PROVISIONED |
+| Domain name / SSL | NOT PROVISIONED |
+| Meta WhatsApp Business | NOT REGISTERED |
+| Exotel account | CONFIGURED (API keys in .env) |
+| Sarvam API | CONFIGURED AND WORKING |
+
+## Voice lab (R&D branch, not in main)
+
 ```
-
-`8d75733` and `b5d7312` are on the Dev2 feature branch at this snapshot; they are not recorded here as merged to `main`.
-
-## Latest independently inspected CI evidence
-
-### Run 30685195177 — cache correction
-
-URL: https://github.com/karthickprem/fonely/actions/runs/30685195177
-
-The cache correction allowed CI to pass setup, dependency installation, QA validation, Chennai coverage, package import, Ruff, formatting, MyPy, migration upgrade/check, and 280 non-PostgreSQL tests. PostgreSQL then executed 23 contracts:
-
-```text
-1 passed
-22 failed with async cross-event-loop / closed-loop fixture errors
+Branch: dev4/voice-rd-lab
+Stack: Pipecat 1.7 + Sarvam STT + Claude Haiku + Sarvam HTTP streaming TTS
+Evidence: Chrome proof — 1.26s speech-end to bot-start
+Status: Working for text + audio, Tamil voice quality needs tuning
 ```
-
-### Run 30686343063 — loop-scope correction
-
-URL: https://github.com/karthickprem/fonely/actions/runs/30686343063
-
-The async loop-lifetime correction removed the shared event-loop failure. PostgreSQL improved to 22 passes and one stale migration-head expectation failure (`0002` versus implemented head `0003`).
-
-### Run 30687004089 — final green PostgreSQL gate
-
-URL: https://github.com/karthickprem/fonely/actions/runs/30687004089
-
-Commit `40e3fbb` renamed the misleading migration test and aligned its current-head assertion to `0003`. Independent review found no issues. The workflow completed successfully:
-
-```text
-Non-PostgreSQL tests:          281 passed, 23 deselected
-PostgreSQL integration tests:   23 passed, 281 deselected
-Migration downgrade to base:    passed
-Migration re-upgrade to 0003:   passed
-QA/static/migration checks:     passed
-```
-
-The PostgreSQL foundation gate is now green. Expected database errors emitted by negative constraint tests are test evidence, not workflow failures. A non-blocking cache-save warning remains because the configured cache path did not exist; dependency installation still passed and this does not reopen the PostgreSQL gate.
-
-## Backend status
-
-Implemented and locally reviewed:
-
-- Tenant-aware ORM foundation and migrations `0001`–`0003`.
-- Deterministic pending-action state machine.
-- Strict payload/schema validation and canonical SHA-256 digests.
-- Idempotent creation and optimistic version checks.
-- Actor-authorized public reads and membership-backed owner/manager authorization.
-- Trusted internal commit commands excluded from public operation exposure.
-- Exact tenant/entity/pending-action linkage on commit completion.
-- Safe migration `0002` legacy-row validation/backfill.
-- Unique pending-action linkage for orders and appointments.
-- Destructive PostgreSQL test guards.
-
-Not implemented as production behavior:
-
-- Inventory/order transaction engine (Phase C).
-- Appointment/scheduling engine and overlap exclusion (Phase D).
-- Production public-tool dispatcher.
-- Production provider adapters and conversation orchestration.
-- WhatsApp owner workflow, payments/provisioning, or controlled pilot.
-
-## Evaluation status
-
-QA.3 structural baseline:
-
-```text
-Cases:                   211
-Turns:                   377
-Tool-contract mismatches:  0
-Caller turns with null outcome: 0
-Chennai-pilot profile:   passing
-All-India profile:       expected future gaps in hi-IN, te-IN, kn-IN, ml-IN
-```
-
-Every case remains language-synthetic, domain-unreviewed, and pilot-untested unless its provenance fields later say otherwise. Medical cases also require clinical review. Structural conformance is not provider-quality or production evidence.
-
-## Current work ownership
-
-### Dev1 — developer
-
-- Owns domain/backend implementation and backend dependency correctness.
-- Repository-audit hardening is complete and independently approved through commits `3902387`, `35cd179`, and `49f8033`; it is integrated on `integration/green-foundation-audit`.
-- Dev1 awaits the next separately approved domain assignment and must not edit Dev3's appointment work.
-
-### Dev2 — developer
-
-- Owns CI, PostgreSQL verification infrastructure, QA tooling/corpus maintenance, and operational test tooling.
-- PostgreSQL CI correction is complete and green.
-- Pre-D appointment verification traceability is independently approved and integrated: 59 requirements, consistent evidence classifications, 48 future PostgreSQL contracts, and one post-commit adapter contract.
-- Dev2 waits for stable Dev3 D1/D2 interfaces before implementing those tests and must not edit Dev3 implementation.
-
-### Dev3 — developer only
-
-- Has no independent review, specification-approval, or phase-gate authority.
-- Explicitly assigned Phase D D1/D2 for the generic appointment capability, configured first for the nearby salon.
-- Current authorized scope: migration `0004`, appointment-specific ORM/enums, ResourceAllocation capacity design, pure appointment domain, appointment PendingAction payloads, and unit/parity tests.
-- D3 repository/service transactions, WhatsApp, voice, providers, and public tooling remain gated.
-
-### AI cofounder
-
-- Owns requirements/specifications, work allocation, independent review, acceptance criteria, durable status, and engineering phase gates.
-
-### Founder
-
-- Owns market/vertical, customer, pricing, spending, deployment, access, legal, and final business decisions.
-
-## Immediate next gate
-
-The founder selected salon appointments, so Phase D is brought forward while Phase C inventory/orders is deferred.
-
-1. Dev1 audit hardening is approved and integrated locally; run CI after publishing/integrating the branch.
-2. Dev3 implements only D1/D2 appointment schema/pure-domain work and stops for independent review.
-3. The AI cofounder reviews migration `0004`, ResourceAllocation capacity semantics, create-versus-mutation commit linkage, payloads, and tests against the approved Dev2 verification blueprint.
-4. Dev2 implements the 48 live PostgreSQL appointment contracts only after Dev3's interfaces stabilize and receives a separate assignment.
-5. The post-commit caller-success adapter contract is implemented only when a real transaction runner/tool adapter exists.
-6. WhatsApp setup and voice integration remain later gates.
-
-Phase C inventory/order code has not started and is intentionally deferred.
-
-## Explicit non-claims
-
-- No production PostgreSQL validation.
-- No production voice/provider validation.
-- No native-language quality approval.
-- No clinical approval.
-- No load/soak validation.
-- No real-call pilot evidence.
-- No validated unit economics or provider capacity limits.

@@ -1,4 +1,12 @@
-"""WhatsApp webhook handler — thin adapter to ConversationService."""
+"""WhatsApp webhook handler — thin adapter to ConversationService.
+
+Note: message processing uses BackgroundTasks. If the process dies after
+returning 200 to Meta but before processing completes, that message is
+lost. Meta will not retry after receiving 200. This is accepted for pilot
+(1-5 clinics) but must be replaced with a durable inbox pattern before
+scaling. Persistent dedup (whatsapp_processed_messages table) ensures
+messages are not reprocessed after restart.
+"""
 
 import hashlib
 import hmac
@@ -7,7 +15,7 @@ import logging
 from collections import OrderedDict
 
 from fastapi import APIRouter, BackgroundTasks, Request, Response
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fonely.api.internal.validation import InternalValidationPort
@@ -35,13 +43,31 @@ def _verify_webhook_signature(body: bytes, signature: str, secret: str) -> bool:
     return hmac.compare_digest(signature, expected)
 
 
-def _is_duplicate(message_id: str) -> bool:
-    if message_id in _PROCESSED_MESSAGE_IDS:
-        return True
+def _is_duplicate_in_memory(message_id: str) -> bool:
+    return message_id in _PROCESSED_MESSAGE_IDS
+
+
+def _mark_processed_in_memory(message_id: str) -> None:
     _PROCESSED_MESSAGE_IDS[message_id] = None
     if len(_PROCESSED_MESSAGE_IDS) > _MAX_PROCESSED_IDS:
         _PROCESSED_MESSAGE_IDS.popitem(last=False)
-    return False
+
+
+async def _is_duplicate_persistent(
+    message_id: str, business_id: int, session: AsyncSession
+) -> bool:
+    result = await session.execute(
+        text(
+            "INSERT INTO whatsapp_processed_messages (message_id, business_id) "
+            "VALUES (:mid, :bid) "
+            "ON CONFLICT (message_id) DO NOTHING"
+        ),
+        {"mid": message_id, "bid": business_id},
+    )
+    inserted = (result.rowcount or 0) > 0  # type: ignore[attr-defined]
+    if inserted:
+        await session.commit()
+    return not inserted
 
 
 @router.get("")
@@ -105,10 +131,10 @@ async def _handle_message(
     if not sender_phone or not message_id:
         return
 
-    if _is_duplicate(message_id):
+    if _is_duplicate_in_memory(message_id):
         logger.info(
             "whatsapp_duplicate_message",
-            extra={"message_id": message_id},
+            extra={"message_id": message_id, "source": "memory"},
         )
         return
 
@@ -121,6 +147,7 @@ async def _handle_message(
             sender_phone,
             "I can currently help with text messages. Please type your request.",
         )
+        _mark_processed_in_memory(message_id)
         return
 
     text_body = ""
@@ -160,6 +187,14 @@ async def _handle_message(
         return
 
     async with session_factory() as session:
+        if await _is_duplicate_persistent(message_id, business_id, session):
+            logger.info(
+                "whatsapp_duplicate_message",
+                extra={"message_id": message_id, "source": "database"},
+            )
+            _mark_processed_in_memory(message_id)
+            return
+
         try:
             if await _is_owner(business_id, phone_formatted, session):
                 from fonely.services.owner_commands import OwnerCommandService
@@ -168,6 +203,7 @@ async def _handle_message(
                 result = await owner_svc.process_command(business_id, phone_formatted, text_body)
                 await session.commit()
                 await sender.send_text(sender_phone, result.response_text)
+                _mark_processed_in_memory(message_id)
                 return
 
             ctx = await find_or_create_conversation_persistent(
@@ -198,6 +234,7 @@ async def _handle_message(
 
             await session.commit()
             await sender.send_text(sender_phone, turn.assistant_response)
+            _mark_processed_in_memory(message_id)
         except Exception:
             logger.warning(
                 "whatsapp_message_processing_error",

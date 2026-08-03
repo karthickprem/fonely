@@ -104,9 +104,7 @@ class ConversationPersistenceService:
             proposal_version=getattr(db_conv, "proposal_version", None),
             created_at=getattr(db_conv, "created_at", utcnow()),
         )
-        turn_count = getattr(db_conv, "turn_count", 0)
-        for _ in range(turn_count):
-            ctx.turns.append(None)  # type: ignore[arg-type]
+        ctx._restored_turn_count = getattr(db_conv, "turn_count", 0)
         return ctx
 
 

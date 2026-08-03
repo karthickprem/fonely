@@ -129,6 +129,7 @@ class ConversationContext:
     proposal_id: int | None = None
     proposal_version: int | None = None
     created_at: datetime = field(default_factory=utcnow)
+    _restored_turn_count: int = 0
 
     def can_transition(self, target: ConversationState) -> bool:
         return target in _VALID_TRANSITIONS.get(self.state, frozenset())
@@ -140,7 +141,7 @@ class ConversationContext:
 
     @property
     def turn_count(self) -> int:
-        return len(self.turns)
+        return len(self.turns) + self._restored_turn_count
 
     @property
     def at_turn_limit(self) -> bool:

@@ -146,6 +146,19 @@ async def test_full_booking_through_http(
             conv_id = data["conversation_id"]
             assert data["state"] == "greeting"
 
+            async with pg_session_factory() as seed_session:
+                await seed_session.execute(
+                    text(
+                        "INSERT INTO conversations "
+                        "(id, business_id, customer_phone, state, collected_facts, "
+                        "turn_count, expires_at) "
+                        "VALUES (:id, 1, '+919123456789', 'greeting', '{}', 0, "
+                        "NOW() + INTERVAL '1 hour')"
+                    ),
+                    {"id": conv_id},
+                )
+                await seed_session.commit()
+
             r2 = await client.post(
                 f"/internal/v1/conversations/{conv_id}/messages",
                 json={"message": "I want to book a consultation"},
@@ -175,13 +188,21 @@ async def test_full_booking_through_http(
                 headers=_AUTH_HEADERS,
             )
             assert r3.status_code == 200, f"Message 2 failed: {r3.text}"
+            turn2 = r3.json()
+            assert turn2["state"] in (
+                "availability_check",
+                "proposal_presented",
+                "awaiting_confirmation",
+            ), f"Unexpected state after availability: {turn2['state']}"
 
             r4 = await client.post(
                 f"/internal/v1/conversations/{conv_id}/messages",
                 json={"message": "yes"},
                 headers=_AUTH_HEADERS,
             )
-            assert r4.status_code == 200, f"Confirm failed: {r4.text}"
+            assert r4.status_code == 200, (
+                f"Confirm failed: {r4.text} (prev state: {turn2['state']})"
+            )
             confirm_data = r4.json()
             assert confirm_data["state"] == "completed"
             assert "confirmed" in confirm_data["assistant_response"].lower()
@@ -239,6 +260,19 @@ async def test_medical_escalation_through_http(
             )
             assert r.status_code == 201
             conv_id = r.json()["conversation_id"]
+
+            async with pg_session_factory() as seed_session:
+                await seed_session.execute(
+                    text(
+                        "INSERT INTO conversations "
+                        "(id, business_id, customer_phone, state, collected_facts, "
+                        "turn_count, expires_at) "
+                        "VALUES (:id, 1, '+919123456789', 'greeting', '{}', 0, "
+                        "NOW() + INTERVAL '1 hour')"
+                    ),
+                    {"id": conv_id},
+                )
+                await seed_session.commit()
 
             r2 = await client.post(
                 f"/internal/v1/conversations/{conv_id}/messages",

@@ -96,3 +96,79 @@ class NotificationService:
             event_ids.append(owner_event.id)
 
         return event_ids
+
+    async def create_cancellation_notifications(
+        self,
+        business_id: int,
+        appointment_id: int,
+        customer_phone: str,
+        customer_name: str | None,
+        service_name: str,
+        resource_name: str,
+        start_at: datetime,
+        business_timezone: str,
+        reason: str | None = None,
+    ) -> list[int]:
+        business = await self._session.scalar(select(Business).where(Business.id == business_id))
+        clinic_name = business.name if business else "Business"
+        owner_phone = business.primary_contact_phone if business else ""
+
+        start_local = start_at.strftime("%A, %b %d")
+        time_local = start_at.strftime("%-I:%M %p")
+
+        event_ids: list[int] = []
+
+        patient_event = await self._repo.insert_event_idempotent(
+            {
+                "business_id": business_id,
+                "event_type": NotificationEventType.APPOINTMENT_CANCELLED.value,
+                "entity_type": "appointment",
+                "entity_id": appointment_id,
+                "recipient_type": NotificationRecipientType.PATIENT.value,
+                "recipient_phone": customer_phone,
+                "recipient_name": customer_name,
+                "channel": NotificationChannel.WHATSAPP.value,
+                "payload": {
+                    "clinic_name": clinic_name,
+                    "service": service_name,
+                    "doctor": resource_name,
+                    "date": start_local,
+                    "time": time_local,
+                    "reason": reason,
+                    "appointment_id": appointment_id,
+                },
+                "status": NotificationStatus.PENDING.value,
+                "idempotency_key": f"appt-cancel-patient-{appointment_id}",
+            }
+        )
+        if patient_event is not None:
+            event_ids.append(patient_event.id)
+
+        owner_event = await self._repo.insert_event_idempotent(
+            {
+                "business_id": business_id,
+                "event_type": NotificationEventType.APPOINTMENT_CANCELLED.value,
+                "entity_type": "appointment",
+                "entity_id": appointment_id,
+                "recipient_type": NotificationRecipientType.OWNER.value,
+                "recipient_phone": owner_phone,
+                "recipient_name": None,
+                "channel": NotificationChannel.WHATSAPP.value,
+                "payload": {
+                    "patient_name": customer_name,
+                    "patient_phone": customer_phone,
+                    "service": service_name,
+                    "doctor": resource_name,
+                    "date": start_local,
+                    "time": time_local,
+                    "reason": reason,
+                    "appointment_id": appointment_id,
+                },
+                "status": NotificationStatus.PENDING.value,
+                "idempotency_key": f"appt-cancel-owner-{appointment_id}",
+            }
+        )
+        if owner_event is not None:
+            event_ids.append(owner_event.id)
+
+        return event_ids

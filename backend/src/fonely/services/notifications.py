@@ -175,3 +175,77 @@ class NotificationService:
             event_ids.append(owner_event.id)
 
         return event_ids
+
+    async def create_reschedule_notifications(
+        self,
+        business_id: int,
+        appointment_id: int,
+        customer_phone: str,
+        customer_name: str | None,
+        service_name: str,
+        resource_name: str,
+        new_start_at: datetime,
+        business_timezone: str,
+    ) -> list[int]:
+        business = await self._session.scalar(select(Business).where(Business.id == business_id))
+        clinic_name = business.name if business else "Business"
+        owner_phone = business.primary_contact_phone if business else ""
+
+        local_time = new_start_at.astimezone(ZoneInfo(business_timezone))
+        date_str = local_time.strftime("%A, %b %d")
+        time_str = local_time.strftime("%-I:%M %p")
+
+        event_ids: list[int] = []
+
+        patient_event = await self._repo.insert_event_idempotent(
+            {
+                "business_id": business_id,
+                "event_type": NotificationEventType.APPOINTMENT_RESCHEDULED.value,
+                "entity_type": "appointment",
+                "entity_id": appointment_id,
+                "recipient_type": NotificationRecipientType.PATIENT.value,
+                "recipient_phone": customer_phone,
+                "recipient_name": customer_name,
+                "channel": NotificationChannel.WHATSAPP.value,
+                "payload": {
+                    "clinic_name": clinic_name,
+                    "service": service_name,
+                    "doctor": resource_name,
+                    "new_date": date_str,
+                    "new_time": time_str,
+                    "appointment_id": appointment_id,
+                },
+                "status": NotificationStatus.PENDING.value,
+                "idempotency_key": f"appt-resched-patient-{appointment_id}",
+            }
+        )
+        if patient_event is not None:
+            event_ids.append(patient_event.id)
+
+        owner_event = await self._repo.insert_event_idempotent(
+            {
+                "business_id": business_id,
+                "event_type": NotificationEventType.APPOINTMENT_RESCHEDULED.value,
+                "entity_type": "appointment",
+                "entity_id": appointment_id,
+                "recipient_type": NotificationRecipientType.OWNER.value,
+                "recipient_phone": owner_phone,
+                "recipient_name": None,
+                "channel": NotificationChannel.WHATSAPP.value,
+                "payload": {
+                    "patient_name": customer_name,
+                    "patient_phone": customer_phone,
+                    "service": service_name,
+                    "doctor": resource_name,
+                    "new_date": date_str,
+                    "new_time": time_str,
+                    "appointment_id": appointment_id,
+                },
+                "status": NotificationStatus.PENDING.value,
+                "idempotency_key": f"appt-resched-owner-{appointment_id}",
+            }
+        )
+        if owner_event is not None:
+            event_ids.append(owner_event.id)
+
+        return event_ids

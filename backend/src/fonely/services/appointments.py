@@ -740,6 +740,22 @@ class AppointmentService:
                 await self._repo.force_constraints(
                     _restore_deferred_sql(APPOINTMENT_RESCHEDULE_POST_COMPLETION_CONSTRAINTS)
                 )
+
+                try:
+                    from fonely.services.notifications import NotificationService
+
+                    await NotificationService(self._session).create_reschedule_notifications(
+                        business_id=command.actor.business_id,
+                        appointment_id=data.target_appointment_id,
+                        customer_phone=appointment.customer_phone,
+                        customer_name=appointment.customer_name,
+                        service_name=new_facts.service_name,
+                        resource_name=new_facts.resource_name,
+                        new_start_at=new_facts.start_at,
+                        business_timezone=new_facts.business_timezone,
+                    )
+                except Exception:
+                    logger.warning("reschedule_notification_failed", exc_info=True)
         except IntegrityError as exc:
             if (
                 getattr(exc.orig, "sqlstate", None) == _OVERLAP_SQLSTATE

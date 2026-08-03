@@ -102,7 +102,9 @@ class SarvamModelGateway:
             data = response.json()
             metrics.increment("llm_requests_total", {"provider": "sarvam", "outcome": "success"})
         except CircuitOpenError:
-            metrics.increment("llm_requests_total", {"provider": "sarvam", "outcome": "circuit_open"})
+            metrics.increment(
+                "llm_requests_total", {"provider": "sarvam", "outcome": "circuit_open"}
+            )
             logger.warning(
                 "model_circuit_open",
                 extra={"model": self._model},

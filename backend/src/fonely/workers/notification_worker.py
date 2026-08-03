@@ -53,14 +53,22 @@ async def run_notification_worker(
         iterations += 1
         async with session_factory() as session:
             repo = NotificationRepository(session)
+            from fonely.core.metrics import metrics
+
             events = await repo.claim_pending_events(limit=batch_size)
             for event in events:
                 try:
                     await sender.send(event)
                     await repo.mark_delivered(event.id, datetime.now(UTC))
+                    metrics.increment("notifications_processed_total", {"outcome": "delivered"})
                 except Exception as exc:
                     next_at = _next_attempt_at(event.attempts)
                     await repo.mark_failed(event.id, type(exc).__name__, next_at)
+                    outcome = (
+                        "dead_letter" if event.attempts + 1 >= event.max_attempts else "failed"
+                    )
+                    metrics.increment("notifications_processed_total", {"outcome": outcome})
+                    metrics.increment("notification_retry_total")
                     logger.warning(
                         "notification_delivery_failed",
                         extra={

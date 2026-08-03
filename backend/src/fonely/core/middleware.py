@@ -133,7 +133,41 @@ class StructuredErrorMiddleware(BaseHTTPMiddleware):
             )
 
 
+class MetricsMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        if request.url.path in _HEALTH_PATHS or request.url.path == "/metrics":
+            return await call_next(request)
+
+        from fonely.core.metrics import metrics, normalize_path
+
+        path = normalize_path(request.url.path)
+        metrics.set_gauge(
+            "http_requests_active",
+            metrics.gauge_value("http_requests_active") + 1,
+        )
+        start = time.monotonic()
+        try:
+            response = await call_next(request)
+            status = str(response.status_code)
+        except Exception:
+            status = "500"
+            raise
+        finally:
+            duration_ms = (time.monotonic() - start) * 1000
+            metrics.increment(
+                "http_requests_total",
+                {"method": request.method, "path": path, "status": status},
+            )
+            metrics.observe("http_request_duration_ms", duration_ms, {"path": path})
+            metrics.set_gauge(
+                "http_requests_active",
+                max(0, metrics.gauge_value("http_requests_active") - 1),
+            )
+        return response
+
+
 def apply_hardening(app: FastAPI) -> None:
+    app.add_middleware(MetricsMiddleware)
     app.add_middleware(StructuredErrorMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(

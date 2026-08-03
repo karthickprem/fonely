@@ -616,6 +616,21 @@ class ConversationService:
 
     def _log_turn(self, turn: ConversationTurn, start_time: float) -> None:
         latency = round((time.monotonic() - start_time) * 1000)
+
+        from fonely.core.metrics import metrics
+
+        bid = str(turn.business_id)
+        metrics.increment(
+            "conversation_turns_total",
+            {"business_id": bid, "state": turn.state.value, "intent": turn.intent.value},
+        )
+        metrics.observe("conversation_turn_duration_ms", latency, {"business_id": bid})
+        if turn.safety_classification != "administrative":
+            metrics.increment(
+                "safety_classifications_total",
+                {"classification": turn.safety_classification},
+            )
+
         logger.info(
             "conversation_turn",
             extra={

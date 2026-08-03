@@ -78,6 +78,8 @@ class SarvamModelGateway:
             "Authorization": f"Bearer {self._api_key}",
         }
 
+        from fonely.core.metrics import metrics
+
         client = self._client or httpx.AsyncClient()
         owns_client = self._client is None
         try:
@@ -89,13 +91,16 @@ class SarvamModelGateway:
             )
             response.raise_for_status()
             data = response.json()
+            metrics.increment("llm_requests_total", {"provider": "sarvam", "outcome": "success"})
         except httpx.TimeoutException:
+            metrics.increment("llm_requests_total", {"provider": "sarvam", "outcome": "timeout"})
             logger.warning(
                 "model_timeout",
                 extra={"model": self._model, "timeout": self._timeout},
             )
             raise
         except httpx.HTTPStatusError as exc:
+            metrics.increment("llm_requests_total", {"provider": "sarvam", "outcome": "error"})
             logger.warning(
                 "model_error",
                 extra={
@@ -109,9 +114,16 @@ class SarvamModelGateway:
                 await client.aclose()
 
         latency = (time.monotonic() - start) * 1000
+        metrics.observe("llm_request_duration_ms", latency, {"provider": "sarvam"})
         choice = data.get("choices", [{}])[0]
         message = choice.get("message", {})
         usage = data.get("usage", {})
+        input_tokens = usage.get("prompt_tokens", 0)
+        output_tokens = usage.get("completion_tokens", 0)
+        if input_tokens:
+            metrics.increment("llm_input_tokens_total", {"provider": "sarvam"})
+        if output_tokens:
+            metrics.increment("llm_output_tokens_total", {"provider": "sarvam"})
 
         parsed_tools: list[ToolCall] | None = None
         raw_tool_calls = message.get("tool_calls")

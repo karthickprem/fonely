@@ -1224,7 +1224,10 @@ class Conversation(Base):
 
 class DBConversationTurn(Base):
     __tablename__ = "conversation_turns"
-    __table_args__ = (Index("ix_conversation_turns_lookup", "conversation_id", "turn_number"),)
+    __table_args__ = (
+        Index("ix_conversation_turns_lookup", "conversation_id", "turn_number"),
+        UniqueConstraint("conversation_id", "turn_number", name="uq_conversation_turns_conv_turn"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     conversation_id: Mapped[str] = mapped_column(

@@ -85,13 +85,13 @@ class DataRetentionService:
             text("DELETE FROM conversation_turns WHERE conversation_id = ANY(:ids)"),
             {"ids": conv_ids},
         )
-        turns_deleted = turn_result.rowcount or 0
+        turns_deleted = turn_result.rowcount or 0  # type: ignore[attr-defined]
 
         conv_result = await self._session.execute(
             text("DELETE FROM conversations WHERE id = ANY(:ids)"),
             {"ids": conv_ids},
         )
-        convs_deleted = conv_result.rowcount or 0
+        convs_deleted = conv_result.rowcount or 0  # type: ignore[attr-defined]
 
         logger.info(
             "retention_conversations_cleaned",
@@ -119,7 +119,7 @@ class DataRetentionService:
             ),
             {"before": delivered_before, "limit": _BATCH_SIZE},
         )
-        delivered_count = delivered_result.rowcount or 0
+        delivered_count = delivered_result.rowcount or 0  # type: ignore[attr-defined]
 
         dead_result = await self._session.execute(
             text(
@@ -133,7 +133,7 @@ class DataRetentionService:
             ),
             {"before": dead_letter_before, "limit": _BATCH_SIZE},
         )
-        dead_count = dead_result.rowcount or 0
+        dead_count = dead_result.rowcount or 0  # type: ignore[attr-defined]
 
         total = delivered_count + dead_count
         if total > 0:
@@ -179,7 +179,7 @@ class DataRetentionService:
                 "limit": _BATCH_SIZE,
             },
         )
-        count = result.rowcount or 0
+        count = result.rowcount or 0  # type: ignore[attr-defined]
         if count > 0:
             logger.info(
                 "retention_pending_actions_cleaned",

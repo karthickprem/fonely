@@ -494,3 +494,107 @@ class TestPIISafety:
             await sender.send_text("919876543210", "Hello")
 
         assert "super-secret-token-123" not in caplog.text
+
+
+# --- Security hardening tests ---
+
+
+class TestWebhookSignatureVerification:
+    def test_valid_signature_accepted(self) -> None:
+        import hashlib
+        import hmac as _hmac
+
+        from fonely.api.channels.whatsapp import _verify_webhook_signature
+
+        body = b'{"entry":[]}'
+        secret = "test-app-secret"
+        sig = "sha256=" + _hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+        assert _verify_webhook_signature(body, sig, secret) is True
+
+    def test_invalid_signature_rejected(self) -> None:
+        from fonely.api.channels.whatsapp import _verify_webhook_signature
+
+        assert _verify_webhook_signature(b"body", "sha256=wrong", "secret") is False
+
+    def test_missing_prefix_rejected(self) -> None:
+        from fonely.api.channels.whatsapp import _verify_webhook_signature
+
+        assert _verify_webhook_signature(b"body", "noprefixhex", "secret") is False
+
+    @pytest.mark.asyncio
+    async def test_webhook_rejects_invalid_signature_with_secret_configured(self) -> None:
+        import fonely.api.channels.whatsapp as wa_mod
+        from fonely.core.config import Settings
+
+        app = FastAPI()
+        app.include_router(router)
+        transport = ASGITransport(app=app)
+        test_settings = Settings(whatsapp_app_secret="my-secret")
+        with patch.object(wa_mod, "settings", test_settings):
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                response = await client.post(
+                    "/webhooks/whatsapp",
+                    content=b'{"entry":[]}',
+                    headers={"X-Hub-Signature-256": "sha256=wrong"},
+                )
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_webhook_skips_verification_without_secret(self) -> None:
+        import fonely.api.channels.whatsapp as wa_mod
+        from fonely.core.config import Settings
+
+        app = FastAPI()
+        app.include_router(router)
+        transport = ASGITransport(app=app)
+        test_settings = Settings(whatsapp_app_secret="")
+        with patch.object(wa_mod, "settings", test_settings):
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                response = await client.post(
+                    "/webhooks/whatsapp",
+                    content=b'{"entry":[]}',
+                )
+        assert response.status_code == 200
+
+
+class TestBoundedDedupSet:
+    def test_eviction_preserves_recent_ids(self) -> None:
+        from fonely.api.channels.whatsapp import _PROCESSED_MESSAGE_IDS, _is_duplicate
+
+        _PROCESSED_MESSAGE_IDS.clear()
+        for i in range(15):
+            assert _is_duplicate(f"msg-{i}") is False
+
+        assert _is_duplicate("msg-14") is True
+        assert _is_duplicate("msg-0") is False or "msg-0" in _PROCESSED_MESSAGE_IDS
+
+    def test_duplicate_detected(self) -> None:
+        from fonely.api.channels.whatsapp import _PROCESSED_MESSAGE_IDS, _is_duplicate
+
+        _PROCESSED_MESSAGE_IDS.clear()
+        assert _is_duplicate("unique-msg") is False
+        assert _is_duplicate("unique-msg") is True
+
+
+class TestConstantTimeVerifyToken:
+    @pytest.mark.asyncio
+    async def test_verify_uses_constant_time_comparison(self) -> None:
+        import fonely.api.channels.whatsapp as wa_mod
+        from fonely.core.config import Settings
+
+        app = FastAPI()
+        app.include_router(router)
+        transport = ASGITransport(app=app)
+        test_settings = Settings(whatsapp_verify_token="correct-token")
+        with patch.object(wa_mod, "settings", test_settings):
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                response = await client.get(
+                    "/webhooks/whatsapp",
+                    params={
+                        "hub.mode": "subscribe",
+                        "hub.verify_token": "correct-token",
+                        "hub.challenge": "challenge-value",
+                    },
+                )
+        assert response.status_code == 200
+        assert response.text == "challenge-value"

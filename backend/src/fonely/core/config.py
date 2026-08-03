@@ -65,6 +65,7 @@ class Settings(BaseSettings):
     whatsapp_access_token: str = ""
     whatsapp_phone_number_id: str = ""
     whatsapp_business_mappings: str = ""
+    whatsapp_app_secret: str = ""
 
     # Shutdown
     shutdown_timeout_seconds: float = 10.0

@@ -68,11 +68,11 @@ class DataRetentionService:
         ids_result = await self._session.execute(
             text(
                 "SELECT id FROM conversations "
-                "WHERE state IN :states AND updated_at < :before "
+                "WHERE state = ANY(:states) AND updated_at < :before "
                 "LIMIT :limit"
             ),
             {
-                "states": _TERMINAL_CONVERSATION_STATES,
+                "states": list(_TERMINAL_CONVERSATION_STATES),
                 "before": before,
                 "limit": _BATCH_SIZE,
             },
@@ -150,7 +150,7 @@ class DataRetentionService:
         result = await self._session.execute(
             text(
                 "DELETE FROM pending_actions "
-                "WHERE status IN :statuses AND updated_at < :before "
+                "WHERE status = ANY(:statuses) AND updated_at < :before "
                 "AND committed_entity_id IS NOT NULL "
                 "AND id NOT IN ("
                 "  SELECT pending_action_id FROM appointments "
@@ -161,7 +161,7 @@ class DataRetentionService:
                 ") "
                 "AND ctid = ANY(ARRAY("
                 "  SELECT pa.ctid FROM pending_actions pa "
-                "  WHERE pa.status IN :statuses AND pa.updated_at < :before "
+                "  WHERE pa.status = ANY(:statuses) AND pa.updated_at < :before "
                 "  AND pa.committed_entity_id IS NOT NULL "
                 "  AND pa.id NOT IN ("
                 "    SELECT pending_action_id FROM appointments "
@@ -174,7 +174,7 @@ class DataRetentionService:
                 "))"
             ),
             {
-                "statuses": _TERMINAL_PA_STATUSES,
+                "statuses": list(_TERMINAL_PA_STATUSES),
                 "before": before,
                 "limit": _BATCH_SIZE,
             },

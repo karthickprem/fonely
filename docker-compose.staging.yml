@@ -32,8 +32,8 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?Set INTERNAL_API_SECRET}
-      FONELY_LOG_FORMAT: ${FONELY_LOG_FORMAT:-json}
-      FONELY_LOG_LEVEL: ${FONELY_LOG_LEVEL:-INFO}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:

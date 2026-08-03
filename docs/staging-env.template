@@ -8,9 +8,9 @@ POSTGRES_PASSWORD=changeme-generate-a-real-password
 DATABASE_URL=
 INTERNAL_API_SECRET=changeme-generate-a-real-secret
 
-# Logging
-FONELY_LOG_FORMAT=json
-FONELY_LOG_LEVEL=INFO
+# Logging (pydantic_settings maps these directly — no FONELY_ prefix)
+LOG_FORMAT=json
+LOG_LEVEL=INFO
 
 # Connection pool (defaults are suitable for 1–5 clinics)
 # DB_POOL_SIZE=5

@@ -136,12 +136,19 @@ async def test_full_booking_through_http(
         app.state.session_factory = pg_session_factory  # type: ignore[union-attr]
         app.state.model_gateway = gateway  # type: ignore[union-attr]
         transport = ASGITransport(app=app)  # type: ignore[arg-type]
+
         async with pg_session_factory() as persist_session:
             persistence = ConversationPersistenceService(persist_session)
             ctx_created = await persistence.load_or_create(1, "+919123456789")
             conv_id = ctx_created.conversation_id
             _CONVERSATIONS[conv_id] = ctx_created
             await persist_session.commit()
+
+        now = utcnow()
+        target = now + timedelta(days=1)
+        if target.isoweekday() == 7:
+            target += timedelta(days=1)
+        slot_start = datetime.combine(target.date(), time(10, 30), tzinfo=UTC)
 
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             r = await client.get(
@@ -157,51 +164,40 @@ async def test_full_booking_through_http(
                 headers=_AUTH_HEADERS,
             )
             assert r2.status_code == 200, f"Message 1 failed: {r2.text}"
-            turn1 = r2.json()
-            assert turn1["state"] == "fact_collection"
+            assert r2.json()["state"] == "fact_collection"
 
-    now = utcnow()
-    target = now + timedelta(days=1)
-    if target.isoweekday() == 7:
-        target += timedelta(days=1)
-    slot_start = datetime.combine(target.date(), time(10, 30), tzinfo=UTC)
+            ctx = _CONVERSATIONS[conv_id]
+            ctx.collected_facts["service_id"] = 1
+            ctx.collected_facts["service_name"] = "General Consultation"
+            ctx.collected_facts["resource_id"] = 1
+            ctx.collected_facts["resource_name"] = "Dr. Priya"
+            ctx.collected_facts["customer_phone"] = "+919123456789"
+            ctx.collected_facts["start_at"] = slot_start
+
+            r3 = await client.post(
+                f"/internal/v1/conversations/{conv_id}/messages",
+                json={"message": "yes that works"},
+                headers=_AUTH_HEADERS,
+            )
+            assert r3.status_code == 200, f"Availability failed: {r3.text}"
+            assert r3.json()["state"] in (
+                "availability_check",
+                "proposal_presented",
+                "awaiting_confirmation",
+            )
+            assert ctx.proposal_id is not None, "Proposal not created"
+
+            r4 = await client.post(
+                f"/internal/v1/conversations/{conv_id}/messages",
+                json={"message": "yes"},
+                headers=_AUTH_HEADERS,
+            )
+            assert r4.status_code == 200, f"Confirm failed: {r4.text}"
+            confirm_data = r4.json()
+            assert confirm_data["state"] == "completed"
+            assert "confirmed" in confirm_data["assistant_response"].lower()
 
     async with pg_session_factory() as session:
-        from fonely.api.internal.validation import InternalValidationPort
-        from fonely.domain.pending_actions.commands import ActorContext
-        from fonely.models.enums import CallerRole
-        from fonely.services.appointments import AppointmentService
-        from fonely.services.conversation import ConversationService
-
-        ctx = _CONVERSATIONS[conv_id]
-        ctx.collected_facts["service_id"] = 1
-        ctx.collected_facts["service_name"] = "General Consultation"
-        ctx.collected_facts["resource_id"] = 1
-        ctx.collected_facts["resource_name"] = "Dr. Priya"
-        ctx.collected_facts["customer_phone"] = "+919123456789"
-        ctx.collected_facts["start_at"] = slot_start
-
-        actor = ActorContext(
-            business_id=1,
-            normalized_phone="+919123456789",
-            verified_role=CallerRole.CUSTOMER,
-        )
-        validation = InternalValidationPort(session)
-        appt_service = AppointmentService(session, validation=validation)
-        conv_service = ConversationService(session, gateway, appointment_service=appt_service)
-
-        turn_avail = await conv_service.process_message(conv_id, 1, actor, "yes that works")
-        assert ctx.proposal_id is not None, "Availability step did not create proposal"
-        assert turn_avail.state.value in (
-            "availability_check",
-            "proposal_presented",
-            "awaiting_confirmation",
-        )
-
-        turn_confirm = await conv_service.process_message(conv_id, 1, actor, "yes")
-        assert turn_confirm.state.value == "completed"
-        assert "confirmed" in turn_confirm.assistant_response.lower()
-
         appt = (
             await session.execute(
                 select(Appointment).where(

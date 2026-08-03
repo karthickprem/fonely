@@ -119,6 +119,7 @@ async def send_message(
                 actor=actor,
                 user_message=body.message,
             )
+            await session.commit()
             return TurnResponse(
                 turn_id=turn.turn_id,
                 conversation_id=turn.conversation_id,

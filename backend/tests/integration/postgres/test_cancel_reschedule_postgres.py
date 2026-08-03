@@ -13,12 +13,15 @@ from fonely.api.internal.validation import InternalValidationPort
 from fonely.domain.appointments.commands import (
     ConfirmPendingAppointmentCancellationCommand,
     ConfirmPendingAppointmentCommand,
+    ConfirmPendingAppointmentRescheduleCommand,
     CreatePendingAppointmentCancellationCommand,
     CreatePendingAppointmentCommand,
+    CreatePendingAppointmentRescheduleCommand,
 )
 from fonely.domain.appointments.errors import AppointmentDomainError, AppointmentErrorCode
 from fonely.domain.appointments.results import (
     AppointmentCancellationResult,
+    AppointmentRescheduleResult,
     PreCommitAppointmentSuccess,
 )
 from fonely.domain.pending_actions.commands import ActorContext
@@ -353,4 +356,193 @@ async def test_cancellation_proposal_idempotency(
             )
         )
         assert proposal1.pending_action_id == proposal2.pending_action_id
+        await session.rollback()
+
+
+# --- Rescheduling PostgreSQL tests ---
+
+
+async def test_full_rescheduling_lifecycle(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with pg_session_factory() as session:
+        await _seed_dental_clinic(session)
+        old_start = datetime.now(UTC) + timedelta(hours=2)
+        confirmed = await _create_confirmed_appointment(
+            session, start_at=old_start, key_suffix="resched-life"
+        )
+        appt_id = confirmed.appointment.appointment_id
+
+        validation = InternalValidationPort(session)
+        service = AppointmentService(session, validation=validation)
+
+        new_start = datetime.now(UTC) + timedelta(hours=8)
+        proposal = await service.create_reschedule_proposal(
+            CreatePendingAppointmentRescheduleCommand(
+                actor=_customer(),
+                appointment_id=appt_id,
+                expected_appointment_version=1,
+                service_id=1,
+                start_at=new_start,
+                expires_at=datetime.now(UTC) + timedelta(minutes=20),
+                idempotency_key="resched-lifecycle",
+            )
+        )
+        assert proposal.confirmation_facts.operation == "reschedule"
+        assert proposal.confirmation_facts.target_appointment_id == appt_id
+
+        result = await service.confirm_reschedule(
+            ConfirmPendingAppointmentRescheduleCommand(
+                actor=_customer(),
+                pending_action_id=proposal.pending_action_id,
+                expected_version=proposal.version,
+            )
+        )
+        assert isinstance(result, AppointmentRescheduleResult)
+        assert result.appointment_id == appt_id
+
+        await session.flush()
+        await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+        appt_after = (
+            await session.execute(
+                text("SELECT status, rescheduled_at, version FROM appointments WHERE id = :id"),
+                {"id": appt_id},
+            )
+        ).one()
+        assert appt_after[0] == "confirmed"
+        assert appt_after[1] is not None
+        assert appt_after[2] == 2
+
+        allocs = (
+            await session.execute(
+                text(
+                    "SELECT status FROM resource_allocations WHERE appointment_id = :id ORDER BY id"
+                ),
+                {"id": appt_id},
+            )
+        ).all()
+        statuses = [r[0] for r in allocs]
+        assert "released" in statuses
+        assert "active" in statuses
+
+        commit = (
+            await session.execute(
+                text("SELECT operation FROM appointment_commits WHERE appointment_id = :id"),
+                {"id": appt_id},
+            )
+        ).one()
+        assert commit[0] == "reschedule"
+
+        await session.rollback()
+
+
+async def test_reschedule_to_conflicting_time(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with pg_session_factory() as session:
+        await _seed_dental_clinic(session)
+        start1 = datetime.now(UTC) + timedelta(hours=2)
+        start2 = start1 + timedelta(minutes=30)
+
+        confirmed1 = await _create_confirmed_appointment(
+            session, start_at=start1, key_suffix="conflict-1"
+        )
+        await _create_confirmed_appointment(session, start_at=start2, key_suffix="conflict-2")
+        appt_id_1 = confirmed1.appointment.appointment_id
+
+        validation = InternalValidationPort(session)
+        service = AppointmentService(session, validation=validation)
+
+        proposal = await service.create_reschedule_proposal(
+            CreatePendingAppointmentRescheduleCommand(
+                actor=_customer(),
+                appointment_id=appt_id_1,
+                expected_appointment_version=1,
+                service_id=1,
+                start_at=start2,
+                expires_at=datetime.now(UTC) + timedelta(minutes=20),
+                idempotency_key="resched-conflict",
+            )
+        )
+
+        with pytest.raises(AppointmentDomainError) as exc_info:
+            await service.confirm_reschedule(
+                ConfirmPendingAppointmentRescheduleCommand(
+                    actor=_customer(),
+                    pending_action_id=proposal.pending_action_id,
+                    expected_version=proposal.version,
+                )
+            )
+        assert exc_info.value.code == AppointmentErrorCode.SLOT_CONFLICT
+
+        appt_unchanged = (
+            await session.execute(
+                text("SELECT status, version FROM appointments WHERE id = :id"),
+                {"id": appt_id_1},
+            )
+        ).one()
+        assert appt_unchanged[0] == "confirmed"
+        assert appt_unchanged[1] == 1
+
+        active_alloc = await session.scalar(
+            text(
+                "SELECT count(*) FROM resource_allocations "
+                "WHERE appointment_id = :id AND status = 'active'"
+            ),
+            {"id": appt_id_1},
+        )
+        assert active_alloc == 1
+
+        await session.rollback()
+
+
+async def test_reschedule_cancelled_appointment(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with pg_session_factory() as session:
+        await _seed_dental_clinic(session)
+        confirmed = await _create_confirmed_appointment(session, key_suffix="resched-cancelled")
+        appt_id = confirmed.appointment.appointment_id
+
+        validation = InternalValidationPort(session)
+        service = AppointmentService(session, validation=validation)
+
+        cancel_proposal = await service.create_cancellation_proposal(
+            CreatePendingAppointmentCancellationCommand(
+                actor=_customer(),
+                appointment_id=appt_id,
+                expected_appointment_version=1,
+                expires_at=datetime.now(UTC) + timedelta(minutes=20),
+                idempotency_key="cancel-before-resched",
+            )
+        )
+        await service.confirm_cancellation(
+            ConfirmPendingAppointmentCancellationCommand(
+                actor=_customer(),
+                pending_action_id=cancel_proposal.pending_action_id,
+                expected_version=cancel_proposal.version,
+            )
+        )
+        await session.flush()
+
+        with pytest.raises(AppointmentDomainError) as exc_info:
+            await service.create_reschedule_proposal(
+                CreatePendingAppointmentRescheduleCommand(
+                    actor=_customer(),
+                    appointment_id=appt_id,
+                    expected_appointment_version=2,
+                    service_id=1,
+                    start_at=datetime.now(UTC) + timedelta(hours=5),
+                    expires_at=datetime.now(UTC) + timedelta(minutes=20),
+                    idempotency_key="resched-after-cancel",
+                )
+            )
+        assert exc_info.value.code == AppointmentErrorCode.INVALID_STATE
+
+        status = await session.scalar(
+            text("SELECT status FROM appointments WHERE id = :id"),
+            {"id": appt_id},
+        )
+        assert status == "cancelled"
         await session.rollback()

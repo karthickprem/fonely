@@ -24,8 +24,8 @@ from fonely.services.data_retention import DataRetentionService
 pytestmark = pytest.mark.postgres
 
 _SEED_SQL = (
-    "INSERT INTO businesses (id, name, category, primary_contact_phone, timezone) "
-    "VALUES (1, 'Smile Dental', 'dental_clinic', '+910000000001', 'Asia/Kolkata')"
+    "INSERT INTO businesses (id, name, category, primary_contact_phone, timezone, subscription) "
+    "VALUES (1, 'Smile Dental', 'dental_clinic', '+910000000001', 'Asia/Kolkata', 'trial')"
 )
 
 

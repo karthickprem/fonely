@@ -1174,3 +1174,57 @@ class NotificationOutboxEvent(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+# =============================================================================
+# Conversations
+# =============================================================================
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+    __table_args__ = (
+        Index("ix_conversations_phone_lookup", "business_id", "customer_phone", "state"),
+        Index("ix_conversations_expiry", "expires_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    customer_phone: Mapped[str] = mapped_column(String(20), nullable=False)
+    state: Mapped[str] = mapped_column(String(30), nullable=False)
+    collected_facts: Mapped[Any] = mapped_column(
+        JSONB, nullable=False, default=dict, server_default="{}"
+    )
+    proposal_id: Mapped[int | None] = mapped_column(Integer)
+    proposal_version: Mapped[int | None] = mapped_column(Integer)
+    turn_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class DBConversationTurn(Base):
+    __tablename__ = "conversation_turns"
+    __table_args__ = (Index("ix_conversation_turns_lookup", "conversation_id", "turn_number"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(
+        ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    turn_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(30), nullable=False)
+    intent: Mapped[str] = mapped_column(String(30), nullable=False)
+    safety_classification: Mapped[str] = mapped_column(String(20), nullable=False)
+    user_message_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    assistant_response: Mapped[str] = mapped_column(Text, nullable=False)
+    collected_facts_snapshot: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    missing_facts: Mapped[Any] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]"
+    )
+    proposal_id: Mapped[int | None] = mapped_column(Integer)
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

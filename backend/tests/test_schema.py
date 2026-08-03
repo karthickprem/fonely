@@ -36,13 +36,15 @@ EXPECTED_TABLES = [
     "business_onboarding_drafts",
     "business_configuration_commits",
     "notification_outbox",
+    "conversations",
+    "conversation_turns",
 ]
 
 
 class TestSchemaMetadata:
     def test_expected_table_count(self) -> None:
         tables = list(Base.metadata.tables.keys())
-        assert len(tables) == 25
+        assert len(tables) == 27
 
     def test_all_expected_tables_exist(self) -> None:
         tables = set(Base.metadata.tables.keys())

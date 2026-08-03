@@ -90,6 +90,15 @@ class ConversationService:
         actor: ActorContext,
         user_message: str,
     ) -> ConversationTurn:
+        from fonely.core.pii_audit import log_pii_access
+
+        log_pii_access(
+            operation="read",
+            data_type="conversation",
+            business_id=business_id,
+            accessor="service:conversation",
+            record_count=1,
+        )
         lock = _get_lock(conversation_id)
         async with lock:
             try:

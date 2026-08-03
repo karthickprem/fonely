@@ -137,6 +137,16 @@ async def _handle_message(
         )
         return
 
+    from fonely.core.pii_audit import log_pii_access
+
+    log_pii_access(
+        operation="read",
+        data_type="conversation",
+        business_id=business_id,
+        accessor="api:whatsapp",
+        record_count=1,
+    )
+
     ctx = find_or_create_conversation(business_id, sender_phone)
 
     phone_formatted = f"+{sender_phone}" if not sender_phone.startswith("+") else sender_phone

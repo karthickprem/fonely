@@ -1,6 +1,6 @@
 """Unit tests for conversation service with mocked model gateway."""
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -16,6 +16,22 @@ from fonely.services.conversation import (
 )
 from fonely.services.conversation_tools import BusinessContext, ResourceInfo, ServiceInfo
 from fonely.services.model_gateway import ModelResponse
+
+
+def _mock_session() -> AsyncMock:
+    session = AsyncMock()
+    nested = AsyncMock()
+    nested.__aenter__ = AsyncMock(return_value=None)
+    nested.__aexit__ = AsyncMock(return_value=False)
+    session.begin_nested = MagicMock(return_value=nested)
+    session.add = MagicMock()
+    result_mock = MagicMock()
+    result_mock.scalar_one_or_none = MagicMock(return_value=None)
+    result_mock.scalars = MagicMock(return_value=MagicMock(all=MagicMock(return_value=[])))
+    session.execute = AsyncMock(return_value=result_mock)
+    session.scalar = AsyncMock(return_value=None)
+    session.get = AsyncMock(return_value=None)
+    return session
 
 
 def _actor() -> ActorContext:
@@ -57,8 +73,16 @@ def clear_conversations() -> None:
     _CONVERSATIONS.clear()
 
 
+@pytest.fixture(autouse=True)
+def _skip_persist(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _noop_persist(self: object, conversation_id: str, turn: object) -> None:
+        pass
+
+    monkeypatch.setattr(ConversationService, "_persist_turn", _noop_persist)
+
+
 async def test_greeting_transitions_to_fact_collection() -> None:
-    session = AsyncMock()
+    session = _mock_session()
     gateway = _mock_gateway("Welcome! What service would you like?")
 
     with pytest.MonkeyPatch.context() as mp:
@@ -76,7 +100,7 @@ async def test_greeting_transitions_to_fact_collection() -> None:
 
 
 async def test_medical_question_escalates() -> None:
-    session = AsyncMock()
+    session = _mock_session()
     gateway = _mock_gateway()
 
     service = ConversationService(session, gateway, appointment_service=AsyncMock())
@@ -91,7 +115,7 @@ async def test_medical_question_escalates() -> None:
 
 
 async def test_urgent_medical_escalates_immediately() -> None:
-    session = AsyncMock()
+    session = _mock_session()
     gateway = _mock_gateway()
 
     service = ConversationService(session, gateway, appointment_service=AsyncMock())
@@ -106,7 +130,7 @@ async def test_urgent_medical_escalates_immediately() -> None:
 
 
 async def test_turn_limit_ends_conversation() -> None:
-    session = AsyncMock()
+    session = _mock_session()
     gateway = _mock_gateway()
 
     from fonely.domain.conversation.state import MAX_TURNS, ConversationContext, ConversationTurn
@@ -135,7 +159,7 @@ async def test_turn_limit_ends_conversation() -> None:
 
 
 async def test_missing_business_ends_conversation() -> None:
-    session = AsyncMock()
+    session = _mock_session()
     gateway = _mock_gateway()
 
     with pytest.MonkeyPatch.context() as mp:
@@ -151,7 +175,7 @@ async def test_missing_business_ends_conversation() -> None:
 
 
 async def test_fact_extraction_populates_service() -> None:
-    session = AsyncMock()
+    session = _mock_session()
     gateway = _mock_gateway("Great choice! When would you like to come?")
 
     with pytest.MonkeyPatch.context() as mp:
@@ -167,7 +191,7 @@ async def test_fact_extraction_populates_service() -> None:
 
 
 async def test_fact_extraction_populates_resource() -> None:
-    session = AsyncMock()
+    session = _mock_session()
     gateway = _mock_gateway("When would you like to see Dr. Priya?")
 
     with pytest.MonkeyPatch.context() as mp:
@@ -184,7 +208,7 @@ async def test_fact_extraction_populates_resource() -> None:
 
 
 async def test_confirmation_positive_completes() -> None:
-    session = AsyncMock()
+    session = _mock_session()
     gateway = _mock_gateway()
 
     from fonely.domain.appointments.results import (
@@ -227,7 +251,7 @@ async def test_confirmation_positive_completes() -> None:
 
 
 async def test_confirmation_negative_returns_to_facts() -> None:
-    session = AsyncMock()
+    session = _mock_session()
     gateway = _mock_gateway()
 
     from fonely.domain.conversation.state import ConversationContext
@@ -245,7 +269,7 @@ async def test_confirmation_negative_returns_to_facts() -> None:
 
 
 async def test_confirmation_ambiguous_asks_clarification() -> None:
-    session = AsyncMock()
+    session = _mock_session()
     gateway = _mock_gateway()
 
     from fonely.domain.conversation.state import ConversationContext
@@ -262,7 +286,7 @@ async def test_confirmation_ambiguous_asks_clarification() -> None:
 
 
 async def test_history_construction_correct() -> None:
-    session = AsyncMock()
+    session = _mock_session()
     gateway = _mock_gateway("Next question")
 
     from fonely.domain.conversation.state import ConversationContext, ConversationTurn
@@ -313,7 +337,7 @@ async def test_conversation_eviction_at_capacity() -> None:
 async def test_concurrent_messages_do_not_corrupt() -> None:
     import asyncio
 
-    session = AsyncMock()
+    session = _mock_session()
     gateway = _mock_gateway("Response")
 
     with pytest.MonkeyPatch.context() as mp:
@@ -335,7 +359,7 @@ async def test_concurrent_messages_do_not_corrupt() -> None:
 
 
 async def test_timeout_returns_graceful_response() -> None:
-    session = AsyncMock()
+    session = _mock_session()
     gateway = AsyncMock()
 
     async def slow_complete(*args: object, **kwargs: object) -> ModelResponse:
@@ -364,7 +388,7 @@ async def test_timeout_returns_graceful_response() -> None:
 
 
 async def test_fact_validation_rejects_past_time() -> None:
-    session = AsyncMock()
+    session = _mock_session()
     gateway = _mock_gateway("What time works?")
 
     from datetime import UTC, datetime
@@ -397,7 +421,7 @@ async def test_fact_validation_rejects_past_time() -> None:
 
 
 async def test_customer_name_extraction() -> None:
-    session = AsyncMock()
+    session = _mock_session()
     gateway = _mock_gateway("Nice to meet you!")
 
     with pytest.MonkeyPatch.context() as mp:

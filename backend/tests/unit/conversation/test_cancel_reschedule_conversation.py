@@ -24,6 +24,14 @@ def _clear():
     _CONVERSATIONS.clear()
 
 
+@pytest.fixture(autouse=True)
+def _skip_persist(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _noop(self: object, conversation_id: str, turn: object) -> None:
+        pass
+
+    monkeypatch.setattr(ConversationService, "_persist_turn", _noop)
+
+
 def _mock_gateway() -> AsyncMock:
     gw = AsyncMock()
     gw.complete.return_value = ModelResponse(text="Sure!")
@@ -136,8 +144,14 @@ class TestCancelFlowNoAppointments:
 
         session = AsyncMock()
         empty_result = MagicMock(scalars=lambda: MagicMock(all=lambda: []))
+        empty_result.scalar_one_or_none = MagicMock(return_value=None)
         session.execute = AsyncMock(return_value=empty_result)
-        session.begin_nested = MagicMock()
+        nested = AsyncMock()
+        nested.__aenter__ = AsyncMock(return_value=None)
+        nested.__aexit__ = AsyncMock(return_value=False)
+        session.begin_nested = MagicMock(return_value=nested)
+        session.add = MagicMock()
+        session.get = AsyncMock(return_value=None)
         session.commit = AsyncMock()
 
         gateway = _mock_gateway()
@@ -164,8 +178,14 @@ class TestRescheduleFlowNoAppointments:
 
         session = AsyncMock()
         empty_result = MagicMock(scalars=lambda: MagicMock(all=lambda: []))
+        empty_result.scalar_one_or_none = MagicMock(return_value=None)
         session.execute = AsyncMock(return_value=empty_result)
-        session.begin_nested = MagicMock()
+        nested = AsyncMock()
+        nested.__aenter__ = AsyncMock(return_value=None)
+        nested.__aexit__ = AsyncMock(return_value=False)
+        session.begin_nested = MagicMock(return_value=nested)
+        session.add = MagicMock()
+        session.get = AsyncMock(return_value=None)
         session.commit = AsyncMock()
 
         gateway = _mock_gateway()

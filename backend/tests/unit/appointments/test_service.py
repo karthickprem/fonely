@@ -218,7 +218,12 @@ async def test_confirm_replay_returns_authoritative_version() -> None:
 
 
 async def test_confirm_does_not_call_outer_commit() -> None:
-    session = AsyncMock()
+    session = AsyncMock(spec=[])
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    session.flush = AsyncMock()
+    session.execute = AsyncMock()
+    session.add = MagicMock()
     validation = _mock_validation()
     service = AppointmentService(session, validation=validation)
 

@@ -262,9 +262,12 @@ def _mock_app(
     mock_session = AsyncMock()
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=None)
+    mock_session.add = MagicMock()
+    mock_session.get = AsyncMock(return_value=None)
 
     dedup_result = MagicMock()
     dedup_result.rowcount = 1
+    dedup_result.scalar_one_or_none = MagicMock(return_value=None)
     mock_session.execute = AsyncMock(return_value=dedup_result)
 
     mock_factory = MagicMock()
@@ -299,6 +302,8 @@ class TestMessageHandling:
 
     @pytest.mark.asyncio
     async def test_duplicate_message_not_reprocessed(self):
+        from fonely.domain.conversation.state import ConversationContext
+
         with patch("fonely.api.channels.whatsapp._get_sender") as mock_get:
             mock_sender = AsyncMock()
             mock_get.return_value = mock_sender
@@ -310,7 +315,13 @@ class TestMessageHandling:
 
                 app = _mock_app()
 
-                with patch("fonely.api.channels.whatsapp.ConversationService") as mock_conv_cls:
+                with (
+                    patch("fonely.api.channels.whatsapp.ConversationService") as mock_conv_cls,
+                    patch(
+                        "fonely.api.channels.whatsapp.find_or_create_conversation_persistent",
+                        new=AsyncMock(return_value=ConversationContext(business_id=1)),
+                    ),
+                ):
                     mock_conv = AsyncMock()
                     mock_turn = MagicMock()
                     mock_turn.assistant_response = "Hello"
@@ -355,6 +366,8 @@ class TestMessageHandling:
 
     @pytest.mark.asyncio
     async def test_text_message_calls_process_message(self):
+        from fonely.domain.conversation.state import ConversationContext
+
         with patch("fonely.api.channels.whatsapp._get_sender") as mock_get:
             mock_sender = AsyncMock()
             mock_get.return_value = mock_sender
@@ -366,7 +379,13 @@ class TestMessageHandling:
 
                 app = _mock_app()
 
-                with patch("fonely.api.channels.whatsapp.ConversationService") as mock_conv_cls:
+                with (
+                    patch("fonely.api.channels.whatsapp.ConversationService") as mock_conv_cls,
+                    patch(
+                        "fonely.api.channels.whatsapp.find_or_create_conversation_persistent",
+                        new=AsyncMock(return_value=ConversationContext(business_id=1)),
+                    ),
+                ):
                     mock_turn = MagicMock()
                     mock_turn.assistant_response = "Welcome to the clinic!"
                     mock_conv = AsyncMock()
@@ -393,6 +412,8 @@ class TestMessageHandling:
 
     @pytest.mark.asyncio
     async def test_process_message_error_sends_fallback(self):
+        from fonely.domain.conversation.state import ConversationContext
+
         with patch("fonely.api.channels.whatsapp._get_sender") as mock_get:
             mock_sender = AsyncMock()
             mock_get.return_value = mock_sender
@@ -404,7 +425,13 @@ class TestMessageHandling:
 
                 app = _mock_app()
 
-                with patch("fonely.api.channels.whatsapp.ConversationService") as mock_conv_cls:
+                with (
+                    patch("fonely.api.channels.whatsapp.ConversationService") as mock_conv_cls,
+                    patch(
+                        "fonely.api.channels.whatsapp.find_or_create_conversation_persistent",
+                        new=AsyncMock(return_value=ConversationContext(business_id=1)),
+                    ),
+                ):
                     mock_conv = AsyncMock()
                     mock_conv.process_message = AsyncMock(side_effect=RuntimeError("db error"))
                     mock_conv_cls.return_value = mock_conv

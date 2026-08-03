@@ -377,43 +377,44 @@ class OwnerCommandService:
         reason_code: str,
     ) -> bool:
         try:
-            from fonely.api.internal.validation import InternalValidationPort
-            from fonely.domain.appointments.commands import (
-                ConfirmPendingAppointmentCancellationCommand,
-                CreatePendingAppointmentCancellationCommand,
-            )
-            from fonely.domain.pending_actions.commands import ActorContext
-            from fonely.services.appointments import AppointmentService
-
-            validation = InternalValidationPort(self._session)
-            appt_service = AppointmentService(self._session, validation=validation)
-            actor = ActorContext(
-                business_id=business_id,
-                normalized_phone=owner_phone,
-                verified_role=CallerRole.OWNER,
-                session_id=None,
-            )
-
-            now = datetime.now(UTC)
-            key = f"owner-cancel-{appointment_id}-{uuid.uuid4().hex[:8]}"
-            proposal = await appt_service.create_cancellation_proposal(
-                CreatePendingAppointmentCancellationCommand(
-                    actor=actor,
-                    appointment_id=appointment_id,
-                    expected_appointment_version=appointment_version,
-                    reason_code=reason_code,
-                    expires_at=now + timedelta(minutes=5),
-                    idempotency_key=key,
+            async with self._session.begin_nested():
+                from fonely.api.internal.validation import InternalValidationPort
+                from fonely.domain.appointments.commands import (
+                    ConfirmPendingAppointmentCancellationCommand,
+                    CreatePendingAppointmentCancellationCommand,
                 )
-            )
-            await appt_service.confirm_cancellation(
-                ConfirmPendingAppointmentCancellationCommand(
-                    actor=actor,
-                    pending_action_id=proposal.pending_action_id,
-                    expected_version=proposal.version,
+                from fonely.domain.pending_actions.commands import ActorContext
+                from fonely.services.appointments import AppointmentService
+
+                validation = InternalValidationPort(self._session)
+                appt_service = AppointmentService(self._session, validation=validation)
+                actor = ActorContext(
+                    business_id=business_id,
+                    normalized_phone=owner_phone,
+                    verified_role=CallerRole.OWNER,
+                    session_id=None,
                 )
-            )
-            return True
+
+                now = datetime.now(UTC)
+                key = f"owner-cancel-{appointment_id}-{uuid.uuid4().hex[:8]}"
+                proposal = await appt_service.create_cancellation_proposal(
+                    CreatePendingAppointmentCancellationCommand(
+                        actor=actor,
+                        appointment_id=appointment_id,
+                        expected_appointment_version=appointment_version,
+                        reason_code=reason_code,
+                        expires_at=now + timedelta(minutes=5),
+                        idempotency_key=key,
+                    )
+                )
+                await appt_service.confirm_cancellation(
+                    ConfirmPendingAppointmentCancellationCommand(
+                        actor=actor,
+                        pending_action_id=proposal.pending_action_id,
+                        expected_version=proposal.version,
+                    )
+                )
+                return True
         except Exception:
             logger.info(
                 "owner_cancel_service_fallback",

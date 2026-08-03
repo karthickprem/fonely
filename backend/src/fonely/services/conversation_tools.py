@@ -122,15 +122,56 @@ async def check_availability(
     slot_interval: int = 15,
 ) -> list[AvailableSlot]:
     from fonely.domain.appointments.availability import (
-        LocalShift,
-        ScheduleExceptionRule,
         TimeWindow,
         derive_windows,
-        shifts_for_date,
     )
     from fonely.domain.appointments.availability import (
         overlaps as domain_overlaps,
     )
+
+    day_of_week = target_date.isoweekday()
+
+    schedules = (
+        (
+            await session.execute(
+                select(OperatingSchedule).where(
+                    OperatingSchedule.business_id == business_id,
+                    OperatingSchedule.day_of_week == day_of_week,
+                    OperatingSchedule.is_active.is_(True),
+                    (
+                        (OperatingSchedule.resource_id == resource_id)
+                        | (OperatingSchedule.resource_id.is_(None))
+                    ),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    if not schedules:
+        return []
+
+    exceptions = (
+        (
+            await session.execute(
+                select(ScheduleException).where(
+                    ScheduleException.business_id == business_id,
+                    ScheduleException.exception_date == target_date,
+                    (
+                        (ScheduleException.resource_id == resource_id)
+                        | (ScheduleException.resource_id.is_(None))
+                    ),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    for exc in exceptions:
+        if exc.is_closed:
+            return []
 
     resource = (
         await session.execute(
@@ -142,72 +183,6 @@ async def check_availability(
         )
     ).scalar_one_or_none()
     if resource is None:
-        return []
-
-    business = (
-        await session.execute(select(Business).where(Business.id == business_id))
-    ).scalar_one_or_none()
-    if business is None:
-        return []
-
-    day_of_week = target_date.isoweekday()
-    schedules = (
-        (
-            await session.execute(
-                select(OperatingSchedule).where(
-                    OperatingSchedule.business_id == business_id,
-                    OperatingSchedule.day_of_week == day_of_week,
-                    OperatingSchedule.is_active.is_(True),
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-
-    business_weekly = tuple(
-        LocalShift(s.open_time, s.close_time) for s in schedules if s.resource_id is None
-    )
-    resource_weekly = tuple(
-        LocalShift(s.open_time, s.close_time) for s in schedules if s.resource_id == resource_id
-    )
-
-    exceptions = (
-        (
-            await session.execute(
-                select(ScheduleException).where(
-                    ScheduleException.business_id == business_id,
-                    ScheduleException.exception_date == target_date,
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-
-    business_exc = None
-    resource_exc = None
-    for exc in exceptions:
-        rule = ScheduleExceptionRule(
-            is_closed=exc.is_closed,
-            open_time=getattr(exc, "open_time", None),
-            close_time=getattr(exc, "close_time", None),
-        )
-        if exc.resource_id is None:
-            business_exc = rule
-        elif exc.resource_id == resource_id:
-            resource_exc = rule
-
-    shift_windows = shifts_for_date(
-        local_day=target_date,
-        timezone=business.timezone,
-        business_weekly=business_weekly,
-        resource_weekly=resource_weekly,
-        business_exception=business_exc,
-        resource_exception=resource_exc,
-    )
-
-    if not shift_windows:
         return []
 
     existing_appointments = (
@@ -231,9 +206,14 @@ async def check_availability(
         if eff_start.date() == target_date or eff_end.date() == target_date:
             booked.append(TimeWindow(eff_start, eff_end))
 
+    from datetime import UTC
+
     slots: list[AvailableSlot] = []
-    for window in shift_windows:
-        slot_start = window.start_at + timedelta(minutes=buffer_before)
+    for schedule in schedules:
+        window_start = datetime.combine(target_date, schedule.open_time, tzinfo=UTC)
+        window_end = datetime.combine(target_date, schedule.close_time, tzinfo=UTC)
+
+        slot_start = window_start + timedelta(minutes=buffer_before)
         while True:
             appt_window, effective = derive_windows(
                 slot_start,
@@ -242,7 +222,7 @@ async def check_availability(
                 buffer_after_minutes=buffer_after,
             )
 
-            if effective.end_at > window.end_at:
+            if effective.end_at > window_end:
                 break
 
             conflict = any(domain_overlaps(effective, b) for b in booked)

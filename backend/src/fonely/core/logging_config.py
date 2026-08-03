@@ -12,6 +12,33 @@ import sys
 import time
 from typing import Any
 
+_STANDARD_LOG_ATTRS = frozenset(
+    {
+        "name",
+        "msg",
+        "args",
+        "created",
+        "filename",
+        "funcName",
+        "levelname",
+        "levelno",
+        "lineno",
+        "module",
+        "msecs",
+        "pathname",
+        "process",
+        "processName",
+        "relativeCreated",
+        "stack_info",
+        "thread",
+        "threadName",
+        "exc_info",
+        "exc_text",
+        "message",
+        "taskName",
+    }
+)
+
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
@@ -21,8 +48,9 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
         }
-        if hasattr(record, "correlation_id"):
-            entry["correlation_id"] = record.correlation_id
+        for key, value in record.__dict__.items():
+            if key not in _STANDARD_LOG_ATTRS and not key.startswith("_"):
+                entry[key] = value
         if record.exc_info and record.exc_info[1]:
             entry["exception"] = f"{type(record.exc_info[1]).__name__}: {record.exc_info[1]}"
         return json.dumps(entry, default=str)

@@ -131,10 +131,11 @@ async def test_full_booking_through_http(
 
     with _override_settings(postgres_database_url):
         app = _create_test_app(postgres_database_url)
+        app.state.engine = pg_engine  # type: ignore[union-attr]
+        app.state.session_factory = pg_session_factory  # type: ignore[union-attr]
+        app.state.model_gateway = gateway  # type: ignore[union-attr]
         transport = ASGITransport(app=app)  # type: ignore[arg-type]
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            app.state.model_gateway = gateway  # type: ignore[union-attr]
-
             r = await client.post(
                 "/internal/v1/conversations",
                 json={"business_id": 1},
@@ -226,10 +227,11 @@ async def test_medical_escalation_through_http(
 
     with _override_settings(postgres_database_url):
         app = _create_test_app(postgres_database_url)
+        app.state.engine = pg_engine  # type: ignore[union-attr]
+        app.state.session_factory = pg_session_factory  # type: ignore[union-attr]
+        app.state.model_gateway = gateway  # type: ignore[union-attr]
         transport = ASGITransport(app=app)  # type: ignore[arg-type]
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            app.state.model_gateway = gateway  # type: ignore[union-attr]
-
             r = await client.post(
                 "/internal/v1/conversations",
                 json={"business_id": 1},
@@ -265,6 +267,7 @@ async def test_security_headers_present(
 ) -> None:
     with _override_settings(postgres_database_url):
         app = _create_test_app(postgres_database_url)
+        app.state.engine = pg_engine  # type: ignore[union-attr]
         transport = ASGITransport(app=app)  # type: ignore[arg-type]
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             r = await client.get("/health/live")
@@ -279,6 +282,7 @@ async def test_unauthenticated_request_rejected(
 ) -> None:
     with _override_settings(postgres_database_url):
         app = _create_test_app(postgres_database_url)
+        app.state.engine = pg_engine  # type: ignore[union-attr]
         transport = ASGITransport(app=app)  # type: ignore[arg-type]
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             r = await client.post(

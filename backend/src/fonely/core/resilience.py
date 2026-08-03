@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import threading
 import time
 
 import httpx
@@ -43,6 +44,7 @@ class ResilientClient:
         self._total_failures = 0
         self._circuit_state = "closed"
         self._circuit_opened_at = 0.0
+        self._stats_lock = threading.Lock()
 
     @property
     def circuit_state(self) -> str:
@@ -64,11 +66,13 @@ class ResilientClient:
         }
 
     async def post(self, url: str, **kwargs: object) -> httpx.Response:
-        self._total_requests += 1
+        with self._stats_lock:
+            self._total_requests += 1
 
         state = self.circuit_state
         if state == "open":
-            self._total_failures += 1
+            with self._stats_lock:
+                self._total_failures += 1
             raise CircuitOpenError(f"Circuit breaker open for {self.name}")
 
         kwargs.setdefault("timeout", self._timeout)
@@ -88,15 +92,17 @@ class ResilientClient:
                         await client.aclose()
 
                 if response.status_code in _RETRYABLE_STATUS_CODES:
-                    if response.status_code == 429:
-                        retry_after = response.headers.get("Retry-After")
-                        if retry_after:
-                            try:
-                                wait = float(retry_after)
-                                await asyncio.sleep(min(wait, 30.0))
-                            except ValueError:
-                                pass
                     if attempt < self._max_retries:
+                        if response.status_code == 429:
+                            retry_after = response.headers.get("Retry-After")
+                            if retry_after:
+                                try:
+                                    wait = float(retry_after)
+                                    await asyncio.sleep(min(wait, 30.0))
+                                except ValueError:
+                                    pass
+                                continue
+
                         backoff = self._retry_backoff * (2**attempt)
                         jitter = random.uniform(0, backoff * 0.5)
                         logger.info(
@@ -157,8 +163,9 @@ class ResilientClient:
         self._circuit_state = "closed"
 
     def _record_failure(self) -> None:
-        self._failure_count += 1
-        self._total_failures += 1
+        with self._stats_lock:
+            self._failure_count += 1
+            self._total_failures += 1
         if self._failure_count >= self._cb_threshold:
             if self._circuit_state != "open":
                 logger.warning(

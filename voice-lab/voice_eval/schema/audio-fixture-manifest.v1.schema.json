@@ -1,0 +1,75 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "audio-fixture-manifest.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "fixture_id", "audio", "locale", "speech_style", "condition", "reference", "provenance", "annotation", "split"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "fixture_id": {"type": "string", "pattern": "^VF-[A-Z0-9-]{3,40}$"},
+    "audio": {
+      "type": "object", "additionalProperties": false,
+      "required": ["relative_path", "sha256", "media_type", "sample_rate_hz", "channels", "sample_width_bits", "duration_ms"],
+      "properties": {
+        "relative_path": {"type": "string", "pattern": "^audio/[A-Za-z0-9._-]+\\.wav$"},
+        "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "media_type": {"const": "audio/wav"},
+        "sample_rate_hz": {"type": "integer", "enum": [8000, 16000, 24000]},
+        "channels": {"const": 1},
+        "sample_width_bits": {"const": 16},
+        "duration_ms": {"type": "integer", "minimum": 100, "maximum": 30000}
+      }
+    },
+    "locale": {"enum": ["ta-IN", "en-IN"]},
+    "speech_style": {"enum": ["tamil", "tanglish", "indian_english"]},
+    "condition": {"enum": ["clean", "telephone_8khz", "noise", "interruption", "self_correction"]},
+    "split": {"enum": ["development", "test"]},
+    "speaker_id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"},
+    "reference": {
+      "type": "object", "additionalProperties": false,
+      "required": ["transcript", "critical_entities"],
+      "properties": {
+        "transcript": {"type": "string", "minLength": 1, "maxLength": 1000},
+        "intent_label": {"type": ["string", "null"], "maxLength": 80},
+        "critical_entities": {
+          "type": "array", "maxItems": 20,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["kind", "value", "variants", "critical"],
+            "properties": {
+              "kind": {"enum": ["intent", "name", "doctor", "service", "date", "time", "price", "quantity", "location", "negation"]},
+              "value": {"type": "string", "minLength": 1, "maxLength": 100},
+              "variants": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 100}, "uniqueItems": true},
+              "critical": {"type": "boolean"}
+            }
+          }
+        }
+      }
+    },
+    "oracle_refs": {"type": "array", "items": {"type": "string", "pattern": "^[A-Z]{2,4}-[0-9]{3,4}$"}, "uniqueItems": true},
+    "provenance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source", "consent_template_version", "consent_status", "license", "commercial_use", "derivative_model_use"],
+      "properties": {
+        "source": {"enum": ["synthetic_tts", "synthetic_loopback", "licensed_external", "human_recording"]},
+        "consent_template_version": {"type": ["string", "null"]},
+        "consent_status": {"enum": ["synthetic", "draft_internal", "approved"]},
+        "license": {"type": "string", "minLength": 1, "maxLength": 200},
+        "commercial_use": {"type": "boolean"},
+        "derivative_model_use": {"type": "boolean"}
+      }
+    },
+    "annotation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["language_review_status", "domain_review_status", "annotation_status", "annotator_roles", "revision"],
+      "properties": {
+        "language_review_status": {"enum": ["synthetic", "unreviewed", "native_reviewed"]},
+        "domain_review_status": {"enum": ["unreviewed", "product_reviewed", "clinician_reviewed"]},
+        "annotation_status": {"enum": ["draft", "single_reviewed", "double_reviewed"]},
+        "annotator_roles": {"type": "array", "items": {"type": "string", "maxLength": 60}, "uniqueItems": true},
+        "revision": {"type": "integer", "minimum": 1}
+      }
+    },
+    "notes": {"type": "string", "maxLength": 500}
+  }
+}

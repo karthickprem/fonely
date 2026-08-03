@@ -27,6 +27,13 @@
 **/voice_samples/
 **/demo_audio/
 **/evals/results/
+**/.voice-eval/
+**/voice-eval-data/
+**/*.webm
+**/*.ogg
+**/*.opus
+**/*.m4a
+**/*.flac
 **/*.wav
 **/*.mp3
 **/*.raw

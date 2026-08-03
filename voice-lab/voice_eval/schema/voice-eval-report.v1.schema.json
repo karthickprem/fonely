@@ -1,0 +1,14 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema","$id":"voice-eval-report.v1","type":"object","additionalProperties":false,
+  "$defs":{"nullableNumber":{"type":["number","null"]},"modeMetrics":{"type":"object","additionalProperties":false,"required":["count","macro_wer","p50_ms","p95_ms"],"properties":{"count":{"type":"integer","minimum":0},"macro_wer":{"$ref":"#/$defs/nullableNumber"},"p50_ms":{"$ref":"#/$defs/nullableNumber"},"p95_ms":{"$ref":"#/$defs/nullableNumber"}}}},
+  "required":["schema_version","report_id","run_ids","generated_at","manifest_sha256","corpus","results","recognition","shadow_correction","latency","evidence_gaps","foundation_gates","promotion_status"],
+  "properties":{
+    "schema_version":{"const":1},"report_id":{"type":"string","minLength":1},"run_ids":{"type":"array","items":{"type":"string"},"minItems":1,"uniqueItems":true},"generated_at":{"type":"string","format":"date-time"},"manifest_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},
+    "corpus":{"type":"object","additionalProperties":false,"required":["total_fixtures","by_speech_style","by_condition"],"properties":{"total_fixtures":{"type":"integer","minimum":0},"by_speech_style":{"type":"object","additionalProperties":{"type":"integer","minimum":0}},"by_condition":{"type":"object","additionalProperties":{"type":"integer","minimum":0}}}},
+    "results":{"type":"object","additionalProperties":false,"required":["total","succeeded","failed","by_mode"],"properties":{"total":{"type":"integer","minimum":0},"succeeded":{"type":"integer","minimum":0},"failed":{"type":"integer","minimum":0},"by_mode":{"type":"object","additionalProperties":{"$ref":"#/$defs/modeMetrics"}}}},
+    "recognition":{"type":"object","additionalProperties":false,"required":["micro_wer","macro_wer","critical_entity_exactness"],"properties":{"micro_wer":{"$ref":"#/$defs/nullableNumber"},"macro_wer":{"$ref":"#/$defs/nullableNumber"},"critical_entity_exactness":{"$ref":"#/$defs/nullableNumber"}}},
+    "shadow_correction":{"type":"object","additionalProperties":false,"required":["proposed_count","clarification_count","wer_improvements","wer_regressions","critical_regressions"],"properties":{"proposed_count":{"type":"integer","minimum":0},"clarification_count":{"type":"integer","minimum":0},"wer_improvements":{"type":"integer","minimum":0},"wer_regressions":{"type":"integer","minimum":0},"critical_regressions":{"type":"integer","minimum":0}}},
+    "latency":{"type":"object","additionalProperties":false,"required":["by_mode"],"properties":{"by_mode":{"type":"object","additionalProperties":{"$ref":"#/$defs/modeMetrics"}}}},
+    "evidence_gaps":{"type":"array","items":{"type":"string"}},"foundation_gates":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["name","passed"],"properties":{"name":{"type":"string"},"passed":{"type":"boolean"}}}},"promotion_status":{"const":"evidence_only"}
+  }
+}

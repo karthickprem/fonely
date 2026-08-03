@@ -1,0 +1,14 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema","$id":"voice-run-result.v1","type":"object","additionalProperties":false,
+  "required":["schema_version","run_id","fixture_id","provider","input","output","shadow_correction","timing","metrics","status","errors"],
+  "properties":{
+    "schema_version":{"const":1},"run_id":{"type":"string","pattern":"^VR-[A-Za-z0-9_-]+$"},"fixture_id":{"type":"string","pattern":"^VF-[A-Z0-9-]{3,40}$"},
+    "provider":{"type":"object","additionalProperties":false,"required":["name","model","mode","configuration"],"properties":{"name":{"const":"sarvam"},"model":{"const":"saaras:v3"},"mode":{"enum":["transcribe","codemix"]},"configuration":{"type":"object"}}},
+    "input":{"type":"object","additionalProperties":false,"required":["audio_sha256","sample_rate_hz","duration_ms"],"properties":{"audio_sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"sample_rate_hz":{"type":"integer"},"duration_ms":{"type":"integer"}}},
+    "output":{"type":"object","additionalProperties":false,"required":["raw_transcript","provider_language","provider_confidence"],"properties":{"raw_transcript":{"type":"string"},"provider_language":{"type":["string","null"]},"provider_confidence":{"type":["number","null"],"minimum":0,"maximum":1}}},
+    "shadow_correction":{"type":"object","additionalProperties":false,"required":["candidates","proposed_transcript","decision","reasons","changed_critical_field"],"properties":{"candidates":{"type":"array","items":{"type":"object"}},"proposed_transcript":{"type":"string"},"decision":{"enum":["unchanged","would_correct","would_clarify"]},"reasons":{"type":"array","items":{"type":"string"}},"changed_critical_field":{"type":"boolean"}}},
+    "timing":{"type":"object","additionalProperties":false,"required":["wall_ms"],"properties":{"wall_ms":{"type":"number","minimum":0},"provider_ttfb_ms":{"type":["number","null"]}}},
+    "metrics":{"type":"object","additionalProperties":false,"required":["substitutions","insertions","deletions","reference_words","wer","critical_entity_correct","critical_entity_total","raw_exact_match","shadow_wer","shadow_critical_regression"],"properties":{"substitutions":{"type":"integer","minimum":0},"insertions":{"type":"integer","minimum":0},"deletions":{"type":"integer","minimum":0},"reference_words":{"type":"integer","minimum":0},"wer":{"type":"number","minimum":0},"critical_entity_correct":{"type":"integer","minimum":0},"critical_entity_total":{"type":"integer","minimum":0},"raw_exact_match":{"type":"boolean"},"shadow_wer":{"type":"number"},"shadow_critical_regression":{"type":"boolean"}}},
+    "status":{"enum":["passed","provider_error","invalid_fixture","skipped"]},"errors":{"type":"array","items":{"type":"string"}}
+  }
+}

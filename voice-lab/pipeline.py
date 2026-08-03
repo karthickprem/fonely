@@ -41,6 +41,7 @@ from pipecat.workers.runner import WorkerRunner
 from processors import ChennaiStyleProcessor, DentalSafetyProcessor
 from services import SarvamStreamingHttpTTSService
 from style_retriever import ChennaiStyleRetriever
+from voice_eval.observer import VoiceEvalObserver
 
 STYLE_CORPUS = Path(__file__).resolve().parent / "data" / "chennai_dental_style.json"
 
@@ -198,9 +199,21 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
                 assistant_aggregator,
             ]
         )
+        observer = None
+        data_root = os.environ.get("VOICE_EVAL_DATA_ROOT")
+        if data_root:
+            root = Path(data_root).resolve()
+            worktree = Path(__file__).resolve().parents[1]
+            if root == worktree or root.is_relative_to(worktree):
+                raise RuntimeError("VOICE_EVAL_DATA_ROOT must be outside the Git worktree")
+            observer = VoiceEvalObserver(
+                output_path=root / "telemetry" / f"{runner_args.session_id}.jsonl",
+                session_id=runner_args.session_id,
+            )
         worker = PipelineWorker(
             pipeline,
             conversation_id=runner_args.session_id,
+            observers=[observer] if observer else None,
             params=PipelineParams(
                 audio_in_sample_rate=16000,
                 audio_out_sample_rate=24000,
@@ -211,6 +224,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             enable_turn_tracking=True,
             enable_rtvi=True,
         )
+
+        @worker.event_handler("on_pipeline_finished")
+        async def on_pipeline_finished(worker, frame):
+            if observer:
+                await observer.close()
 
         @transport.event_handler("on_client_connected")
         async def on_client_connected(transport, client):
@@ -227,6 +245,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         async def on_client_disconnected(transport, client):
             logger.info("Voice-lab client disconnected")
             await worker.cancel()
+            if observer:
+                await observer.close()
 
         runner = WorkerRunner(handle_sigint=False)
         await runner.add_workers(worker)

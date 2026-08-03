@@ -154,9 +154,12 @@ async def get_conversation_route(
 ) -> ConversationResponse:
     _verify_internal_auth(request)
     _validate_conversation_id(conversation_id)
+    actor = _trusted_actor(request)
     ctx = get_conversation(conversation_id)
     if ctx is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    if ctx.business_id != actor.business_id:
+        raise HTTPException(status_code=403, detail="Tenant mismatch")
     return ConversationResponse(
         conversation_id=ctx.conversation_id,
         state=ctx.state.value,

@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime, time, timedelta
 from unittest.mock import AsyncMock
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import func, select, text
@@ -89,7 +90,8 @@ def _next_weekday_slot(hour: int = 10, minute: int = 30) -> datetime:
     target = now + timedelta(days=1)
     if target.isoweekday() == 7:
         target += timedelta(days=1)
-    return datetime.combine(target.date(), time(hour, minute), tzinfo=UTC)
+    clinic_tz = ZoneInfo("Asia/Kolkata")
+    return datetime.combine(target.date(), time(hour, minute), tzinfo=clinic_tz).astimezone(UTC)
 
 
 async def _book_appointment(

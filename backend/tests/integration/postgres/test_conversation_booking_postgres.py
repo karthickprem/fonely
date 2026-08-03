@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime, time, timedelta
 from unittest.mock import AsyncMock
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import func, select, text
@@ -105,7 +106,8 @@ async def test_full_booking_flow_commits_appointment(
         if target.isoweekday() == 7:
             target += timedelta(days=1)
 
-    slot_start = datetime.combine(target.date(), time(10, 30), tzinfo=UTC)
+    clinic_tz = ZoneInfo("Asia/Kolkata")
+    slot_start = datetime.combine(target.date(), time(10, 30), tzinfo=clinic_tz).astimezone(UTC)
 
     async with pg_session_factory() as session:
         gateway = _mock_gateway()
@@ -178,7 +180,8 @@ async def test_changed_mind_no_appointment(
     target = now + timedelta(days=1)
     if target.isoweekday() == 7:
         target += timedelta(days=1)
-    slot_start = datetime.combine(target.date(), time(10, 30), tzinfo=UTC)
+    clinic_tz = ZoneInfo("Asia/Kolkata")
+    slot_start = datetime.combine(target.date(), time(10, 30), tzinfo=clinic_tz).astimezone(UTC)
 
     async with pg_session_factory() as session:
         gateway = _mock_gateway()

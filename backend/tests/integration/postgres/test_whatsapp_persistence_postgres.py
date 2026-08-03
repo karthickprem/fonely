@@ -7,6 +7,7 @@ the in-memory _CONVERSATIONS cache between messages.
 
 from datetime import UTC, datetime, time, timedelta
 from unittest.mock import AsyncMock
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import select, text
@@ -151,7 +152,8 @@ async def test_completed_conversation_starts_new(
     target = now + timedelta(days=1)
     if target.isoweekday() == 7:
         target += timedelta(days=1)
-    slot_start = datetime.combine(target.date(), time(10, 30), tzinfo=UTC)
+    clinic_tz = ZoneInfo("Asia/Kolkata")
+    slot_start = datetime.combine(target.date(), time(10, 30), tzinfo=clinic_tz).astimezone(UTC)
 
     async with pg_session_factory() as session:
         ctx = await find_or_create_conversation_persistent(1, "+919123456789", session)

@@ -49,7 +49,13 @@ def validate_manifest(path: Path, data_root: Path) -> list[dict]:
     if not manifest_path.is_relative_to(root):
         raise ValueError("manifest must be stored under the evaluation data root")
     records = _read_jsonl(manifest_path)
-    _validate_records(records, "audio-fixture-manifest.v1.schema.json")
+    if not records:
+        return []
+    versions = {record.get("schema_version") for record in records}
+    if len(versions) != 1 or versions.pop() not in {1, 2}:
+        raise ValueError("manifest must contain one supported schema version")
+    version = records[0]["schema_version"]
+    _validate_records(records, f"audio-fixture-manifest.v{version}.schema.json")
     seen: set[str] = set()
     speakers_by_split: dict[str, set[str]] = {"development": set(), "test": set()}
     for record in records:
@@ -58,8 +64,17 @@ def validate_manifest(path: Path, data_root: Path) -> list[dict]:
             raise ValueError(f"duplicate fixture_id: {fixture_id}")
         seen.add(fixture_id)
         source = record["provenance"]["source"]
-        if source in {"human_recording", "licensed_external"}:
+        if version == 1 and source in {"human_recording", "licensed_external"}:
             raise ValueError(f"{fixture_id}: V1 rejects unapproved real/licensed collection")
+        if version == 2:
+            approval = root / "governance" / "approvals" / f"{record['governance']['approval_receipt_id']}.json"
+            consent = root / "governance" / "consents" / f"{record['governance']['consent_receipt_id']}.json"
+            if not approval.exists() or not consent.exists():
+                raise ValueError(f"{fixture_id}: missing governance receipt")
+            approval_data = json.loads(approval.read_text())
+            consent_data = json.loads(consent.read_text())
+            if approval_data.get("policy_sha256") != record["governance"]["policy_sha256"] or consent_data.get("consent_sha256") != record["governance"]["consent_sha256"]:
+                raise ValueError(f"{fixture_id}: governance receipt hash mismatch")
         verify_fixture_audio(record, root)
         if record.get("speaker_id"):
             speakers_by_split[record["split"]].add(record["speaker_id"])

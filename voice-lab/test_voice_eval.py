@@ -24,9 +24,16 @@ from pipecat.processors.frame_processor import FrameDirection
 
 
 def write_wav(path: Path, frames=16000):
+    import math
+    import struct
+
     path.parent.mkdir(parents=True, exist_ok=True)
+    samples = b"".join(
+        struct.pack("<h", int(0.5 * 32767 * math.sin(2 * math.pi * 440 * index / 16000)))
+        for index in range(frames)
+    )
     with wave.open(str(path), 'wb') as wav:
-        wav.setnchannels(1); wav.setsampwidth(2); wav.setframerate(16000); wav.writeframes(b'\0\0' * frames)
+        wav.setnchannels(1); wav.setsampwidth(2); wav.setframerate(16000); wav.writeframes(samples)
 
 
 def fixture_record(root: Path):
@@ -36,8 +43,17 @@ def fixture_record(root: Path):
 
 
 def test_schemas_are_valid():
-    for name in ['audio-fixture-manifest.v1.schema.json','voice-run-result.v1.schema.json','voice-eval-report.v1.schema.json']:
+    for name in ['audio-fixture-manifest.v1.schema.json','audio-fixture-manifest.v2.schema.json','voice-run-result.v1.schema.json','voice-eval-report.v1.schema.json']:
         Draft202012Validator.check_schema(load_json_schema(name))
+
+
+def test_founder_prompt_pack_is_locked_and_balanced():
+    from voice_eval.founder_studio import load_prompt_pack
+
+    pack = load_prompt_pack()
+    assert len(pack["prompts"]) == 50
+    assert sum(prompt["speech_style"] == "tamil" for prompt in pack["prompts"]) == 25
+    assert sum(prompt["speech_style"] == "tanglish" for prompt in pack["prompts"]) == 25
 
 
 def test_manifest_and_wav_validation(tmp_path):
@@ -210,6 +226,60 @@ def test_synthetic_loopback_upload_is_validated_and_external(tmp_path):
             record = response.json()
             assert (tmp_path / record["audio"]["relative_path"]).exists()
             validate_manifest(tmp_path / "manifests" / "foundation-v1.jsonl", tmp_path)
+
+    asyncio.run(run())
+
+
+def test_founder_studio_requires_governance_and_persists_recording(tmp_path):
+    async def run():
+        import base64
+        import httpx
+
+        source = tmp_path / "source.wav"
+        write_wav(source)
+        app = create_app(tmp_path, "founder_recording", "test-token")
+        headers = {"x-voice-eval-token": "test-token"}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost", headers=headers) as client:
+            studio = (await client.get("/api/studio")).json()
+            assert studio["total"] == 50 and studio["completed"] == 0
+            prompt = studio["prompts"][0]
+            unauthorized = await client.post("/api/recordings", json={})
+            assert unauthorized.status_code == 422
+            approval = (await client.post("/api/governance/founder-approval", json={
+                "approver_name": "Karthick", "role": "founder", "allow_evaluation": True,
+                "allow_named_providers": True, "allow_model_training": True,
+                "prohibit_voice_cloning": True, "prohibit_real_person_data": True,
+                "accept_90_day_retention": True,
+            })).json()
+            consent = (await client.post("/api/governance/participant-consent", json={
+                "participant_name": "Karthick", "adult_self_recording": True,
+                "alone_no_background_speakers": True, "fictional_prompts_only": True,
+                "no_real_person_data": True, "allow_evaluation": True,
+                "allow_named_providers": True, "allow_model_training": True,
+                "understand_deletion_limit": True,
+            })).json()
+            payload = {
+                "request_id": "request-12345678", "prompt_id": prompt["prompt_id"],
+                "audio_base64": base64.b64encode(source.read_bytes()).decode(),
+                "transcript": prompt["text"], "source_sample_rate_hz": 48000, "attempt": 1,
+                "peak": 0.5, "clipped_ratio": 0.0, "speech_ratio": 0.5,
+                "leading_silence_ms": 100, "trailing_silence_ms": 200,
+                "approval_receipt_id": approval["receipt_id"], "consent_receipt_id": consent["receipt_id"],
+            }
+            response = await client.post("/api/recordings", json=payload)
+            assert response.status_code == 200, response.text
+            record = response.json()
+            assert record["schema_version"] == 2
+            assert record["provenance"]["voice_cloning_allowed"] is False
+            assert (tmp_path / record["audio"]["relative_path"]).exists()
+            # Idempotent retry returns the same fixture.
+            assert (await client.post("/api/recordings", json=payload)).json()["fixture_id"] == record["fixture_id"]
+            validate_manifest(tmp_path / "manifests" / "founder-chennai-v1.jsonl", tmp_path)
+            progress = (await client.get("/api/studio")).json()
+            assert progress["completed"] == 1
+            deleted = await client.post(f"/api/recordings/{record['fixture_id']}/deletion-request", json={"confirm_fixture_id": record["fixture_id"], "reason": "test withdrawal"})
+            assert deleted.status_code == 200
+            assert not (tmp_path / record["audio"]["relative_path"]).exists()
 
     asyncio.run(run())
 

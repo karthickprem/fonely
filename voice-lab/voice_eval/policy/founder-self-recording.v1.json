@@ -1,0 +1,17 @@
+{
+  "policy_id": "fonely-founder-self-recording",
+  "version": 1,
+  "participant_scope": "Karthick self-recording only",
+  "approved_uses": ["internal_evaluation", "named_provider_benchmarking", "internal_model_training"],
+  "named_providers": ["sarvam", "anthropic", "google", "openai"],
+  "raw_audio_retention_days": 90,
+  "deletion_requests_allowed": true,
+  "voice_cloning_allowed": false,
+  "minors_allowed": false,
+  "background_speakers_allowed": false,
+  "real_patient_or_customer_data_allowed": false,
+  "redistribution_allowed": false,
+  "access_roles": ["founder", "authorized_voice_rnd_reviewer"],
+  "trained_model_deletion_limit": "Deleting source audio cannot reliably remove influence from already-completed model training.",
+  "reconsent_triggers": ["new_provider", "new_use", "retention_change", "voice_cloning", "redistribution"]
+}

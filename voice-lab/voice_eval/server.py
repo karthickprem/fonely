@@ -14,6 +14,13 @@ from pydantic import BaseModel, ConfigDict
 
 from voice_eval.audio import inspect_wav
 from voice_eval.contracts import _validate_records, validate_manifest
+from voice_eval.founder_studio import (
+    ApprovalRequest,
+    ConsentRequest,
+    DeleteRequest,
+    FounderStudio,
+    RecordingRequest,
+)
 
 STATIC = Path(__file__).parent / "static"
 CONSENT_VERSION = "voice-rd-consent-v1-draft"
@@ -49,8 +56,9 @@ def create_app(data_root: Path, collection_mode: str = "disabled", access_token:
     worktree = Path(__file__).resolve().parents[2]
     if root == worktree or root.is_relative_to(worktree):
         raise ValueError("data root must be outside Git worktree")
-    if collection_mode not in {"disabled", "synthetic_loopback"}:
-        raise ValueError("V1 supports only disabled or synthetic_loopback")
+    if collection_mode not in {"disabled", "synthetic_loopback", "founder_recording"}:
+        raise ValueError("supported modes: disabled, synthetic_loopback, founder_recording")
+    founder_studio = FounderStudio(root) if collection_mode == "founder_recording" else None
     token = access_token or os.environ.get("VOICE_EVAL_ACCESS_TOKEN") or uuid.uuid4().hex
     app = FastAPI(docs_url=None, redoc_url=None)
     app.mount("/assets", StaticFiles(directory=STATIC), name="assets")
@@ -82,7 +90,49 @@ def create_app(data_root: Path, collection_mode: str = "disabled", access_token:
     async def index(): return FileResponse(STATIC / "index.html")
 
     @app.get("/api/config")
-    async def config(): return {"collection_mode": collection_mode, "allowed_source": "synthetic_loopback" if collection_mode == "synthetic_loopback" else None, "consent_template_version": CONSENT_VERSION, "founder_approval_required": True}
+    async def config():
+        payload = {"collection_mode": collection_mode, "allowed_source": "synthetic_loopback" if collection_mode == "synthetic_loopback" else "human_recording" if collection_mode == "founder_recording" else None, "consent_template_version": CONSENT_VERSION, "founder_approval_required": True}
+        if founder_studio:
+            payload.update({"policy_id": founder_studio.policy["policy_id"], "policy_version": 1, "policy_sha256": founder_studio.policy_sha, "policy_document_sha256": founder_studio.policy_doc_sha, "consent_sha256": founder_studio.consent_sha, "prompt_pack_id": founder_studio.pack["pack_id"], "prompt_total": len(founder_studio.prompts), "named_providers": founder_studio.policy["named_providers"], "retention_days": 90})
+        return payload
+
+    @app.get("/api/studio")
+    async def studio_state():
+        if not founder_studio:
+            raise HTTPException(404)
+        accepted = founder_studio.accepted_prompt_ids()
+        prompts = list(founder_studio.prompts.values())
+        skipped = founder_studio.skipped_prompt_ids()
+        approval = founder_studio.latest_receipt("approvals")
+        consent = founder_studio.latest_receipt("consents")
+        if consent and (not approval or consent.get("approval_receipt_id") != approval.get("receipt_id")):
+            consent = None
+        return {"approval": approval, "consent": consent, "prompts": prompts, "accepted_prompt_ids": sorted(accepted), "skipped_prompt_ids": sorted(skipped), "completed": len(accepted), "skipped": len(skipped), "total": len(prompts)}
+
+    @app.post("/api/governance/founder-approval")
+    async def founder_approval(request: ApprovalRequest):
+        if not founder_studio: raise HTTPException(404)
+        return await founder_studio.approve(request)
+
+    @app.post("/api/governance/participant-consent")
+    async def participant_consent(request: ConsentRequest):
+        if not founder_studio: raise HTTPException(404)
+        return await founder_studio.consent(request)
+
+    @app.post("/api/recordings")
+    async def accept_recording(request: RecordingRequest):
+        if not founder_studio: raise HTTPException(404)
+        return await founder_studio.accept(request)
+
+    @app.post("/api/assignments/{prompt_id}/skip")
+    async def skip_prompt(prompt_id: str, request: SkipRequest):
+        if not founder_studio: raise HTTPException(404)
+        return await founder_studio.skip(prompt_id, request)
+
+    @app.post("/api/recordings/{fixture_id}/deletion-request")
+    async def delete_recording(fixture_id: str, request: DeleteRequest):
+        if not founder_studio: raise HTTPException(404)
+        return await founder_studio.delete(fixture_id, request)
 
     @app.get("/api/fixtures")
     async def fixtures():

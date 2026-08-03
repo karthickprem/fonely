@@ -159,8 +159,13 @@ def main() -> int:
         import uvicorn
         from voice_eval.server import create_app
         token = secrets.token_urlsafe(32)
+        data_root = Path(args.data_root)
+        data_root.mkdir(parents=True, exist_ok=True)
         print(f"Open http://{args.host}:{args.port}/#token={token}")
-        uvicorn.run(create_app(Path(args.data_root), args.collection_mode, token), host=args.host, port=args.port)
+        if args.collection_mode == "founder_recording":
+            print(f"Remote browser: ssh -N -L {args.port}:127.0.0.1:{args.port} xhdctallapa40")
+            print(f"Then open http://127.0.0.1:{args.port}/#token={token}")
+        uvicorn.run(create_app(data_root, args.collection_mode, token), host=args.host, port=args.port)
         return 0
     return 2
 

@@ -669,7 +669,7 @@ class AppointmentService:
                         "business_id": command.actor.business_id,
                         "resource_id": new_facts.resource_id,
                         "appointment_id": data.target_appointment_id,
-                        "pending_action_id": command.pending_action_id,
+                        "pending_action_id": appointment.pending_action_id,
                         "allocation_type": ResourceAllocationType.APPOINTMENT.value,
                         "status": ResourceAllocationStatus.ACTIVE.value,
                         "source": ResourceAllocationSource.CUSTOMER_CONVERSATION.value,

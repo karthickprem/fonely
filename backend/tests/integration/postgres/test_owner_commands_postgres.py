@@ -67,7 +67,7 @@ async def test_doctor_leave_creates_exception_and_cancels(
         ),
         {
             "payload": "{}",
-            "exp": (datetime.now(UTC) + timedelta(hours=24)).isoformat(),
+            "exp": datetime.now(UTC) + timedelta(hours=24),
         },
     )
     tomorrow_10am = datetime.combine(
@@ -129,7 +129,7 @@ async def test_get_summary_returns_appointment_list(
         ),
         {
             "payload": "{}",
-            "exp": (datetime.now(UTC) + timedelta(hours=24)).isoformat(),
+            "exp": datetime.now(UTC) + timedelta(hours=24),
         },
     )
     await pg_session.execute(

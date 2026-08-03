@@ -416,41 +416,12 @@ class OwnerCommandService:
                 )
                 return True
         except Exception:
-            logger.info(
-                "owner_cancel_service_fallback",
+            logger.warning(
+                "owner_cancel_failed",
                 extra={"appointment_id": appointment_id},
                 exc_info=True,
             )
-            return await self._cancel_direct(business_id, appointment_id)
-
-    async def _cancel_direct(self, business_id: int, appointment_id: int) -> bool:
-        from sqlalchemy import update
-
-        from fonely.models.schema import ResourceAllocation
-
-        now = datetime.now(UTC)
-        result = await self._session.execute(
-            update(Appointment)
-            .where(
-                Appointment.id == appointment_id,
-                Appointment.business_id == business_id,
-                Appointment.status == "confirmed",
-            )
-            .values(status="cancelled", cancelled_at=now)
-        )
-        if getattr(result, "rowcount", 0) == 0:
             return False
-        await self._session.execute(
-            update(ResourceAllocation)
-            .where(
-                ResourceAllocation.appointment_id == appointment_id,
-                ResourceAllocation.business_id == business_id,
-                ResourceAllocation.status == "active",
-            )
-            .values(status="cancelled", updated_at=now)
-        )
-        await self._session.flush()
-        return True
 
 
 async def get_daily_context(

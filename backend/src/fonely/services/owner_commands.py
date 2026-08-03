@@ -3,7 +3,7 @@
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
@@ -14,6 +14,7 @@ from fonely.models.schema import (
     Appointment,
     Business,
     BusinessDailyContext,
+    OperatingSchedule,
     Resource,
     ScheduleException,
 )
@@ -67,7 +68,7 @@ class OwnerCommandService:
                 business_id, owner_phone, parsed, DailyContextType.NOTE
             )
         if parsed.command == "close_early":
-            return await self._handle_close_clinic(business_id, owner_phone, parsed)
+            return await self._handle_close_early(business_id, owner_phone, parsed)
 
         return OwnerCommandResult(
             command_type="unknown",
@@ -152,6 +153,139 @@ class OwnerCommandService:
             affected_appointments=len(cancelled),
             affected_patients=len(cancelled),
         )
+
+    async def _handle_close_early(
+        self, business_id: int, owner_phone: str, parsed: ParsedOwnerCommand
+    ) -> OwnerCommandResult:
+        target_date = self._resolve_date(parsed.date)
+        new_close = self._parse_time(parsed.close_time)
+        if new_close is None:
+            return OwnerCommandResult(
+                command_type="close_early",
+                success=False,
+                response_text="Could not parse the close time. Example: 'close early at 6:30 PM'",
+            )
+
+        reason = parsed.reason or "Closing early"
+        tz_name = await self._get_business_timezone(business_id)
+        tz = ZoneInfo(tz_name)
+
+        schedule = await self._get_schedule_for_date(business_id, target_date)
+        open_time = schedule.open_time if schedule else new_close.replace(hour=9, minute=0)
+        if new_close <= open_time:
+            return OwnerCommandResult(
+                command_type="close_early",
+                success=False,
+                response_text=f"New close time {new_close.strftime('%-I:%M %p')} is before "
+                f"opening {open_time.strftime('%-I:%M %p')}.",
+            )
+
+        exc = ScheduleException(
+            business_id=business_id,
+            resource_id=None,
+            exception_date=target_date,
+            is_closed=False,
+            open_time=open_time,
+            close_time=new_close,
+            reason=reason,
+        )
+        self._session.add(exc)
+        await self._session.flush()
+
+        cancelled = await self._cancel_appointments_after(
+            business_id, target_date, new_close, tz, owner_phone
+        )
+
+        date_str = target_date.strftime("%b %d")
+        close_str = new_close.strftime("%-I:%M %p")
+        lines = [f"Clinic closing early at {close_str} on {date_str}."]
+        if cancelled:
+            lines.append(f"{len(cancelled)} appointment(s) after {close_str} cancelled:")
+            for appt in cancelled:
+                lines.append(f"  - {appt['time']} {appt['patient']} ({appt['service']})")
+        else:
+            lines.append("No appointments affected.")
+
+        return OwnerCommandResult(
+            command_type="close_early",
+            success=True,
+            response_text="\n".join(lines),
+            affected_appointments=len(cancelled),
+            affected_patients=len(cancelled),
+        )
+
+    async def _get_schedule_for_date(
+        self, business_id: int, target_date: date
+    ) -> OperatingSchedule | None:
+        dow = target_date.weekday()
+        return await self._session.scalar(
+            select(OperatingSchedule).where(
+                OperatingSchedule.business_id == business_id,
+                OperatingSchedule.resource_id.is_(None),
+                OperatingSchedule.day_of_week == dow,
+            )
+        )
+
+    async def _cancel_appointments_after(
+        self,
+        business_id: int,
+        target_date: date,
+        after_time: time,
+        tz: ZoneInfo,
+        owner_phone: str,
+    ) -> list[dict[str, str]]:
+        appointments = (
+            (
+                await self._session.execute(
+                    select(Appointment).where(
+                        Appointment.business_id == business_id,
+                        Appointment.status == "confirmed",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+        cancelled: list[dict[str, str]] = []
+        for appt in appointments:
+            local_dt = appt.start_at.astimezone(tz)
+            if local_dt.date() != target_date:
+                continue
+            if local_dt.time() < after_time:
+                continue
+            success = await self._cancel_via_service(
+                business_id, appt.id, appt.version, owner_phone, "owner_close_early"
+            )
+            if success:
+                cancelled.append(
+                    {
+                        "time": local_dt.strftime("%-I:%M %p"),
+                        "patient": appt.customer_name or "Patient",
+                        "service": appt.service_name_snapshot,
+                    }
+                )
+        return cancelled
+
+    @staticmethod
+    def _parse_time(expr: str | None) -> time | None:
+        if not expr:
+            return None
+        expr = expr.strip().lower()
+        for fmt in ("%I:%M %p", "%I:%M%p", "%I %p", "%I%p", "%H:%M"):
+            try:
+                return datetime.strptime(expr, fmt).time()
+            except ValueError:
+                continue
+        try:
+            hour = int(expr)
+            if 1 <= hour <= 12:
+                return time(hour if hour < 12 else 0, 0)
+            if 13 <= hour <= 23:
+                return time(hour, 0)
+        except ValueError:
+            pass
+        return None
 
     async def _handle_get_summary(
         self, business_id: int, parsed: ParsedOwnerCommand

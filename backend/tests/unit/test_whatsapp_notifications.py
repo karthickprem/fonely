@@ -155,6 +155,7 @@ class TestWorkerSenderSelection:
         from unittest.mock import patch
 
         import run_worker
+
         from fonely.core.config import Settings
 
         s = Settings(
@@ -169,6 +170,7 @@ class TestWorkerSenderSelection:
         from unittest.mock import patch
 
         import run_worker
+
         from fonely.core.config import Settings
 
         s = Settings(whatsapp_access_token="", whatsapp_phone_number_id="")

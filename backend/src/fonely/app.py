@@ -1,6 +1,7 @@
 """Fonely application factory."""
 
 import asyncio
+import json
 import logging
 import uuid
 from collections.abc import AsyncGenerator
@@ -84,6 +85,29 @@ def create_app() -> FastAPI:
         from fonely.api.channels.whatsapp import router as whatsapp_router
 
         app.include_router(whatsapp_router)
+
+    @app.get("/metrics")
+    async def metrics_endpoint(request: Request) -> Response:
+        from fonely.core.metrics import metrics
+
+        data = metrics.export()
+        return Response(
+            content=json.dumps(data, indent=2),
+            media_type="application/json",
+        )
+
+    @app.get("/health/alerts")
+    async def alerts_endpoint(request: Request) -> Response:
+        from fonely.core.alerts import check_alerts
+        from fonely.core.metrics import metrics
+
+        alerts = check_alerts(metrics)
+        status_code = 200 if not alerts else 503
+        return Response(
+            content=json.dumps({"alerts": alerts}),
+            media_type="application/json",
+            status_code=status_code,
+        )
 
     @app.get("/health/live")
     async def liveness() -> dict[str, str]:

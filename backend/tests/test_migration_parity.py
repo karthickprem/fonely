@@ -31,6 +31,7 @@ MIGRATION_0004 = MIGRATIONS_DIR / "0004_appointment_engine.py"
 MIGRATION_0005 = MIGRATIONS_DIR / "0005_inventory_order_engine.py"
 MIGRATION_0006 = MIGRATIONS_DIR / "0006_business_onboarding.py"
 MIGRATION_0007 = MIGRATIONS_DIR / "0007_notification_outbox.py"
+MIGRATION_0008 = MIGRATIONS_DIR / "0008_conversation_persistence.py"
 
 
 class OperationRecorder:
@@ -226,6 +227,7 @@ def _capture_upgrade() -> OperationRecorder:
         (MIGRATION_0005, "fonely_migration_0005"),
         (MIGRATION_0006, "fonely_migration_0006"),
         (MIGRATION_0007, "fonely_migration_0007"),
+        (MIGRATION_0008, "fonely_migration_0008"),
     ):
         module = _load_migration(path, name)
         module.op = recorder
@@ -250,6 +252,9 @@ def _capture_downgrade() -> OperationRecorder:
     recorder = _capture_upgrade()
     recorder.dropped_tables.clear()
     recorder.operations.clear()
+    module_0008 = _load_migration(MIGRATION_0008, "fonely_migration_0008_down")
+    module_0008.op = recorder
+    module_0008.downgrade()
     module_0007 = _load_migration(MIGRATION_0007, "fonely_migration_0007_down")
     module_0007.op = recorder
     module_0007.downgrade()
@@ -366,7 +371,7 @@ def _exclude_signatures(table: sa.Table) -> set[tuple[str, str, str, tuple[tuple
 def test_migration_and_orm_have_identical_application_tables() -> None:
     captured = _capture_upgrade()
     assert set(captured.metadata.tables) == set(Base.metadata.tables)
-    assert len(captured.metadata.tables) == 25
+    assert len(captured.metadata.tables) == 27
 
 
 def test_migration_and_orm_column_parity() -> None:
@@ -431,9 +436,9 @@ def test_migration_and_orm_exclusion_constraint_parity() -> None:
 def test_migration_downgrade_drops_all_application_tables() -> None:
     recorder = _capture_downgrade()
     assert set(recorder.dropped_tables) == set(Base.metadata.tables)
-    assert recorder.dropped_tables[0] == "notification_outbox"
-    assert recorder.dropped_tables[1] == "business_configuration_commits"
-    assert recorder.dropped_tables[2] == "business_onboarding_drafts"
+    assert recorder.dropped_tables[0] == "conversation_turns"
+    assert recorder.dropped_tables[1] == "conversations"
+    assert recorder.dropped_tables[2] == "notification_outbox"
 
 
 def test_appointment_migration_installs_btree_gist_without_dropping_it() -> None:
@@ -697,7 +702,7 @@ def test_revision_chain_has_single_head() -> None:
     }
     heads = revisions - parent_revisions
 
-    assert heads == {"0007"}
+    assert heads == {"0008"}
     assert {migration.revision: migration.down_revision for migration in migrations} == {
         "0001": None,
         "0002": "0001",
@@ -706,6 +711,7 @@ def test_revision_chain_has_single_head() -> None:
         "0005": "0004",
         "0006": "0005",
         "0007": "0006",
+        "0008": "0007",
     }
 
 

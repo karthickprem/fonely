@@ -265,7 +265,7 @@ class TestRepositoryHeadDiscovery:
     def test_real_discovery_finds_one_head(self) -> None:
         heads = readiness._discover_repository_heads()
         assert len(heads) == 1
-        assert heads[0] in {"0003", "0004", "0005", "0006", "0007"}
+        assert heads[0] in {"0003", "0004", "0005", "0006", "0007", "0008"}
 
     def test_real_discovery_uses_backend_versions(self) -> None:
         heads = readiness._discover_repository_heads()

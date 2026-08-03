@@ -14,8 +14,10 @@ from fonely.domain.pending_actions.commands import ActorContext
 from fonely.domain.pending_actions.errors import PendingActionIdempotencyConflictError
 from fonely.domain.pending_actions.payloads import (
     AppointmentFacts,
+    CancelAppointmentData,
     CreateAppointmentData,
     PendingAppointmentEnvelope,
+    RescheduleAppointmentData,
 )
 from fonely.domain.pending_actions.snapshots import payload_digest
 from fonely.models.schema import Business, Resource, Service, ServiceResourceEligibility
@@ -100,7 +102,20 @@ class InternalValidationPort(AppointmentValidationPort):
         actor: ActorContext,
         payload: PendingAppointmentEnvelope,
     ) -> PendingAppointmentEnvelope:
-        assert isinstance(payload.data, CreateAppointmentData)
+        if isinstance(payload.data, CancelAppointmentData):
+            return payload
+        if isinstance(payload.data, RescheduleAppointmentData):
+            new_facts = await self._resolve_facts(actor.business_id, payload.data.new_facts)
+            return PendingAppointmentEnvelope(
+                data=RescheduleAppointmentData(
+                    target_appointment_id=payload.data.target_appointment_id,
+                    target_expected_version=payload.data.target_expected_version,
+                    old_facts=payload.data.old_facts,
+                    new_facts=new_facts,
+                )
+            )
+        if not isinstance(payload.data, CreateAppointmentData):
+            raise ValueError(f"Unsupported appointment operation: {type(payload.data).__name__}")
         facts = await self._resolve_facts(actor.business_id, payload.data.facts)
         return PendingAppointmentEnvelope(
             data=CreateAppointmentData(
@@ -117,7 +132,10 @@ class InternalValidationPort(AppointmentValidationPort):
         business_id: int,
         payload: PendingAppointmentEnvelope,
     ) -> PendingAppointmentEnvelope:
-        assert isinstance(payload.data, CreateAppointmentData)
+        if isinstance(payload.data, (CancelAppointmentData, RescheduleAppointmentData)):
+            return payload
+        if not isinstance(payload.data, CreateAppointmentData):
+            raise ValueError(f"Unsupported appointment operation: {type(payload.data).__name__}")
         stored_facts = payload.data.facts
         current_facts = await self._resolve_facts(business_id, stored_facts)
 

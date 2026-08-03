@@ -94,9 +94,11 @@ class ConversationService:
         async with lock:
             try:
                 async with asyncio.timeout(settings.conversation_timeout_seconds):
-                    return await self._process_inner(
+                    turn = await self._process_inner(
                         conversation_id, business_id, actor, user_message
                     )
+                    await self._persist_turn(conversation_id, turn)
+                    return turn
             except TimeoutError:
                 logger.warning(
                     "conversation_timeout",
@@ -126,6 +128,19 @@ class ConversationService:
         start_time = time.monotonic()
 
         ctx = _CONVERSATIONS.get(conversation_id)
+        if ctx is None:
+            try:
+                from fonely.services.conversation_persistence import (
+                    ConversationPersistenceService,
+                )
+
+                persistence = ConversationPersistenceService(self._session)
+                loaded = await persistence.load_by_id(conversation_id)
+                if loaded is not None:
+                    ctx = loaded
+                    _CONVERSATIONS[conversation_id] = ctx
+            except Exception:
+                logger.debug("db_conversation_load_skipped", exc_info=True)
         if ctx is None:
             ctx = ConversationContext(
                 conversation_id=conversation_id,
@@ -585,6 +600,20 @@ class ConversationService:
             max_tokens=300,
         )
 
+    async def _persist_turn(self, conversation_id: str, turn: ConversationTurn) -> None:
+        try:
+            from fonely.services.conversation_persistence import (
+                ConversationPersistenceService,
+            )
+
+            ctx = _CONVERSATIONS.get(conversation_id)
+            if ctx is not None:
+                persistence = ConversationPersistenceService(self._session)
+                async with self._session.begin_nested():
+                    await persistence.save_turn(ctx, turn)
+        except Exception:
+            logger.debug("conversation_persist_skipped", exc_info=True)
+
     def _log_turn(self, turn: ConversationTurn, start_time: float) -> None:
         latency = round((time.monotonic() - start_time) * 1000)
         logger.info(
@@ -737,3 +766,31 @@ def find_or_create_conversation(
     ctx = create_conversation(business_id)
     _PHONE_INDEX[key] = ctx.conversation_id
     return ctx
+
+
+async def find_or_create_conversation_persistent(
+    business_id: int,
+    customer_phone: str,
+    session: object,
+) -> ConversationContext:
+    key = (business_id, customer_phone)
+    existing_id = _PHONE_INDEX.get(key)
+    if existing_id is not None:
+        ctx = _CONVERSATIONS.get(existing_id)
+        if ctx is not None and ctx.state not in (
+            ConversationState.COMPLETED,
+            ConversationState.ENDED,
+        ):
+            return ctx
+
+    try:
+        from fonely.services.conversation_persistence import ConversationPersistenceService
+
+        persistence = ConversationPersistenceService(session)  # type: ignore[arg-type]
+        ctx = await persistence.load_or_create(business_id, customer_phone)
+        _CONVERSATIONS[ctx.conversation_id] = ctx
+        _PHONE_INDEX[key] = ctx.conversation_id
+        return ctx
+    except Exception:
+        logger.debug("persistent_find_or_create_failed", exc_info=True)
+        return find_or_create_conversation(business_id, customer_phone)

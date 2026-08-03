@@ -5,14 +5,16 @@ ConversationService all wire together to produce a committed appointment
 in PostgreSQL. The model gateway is mocked; the database is real.
 """
 
+from contextlib import contextmanager
 from datetime import UTC, datetime, time, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from fonely.core.config import settings
 from fonely.core.validators import utcnow
 from fonely.models.schema import Appointment, PendingAction, ResourceAllocation
 from fonely.services.conversation import _CONVERSATIONS
@@ -92,18 +94,29 @@ def _clear_conversations():
     _CONVERSATIONS.clear()
 
 
-def _create_app_with_test_db(database_url: str) -> object:
-    with (
-        patch("fonely.core.config.settings.internal_api_secret", _SECRET),
-        patch("fonely.core.config.settings.database_url", database_url),
-        patch("fonely.core.config.settings.sarvam_api_key", ""),
-        patch("fonely.core.config.settings.whatsapp_verify_token", ""),
-        patch("fonely.core.config.settings.rate_limit_per_minute", 60),
-    ):
-        from fonely.app import create_app
+@contextmanager
+def _override_settings(database_url: str):
+    originals = {
+        "internal_api_secret": settings.internal_api_secret,
+        "database_url": settings.database_url,
+        "sarvam_api_key": settings.sarvam_api_key,
+        "whatsapp_verify_token": settings.whatsapp_verify_token,
+    }
+    object.__setattr__(settings, "internal_api_secret", _SECRET)
+    object.__setattr__(settings, "database_url", database_url)
+    object.__setattr__(settings, "sarvam_api_key", "")
+    object.__setattr__(settings, "whatsapp_verify_token", "")
+    try:
+        yield
+    finally:
+        for k, v in originals.items():
+            object.__setattr__(settings, k, v)
 
-        app = create_app()
-    return app
+
+def _create_test_app(database_url: str) -> object:
+    from fonely.app import create_app
+
+    return create_app()
 
 
 async def test_full_booking_through_http(
@@ -116,11 +129,10 @@ async def test_full_booking_through_http(
 
     gateway = _mock_gateway()
 
-    app = _create_app_with_test_db(postgres_database_url)
-
-    transport = ASGITransport(app=app)  # type: ignore[arg-type]
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        with patch("fonely.app.settings.database_url", postgres_database_url):
+    with _override_settings(postgres_database_url):
+        app = _create_test_app(postgres_database_url)
+        transport = ASGITransport(app=app)  # type: ignore[arg-type]
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
             app.state.model_gateway = gateway  # type: ignore[union-attr]
 
             r = await client.post(
@@ -211,35 +223,36 @@ async def test_medical_escalation_through_http(
         await _seed_dental_clinic(session)
 
     gateway = _mock_gateway()
-    app = _create_app_with_test_db(postgres_database_url)
 
-    transport = ASGITransport(app=app)  # type: ignore[arg-type]
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        app.state.model_gateway = gateway  # type: ignore[union-attr]
+    with _override_settings(postgres_database_url):
+        app = _create_test_app(postgres_database_url)
+        transport = ASGITransport(app=app)  # type: ignore[arg-type]
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            app.state.model_gateway = gateway  # type: ignore[union-attr]
 
-        r = await client.post(
-            "/internal/v1/conversations",
-            json={"business_id": 1},
-            headers=_AUTH_HEADERS,
-        )
-        assert r.status_code == 201
-        conv_id = r.json()["conversation_id"]
+            r = await client.post(
+                "/internal/v1/conversations",
+                json={"business_id": 1},
+                headers=_AUTH_HEADERS,
+            )
+            assert r.status_code == 201
+            conv_id = r.json()["conversation_id"]
 
-        r2 = await client.post(
-            f"/internal/v1/conversations/{conv_id}/messages",
-            json={"message": "I want to book"},
-            headers=_AUTH_HEADERS,
-        )
-        assert r2.status_code == 200
+            r2 = await client.post(
+                f"/internal/v1/conversations/{conv_id}/messages",
+                json={"message": "I want to book"},
+                headers=_AUTH_HEADERS,
+            )
+            assert r2.status_code == 200
 
-        r3 = await client.post(
-            f"/internal/v1/conversations/{conv_id}/messages",
-            json={"message": "my tooth is bleeding badly"},
-            headers=_AUTH_HEADERS,
-        )
-        assert r3.status_code == 200
-        escalation = r3.json()
-        assert escalation["safety_classification"] == "medical"
+            r3 = await client.post(
+                f"/internal/v1/conversations/{conv_id}/messages",
+                json={"message": "my tooth is bleeding badly"},
+                headers=_AUTH_HEADERS,
+            )
+            assert r3.status_code == 200
+            escalation = r3.json()
+            assert escalation["safety_classification"] == "medical"
 
     async with pg_session_factory() as session:
         count = await session.scalar(select(func.count(Appointment.id)))
@@ -250,24 +263,26 @@ async def test_security_headers_present(
     pg_engine: AsyncEngine,
     postgres_database_url: str,
 ) -> None:
-    app = _create_app_with_test_db(postgres_database_url)
-    transport = ASGITransport(app=app)  # type: ignore[arg-type]
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.get("/health/live")
-        assert r.status_code == 200
-        assert r.headers.get("X-Content-Type-Options") == "nosniff"
-        assert r.headers.get("X-Frame-Options") == "DENY"
+    with _override_settings(postgres_database_url):
+        app = _create_test_app(postgres_database_url)
+        transport = ASGITransport(app=app)  # type: ignore[arg-type]
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get("/health/live")
+            assert r.status_code == 200
+            assert r.headers.get("X-Content-Type-Options") == "nosniff"
+            assert r.headers.get("X-Frame-Options") == "DENY"
 
 
 async def test_unauthenticated_request_rejected(
     pg_engine: AsyncEngine,
     postgres_database_url: str,
 ) -> None:
-    app = _create_app_with_test_db(postgres_database_url)
-    transport = ASGITransport(app=app)  # type: ignore[arg-type]
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post(
-            "/internal/v1/conversations",
-            json={"business_id": 1},
-        )
-        assert r.status_code in (401, 503)
+    with _override_settings(postgres_database_url):
+        app = _create_test_app(postgres_database_url)
+        transport = ASGITransport(app=app)  # type: ignore[arg-type]
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.post(
+                "/internal/v1/conversations",
+                json={"business_id": 1},
+            )
+            assert r.status_code in (401, 503)

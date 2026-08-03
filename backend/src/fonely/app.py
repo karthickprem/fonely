@@ -48,6 +48,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     finally:
         logger.info("shutdown_signal_received")
         try:
+            gateway = getattr(app.state, "model_gateway", None)
+            if gateway is not None:
+                client = getattr(gateway, "_client", None)
+                if client is not None and hasattr(client, "aclose"):
+                    await client.aclose()
             await engine.dispose()
             logger.info("shutdown_complete")
         except Exception:

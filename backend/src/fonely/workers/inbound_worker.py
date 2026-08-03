@@ -34,7 +34,7 @@ def _next_attempt_at(attempts: int) -> datetime:
 
 async def run_inbound_worker(
     session_factory: async_sessionmaker[AsyncSession],
-    model_gateway: object,
+    model_gateway: object | None,
     sender: WhatsAppSender | None,
     *,
     poll_interval: float = 2.0,
@@ -74,7 +74,7 @@ async def run_inbound_worker(
 async def _process_event(
     event: WhatsAppInboundEvent,
     session: AsyncSession,
-    model_gateway: object,
+    model_gateway: object | None,
     sender: WhatsAppSender | None,
 ) -> None:
     phone = event.sender_phone
@@ -106,7 +106,7 @@ async def _process_event(
     if await _is_owner(business_id, phone_formatted, session):
         from fonely.services.owner_commands import OwnerCommandService
 
-        owner_svc = OwnerCommandService(session, model_gateway)
+        owner_svc = OwnerCommandService(session, model_gateway)  # type: ignore[arg-type]
         result = await owner_svc.process_command(business_id, phone_formatted, text_body)
         if sender:
             await sender.send_text(phone, result.response_text)
@@ -121,7 +121,7 @@ async def _process_event(
     )
     validation = InternalValidationPort(session)
     appt_service = AppointmentService(session, validation=validation)
-    conv_service = ConversationService(session, model_gateway, appointment_service=appt_service)
+    conv_service = ConversationService(session, model_gateway, appointment_service=appt_service)  # type: ignore[arg-type]
     turn = await conv_service.process_message(
         ctx.conversation_id,
         business_id,

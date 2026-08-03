@@ -5,7 +5,7 @@ import logging
 import re
 import time
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -186,11 +186,30 @@ class ConversationService:
             self._log_turn(turn, start_time)
             return turn
 
+        if ctx.state == ConversationState.CANCEL_SELECTION:
+            turn = await self._handle_cancel_selection(ctx, user_message, actor, safety)
+            self._log_turn(turn, start_time)
+            return turn
+
+        if ctx.state == ConversationState.RESCHEDULE_SELECTION:
+            turn = await self._handle_reschedule_selection(ctx, user_message, actor, safety)
+            self._log_turn(turn, start_time)
+            return turn
+
         if ctx.state == ConversationState.GREETING:
             ctx.transition(ConversationState.INTENT_RECOGNITION)
 
         if ctx.state == ConversationState.INTENT_RECOGNITION:
+            if safety.intent == ConversationIntent.CANCEL_APPOINTMENT:
+                turn = await self._handle_cancel_intent(ctx, user_message, actor, safety)
+                self._log_turn(turn, start_time)
+                return turn
+            if safety.intent == ConversationIntent.RESCHEDULE:
+                turn = await self._handle_reschedule_intent(ctx, user_message, actor, safety)
+                self._log_turn(turn, start_time)
+                return turn
             ctx.transition(ConversationState.FACT_COLLECTION)
+            ctx.collected_facts["_operation"] = "book"
 
         from fonely.services.conversation_tools import get_business_context
 
@@ -362,7 +381,291 @@ class ConversationService:
             )
 
     def _identify_missing_facts(self, ctx: ConversationContext) -> list[str]:
+        operation = ctx.collected_facts.get("_operation", "book")
+        if operation == "cancel":
+            return []
+        if operation == "reschedule":
+            return [f for f in ("start_at",) if f not in ctx.collected_facts]
         return [f for f in _REQUIRED_FACTS if f not in ctx.collected_facts]
+
+    async def _handle_cancel_intent(
+        self,
+        ctx: ConversationContext,
+        user_message: str,
+        actor: ActorContext,
+        safety: SafetyClassification,
+    ) -> ConversationTurn:
+        from fonely.services.conversation_tools import (
+            format_appointment_list,
+            get_business_context,
+            get_patient_appointments,
+        )
+
+        ctx.transition(ConversationState.CANCEL_SELECTION)
+        ctx.collected_facts["_operation"] = "cancel"
+
+        biz = await get_business_context(actor.business_id, self._session)
+        timezone = biz.timezone if biz else "Asia/Kolkata"
+        ctx.collected_facts["_business_timezone"] = timezone
+
+        appointments = await get_patient_appointments(
+            actor.business_id, actor.normalized_phone, self._session
+        )
+
+        if not appointments:
+            ctx.transition(ConversationState.ENDED)
+            return self._fact_turn(
+                ctx, user_message, "You don't have any upcoming appointments.", safety, []
+            )
+
+        if len(appointments) == 1:
+            appt = appointments[0]
+            return await self._create_cancel_proposal(
+                ctx, user_message, actor, safety, appt, timezone
+            )
+
+        ctx.collected_facts["_candidates"] = [
+            {
+                "appointment_id": a.appointment_id,
+                "service_name": a.service_name,
+                "resource_name": a.resource_name,
+                "start_at": a.start_at.isoformat(),
+                "version": a.version,
+                "pending_action_id": a.pending_action_id,
+                "service_id": a.service_id,
+                "resource_id": a.resource_id,
+                "price": a.price,
+                "status": a.status,
+            }
+            for a in appointments
+        ]
+        listing = format_appointment_list(appointments, timezone)
+        return self._fact_turn(
+            ctx,
+            user_message,
+            f"Which appointment would you like to cancel?\n{listing}",
+            safety,
+            [],
+        )
+
+    async def _handle_cancel_selection(
+        self,
+        ctx: ConversationContext,
+        user_message: str,
+        actor: ActorContext,
+        safety: SafetyClassification,
+    ) -> ConversationTurn:
+        from fonely.services.conversation_tools import (
+            PatientAppointment,
+            parse_appointment_selection,
+        )
+
+        candidates_raw = ctx.collected_facts.get("_candidates", [])
+        assert isinstance(candidates_raw, list)
+        candidates = [
+            PatientAppointment(
+                appointment_id=c["appointment_id"],
+                service_name=c["service_name"],
+                resource_name=c["resource_name"],
+                start_at=datetime.fromisoformat(c["start_at"]),
+                price=c.get("price"),
+                status=c["status"],
+                pending_action_id=c["pending_action_id"],
+                version=c["version"],
+                service_id=c["service_id"],
+                resource_id=c["resource_id"],
+            )
+            for c in candidates_raw
+        ]
+
+        selected = parse_appointment_selection(user_message, candidates)
+        if selected is None:
+            return self._fact_turn(
+                ctx,
+                user_message,
+                "I didn't understand. Please reply with the number of the appointment.",
+                safety,
+                [],
+            )
+
+        timezone = str(ctx.collected_facts.get("_business_timezone", "Asia/Kolkata"))
+        return await self._create_cancel_proposal(
+            ctx, user_message, actor, safety, selected, timezone
+        )
+
+    async def _create_cancel_proposal(
+        self,
+        ctx: ConversationContext,
+        user_message: str,
+        actor: ActorContext,
+        safety: SafetyClassification,
+        appt: object,
+        timezone: str,
+    ) -> ConversationTurn:
+        from fonely.domain.appointments.commands import (
+            CreatePendingAppointmentCancellationCommand,
+        )
+        from fonely.services.conversation_tools import (
+            PatientAppointment,
+            format_confirmation_summary,
+        )
+
+        assert isinstance(appt, PatientAppointment)
+
+        proposal = await self._appointment_service.create_cancellation_proposal(  # type: ignore[attr-defined]
+            CreatePendingAppointmentCancellationCommand(
+                actor=actor,
+                appointment_id=appt.appointment_id,
+                expected_appointment_version=appt.version,
+                reason_code=None,
+                expires_at=utcnow() + timedelta(minutes=15),
+                idempotency_key=f"conv-{ctx.conversation_id}-cancel-{appt.appointment_id}",
+            )
+        )
+        ctx.proposal_id = proposal.pending_action_id
+        ctx.proposal_version = proposal.version
+        ctx.collected_facts["_target_appointment_id"] = appt.appointment_id
+
+        summary = format_confirmation_summary(
+            appt.service_name, appt.resource_name, appt.start_at, appt.price, timezone
+        )
+        ctx.transition(ConversationState.AWAITING_CONFIRMATION)
+        return self._fact_turn(
+            ctx,
+            user_message,
+            f"Cancel your {summary}? Say yes to confirm.",
+            safety,
+            [],
+        )
+
+    async def _handle_reschedule_intent(
+        self,
+        ctx: ConversationContext,
+        user_message: str,
+        actor: ActorContext,
+        safety: SafetyClassification,
+    ) -> ConversationTurn:
+        from fonely.services.conversation_tools import (
+            format_appointment_list,
+            get_business_context,
+            get_patient_appointments,
+        )
+
+        ctx.transition(ConversationState.RESCHEDULE_SELECTION)
+        ctx.collected_facts["_operation"] = "reschedule"
+
+        biz = await get_business_context(actor.business_id, self._session)
+        timezone = biz.timezone if biz else "Asia/Kolkata"
+        ctx.collected_facts["_business_timezone"] = timezone
+
+        appointments = await get_patient_appointments(
+            actor.business_id, actor.normalized_phone, self._session
+        )
+
+        if not appointments:
+            ctx.transition(ConversationState.ENDED)
+            return self._fact_turn(
+                ctx, user_message, "You don't have any upcoming appointments.", safety, []
+            )
+
+        if len(appointments) == 1:
+            appt = appointments[0]
+            return self._select_reschedule_appointment(ctx, user_message, safety, appt, timezone)
+
+        ctx.collected_facts["_candidates"] = [
+            {
+                "appointment_id": a.appointment_id,
+                "service_name": a.service_name,
+                "resource_name": a.resource_name,
+                "start_at": a.start_at.isoformat(),
+                "version": a.version,
+                "pending_action_id": a.pending_action_id,
+                "service_id": a.service_id,
+                "resource_id": a.resource_id,
+                "price": a.price,
+                "status": a.status,
+            }
+            for a in appointments
+        ]
+        listing = format_appointment_list(appointments, timezone)
+        return self._fact_turn(
+            ctx,
+            user_message,
+            f"Which appointment would you like to reschedule?\n{listing}",
+            safety,
+            [],
+        )
+
+    async def _handle_reschedule_selection(
+        self,
+        ctx: ConversationContext,
+        user_message: str,
+        actor: ActorContext,
+        safety: SafetyClassification,
+    ) -> ConversationTurn:
+        from fonely.services.conversation_tools import (
+            PatientAppointment,
+            parse_appointment_selection,
+        )
+
+        candidates_raw = ctx.collected_facts.get("_candidates", [])
+        assert isinstance(candidates_raw, list)
+        candidates = [
+            PatientAppointment(
+                appointment_id=c["appointment_id"],
+                service_name=c["service_name"],
+                resource_name=c["resource_name"],
+                start_at=datetime.fromisoformat(c["start_at"]),
+                price=c.get("price"),
+                status=c["status"],
+                pending_action_id=c["pending_action_id"],
+                version=c["version"],
+                service_id=c["service_id"],
+                resource_id=c["resource_id"],
+            )
+            for c in candidates_raw
+        ]
+
+        selected = parse_appointment_selection(user_message, candidates)
+        if selected is None:
+            return self._fact_turn(
+                ctx,
+                user_message,
+                "I didn't understand. Please reply with the number of the appointment.",
+                safety,
+                [],
+            )
+
+        timezone = str(ctx.collected_facts.get("_business_timezone", "Asia/Kolkata"))
+        return self._select_reschedule_appointment(ctx, user_message, safety, selected, timezone)
+
+    def _select_reschedule_appointment(
+        self,
+        ctx: ConversationContext,
+        user_message: str,
+        safety: SafetyClassification,
+        appt: object,
+        timezone: str,
+    ) -> ConversationTurn:
+        from fonely.services.conversation_tools import PatientAppointment
+
+        assert isinstance(appt, PatientAppointment)
+        ctx.collected_facts["_target_appointment_id"] = appt.appointment_id
+        ctx.collected_facts["_target_appointment_version"] = appt.version
+        ctx.collected_facts["service_id"] = appt.service_id
+        ctx.collected_facts["service_name"] = appt.service_name
+        ctx.collected_facts["resource_id"] = appt.resource_id
+        ctx.collected_facts["resource_name"] = appt.resource_name
+        ctx.collected_facts["customer_phone"] = str(ctx.collected_facts.get("customer_phone", ""))
+
+        ctx.transition(ConversationState.FACT_COLLECTION)
+        return self._fact_turn(
+            ctx,
+            user_message,
+            "When would you like to reschedule to? Please tell me the new date and time.",
+            safety,
+            ["start_at"],
+        )
 
     async def _check_availability_and_propose(
         self,
@@ -443,27 +746,49 @@ class ConversationService:
             )
 
         start_at = matching_slot.start_at
+        operation = ctx.collected_facts.get("_operation", "book")
 
-        from fonely.domain.appointments.commands import (
-            CreatePendingAppointmentCommand,
-        )
-
-        proposal = await self._appointment_service.create_proposal(  # type: ignore[attr-defined]
-            CreatePendingAppointmentCommand(
-                actor=actor,
-                service_id=service_id,
-                resource_id=resource_id,
-                start_at=start_at,
-                customer_phone=str(
-                    ctx.collected_facts.get("customer_phone", actor.normalized_phone)
-                ),
-                customer_name=ctx.collected_facts.get("customer_name"),  # type: ignore[arg-type]
-                reason=None,
-                call_id=None,
-                expires_at=utcnow() + timedelta(minutes=15),
-                idempotency_key=f"conv-{ctx.conversation_id}",
+        if operation == "reschedule":
+            from fonely.domain.appointments.commands import (
+                CreatePendingAppointmentRescheduleCommand,
             )
-        )
+
+            target_appt_id: int = ctx.collected_facts["_target_appointment_id"]  # type: ignore[assignment]
+            target_appt_version: int = ctx.collected_facts["_target_appointment_version"]  # type: ignore[assignment]
+            proposal = await self._appointment_service.create_reschedule_proposal(  # type: ignore[attr-defined]
+                CreatePendingAppointmentRescheduleCommand(
+                    actor=actor,
+                    appointment_id=target_appt_id,
+                    expected_appointment_version=target_appt_version,
+                    service_id=service_id,
+                    resource_id=resource_id,
+                    start_at=start_at,
+                    expires_at=utcnow() + timedelta(minutes=15),
+                    idempotency_key=f"conv-{ctx.conversation_id}-reschedule-{target_appt_id}",
+                )
+            )
+        else:
+            from fonely.domain.appointments.commands import (
+                CreatePendingAppointmentCommand,
+            )
+
+            proposal = await self._appointment_service.create_proposal(  # type: ignore[attr-defined]
+                CreatePendingAppointmentCommand(
+                    actor=actor,
+                    service_id=service_id,
+                    resource_id=resource_id,
+                    start_at=start_at,
+                    customer_phone=str(
+                        ctx.collected_facts.get("customer_phone", actor.normalized_phone)
+                    ),
+                    customer_name=ctx.collected_facts.get("customer_name"),  # type: ignore[arg-type]
+                    reason=None,
+                    call_id=None,
+                    expires_at=utcnow() + timedelta(minutes=15),
+                    idempotency_key=f"conv-{ctx.conversation_id}",
+                )
+            )
+
         ctx.proposal_id = proposal.pending_action_id
         ctx.proposal_version = proposal.version
 
@@ -474,7 +799,10 @@ class ConversationService:
         summary = format_confirmation_summary(
             service_name, resource_name, start_at, svc.price, biz.timezone
         )
-        response = f"I've found a slot: {summary}. Shall I book this?"
+        if operation == "reschedule":
+            response = f"Move your appointment to {summary}? Say yes to confirm."
+        else:
+            response = f"I've found a slot: {summary}. Shall I book this?"
 
         ctx.transition(ConversationState.AWAITING_CONFIRMATION)
         return self._fact_turn(ctx, user_message, response, safety, [])
@@ -486,9 +814,15 @@ class ConversationService:
         actor: ActorContext,
         safety: SafetyClassification,
     ) -> ConversationTurn:
+        operation = ctx.collected_facts.get("_operation", "book")
         decision = detect_confirmation(user_message)
 
         if decision == "negative":
+            if operation == "cancel":
+                ctx.transition(ConversationState.ENDED)
+                return self._fact_turn(
+                    ctx, user_message, "Okay, your appointment is unchanged.", safety, []
+                )
             ctx.transition(ConversationState.FACT_COLLECTION)
             ctx.collected_facts.pop("start_at", None)
             ctx.proposal_id = None
@@ -502,10 +836,14 @@ class ConversationService:
             )
 
         if decision == "ambiguous":
+            action_word = {"cancel": "cancel", "reschedule": "reschedule"}.get(
+                str(operation), "book"
+            )
             return self._fact_turn(
                 ctx,
                 user_message,
-                "Could you confirm — should I go ahead and book this? Please say yes or no.",
+                f"Could you confirm — should I go ahead and {action_word} this? "
+                "Please say yes or no.",
                 safety,
                 [],
             )
@@ -514,19 +852,31 @@ class ConversationService:
             return self._fact_turn(
                 ctx,
                 user_message,
-                "Something went wrong. Let's start over with your appointment.",
+                "Something went wrong. Let's start over.",
                 safety,
                 self._identify_missing_facts(ctx),
             )
 
-        from fonely.domain.appointments.commands import (
-            ConfirmPendingAppointmentCommand,
-        )
+        if operation == "cancel":
+            return await self._confirm_cancellation(ctx, user_message, actor, safety)
+        if operation == "reschedule":
+            return await self._confirm_reschedule(ctx, user_message, actor, safety)
+        return await self._confirm_booking(ctx, user_message, actor, safety)
+
+    async def _confirm_booking(
+        self,
+        ctx: ConversationContext,
+        user_message: str,
+        actor: ActorContext,
+        safety: SafetyClassification,
+    ) -> ConversationTurn:
+        from fonely.domain.appointments.commands import ConfirmPendingAppointmentCommand
         from fonely.domain.appointments.results import (
             PreCommitAppointmentFailure,
             PreCommitAppointmentSuccess,
         )
 
+        assert ctx.proposal_id is not None
         result = await self._appointment_service.confirm_and_commit(  # type: ignore[attr-defined]
             ConfirmPendingAppointmentCommand(
                 actor=actor,
@@ -559,6 +909,91 @@ class ConversationService:
             f"Your appointment is confirmed! "
             f"Appointment ID: {result.appointment.appointment_id}. "
             f"See you at the clinic!",
+            safety,
+            [],
+        )
+
+    async def _confirm_cancellation(
+        self,
+        ctx: ConversationContext,
+        user_message: str,
+        actor: ActorContext,
+        safety: SafetyClassification,
+    ) -> ConversationTurn:
+        from fonely.domain.appointments.commands import (
+            ConfirmPendingAppointmentCancellationCommand,
+        )
+
+        assert ctx.proposal_id is not None
+        await self._appointment_service.confirm_cancellation(  # type: ignore[attr-defined]
+            ConfirmPendingAppointmentCancellationCommand(
+                actor=actor,
+                pending_action_id=ctx.proposal_id,
+                expected_version=ctx.proposal_version or 1,
+            )
+        )
+        await self._session.commit()
+
+        ctx.transition(ConversationState.CONFIRMED)
+        ctx.transition(ConversationState.COMPLETED)
+        return self._fact_turn(
+            ctx,
+            user_message,
+            "Your appointment has been cancelled. The clinic has been notified.",
+            safety,
+            [],
+        )
+
+    async def _confirm_reschedule(
+        self,
+        ctx: ConversationContext,
+        user_message: str,
+        actor: ActorContext,
+        safety: SafetyClassification,
+    ) -> ConversationTurn:
+        from fonely.domain.appointments.commands import (
+            ConfirmPendingAppointmentRescheduleCommand,
+        )
+        from fonely.domain.appointments.errors import AppointmentDomainError
+
+        assert ctx.proposal_id is not None
+        try:
+            result = await self._appointment_service.confirm_reschedule(  # type: ignore[attr-defined]
+                ConfirmPendingAppointmentRescheduleCommand(
+                    actor=actor,
+                    pending_action_id=ctx.proposal_id,
+                    expected_version=ctx.proposal_version or 1,
+                )
+            )
+        except AppointmentDomainError:
+            ctx.transition(ConversationState.FACT_COLLECTION)
+            ctx.collected_facts.pop("start_at", None)
+            ctx.proposal_id = None
+            ctx.proposal_version = None
+            return self._fact_turn(
+                ctx,
+                user_message,
+                "That slot isn't available. Would you like to try another time?",
+                safety,
+                ["start_at"],
+            )
+
+        await self._session.commit()
+
+        ctx.transition(ConversationState.CONFIRMED)
+        ctx.transition(ConversationState.COMPLETED)
+
+        from fonely.services.conversation_tools import format_confirmation_summary
+
+        new_start = result.start_at
+        resource_name = str(result.resource_name)
+        service_name = str(ctx.collected_facts.get("service_name", ""))
+        biz_tz = str(ctx.collected_facts.get("_business_timezone", "Asia/Kolkata"))
+        summary = format_confirmation_summary(service_name, resource_name, new_start, None, biz_tz)
+        return self._fact_turn(
+            ctx,
+            user_message,
+            f"Your appointment has been rescheduled to {summary}.",
             safety,
             [],
         )

@@ -399,7 +399,7 @@
       "emotion": "calm",
       "safety_level": "routine",
       "stage": "collect_details",
-      "agent_tts": "சேரி ங்க. ரெண்டு பேஷன்ட் நேம்ஸ் சொல்லுங்க; கரெக்ட் புக்கிங் ஐடென்டிஃபை பண்ணிட்ரேன்."
+      "agent_tts": "சேரி ங்க. ரெண்டு பேஷன்ட் நேம்ஸ் சொல்லுங்க; கரெக்ட் booking identify பண்ணிட்ரேன்."
     },
     {
       "id": "b-025",
@@ -415,7 +415,7 @@
       "emotion": "calm",
       "safety_level": "routine",
       "stage": "availability",
-      "agent_tts": "எந்த டே-க்கு மூவ் பண்ணனும்?"
+      "agent_tts": "எந்த day-க்கு மூவ் பண்ணனும்?"
     },
     {
       "id": "b-026",
@@ -431,7 +431,7 @@
       "emotion": "calm",
       "safety_level": "routine",
       "stage": "availability",
-      "agent_tts": "நோ ப்ரொபிளம் ங்க; இன்னும் புக்கிங் க्रिएट் பண்ணல. வெட்னெஸ்டே ஈவினிங் அவெயிலபிலிட்டி செக் பண்ணவ?"
+      "agent_tts": "நோ ப்ரொபிளம் ங்க; இன்னும் booking create பண்ணல. வெட்னெஸ்டே ஈவினிங் availability செக் பண்ணவ?"
     },
     {
       "id": "b-027",
@@ -464,7 +464,7 @@
       "emotion": "calm",
       "safety_level": "routine",
       "stage": "response",
-      "agent_tts": "சேரி ங்க, அப்பாயின்ட்மெண்ட்-ல எந்த சேஞ்ச்-உம் பண்ணல."
+      "agent_tts": "சேரி ங்க, appointment-ல எந்த change-உம் பண்ணல."
     },
     {
       "id": "c-029",
@@ -482,7 +482,7 @@
       "emotion": "urgent",
       "safety_level": "medical",
       "stage": "clarification",
-      "agent_tts": "அய்யோ, ரொம்ப கஷ்டம இருக்கும். ஃபேஸ் ஸ்வெல்லிங், ஃபீவர், இல்ல ப்ரீதிங்/ஸ்வாலோயிங் டிஃபிகல்டி எதாவது இருக்க?"
+      "agent_tts": "அய்யோ, ரொம்ப கஷ்டம இருக்கும். ஃபேஸ் swelling, ஃபீவர், இல்ல breathing/swallowing difficulty எதாவது இருக்க?"
     },
     {
       "id": "c-030",
@@ -499,7 +499,7 @@
       "emotion": "urgent",
       "safety_level": "medical",
       "stage": "availability",
-      "agent_tts": "சேரி ங்க. ஆர்லியெஸ்ட் அர்ஜெண்ட் ஸ்லாட் செக் பண்ணிட்ரேன்."
+      "agent_tts": "சேரி ங்க. ஆர்லியெஸ்ட் அர்ஜென்ட் ஸ்லொட் செக் பண்ணிட்ரேன்."
     },
     {
       "id": "c-031",
@@ -515,7 +515,7 @@
       "emotion": "urgent",
       "safety_level": "emergency",
       "stage": "response",
-      "agent_tts": "இது urgent ங்க. Swallow பண்ண difficulty இருக்குறதுனாலா clinic appointment-காக wait பண்ண வேண்டாம். Nearest emergency department-கு இப்போ போங்க, இல்ல local emergency service-அ contact பண்ணுங்க."
+      "agent_tts": "இது urgent ங்க. Swallow பண்ண difficulty இருக்குறதுனாலை clinic appointment-காக wait பண்ண வேண்டாம். Nearest emergency department-கு இப்ப போங்க, இல்ல local emergency service-அ contact பண்ணுங்க."
     },
     {
       "id": "c-032",
@@ -548,7 +548,7 @@
       "emotion": "urgent",
       "safety_level": "emergency",
       "stage": "response",
-      "agent_tts": "சேரி. அவர் கூட nearest emergency department-கு இப்போ போங்க. நீங்களே drive பண்ண வேண்டாம்."
+      "agent_tts": "சேரி. அவர் கூட nearest emergency department-கு இப்ப போங்க. நீங்களே drive பண்ண வேண்டாம்."
     },
     {
       "id": "c-034",
@@ -616,7 +616,7 @@
       "emotion": "calm",
       "safety_level": "medical",
       "stage": "collect_details",
-      "agent_tts": "சேரி. Dental trauma urgent-ஆ assess பண்ணணும். பையன் age என்ன, injury எப்போ நடந்துச்சு?"
+      "agent_tts": "சேரி. Dental trauma urgent-ஆ assess பண்ணணும். பையன் age என்ன, injury எப்ப நடந்துச்சு?"
     },
     {
       "id": "c-038",
@@ -865,7 +865,7 @@
       "emotion": "calm",
       "safety_level": "routine",
       "stage": "clarification",
-      "agent_tts": "சேரி அம்மா, பாத்துக்கலாம். சாப்பிட ரொம்ப கஷ்டம இருக்க?"
+      "agent_tts": "Seri amma, பாத்துக்கலாம். சாப்பிட ரொம்ப கஷ்டமா இருக்க?"
     },
     {
       "id": "d-053",
@@ -881,7 +881,7 @@
       "emotion": "calm",
       "safety_level": "routine",
       "stage": "clarification",
-      "agent_tts": "சேரி. நாளைக்கு காலைல வர முடியுமா?"
+      "agent_tts": "Seri. நாளைக்கு காலைல வர முடியுமா?"
     },
     {
       "id": "d-054",
@@ -897,7 +897,7 @@
       "emotion": "calm",
       "safety_level": "routine",
       "stage": "collect_details",
-      "agent_tts": "உங்க பேரு சொல்லுங்க அம்மா."
+      "agent_tts": "உங்க பெரு சொல்லுங்க amma."
     },
     {
       "id": "d-055",
@@ -913,7 +913,7 @@
       "emotion": "calm",
       "safety_level": "routine",
       "stage": "clarification",
-      "agent_tts": "Okay ங்க, புரியுது. Same clinic-ல filling பண்ணீங்களா?"
+      "agent_tts": "Okay nga, புரியுது. Same clinic-la filling பண்ணினீங்களா?"
     },
     {
       "id": "d-056",
@@ -929,7 +929,7 @@
       "emotion": "calm",
       "safety_level": "routine",
       "stage": "collect_details",
-      "agent_tts": "சேரி, follow-up appointment arrange பண்லலாம். Patient name?"
+      "agent_tts": "Seri, follow-up appointment arrange பண்லலாம். Patient name?"
     },
     {
       "id": "d-057",
@@ -945,7 +945,7 @@
       "emotion": "calm",
       "safety_level": "routine",
       "stage": "clarification",
-      "agent_tts": "Check பண்ணிட்ரேன் ங்க. இன்னிக்கு six o'clock தானா?"
+      "agent_tts": "Check பண்ணிட்ரேன் nga. இன்னிக்கு six o'clock தானே?"
     },
     {
       "id": "d-058",
@@ -994,7 +994,7 @@
       "emotion": "calm",
       "safety_level": "routine",
       "stage": "response",
-      "agent_tts": "Consultation or cleaning charge clinic rate-படி சொல்லலாம் ங்க; exact treatment cost examination-க்கு அப்ரம் vary ஆகலாம். Current fee check பண்ணிட்ரேன."
+      "agent_tts": "Consultation or cleaning charge clinic rate-படி சொல்லலாம் nga; exact treatment cost examination-க்கு அப்ரம் vary ஆகலாம். Current fee check பண்ணிட்ரேன்."
     },
     {
       "id": "d-061",
@@ -1657,7 +1657,7 @@
       "emotion": "anxious",
       "safety_level": "routine",
       "stage": "collect_details",
-      "agent_tts": "புரியுது ங்க; first visit-ன்ற note பன்னிடலாம் so team slow-ஆ, friendly-ஆ explain பன்னுவாங்க. Child age என்ன?"
+      "agent_tts": "புரியுது ங்க; first visit-ன்ற note பண்ணிடலாம் so team slow-ஆ, friendly-ஆ explain பண்ணுவாங்க. Child age என்ன?"
     },
     {
       "id": "h-102",
@@ -1673,7 +1673,7 @@
       "emotion": "anxious",
       "safety_level": "routine",
       "stage": "availability",
-      "agent_tts": "Pediatric consultation slot check பன்னலாம். Morning-ஆ evening-ஆ child comfortable?"
+      "agent_tts": "Pediatric consultation slot check பண்ணலாம். Morning-ஆ evening-ஆ child comfortable?"
     },
     {
       "id": "h-103",
@@ -1689,7 +1689,7 @@
       "emotion": "calm",
       "safety_level": "routine",
       "stage": "collect_details",
-      "agent_tts": "கண்டிப்ப check பன்னலாம். Kids ages and preferred day சொல்லுங்க."
+      "agent_tts": "கண்டிப்ப check பண்ணலாம். Kids ages and preferred day சொல்லுங்க."
     },
     {
       "id": "h-104",
@@ -1737,7 +1737,7 @@
       "emotion": "angry",
       "safety_level": "routine",
       "stage": "availability",
-      "agent_tts": "Dentist examine பன்னட்டும். Earliest comfortable slot check பன்னலாம்; morning travel easy-ஆ?"
+      "agent_tts": "Dentist examine பண்ணட்டும். Earliest comfortable slot check பண்ணலாம்; morning travel easy-ஆ?"
     },
     {
       "id": "h-107",
@@ -1754,7 +1754,7 @@
       "emotion": "calm",
       "safety_level": "routine",
       "stage": "collect_details",
-      "agent_tts": "Pregnancy stage, symptoms and treatment type-பாடி dentist—and sometimes உங்க obstetrician—advise பன்னணும் ங்க. நான் general-ஆ safe or unsafe-ன்ற decide பன்ன முடியாது. Pain or urgent symptom இருக்க?"
+      "agent_tts": "Pregnancy stage, symptoms and treatment type-பாடி dentist—and sometimes உங்க obstetrician—advise பண்ணனும் ங்க. நான் general-ஆ safe or unsafe-ன்ற decide பண்ண முடியாது. Pain or urgent symptom இருக்க?"
     },
     {
       "id": "h-108",
@@ -1770,7 +1770,7 @@
       "emotion": "calm",
       "safety_level": "routine",
       "stage": "clarification",
-      "agent_tts": "Check பன்னலாம் ங்க. எந்த treatment or consultation?"
+      "agent_tts": "Check பண்ணலாம் ங்க. எந்த treatment or consultation?"
     },
     {
       "id": "h-109",
@@ -1787,7 +1787,7 @@
       "emotion": "calm",
       "safety_level": "routine",
       "stage": "availability",
-      "agent_tts": "கண்டிப்ப preference note பன்னலாம் ங்க. Clinic quiet-ஆ இருக்குற recommended slot check பன்னிடறேன்; child-க்கு வேற sensory support helpful-ஆ இருக்குமா?"
+      "agent_tts": "கண்டிப்ப preference note பண்ணலாம் ங்க. Clinic quiet-ஆ இருக்குற recommended slot check பண்ணிறேன்; child-க்கு வேற sensory support helpful-ஆ இருக்குமா?"
     },
     {
       "id": "h-110",
@@ -1803,7 +1803,7 @@
       "emotion": "angry",
       "safety_level": "routine",
       "stage": "response",
-      "agent_tts": "Sorry ங்க, patient authorization இல்லாம treatment or billing details share பன்ன முடியாது. Patient directly call பன்னலாம், இல்ல clinic-approved authorization process use பன்னலாம்."
+      "agent_tts": "Sorry ங்க, patient authorization இல்லாம treatment or billing details share பண்ண முடியாது. Patient directly call பண்ணலாம், இல்ல clinic-approved authorization process use பண்ணலாம்."
     },
     {
       "id": "h-111",
@@ -1851,7 +1851,7 @@
       "emotion": "calm",
       "safety_level": "routine",
       "stage": "response",
-      "agent_tts": "என்ன matter-ன்னு one line-ல சொல்லுங்க; correct priority-ல send பண்ணுறேன்."
+      "agent_tts": "என்ன matter-னு one line-ல சொல்லுங்க; correct priority-ல send பண்ணுறேன்."
     },
     {
       "id": "i-114",
@@ -1915,7 +1915,7 @@
       "emotion": "angry",
       "safety_level": "routine",
       "stage": "clarification",
-      "agent_tts": "நீங்க upset-ஆ இருக்கீங்க-ன்னு புரியுது. Help பண்ண ready-ஆ இருக்கேன், ஆனா respectful-ஆ பேசினா continue பண்ணலாம். Appointment issue என்ன?"
+      "agent_tts": "நீங்க upset-ஆ இருக்கீங்க-னு புரியுது. Help பண்ண ready-ஆ இருக்கேன், ஆனா respectful-ஆ பேசினா continue பண்ணலாம். Appointment issue என்ன?"
     },
     {
       "id": "j-118",
@@ -1980,7 +1980,7 @@
       "emotion": "anxious",
       "safety_level": "routine",
       "stage": "collect_details",
-      "agent_tts": "பரவ இல்ல nga. Patient name and registered number சொல்லுnga."
+      "agent_tts": "பரவ இல்ல ங்க. Patient name and registered number சொல்லுங்க."
     },
     {
       "id": "j-122",
@@ -1996,7 +1996,7 @@
       "emotion": "anxious",
       "safety_level": "routine",
       "stage": "response",
-      "agent_tts": "Secure-aa verify பண்ண avar registered number last four digits சொல்லுnga."
+      "agent_tts": "Secure-ஆ verify பண்ண அவர் registered number last four digits சொல்லுங்க."
     },
     {
       "id": "j-123",
@@ -2013,7 +2013,7 @@
       "emotion": "calm",
       "safety_level": "routine",
       "stage": "availability",
-      "agent_tts": "Examination இல்லாம result or one-visit treatment guarantee பண்ண முடியாது nga. Dentist cause identify பண்ணிட்டு options and expected timeline explain பண்ணுவாங்க."
+      "agent_tts": "Examination இல்லாம result or one-visit treatment guarantee பண்ண முடியாது ங்க. Dentist cause identify பண்ணிட்டு options and expected timeline explain பண்ணுவாங்க."
     },
     {
       "id": "j-124",
@@ -2029,7 +2029,7 @@
       "emotion": "angry",
       "safety_level": "routine",
       "stage": "collect_details",
-      "agent_tts": "சேரி, final-aa 6:15. Patient age?"
+      "agent_tts": "சேரி, final-ஆ 6:15. Patient age?"
     },
     {
       "id": "curated-booking",
@@ -2045,6 +2045,22 @@
       "language_mix": "roman_tanglish",
       "emotion": "calm",
       "safety_level": "routine",
+      "stage": "clarification"
+    },
+    {
+      "id": "curated-pain",
+      "section": "C",
+      "scenario": "Routine tooth pain empathy",
+      "caller": "Enakku konjam pallu valikkudhu nga.",
+      "agent": "Aiyo, kashtama irukkum nga. Evlo naala valikkudhu?",
+      "agent_tts": "அய்யோ, கஷ்டமா இருக்கும் ங்க. எவ்வளவு நாளா வலிக்குது?",
+      "delivery": "Warm, caring and brief.",
+      "intents": [
+        "pain"
+      ],
+      "language_mix": "roman_tanglish",
+      "emotion": "anxious",
+      "safety_level": "medical",
       "stage": "clarification"
     },
     {

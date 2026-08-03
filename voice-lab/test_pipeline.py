@@ -47,6 +47,14 @@ def test_style_corpus_contains_no_operational_claims_or_placeholders():
         assert forbidden not in serialized
 
 
+def test_tooth_pain_uses_reviewed_empathy_pattern():
+    retriever = ChennaiStyleRetriever(STYLE_CORPUS)
+    examples = retriever.retrieve("எனக்கு கொஞ்சம் பல் வலிக்குது", limit=3)
+    assert examples[0]["id"] == "curated-pain"
+    assert examples[0]["agent_tts"] == "அய்யோ, கஷ்டமா இருக்கும் ங்க. எவ்வளவு நாளா வலிக்குது?"
+    assert "நல்ல வலி" not in retriever.render(examples, "எனக்கு கொஞ்சம் பல் வலிக்குது")
+
+
 def test_style_retrieval_matches_booking_and_is_bounded():
     retriever = ChennaiStyleRetriever(STYLE_CORPUS)
     examples = retriever.retrieve("நாளைக்கு appointment வேணும்", limit=3)

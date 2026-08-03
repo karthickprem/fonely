@@ -243,8 +243,12 @@ async def validate_slot_time(
     resource_id: int | None,
     target_datetime: datetime,
     session: AsyncSession,
+    timezone: str = "Asia/Kolkata",
 ) -> tuple[bool, str]:
-    day_of_week = target_datetime.isoweekday()
+    from zoneinfo import ZoneInfo
+
+    local_target = target_datetime.astimezone(ZoneInfo(timezone))
+    day_of_week = local_target.isoweekday()
 
     exceptions = (
         (
@@ -293,7 +297,10 @@ async def validate_slot_time(
     if not schedules:
         return False, "No operating schedule for this day"
 
-    target_time = target_datetime.time()
+    from zoneinfo import ZoneInfo
+
+    local_dt = target_datetime.astimezone(ZoneInfo(timezone))
+    target_time = local_dt.time()
     for schedule in schedules:
         if schedule.open_time <= target_time < schedule.close_time:
             return True, "Within schedule"

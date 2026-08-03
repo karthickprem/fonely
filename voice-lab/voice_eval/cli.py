@@ -16,6 +16,7 @@ load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from voice_eval.analysis import build_analysis, write_analysis
 from voice_eval.audio import read_pcm16_mono, resolve_audio_path
 from voice_eval.contracts import apply_annotations, validate_manifest, validate_report, validate_results, _validate_records
 from voice_eval.correction import propose_shadow_correction
@@ -45,6 +46,12 @@ def write_jsonl(path: Path, records: list[dict]) -> None:
 async def run_saaras(args) -> int:
     data_root = Path(args.data_root)
     fixtures = apply_annotations(validate_manifest(Path(args.manifest), data_root), data_root)
+    if args.fixture_ids:
+        selected = {value.strip() for value in args.fixture_ids.split(",") if value.strip()}
+        fixtures = [fixture for fixture in fixtures if fixture["fixture_id"] in selected]
+        missing = selected - {fixture["fixture_id"] for fixture in fixtures}
+        if missing:
+            raise ValueError(f"unknown fixture IDs: {sorted(missing)}")
     modes = [mode.strip() for mode in args.modes.split(",") if mode.strip()]
     if not modes or any(mode not in {"transcribe", "codemix"} for mode in modes):
         raise ValueError("modes must contain transcribe and/or codemix")
@@ -142,7 +149,9 @@ def main() -> int:
     validate.add_argument("--manifest", required=True)
     validate.add_argument("--data-root", required=True)
     run = sub.add_parser("run-saaras")
-    run.add_argument("--manifest", required=True); run.add_argument("--data-root", required=True); run.add_argument("--modes", default="transcribe,codemix"); run.add_argument("--run-id", required=True); run.add_argument("--output", required=True)
+    run.add_argument("--manifest", required=True); run.add_argument("--data-root", required=True); run.add_argument("--modes", default="transcribe,codemix"); run.add_argument("--fixture-ids"); run.add_argument("--run-id", required=True); run.add_argument("--output", required=True)
+    analyze = sub.add_parser("analyze")
+    analyze.add_argument("--manifest", required=True); analyze.add_argument("--data-root", required=True); analyze.add_argument("--results", required=True); analyze.add_argument("--retry-results"); analyze.add_argument("--output", required=True)
     report = sub.add_parser("report")
     report.add_argument("--manifest", required=True); report.add_argument("--data-root", required=True); report.add_argument("--results", required=True); report.add_argument("--report-id", required=True); report.add_argument("--output", required=True); report.add_argument("--expected-modes", default="transcribe,codemix")
     serve = sub.add_parser("serve")
@@ -151,6 +160,18 @@ def main() -> int:
     if args.command == "validate":
         fixtures = validate_manifest(Path(args.manifest), Path(args.data_root)); print(f"Validated {len(fixtures)} fixtures"); return 0
     if args.command == "run-saaras": return asyncio.run(run_saaras(args))
+    if args.command == "analyze":
+        data_root = Path(args.data_root)
+        fixtures = apply_annotations(validate_manifest(Path(args.manifest), data_root), data_root)
+        results = validate_results(Path(args.results))
+        retries = validate_results(Path(args.retry_results)) if args.retry_results else []
+        fixture_ids = {fixture["fixture_id"] for fixture in fixtures}
+        if any(result["fixture_id"] not in fixture_ids for result in results):
+            raise ValueError("analysis results contain unknown fixture IDs")
+        output = safe_output_path(data_root, Path(args.output))
+        write_analysis(output, build_analysis(fixtures, results, retries))
+        print(f"Wrote analysis to {output}")
+        return 0
     if args.command == "report": return build_report(args)
     if args.command == "serve":
         if args.host not in {"127.0.0.1", "localhost", "::1"}:

@@ -8,6 +8,8 @@ from pipecat.frames.frames import (BotStartedSpeakingFrame, BotStoppedSpeakingFr
 from pipecat.metrics.metrics import TTFAMetricsData, TTFBMetricsData, TurnMetricsData
 from pipecat.observers.base_observer import BaseObserver, FramePushed
 
+from voice_eval.correction import propose_shadow_correction
+
 
 class VoiceEvalObserver(BaseObserver):
     """Append small allow-listed evidence records; never audio or transcript text."""
@@ -48,7 +50,17 @@ class VoiceEvalObserver(BaseObserver):
         elif isinstance(frame, VADUserStoppedSpeakingFrame): event = {"event": "vad_stop", "stop_secs": frame.stop_secs}
         elif isinstance(frame, UserStartedSpeakingFrame): event = {"event": "user_turn_start"}
         elif isinstance(frame, UserStoppedSpeakingFrame): event = {"event": "user_turn_stop"}
-        elif isinstance(frame, TranscriptionFrame): event = {"event": "stt_transcript", "text_length": len(frame.text), "language": str(frame.language) if frame.language else None, "finalized": frame.finalized}
+        elif isinstance(frame, TranscriptionFrame):
+            correction = propose_shadow_correction(frame.text, [])
+            event = {
+                "event": "stt_transcript",
+                "text_length": len(frame.text),
+                "language": str(frame.language) if frame.language else None,
+                "finalized": frame.finalized,
+                "shadow_decision": correction.decision,
+                "shadow_candidates": len(correction.candidates),
+                "shadow_changed_critical_field": correction.changed_critical_field,
+            }
         elif isinstance(frame, TTSAudioRawFrame): event = {"event": "tts_audio", "bytes": len(frame.audio), "sample_rate": frame.sample_rate}
         elif isinstance(frame, BotStartedSpeakingFrame): event = {"event": "bot_start_proxy"}
         elif isinstance(frame, BotStoppedSpeakingFrame): event = {"event": "bot_stop_proxy"}

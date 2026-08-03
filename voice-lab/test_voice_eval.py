@@ -11,6 +11,7 @@ from jsonschema import Draft202012Validator
 LAB = Path(__file__).resolve().parent
 sys.path.insert(0, str(LAB))
 
+from voice_eval.analysis import classify_row, semantic_text
 from voice_eval.audio import inspect_wav, verify_fixture_audio
 from voice_eval.contracts import apply_annotations, load_json_schema, validate_manifest, validate_report
 from voice_eval.correction import propose_shadow_correction
@@ -93,6 +94,11 @@ def test_entity_scoring():
     assert score_critical_entities(entities,'Doctor Priya available','ta-IN')==(1,1)
 
 
+def test_semantic_normalization_preserves_raw_evidence_but_equates_scripts():
+    assert semantic_text("doctor appointment six thirty") == semantic_text("டாக்டர் அப்பாயின்ட்மென்ட் 6:30")
+    assert semantic_text("Dr. Priya-வை பாக்கணும்") == semantic_text("Doctor Priyaவை பார்க்கணும்")
+
+
 def test_shadow_correction_and_critical_clarification():
     safe=propose_shadow_correction('DOCUMENTARY at aminji karai',[])
     assert safe.decision=='would_correct'
@@ -101,6 +107,9 @@ def test_shadow_correction_and_critical_clarification():
     assert intent.decision=='would_clarify' and intent.proposed_transcript=='எனக்கு documentary book பண்ணனும்'
     critical=propose_shadow_correction('root channel venum',[{"kind":"service","value":"root canal","variants":[],"critical":True}])
     assert critical.decision=='would_clarify' and critical.proposed_transcript=='root channel venum'
+    observed=propose_shadow_correction('டாக்டர் பிரிய உபாகனம்',[])
+    assert observed.decision=='would_clarify'
+    assert observed.proposed_transcript=='டாக்டர் பிரிய உபாகனம்'
 
 
 def test_observer_writes_sanitized_deduplicated_events(tmp_path):

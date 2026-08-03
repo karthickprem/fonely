@@ -6,11 +6,16 @@ import re
 
 CRITICAL_KINDS = {"intent", "name", "doctor", "service", "date", "time", "price", "quantity", "negation"}
 CONFUSIONS = {
-    "documentary": "doctor appointment",
-    "root channel": "root canal",
-    "preeya": "Priya",
-    "aminji karai": "Aminjikarai",
-    "six dirty": "six thirty",
+    "documentary": ("doctor appointment", False),
+    "root channel": ("root canal", True),
+    "preeya": ("Priya", True),
+    "aminji karai": ("Aminjikarai", False),
+    "six dirty": ("six thirty", True),
+    # Evidence-backed founder benchmark confusions. These remain shadow-only
+    # and require clarification because they change critical values.
+    "பிரிய உபாகனம்": ("Dr. Priya-வை பாக்கணும்", True),
+    "எவ்ளோ ஓ கிளாக்": ("eleven o'clock", True),
+    "டாக்குமெண்ட் ரீட்ல": ("documentary illa", True),
 }
 
 
@@ -29,7 +34,7 @@ def propose_shadow_correction(raw_transcript: str, critical_entities: list[dict]
     proposed = raw_transcript
     changed_critical = False
     reasons = []
-    for confusion, replacement in CONFUSIONS.items():
+    for confusion, (replacement, always_critical) in CONFUSIONS.items():
         if confusion not in lower:
             continue
         acceptable_critical_values = [
@@ -44,7 +49,7 @@ def propose_shadow_correction(raw_transcript: str, critical_entities: list[dict]
         )
         candidate = re.sub(re.escape(confusion), replacement, proposed, flags=re.IGNORECASE)
         candidates.append({"from": confusion, "to": replacement, "text": candidate, "confidence": 0.9, "reason": "reviewed dental confusion pair"})
-        if affected or replacement in {"Priya", "root canal", "six thirty"}:
+        if affected or always_critical:
             changed_critical = True
             reasons.append("critical value requires caller clarification")
         else:

@@ -295,7 +295,7 @@ class ConversationService:
                 regex_found = True
 
         if "start_at" not in ctx.collected_facts:
-            self._extract_datetime(ctx, message)
+            self._extract_datetime(ctx, message, biz.timezone)
             if "start_at" in ctx.collected_facts:
                 regex_found = True
 
@@ -346,9 +346,16 @@ class ConversationService:
                 del ctx.collected_facts["resource_id"]
                 ctx.collected_facts.pop("resource_name", None)
 
-    def _extract_datetime(self, ctx: ConversationContext, message: str) -> None:
+    def _extract_datetime(
+        self, ctx: ConversationContext, message: str, timezone: str = "Asia/Kolkata"
+    ) -> None:
+        from datetime import UTC, datetime
+        from datetime import time as dt_time
+        from zoneinfo import ZoneInfo
+
         msg_lower = message.lower()
-        now = utcnow()
+        clinic_tz = ZoneInfo(timezone)
+        now = datetime.now(clinic_tz)
 
         time_match = re.search(r"\b(\d{1,2}):(\d{2})\s*(am|pm)?\b", msg_lower)
         if time_match:
@@ -364,21 +371,14 @@ class ConversationService:
             if "tomorrow" in msg_lower or "நாளை" in message:
                 target_date = (now + timedelta(days=1)).date()
 
-            from datetime import UTC, datetime
-            from datetime import time as dt_time
-
-            slot_time = datetime.combine(target_date, dt_time(hour, minute), tzinfo=UTC)
-            ctx.collected_facts["start_at"] = slot_time
+            local_dt = datetime.combine(target_date, dt_time(hour, minute), tzinfo=clinic_tz)
+            ctx.collected_facts["start_at"] = local_dt.astimezone(UTC)
             return
 
         if "tomorrow" in msg_lower or "நாளை" in message:
             target_date = (now + timedelta(days=1)).date()
-            from datetime import UTC, datetime
-            from datetime import time as dt_time
-
-            ctx.collected_facts["start_at"] = datetime.combine(
-                target_date, dt_time(10, 0), tzinfo=UTC
-            )
+            local_dt = datetime.combine(target_date, dt_time(10, 0), tzinfo=clinic_tz)
+            ctx.collected_facts["start_at"] = local_dt.astimezone(UTC)
 
     def _identify_missing_facts(self, ctx: ConversationContext) -> list[str]:
         operation = ctx.collected_facts.get("_operation", "book")

@@ -93,16 +93,36 @@ class ConversationPersistenceService:
 
     @staticmethod
     def _to_context(db_conv: object) -> ConversationContext:
+        raw_facts = dict(getattr(db_conv, "collected_facts", {}) or {})
+        facts = _deserialize_facts(raw_facts)
         ctx = ConversationContext(
             conversation_id=getattr(db_conv, "id", ""),
             business_id=getattr(db_conv, "business_id", 0),
             state=ConversationState(getattr(db_conv, "state", "greeting")),
-            collected_facts=dict(getattr(db_conv, "collected_facts", {}) or {}),
+            collected_facts=facts,
             proposal_id=getattr(db_conv, "proposal_id", None),
             proposal_version=getattr(db_conv, "proposal_version", None),
             created_at=getattr(db_conv, "created_at", utcnow()),
         )
+        turn_count = getattr(db_conv, "turn_count", 0)
+        for _ in range(turn_count):
+            ctx.turns.append(None)  # type: ignore[arg-type]
         return ctx
+
+
+def _deserialize_facts(facts: dict[str, object]) -> dict[str, object]:
+    from datetime import datetime
+
+    result: dict[str, object] = {}
+    for key, value in facts.items():
+        if isinstance(value, str) and key in ("start_at", "end_at", "expires_at"):
+            try:
+                result[key] = datetime.fromisoformat(value)
+            except (ValueError, TypeError):
+                result[key] = value
+        else:
+            result[key] = value
+    return result
 
 
 def _serialize_facts(facts: dict[str, object]) -> dict[str, object]:

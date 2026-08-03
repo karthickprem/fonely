@@ -1,7 +1,7 @@
 """Tenant-scoped read tools for conversation orchestration."""
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -116,6 +116,7 @@ async def check_availability(
     target_date: date,
     session: AsyncSession,
     *,
+    timezone: str = "Asia/Kolkata",
     duration_minutes: int = 30,
     buffer_before: int = 0,
     buffer_after: int = 0,
@@ -205,8 +206,11 @@ async def check_availability(
         open_time = schedule.open_time
         close_time = schedule.close_time
 
-        current = datetime.combine(target_date, open_time, tzinfo=UTC)
-        day_end = datetime.combine(target_date, close_time, tzinfo=UTC)
+        from zoneinfo import ZoneInfo
+
+        clinic_tz = ZoneInfo(timezone)
+        current = datetime.combine(target_date, open_time, tzinfo=clinic_tz)
+        day_end = datetime.combine(target_date, close_time, tzinfo=clinic_tz)
 
         while current + timedelta(minutes=total_effective) <= day_end:
             slot_start = current + timedelta(minutes=buffer_before)

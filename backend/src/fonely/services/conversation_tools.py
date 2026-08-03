@@ -192,48 +192,48 @@ async def check_availability(
         .all()
     )
 
-    booked_intervals: list[tuple[datetime, datetime]] = []
+    from fonely.domain.appointments.availability import TimeWindow, derive_windows
+    from fonely.domain.appointments.availability import overlaps as domain_overlaps
+
+    booked: list[TimeWindow] = []
     for appt in existing_appointments:
-        effective_start = appt.effective_start_at or appt.start_at
-        effective_end = appt.effective_end_at or appt.end_at
-        if effective_start.date() == target_date or effective_end.date() == target_date:
-            booked_intervals.append((effective_start, effective_end))
+        eff_start = appt.effective_start_at or appt.start_at
+        eff_end = appt.effective_end_at or appt.end_at
+        if eff_start.date() == target_date or eff_end.date() == target_date:
+            booked.append(TimeWindow(eff_start, eff_end))
 
     slots: list[AvailableSlot] = []
-    total_effective = duration_minutes + buffer_before + buffer_after
 
     for schedule in schedules:
-        open_time = schedule.open_time
-        close_time = schedule.close_time
-
         from zoneinfo import ZoneInfo
 
         clinic_tz = ZoneInfo(timezone)
-        current = datetime.combine(target_date, open_time, tzinfo=clinic_tz)
-        day_end = datetime.combine(target_date, close_time, tzinfo=clinic_tz)
+        current = datetime.combine(target_date, schedule.open_time, tzinfo=clinic_tz)
+        day_end = datetime.combine(target_date, schedule.close_time, tzinfo=clinic_tz)
 
-        while current + timedelta(minutes=total_effective) <= day_end:
-            slot_start = current + timedelta(minutes=buffer_before)
-            slot_end = slot_start + timedelta(minutes=duration_minutes)
-            effective_start = current
-            effective_end = slot_end + timedelta(minutes=buffer_after)
-
-            overlaps = any(
-                effective_start < booked_end and effective_end > booked_start
-                for booked_start, booked_end in booked_intervals
+        slot_start = current + timedelta(minutes=buffer_before)
+        while True:
+            appt_window, effective = derive_windows(
+                slot_start,
+                duration_minutes=duration_minutes,
+                buffer_before_minutes=buffer_before,
+                buffer_after_minutes=buffer_after,
             )
+            if effective.end_at > day_end:
+                break
 
-            if not overlaps:
+            conflict = any(domain_overlaps(effective, b) for b in booked)
+            if not conflict:
                 slots.append(
                     AvailableSlot(
-                        start_at=slot_start,
-                        end_at=slot_end,
+                        start_at=appt_window.start_at,
+                        end_at=appt_window.end_at,
                         resource_id=resource_id,
                         resource_name=resource.name,
                     )
                 )
 
-            current += timedelta(minutes=slot_interval)
+            slot_start += timedelta(minutes=slot_interval)
 
     return slots
 

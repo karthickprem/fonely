@@ -174,3 +174,9 @@ class NotificationStatus(enum.StrEnum):
     DELIVERED = "delivered"
     FAILED = "failed"
     DEAD_LETTER = "dead_letter"
+
+
+class DailyContextType(enum.StrEnum):
+    OFFER = "offer"
+    NOTE = "note"
+    ANNOUNCEMENT = "announcement"

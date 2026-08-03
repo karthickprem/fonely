@@ -485,6 +485,23 @@ class AppointmentService:
                 _restore_deferred_sql(APPOINTMENT_CANCEL_POST_COMPLETION_CONSTRAINTS)
             )
 
+            try:
+                from fonely.services.notifications import NotificationService
+
+                await NotificationService(self._session).create_cancellation_notifications(
+                    business_id=command.actor.business_id,
+                    appointment_id=appointment.id,
+                    customer_phone=appointment.customer_phone,
+                    customer_name=appointment.customer_name,
+                    service_name=appointment.service_name_snapshot,
+                    resource_name=appointment.resource_name_snapshot,
+                    start_at=appointment.start_at,
+                    business_timezone=appointment.business_timezone_snapshot,
+                    reason=data.reason_code,
+                )
+            except Exception:
+                logger.warning("cancellation_notification_failed", exc_info=True)
+
         return AppointmentCancellationResult(
             appointment_id=data.target_appointment_id,
             appointment_commit_id=commit.id,

@@ -2,6 +2,7 @@
 
 from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -37,8 +38,9 @@ class NotificationService:
         clinic_name = business.name if business else "Business"
         owner_phone = business.primary_contact_phone if business else ""
 
-        start_local = start_at.strftime("%A, %b %d")
-        time_local = start_at.strftime("%-I:%M %p")
+        local_time = start_at.astimezone(ZoneInfo(business_timezone))
+        start_local = local_time.strftime("%A, %b %d")
+        time_local = local_time.strftime("%-I:%M %p")
         price_str = f"₹{price}" if price is not None else None
 
         event_ids: list[int] = []
@@ -113,8 +115,9 @@ class NotificationService:
         clinic_name = business.name if business else "Business"
         owner_phone = business.primary_contact_phone if business else ""
 
-        start_local = start_at.strftime("%A, %b %d")
-        time_local = start_at.strftime("%-I:%M %p")
+        local_time = start_at.astimezone(ZoneInfo(business_timezone))
+        start_local = local_time.strftime("%A, %b %d")
+        time_local = local_time.strftime("%-I:%M %p")
 
         event_ids: list[int] = []
 

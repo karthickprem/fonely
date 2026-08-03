@@ -43,6 +43,19 @@ async def _seed_clinic(session: AsyncSession, target_date: date) -> None:
             "VALUES (1, 1, 'Consultation', 30, 0, 0, 500, true)"
         )
     )
+    await session.execute(
+        text(
+            "INSERT INTO service_resource_eligibility "
+            "(business_id, service_id, resource_id, is_active) "
+            "VALUES (1, 1, 1, true)"
+        )
+    )
+    await session.execute(
+        text(
+            "INSERT INTO business_users (business_id, phone, role, is_active) "
+            "VALUES (1, '+910000000001', 'owner', true)"
+        )
+    )
     dow = target_date.weekday()
     await session.execute(
         text(

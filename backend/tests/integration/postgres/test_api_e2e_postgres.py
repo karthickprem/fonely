@@ -8,6 +8,7 @@ in PostgreSQL. The model gateway is mocked; the database is real.
 from contextlib import contextmanager
 from datetime import UTC, datetime, time, timedelta
 from unittest.mock import AsyncMock
+from zoneinfo import ZoneInfo
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -148,7 +149,8 @@ async def test_full_booking_through_http(
         target = now + timedelta(days=1)
         if target.isoweekday() == 7:
             target += timedelta(days=1)
-        slot_start = datetime.combine(target.date(), time(10, 30), tzinfo=UTC)
+        clinic_tz = ZoneInfo("Asia/Kolkata")
+        slot_start = datetime.combine(target.date(), time(10, 30), tzinfo=clinic_tz).astimezone(UTC)
 
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             r = await client.get(

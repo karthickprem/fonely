@@ -263,6 +263,10 @@ def _mock_app(
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock(return_value=None)
 
+    dedup_result = MagicMock()
+    dedup_result.rowcount = 1
+    mock_session.execute = AsyncMock(return_value=dedup_result)
+
     mock_factory = MagicMock()
     mock_factory.return_value = mock_session
 
@@ -559,21 +563,31 @@ class TestWebhookSignatureVerification:
 
 class TestBoundedDedupSet:
     def test_eviction_preserves_recent_ids(self) -> None:
-        from fonely.api.channels.whatsapp import _PROCESSED_MESSAGE_IDS, _is_duplicate
+        from fonely.api.channels.whatsapp import (
+            _PROCESSED_MESSAGE_IDS,
+            _is_duplicate_in_memory,
+            _mark_processed_in_memory,
+        )
 
         _PROCESSED_MESSAGE_IDS.clear()
         for i in range(15):
-            assert _is_duplicate(f"msg-{i}") is False
+            assert _is_duplicate_in_memory(f"msg-{i}") is False
+            _mark_processed_in_memory(f"msg-{i}")
 
-        assert _is_duplicate("msg-14") is True
-        assert _is_duplicate("msg-0") is False or "msg-0" in _PROCESSED_MESSAGE_IDS
+        assert _is_duplicate_in_memory("msg-14") is True
+        assert _is_duplicate_in_memory("msg-0") is False or "msg-0" in _PROCESSED_MESSAGE_IDS
 
     def test_duplicate_detected(self) -> None:
-        from fonely.api.channels.whatsapp import _PROCESSED_MESSAGE_IDS, _is_duplicate
+        from fonely.api.channels.whatsapp import (
+            _PROCESSED_MESSAGE_IDS,
+            _is_duplicate_in_memory,
+            _mark_processed_in_memory,
+        )
 
         _PROCESSED_MESSAGE_IDS.clear()
-        assert _is_duplicate("unique-msg") is False
-        assert _is_duplicate("unique-msg") is True
+        assert _is_duplicate_in_memory("unique-msg") is False
+        _mark_processed_in_memory("unique-msg")
+        assert _is_duplicate_in_memory("unique-msg") is True
 
 
 class TestConstantTimeVerifyToken:

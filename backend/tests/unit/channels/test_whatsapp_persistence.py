@@ -50,6 +50,10 @@ def _mock_app():
     mock_session.__aexit__ = AsyncMock(return_value=None)
     mock_session.commit = AsyncMock()
 
+    dedup_result = MagicMock()
+    dedup_result.rowcount = 1
+    mock_session.execute = AsyncMock(return_value=dedup_result)
+
     mock_factory = MagicMock()
     mock_factory.return_value = mock_session
 
@@ -132,7 +136,7 @@ class TestSessionCommit:
 
             await _handle_message(_text_message(), "12345", app)
 
-            mock_session.commit.assert_called_once()
+            assert mock_session.commit.call_count >= 2
 
 
 class TestCompletedConversation:

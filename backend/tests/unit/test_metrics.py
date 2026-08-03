@@ -2,7 +2,7 @@
 
 import threading
 
-from fonely.core.metrics import MetricsCollector, normalize_path
+from fonely.core.metrics import Histogram, MetricsCollector, normalize_path
 
 
 class TestCounter:
@@ -58,6 +58,23 @@ class TestHistogram:
         assert m.histogram_summary("dur", {"path": "/a"})["count"] == 1
         assert m.histogram_summary("dur", {"path": "/b"})["count"] == 1
 
+    def test_sliding_window_caps_memory(self) -> None:
+        h = Histogram(max_size=1000)
+        for i in range(2000):
+            h.observe(float(i))
+        assert h.window_size() == 1000
+        summary = h.summary()
+        assert summary["count"] == 1000
+        assert summary["min"] >= 1000
+
+    def test_window_retains_recent_values(self) -> None:
+        h = Histogram(max_size=100)
+        for i in range(200):
+            h.observe(float(i))
+        summary = h.summary()
+        assert summary["min"] >= 100
+        assert summary["max"] == 199
+
 
 class TestGauge:
     def test_set_and_value(self) -> None:
@@ -70,6 +87,38 @@ class TestGauge:
     def test_missing_gauge_returns_zero(self) -> None:
         m = MetricsCollector()
         assert m.gauge_value("missing") == 0.0
+
+    def test_atomic_increment_decrement(self) -> None:
+        m = MetricsCollector()
+        m.increment_gauge("active")
+        m.increment_gauge("active")
+        assert m.gauge_value("active") == 2
+        m.decrement_gauge("active")
+        assert m.gauge_value("active") == 1
+        m.decrement_gauge("active")
+        m.decrement_gauge("active")
+        assert m.gauge_value("active") == 0
+
+    def test_concurrent_increment_decrement(self) -> None:
+        m = MetricsCollector()
+        count = 1000
+
+        def inc() -> None:
+            for _ in range(count):
+                m.increment_gauge("race")
+
+        def dec() -> None:
+            for _ in range(count):
+                m.decrement_gauge("race")
+
+        threads = [threading.Thread(target=inc) for _ in range(4)] + [
+            threading.Thread(target=dec) for _ in range(4)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert m.gauge_value("race") == 0
 
 
 class TestExport:
@@ -119,10 +168,8 @@ class TestReset:
 
 class TestPathNormalization:
     def test_uuid_normalized(self) -> None:
-        assert (
-            normalize_path("/conversations/abc12345-1234-5678-9012-abcdef012345/messages")
-            == "/conversations/{id}/messages"
-        )
+        result = normalize_path("/conversations/abc12345-1234-5678-9012-abcdef012345/messages")
+        assert result == "/conversations/{id}/messages"
 
     def test_integer_id_normalized(self) -> None:
         result = normalize_path("/onboarding/drafts/42/activate")
@@ -130,3 +177,11 @@ class TestPathNormalization:
 
     def test_no_id_unchanged(self) -> None:
         assert normalize_path("/health/live") == "/health/live"
+
+    def test_v1_preserved(self) -> None:
+        result = normalize_path("/internal/v1/conversations")
+        assert result == "/internal/v1/conversations"
+
+    def test_v1_with_integer_id(self) -> None:
+        result = normalize_path("/internal/v1/onboarding/drafts/42")
+        assert result == "/internal/v1/onboarding/drafts/{id}"

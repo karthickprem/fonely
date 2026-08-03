@@ -1,8 +1,11 @@
 """Thread-safe in-process metrics with JSON export."""
 
+import re
 import threading
 import time
 from typing import Any
+
+_DEFAULT_HISTOGRAM_WINDOW = 1000
 
 
 class Counter:
@@ -24,14 +27,18 @@ class Counter:
 
 
 class Histogram:
-    def __init__(self) -> None:
+    def __init__(self, max_size: int = _DEFAULT_HISTOGRAM_WINDOW) -> None:
         self._data: dict[str, list[float]] = {}
         self._lock = threading.Lock()
+        self._max_size = max_size
 
     def observe(self, value: float, labels: dict[str, str] | None = None) -> None:
         key = _label_key(labels)
         with self._lock:
-            self._data.setdefault(key, []).append(value)
+            bucket = self._data.setdefault(key, [])
+            bucket.append(value)
+            if len(bucket) > self._max_size:
+                del bucket[: len(bucket) - self._max_size]
 
     def summary(self, labels: dict[str, str] | None = None) -> dict[str, float]:
         key = _label_key(labels)
@@ -50,6 +57,11 @@ class Histogram:
             "p99": round(_percentile(sorted_vals, 99), 2),
         }
 
+    def window_size(self, labels: dict[str, str] | None = None) -> int:
+        key = _label_key(labels)
+        with self._lock:
+            return len(self._data.get(key, []))
+
     def export(self) -> dict[str, dict[str, float]]:
         with self._lock:
             keys = list(self._data.keys())
@@ -65,6 +77,16 @@ class Gauge:
         key = _label_key(labels)
         with self._lock:
             self._values[key] = value
+
+    def increment(self, labels: dict[str, str] | None = None, amount: float = 1.0) -> None:
+        key = _label_key(labels)
+        with self._lock:
+            self._values[key] = self._values.get(key, 0.0) + amount
+
+    def decrement(self, labels: dict[str, str] | None = None, amount: float = 1.0) -> None:
+        key = _label_key(labels)
+        with self._lock:
+            self._values[key] = max(0, self._values.get(key, 0.0) - amount)
 
     def value(self, labels: dict[str, str] | None = None) -> float:
         return self._values.get(_label_key(labels), 0.0)
@@ -93,6 +115,16 @@ class MetricsCollector:
     def set_gauge(self, name: str, value: float, labels: dict[str, str] | None = None) -> None:
         gauge = self._get_gauge(name)
         gauge.set(value, labels)
+
+    def increment_gauge(
+        self, name: str, labels: dict[str, str] | None = None, amount: float = 1.0
+    ) -> None:
+        self._get_gauge(name).increment(labels, amount)
+
+    def decrement_gauge(
+        self, name: str, labels: dict[str, str] | None = None, amount: float = 1.0
+    ) -> None:
+        self._get_gauge(name).decrement(labels, amount)
 
     def counter_value(self, name: str, labels: dict[str, str] | None = None) -> int:
         counter = self._counters.get(name)
@@ -187,14 +219,12 @@ def _percentile(sorted_values: list[float], pct: float) -> float:
 
 
 def normalize_path(path: str) -> str:
-    import re
-
     path = re.sub(
         r"/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
         "/{id}",
         path,
     )
-    path = re.sub(r"/\d+", "/{id}", path)
+    path = re.sub(r"/(\d+)(?=/|$)", "/{id}", path)
     return path
 
 

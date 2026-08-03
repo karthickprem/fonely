@@ -4,6 +4,8 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from fonely.domain.appointments.commands import (
     ConfirmPendingAppointmentCommand,
     CreatePendingAppointmentCommand,
@@ -224,6 +226,10 @@ async def test_confirm_does_not_call_outer_commit() -> None:
     session.flush = AsyncMock()
     session.execute = AsyncMock()
     session.add = MagicMock()
+    mock_business = MagicMock()
+    mock_business.name = "Test Clinic"
+    mock_business.timezone = "Asia/Kolkata"
+    session.scalar = AsyncMock(return_value=mock_business)
     validation = _mock_validation()
     service = AppointmentService(session, validation=validation)
 
@@ -277,13 +283,20 @@ async def test_confirm_does_not_call_outer_commit() -> None:
 
     session.begin_nested = _fake_nested
 
-    result = await service.confirm_and_commit(
-        ConfirmPendingAppointmentCommand(
-            actor=_actor(),
-            pending_action_id=10,
-            expected_version=2,
+    with pytest.MonkeyPatch.context() as mp:
+        mock_notif_service = AsyncMock()
+        mock_notif_cls = MagicMock(return_value=mock_notif_service)
+        mp.setattr(
+            "fonely.services.notifications.NotificationService",
+            mock_notif_cls,
         )
-    )
+        result = await service.confirm_and_commit(
+            ConfirmPendingAppointmentCommand(
+                actor=_actor(),
+                pending_action_id=10,
+                expected_version=2,
+            )
+        )
 
     assert isinstance(result, PreCommitAppointmentSuccess)
     session.commit.assert_not_called()

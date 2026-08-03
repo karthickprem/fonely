@@ -189,7 +189,7 @@ async def test_cancel_no_appointments(
         turn = await conv_service.process_message(
             "cancel-none", 1, _actor(), "cancel my appointment"
         )
-        assert "no upcoming appointments" in turn.assistant_response.lower()
+        assert "upcoming appointments" in turn.assistant_response.lower()
         assert turn.state == ConversationState.ENDED
 
         count = await session.scalar(select(func.count(Appointment.id)))

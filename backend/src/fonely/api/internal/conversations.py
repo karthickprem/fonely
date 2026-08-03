@@ -14,7 +14,6 @@ from fonely.api.internal.appointments import (
 )
 from fonely.services.conversation import (
     ConversationService,
-    create_conversation,
     get_conversation,
 )
 
@@ -72,7 +71,13 @@ async def create_conversation_route(
     request: Request,
 ) -> ConversationResponse:
     _verify_internal_auth(request)
-    ctx = create_conversation(body.business_id)
+    factory: async_sessionmaker[AsyncSession] = request.app.state.session_factory
+    async with factory() as session:
+        from fonely.services.conversation_persistence import ConversationPersistenceService
+
+        persistence = ConversationPersistenceService(session)
+        ctx = await persistence.load_or_create(body.business_id, "internal")
+        await session.commit()
     return ConversationResponse(
         conversation_id=ctx.conversation_id,
         state=ctx.state.value,

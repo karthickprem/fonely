@@ -609,9 +609,10 @@ class ConversationService:
             ctx = _CONVERSATIONS.get(conversation_id)
             if ctx is not None:
                 persistence = ConversationPersistenceService(self._session)
-                await persistence.save_turn(ctx, turn)
+                async with self._session.begin_nested():
+                    await persistence.save_turn(ctx, turn)
         except Exception:
-            logger.warning("conversation_persist_failed", exc_info=True)
+            logger.debug("conversation_persist_skipped", exc_info=True)
 
     def _log_turn(self, turn: ConversationTurn, start_time: float) -> None:
         latency = round((time.monotonic() - start_time) * 1000)

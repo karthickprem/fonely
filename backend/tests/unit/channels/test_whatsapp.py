@@ -9,8 +9,11 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from fonely.api.channels.whatsapp import (
+    _MAX_PROCESSED_IDS,
     _PROCESSED_MESSAGE_IDS,
     _handle_message,
+    _is_duplicate,
+    _verify_webhook_signature,
     router,
 )
 from fonely.services.conversation import _CONVERSATIONS, _PHONE_INDEX
@@ -40,6 +43,7 @@ def _patch_settings():
         mock_settings.whatsapp_access_token = "test-access"
         mock_settings.whatsapp_phone_number_id = "12345"
         mock_settings.whatsapp_business_mappings = ""
+        mock_settings.whatsapp_app_secret = ""
         yield mock_settings
 
 
@@ -494,3 +498,129 @@ class TestPIISafety:
             await sender.send_text("919876543210", "Hello")
 
         assert "super-secret-token-123" not in caplog.text
+
+
+class TestWebhookSignatureVerification:
+    def _sign(self, body: bytes, secret: str) -> str:
+        import hashlib
+        import hmac as _hmac
+
+        return "sha256=" + _hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+    @pytest.mark.asyncio
+    async def test_valid_signature_accepted(self, _patch_settings):
+        _patch_settings.whatsapp_app_secret = "test-secret"
+        app = _make_app()
+        transport = ASGITransport(app=app)
+
+        payload = json.dumps(_webhook_payload()).encode()
+        sig = self._sign(payload, "test-secret")
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.post(
+                "/webhooks/whatsapp",
+                content=payload,
+                headers={"Content-Type": "application/json", "X-Hub-Signature-256": sig},
+            )
+            assert r.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_invalid_signature_rejected(self, _patch_settings):
+        _patch_settings.whatsapp_app_secret = "test-secret"
+        app = _make_app()
+        transport = ASGITransport(app=app)
+
+        payload = json.dumps(_webhook_payload()).encode()
+        bad_sig = self._sign(payload, "wrong-secret")
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.post(
+                "/webhooks/whatsapp",
+                content=payload,
+                headers={"Content-Type": "application/json", "X-Hub-Signature-256": bad_sig},
+            )
+            assert r.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_missing_signature_with_secret_configured_rejected(self, _patch_settings):
+        _patch_settings.whatsapp_app_secret = "test-secret"
+        app = _make_app()
+        transport = ASGITransport(app=app)
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.post(
+                "/webhooks/whatsapp",
+                json=_webhook_payload(),
+            )
+            assert r.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_no_app_secret_skips_verification(self, _patch_settings):
+        _patch_settings.whatsapp_app_secret = ""
+        app = _make_app()
+        transport = ASGITransport(app=app)
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.post(
+                "/webhooks/whatsapp",
+                json=_webhook_payload(),
+            )
+            assert r.status_code == 200
+
+    def test_verify_signature_function_correct(self):
+        import hashlib
+        import hmac as _hmac
+
+        with patch("fonely.api.channels.whatsapp.settings") as mock_s:
+            mock_s.whatsapp_app_secret = "my-secret"
+            body = b'{"test": "data"}'
+            expected_sig = "sha256=" + _hmac.new(b"my-secret", body, hashlib.sha256).hexdigest()
+
+            mock_request = MagicMock()
+            mock_request.headers = {"X-Hub-Signature-256": expected_sig}
+            assert _verify_webhook_signature(mock_request, body) is True
+
+            mock_request.headers = {"X-Hub-Signature-256": "sha256=invalid"}
+            assert _verify_webhook_signature(mock_request, body) is False
+
+            mock_request.headers = {}
+            assert _verify_webhook_signature(mock_request, body) is False
+
+
+class TestConstantTimeVerifyToken:
+    @pytest.mark.asyncio
+    async def test_uses_hmac_compare_digest(self):
+        import hmac as _hmac
+
+        with patch.object(_hmac, "compare_digest", wraps=_hmac.compare_digest) as mock_compare:
+            app = _make_app()
+            transport = ASGITransport(app=app)
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                await client.get(
+                    "/webhooks/whatsapp",
+                    params={
+                        "hub.mode": "subscribe",
+                        "hub.verify_token": "test-token",
+                        "hub.challenge": "test",
+                    },
+                )
+            assert mock_compare.called
+
+
+class TestBoundedDedupEviction:
+    def test_oldest_evicted_when_limit_exceeded(self):
+        _PROCESSED_MESSAGE_IDS.clear()
+        for i in range(_MAX_PROCESSED_IDS + 1):
+            _is_duplicate(f"msg-{i}")
+
+        assert len(_PROCESSED_MESSAGE_IDS) == _MAX_PROCESSED_IDS
+        assert "msg-0" not in _PROCESSED_MESSAGE_IDS
+        assert f"msg-{_MAX_PROCESSED_IDS}" in _PROCESSED_MESSAGE_IDS
+
+    def test_recent_ids_still_deduped_after_eviction(self):
+        _PROCESSED_MESSAGE_IDS.clear()
+        for i in range(_MAX_PROCESSED_IDS + 1):
+            _is_duplicate(f"msg-{i}")
+
+        assert _is_duplicate(f"msg-{_MAX_PROCESSED_IDS}") is True
+        assert _is_duplicate("msg-0") is False

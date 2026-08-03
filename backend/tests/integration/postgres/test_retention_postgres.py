@@ -251,14 +251,16 @@ class TestPendingActionProtection:
         await pg_session.execute(
             text(
                 "INSERT INTO appointments "
-                "(business_id, resource_id, service_id, start_at, end_at, "
-                " effective_start_at, effective_end_at, status, source, "
-                " service_name_snapshot, resource_name_snapshot, "
-                " duration_minutes_snapshot, business_timezone_snapshot, "
+                "(business_id, resource_id, service_id, customer_phone, "
+                " start_at, end_at, effective_start_at, effective_end_at, "
+                " status, source, service_name_snapshot, resource_name_snapshot, "
+                " duration_minutes_snapshot, buffer_before_minutes_snapshot, "
+                " buffer_after_minutes_snapshot, business_timezone_snapshot, "
                 " pending_action_id, idempotency_key) "
-                "VALUES (1, 1, 1, :start, :end, :start, :end, 'confirmed', "
-                " 'customer_conversation', 'Consultation', 'Dr. Priya', "
-                " 30, 'Asia/Kolkata', :pa_id, :idem)"
+                "VALUES (1, 1, 1, '+919123456789', "
+                " :start, :end, :start, :end, "
+                " 'confirmed', 'customer_conversation', 'Consultation', 'Dr. Priya', "
+                " 30, 0, 0, 'Asia/Kolkata', :pa_id, :idem)"
             ),
             {"start": start, "end": end, "pa_id": pa_id, "idem": f"pa-{pa_id}"},
         )

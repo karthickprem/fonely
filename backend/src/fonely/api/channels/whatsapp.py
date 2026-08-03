@@ -82,7 +82,9 @@ async def handle_webhook(request: Request) -> Response:
     return Response(status_code=200)
 
 
-async def _persist_inbound_event(session: AsyncSession, message: dict, business_id: int) -> int:
+async def _persist_inbound_event(
+    session: AsyncSession, message: dict[str, object], business_id: int
+) -> int:
     message_id = str(message.get("id", ""))
     sender_phone = str(message.get("from", ""))
     message_type = str(message.get("type", ""))

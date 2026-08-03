@@ -21,7 +21,8 @@ def upgrade() -> None:
     op.create_table(
         "whatsapp_inbound_events",
         sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
-        sa.Column("message_id", sa.String(100), nullable=False, unique=True),
+        sa.Column("message_id", sa.String(100), nullable=False),
+        sa.UniqueConstraint("message_id", name="uq_whatsapp_inbound_message_id"),
         sa.Column(
             "business_id",
             sa.Integer,

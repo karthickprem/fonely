@@ -1173,10 +1173,22 @@ class TestDeadlineInteraction:
 
     def test_deadline_expired_before_checks_still_disposes(self) -> None:
         engine = _mock_engine()
-        output, exit_code = _run_main_with_env(
-            {"FONELY_READINESS_OVERALL_TIMEOUT_S": "0.001"},
-            engine,
-        )
+
+        call_count = 0
+        real_monotonic = time.monotonic
+
+        def _advancing_monotonic() -> float:
+            nonlocal call_count
+            call_count += 1
+            if call_count <= 2:
+                return real_monotonic()
+            return real_monotonic() + 600
+
+        with patch.object(time, "monotonic", side_effect=_advancing_monotonic):
+            output, exit_code = _run_main_with_env(
+                {"FONELY_READINESS_OVERALL_TIMEOUT_S": "0.001"},
+                engine,
+            )
         assert output["overall_status"] == "failed"
         assert exit_code == 1
         codes = [c["failure_code"] for c in output["checks"] if c["failure_code"]]

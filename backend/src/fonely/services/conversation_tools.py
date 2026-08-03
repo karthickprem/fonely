@@ -313,3 +313,98 @@ def format_confirmation_summary(
     if price:
         summary += f", fee ₹{price}"
     return summary
+
+
+@dataclass(frozen=True)
+class PatientAppointment:
+    appointment_id: int
+    service_name: str
+    resource_name: str
+    start_at: datetime
+    price: str | None
+    status: str
+    pending_action_id: int
+    version: int
+    service_id: int
+    resource_id: int
+
+
+async def get_patient_appointments(
+    business_id: int,
+    customer_phone: str,
+    session: AsyncSession,
+    *,
+    status: str = "confirmed",
+    future_only: bool = True,
+) -> list[PatientAppointment]:
+    from fonely.core.validators import utcnow
+
+    stmt = (
+        select(Appointment)
+        .where(
+            Appointment.business_id == business_id,
+            Appointment.customer_phone == customer_phone,
+            Appointment.status == status,
+        )
+        .order_by(Appointment.start_at)
+    )
+    if future_only:
+        stmt = stmt.where(Appointment.start_at > utcnow())
+    result = await session.execute(stmt)
+    rows = result.scalars().all()
+    return [
+        PatientAppointment(
+            appointment_id=a.id,
+            service_name=a.service_name_snapshot,
+            resource_name=a.resource_name_snapshot,
+            start_at=a.start_at,
+            price=str(a.price_snapshot) if a.price_snapshot is not None else None,
+            status=a.status,
+            pending_action_id=a.pending_action_id,  # type: ignore[arg-type]
+            version=a.version,
+            service_id=a.service_id,
+            resource_id=a.resource_id,
+        )
+        for a in rows
+    ]
+
+
+def format_appointment_list(appointments: list[PatientAppointment], timezone: str) -> str:
+    from zoneinfo import ZoneInfo
+
+    lines: list[str] = []
+    for i, appt in enumerate(appointments, 1):
+        local = appt.start_at.astimezone(ZoneInfo(timezone))
+        day = local.strftime("%A %b %d")
+        time_str = local.strftime("%-I:%M %p")
+        lines.append(f"{i}. {day} {time_str} — {appt.service_name}, {appt.resource_name}")
+    return "\n".join(lines)
+
+
+def parse_appointment_selection(
+    message: str,
+    appointments: list[PatientAppointment],
+) -> PatientAppointment | None:
+    import re
+
+    stripped = message.strip()
+
+    num_match = re.match(r"^(\d+)$", stripped)
+    if num_match:
+        idx = int(num_match.group(1)) - 1
+        if 0 <= idx < len(appointments):
+            return appointments[idx]
+        return None
+
+    lower = stripped.lower()
+    for appt in appointments:
+        if appt.service_name.lower() in lower:
+            return appt
+        if appt.resource_name.lower() in lower:
+            return appt
+        name_parts = appt.resource_name.lower().split()
+        for part in name_parts:
+            if len(part) > 2 and part in lower:
+                return appt
+
+    return None

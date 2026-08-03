@@ -9,7 +9,9 @@ from fonely.repositories.appointments import AppointmentRepository
 
 @pytest.fixture
 def mock_session() -> AsyncMock:
-    return AsyncMock()
+    session = AsyncMock()
+    session.add = MagicMock()
+    return session
 
 
 @pytest.fixture

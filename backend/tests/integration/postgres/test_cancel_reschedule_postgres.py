@@ -324,18 +324,22 @@ async def test_cancellation_proposal_idempotency(
 ) -> None:
     async with pg_session_factory() as session:
         await _seed_dental_clinic(session)
-        confirmed = await _create_confirmed_appointment(session, key_suffix="idemp")
+        fixed_start = datetime.now(UTC) + timedelta(hours=3)
+        confirmed = await _create_confirmed_appointment(
+            session, start_at=fixed_start, key_suffix="idemp"
+        )
         appt_id = confirmed.appointment.appointment_id
 
         validation = InternalValidationPort(session)
         service = AppointmentService(session, validation=validation)
 
+        expires = datetime.now(UTC) + timedelta(minutes=20)
         proposal1 = await service.create_cancellation_proposal(
             CreatePendingAppointmentCancellationCommand(
                 actor=_customer(),
                 appointment_id=appt_id,
                 expected_appointment_version=1,
-                expires_at=datetime.now(UTC) + timedelta(minutes=30),
+                expires_at=expires,
                 idempotency_key="cancel-idemp",
             )
         )
@@ -344,7 +348,7 @@ async def test_cancellation_proposal_idempotency(
                 actor=_customer(),
                 appointment_id=appt_id,
                 expected_appointment_version=1,
-                expires_at=datetime.now(UTC) + timedelta(minutes=30),
+                expires_at=expires,
                 idempotency_key="cancel-idemp",
             )
         )

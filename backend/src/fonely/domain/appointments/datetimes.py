@@ -27,7 +27,7 @@ def validate_business_local(value: datetime, timezone: str, *, label: str) -> No
     """Reject invalid local wall representations while accepting canonical UTC instants."""
     aware = require_aware(value, label=label)
     zone = ZoneInfo(timezone)
-    if aware.tzinfo is UTC or (timezone == "UTC" and aware.utcoffset() == timedelta(0)):
+    if timezone == "UTC" or aware.utcoffset() == timedelta(0):
         return
     local = aware.astimezone(zone)
     if (

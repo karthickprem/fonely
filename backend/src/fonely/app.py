@@ -33,12 +33,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     app.state.engine = engine
     app.state.session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
+    http_client = None
     if settings.sarvam_api_key:
         import httpx
 
         from fonely.services.model_gateway import SarvamModelGateway
 
         http_client = httpx.AsyncClient()
+        app.state.http_client = http_client
         app.state.model_gateway = SarvamModelGateway(client=http_client)
     else:
         app.state.model_gateway = None
@@ -48,6 +50,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     finally:
         logger.info("shutdown_signal_received")
         try:
+            if http_client is not None:
+                await http_client.aclose()
             await engine.dispose()
             logger.info("shutdown_complete")
         except Exception:

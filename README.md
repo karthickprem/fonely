@@ -1,82 +1,127 @@
 # Fonely
 
-Fonely is building a multilingual AI front desk for Indian small businesses. The target product answers inbound calls, understands the caller in their language, invokes strictly validated public tools, commits business transactions through deterministic backend services, and notifies the owner.
+Multilingual AI virtual receptionist for Indian dental clinics. Handles appointment booking, cancellation, and rescheduling via WhatsApp and voice — in Tamil, Tanglish, and Indian English.
 
-## Current maturity
+## What Fonely does
 
-Fonely is **not production-ready or pilot-validated**.
+A patient messages the clinic's WhatsApp number (or calls) to book an appointment. Fonely understands the request in their language, checks the doctor's availability, and books the slot — all without the clinic owner answering the phone. The owner gets notified of every booking. Nobody misses a call, nobody waits on hold, and the receptionist desk doesn't need to be staffed during peak hours.
 
-The repository currently contains:
+## Architecture
 
-- A Python 3.12 backend foundation with SQLAlchemy, Alembic, PostgreSQL, and a deterministic `PendingAction` lifecycle.
-- Migrations through `0003`.
-- A synthetic adversarial evaluation corpus with 211 cases and 377 turns.
-- PostgreSQL integration contracts and GitHub Actions CI under active correction.
-- A JavaScript voice feasibility prototype that is not connected to the production backend transaction path.
-
-See [Current Project Status](docs/STATUS.md) for the latest independently verified evidence and active blockers.
-
-## Target product path
-
-```text
-Inbound call
-→ speech-to-text
-→ validated public tool request
-→ PendingAction proposal
-→ caller confirmation
-→ deterministic transaction engine
-→ PostgreSQL commit
-→ spoken committed result
-→ owner notification
+```
+WhatsApp / Voice / Internal API
+        │
+        ▼
+Channel adapters (thin, stateless — no business logic)
+        │
+        ▼
+ConversationService (state machine, safety classification, fact extraction)
+        │
+        ▼
+AppointmentService (propose → confirm → commit with PostgreSQL constraints)
+        │
+        ▼
+PostgreSQL (authoritative state, exclusion constraints, transaction evidence)
+        │
+        ▼
+Notification outbox → WhatsApp delivery (patient confirmation + owner alert)
 ```
 
-The model is never the system of record and must never directly perform internal commit operations.
+The AI proposes. PostgreSQL decides. The model is never the system of record and never directly mutates business tables.
 
-## Repository layout
+## Quick start
 
-```text
-backend/          Python backend, ORM, migrations, domain/services, and tests
-evals/            Synthetic evaluation corpus and versioned contracts
-scripts/          Validation, migration, PostgreSQL, and repository-audit tooling
-infra/            Local disposable PostgreSQL configuration
-src/, public/     Voice feasibility prototype
-docs/             Product plan, operating model, QA, testing, and historical logs
-```
-
-## Authoritative documents
-
-- [Current status](docs/STATUS.md)
-- [Product and engineering roadmap](docs/PLAN.md)
-- [Team and operating model](docs/TEAM_AND_OPERATING_MODEL.md)
-- [PostgreSQL testing guide](docs/testing/POSTGRESQL.md)
-- [Evaluation framework](evals/README.md)
-- [Testing strategy](docs/qa/TEST_STRATEGY.md)
-- [Production-readiness checklist](docs/qa/PRODUCTION_READINESS_CHECKLIST.md)
-
-Daily status files are append-only historical records. They may contain older counts and blockers that were accurate at the time; use `docs/STATUS.md` for current truth.
-
-## Local backend checks
+Prerequisites: Python 3.12, Docker (for PostgreSQL), [uv](https://docs.astral.sh/uv/)
 
 ```bash
-cd backend
+# Clone and install
+git clone git@github.com:karthickprem/fonely.git
+cd fonely/backend
 uv sync --frozen --all-extras
+
+# Start disposable PostgreSQL
+docker compose -f ../infra/postgres/compose.yaml up -d
+
+# Run migrations
+.venv/bin/alembic upgrade head
+
+# Run unit tests (no database needed)
+.venv/bin/pytest -m "not postgres" -q
+
+# Run PostgreSQL integration tests
+export FONELY_TEST_DATABASE_URL=postgresql+asyncpg://fonely_test:fonely_test_local_only@localhost:55432/fonely_test
+.venv/bin/pytest -m postgres -q
+
+# Type checking and linting
+.venv/bin/mypy src
 .venv/bin/ruff check .
 .venv/bin/ruff format --check .
-.venv/bin/mypy src
-.venv/bin/pytest -m "not postgres" -q
+
+# Start the application
+.venv/bin/python run.py
 ```
 
-PostgreSQL tests are destructive and must only target an approved disposable local test database. Read [the PostgreSQL guide](docs/testing/POSTGRESQL.md) before running them.
+## Project structure
+
+```
+backend/
+  src/fonely/
+    api/              HTTP routes and webhook handlers
+      channels/       WhatsApp webhook (signature verification, message dedup)
+      internal/       Internal API (conversations, appointments, onboarding)
+    core/             Config, middleware, resilience, metrics, PII audit
+    domain/           Pure business rules (no database, no I/O)
+      appointments/   Booking commands, validation contracts, availability
+      conversation/   State machine, safety classification, intent detection
+      onboarding/     Clinic configuration and setup
+      pending_actions/ Proposal → confirmation lifecycle
+      inventory/      Stock management (future vertical)
+      orders/         Order management (future vertical)
+    models/           SQLAlchemy ORM models and enums
+    repositories/     Database access (all queries tenant-scoped by business_id)
+    services/         Application transactions (caller-owned sessions)
+    workers/          Background processing (notification delivery)
+  migrations/         Alembic versions (0001–0008)
+  tests/
+    unit/             Fast tests, no database needed (~680 tests)
+    integration/
+      postgres/       Real PostgreSQL required (~390 tests)
+
+docs/                 Product plan, status, QA strategies, team model
+evals/                Adversarial evaluation corpus (211 cases, 377 turns)
+infra/postgres/       Docker Compose for local test database
+scripts/              Migration checks, backup verification, deployment readiness
+src/, public/         Voice feasibility prototype (not connected to backend)
+```
+
+## Key documents
+
+| Document | What it covers |
+|---|---|
+| [PLAN.md](docs/PLAN.md) | Product strategy, phase roadmap, pilot plan |
+| [STATUS.md](docs/STATUS.md) | Current evidence snapshot and blockers |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to make changes safely |
+| [Architecture walkthrough](docs/ARCHITECTURE.md) | Trace one booking from WhatsApp to PostgreSQL commit |
+| [DATA_INVENTORY.md](docs/DATA_INVENTORY.md) | PII classification and retention policies |
+| [STAGING_DEPLOYMENT.md](docs/STAGING_DEPLOYMENT.md) | Docker deployment for staging |
+| [PostgreSQL testing guide](docs/testing/POSTGRESQL.md) | How to run and write PG integration tests |
+| [Test strategy](docs/qa/TEST_STRATEGY.md) | Testing philosophy and coverage approach |
+
+## Current status
+
+Fonely is **pre-pilot**. The backend booking path (create, cancel, reschedule) is implemented and PostgreSQL-tested. WhatsApp channel adapter, notification delivery, and conversation engine are implemented. Voice channel is in R&D. The first pilot target is independent urban dental clinics.
+
+See [STATUS.md](docs/STATUS.md) for the latest verified evidence.
 
 ## Verification language
 
-Documentation uses these terms narrowly:
+This project uses precise terminology:
 
-- **Implemented:** code exists.
-- **Locally tested:** the named local command passed.
-- **PostgreSQL-tested:** the behavior passed against a real disposable PostgreSQL instance.
-- **CI-passed:** the cited GitHub Actions run completed successfully.
-- **Provider-tested:** a named provider was exercised with recorded results.
-- **Pilot-validated:** observed with consenting real businesses/callers under the pilot protocol.
+- **Implemented:** code exists
+- **Unit-tested:** passed without a database
+- **PostgreSQL-tested:** passed against a real disposable PostgreSQL instance
+- **CI-verified:** GitHub Actions run completed successfully
+- **Staging-validated:** tested in staging environment
+- **Pilot-validated:** observed with real businesses and callers
 
 One level never implies the next.

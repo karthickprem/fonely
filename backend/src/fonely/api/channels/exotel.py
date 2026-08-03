@@ -9,7 +9,6 @@ from typing import Any
 
 from fastapi import APIRouter, Request, Response, WebSocket, WebSocketDisconnect
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from fonely.services.exotel_config import ExotelNumberMapping
 
@@ -46,7 +45,7 @@ async def call_status_webhook(request: Request) -> Response:
         )
         return Response(status_code=404, content="unknown number")
 
-    factory: async_sessionmaker = request.app.state.session_factory  # type: ignore[assignment]
+    factory = request.app.state.session_factory
     async with factory() as session:
         if status == "ringing":
             result = await session.execute(

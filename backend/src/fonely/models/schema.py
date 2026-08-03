@@ -1178,6 +1178,21 @@ class NotificationOutboxEvent(Base):
 
 
 # =============================================================================
+# WhatsApp Message Deduplication
+# =============================================================================
+
+
+class WhatsAppProcessedMessage(Base):
+    __tablename__ = "whatsapp_processed_messages"
+
+    message_id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    business_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    processed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
+# =============================================================================
 # Conversations
 # =============================================================================
 

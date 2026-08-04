@@ -101,35 +101,45 @@ class ChennaiStyleProcessor(FrameProcessor):
 
 
 class ResponseRelevanceProcessor(FrameProcessor):
-    """Apply bounded relevance and repetition guards before TTS."""
+    """Apply bounded relevance guards to complete responses, preserving stream spacing."""
 
     def __init__(self, dialogue_state: DialogueStateProcessor):
         super().__init__()
         self._dialogue_state = dialogue_state
         self._last_response = ""
+        self._chunks: list[str] = []
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
-        if not isinstance(frame, LLMTextFrame):
+        if isinstance(frame, LLMFullResponseStartFrame):
+            self._chunks = []
             await self.push_frame(frame, direction)
             return
-        text = frame.text.strip()
+        if isinstance(frame, LLMTextFrame):
+            self._chunks.append(frame.text)
+            return
+        if not isinstance(frame, LLMFullResponseEndFrame):
+            await self.push_frame(frame, direction)
+            return
+
+        text = "".join(self._chunks).strip()
         state = self._dialogue_state.current_state
         normalized = " ".join(text.casefold().split())
         previous = " ".join(self._last_response.casefold().split())
         if contains_false_confirmation(text):
             text = "இது demo மட்டும்; actual booking save ஆகாது."
         elif state.must_not_offer_slot and contains_unwanted_slot(text):
-            if state.latest_user_act == "general_question":
-                text = "நீங்க கேட்ட question-க்கு direct-ஆ answer பண்றேன்; கொஞ்சம் clear-ஆ மறுபடி சொல்லுங்க?"
-            elif state.latest_user_act == "repair":
+            if state.latest_user_act == "repair":
                 text = "Sorry, நான் தவறா புரிஞ்சுக்கிட்டேன். நீங்க கேட்டது மறுபடி சொல்லுங்க?"
             else:
                 text = "சரிங்க, timing விடுங்க. நீங்க கேட்ட question என்ன சொல்லுங்க?"
         elif previous and normalized == previous:
             text = "Sorry, same answer repeat ஆயிடுச்சு. நீங்க இப்ப கேட்டது மறுபடி சொல்லுங்க?"
         self._last_response = text
-        await self.push_frame(LLMTextFrame(text=text), direction)
+        if text:
+            await self.push_frame(LLMTextFrame(text=text), direction)
+        await self.push_frame(frame, direction)
+        self._chunks = []
 
 
 class DentalSafetyProcessor(FrameProcessor):

@@ -119,6 +119,26 @@ def test_dialogue_state_processor_does_not_mutate_history():
     asyncio.run(run())
 
 
+def test_relevance_guard_preserves_stream_chunk_spacing():
+    async def run():
+        state = DialogueStateProcessor()
+        guard = ResponseRelevanceProcessor(state)
+        down, _ = await run_test(
+            guard,
+            frames_to_send=[
+                LLMFullResponseStartFrame(),
+                LLMTextFrame(text="கண்டிப்ப, "),
+                LLMTextFrame(text="help பண்ணுறேன். "),
+                LLMTextFrame(text="என்ன problem இருக்கு?"),
+                LLMFullResponseEndFrame(),
+            ],
+        )
+        text = next(frame.text for frame in down if isinstance(frame, LLMTextFrame))
+        assert text == "கண்டிப்ப, help பண்ணுறேன். என்ன problem இருக்கு?"
+
+    asyncio.run(run())
+
+
 def test_relevance_guard_blocks_slot_and_false_confirmation():
     async def run():
         state = DialogueStateProcessor()

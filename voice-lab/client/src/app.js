@@ -34,6 +34,8 @@ let playbackContext = null;
 let playbackMeter = null;
 let interruptionMarker = null;
 let botStopCallbackMs = null;
+let activeBotMessageKey = null;
+let activeBotText = '';
 
 function setState(text, className = '') {
   status.textContent = text;
@@ -191,6 +193,8 @@ async function connect() {
       },
       onBotStartedSpeaking() {
         botWasSpeaking = true;
+        activeBotMessageKey = `bot-${connectionGeneration}-${performance.now()}`;
+        activeBotText = '';
         playbackState.textContent = 'Active · mic still live';
         if (userStoppedAt != null) {
           latencyEl.textContent = `${Math.round(performance.now() - userStoppedAt)} ms`;
@@ -202,6 +206,11 @@ async function connect() {
         if (botWasSpeaking && interruptionStartedAt != null) {
           botStopCallbackMs = performance.now() - interruptionStartedAt;
         }
+        if (activeBotMessageKey) {
+          transcript.querySelector(`[data-message-key="${activeBotMessageKey}"]`)?.removeAttribute('data-message-key');
+        }
+        activeBotMessageKey = null;
+        activeBotText = '';
         botWasSpeaking = false;
         playbackState.textContent = 'Idle';
         interruptionStartedAt = null;
@@ -216,7 +225,10 @@ async function connect() {
         }
       },
       onBotTranscript(data) {
-        addMessage(data.text, 'bot');
+        if (!activeBotMessageKey) activeBotMessageKey = `bot-${connectionGeneration}-${performance.now()}`;
+        const incoming = data.text || '';
+        activeBotText = incoming.startsWith(activeBotText) ? incoming : activeBotText + incoming;
+        addMessage(activeBotText, 'bot', activeBotMessageKey, 'final');
       },
       onError(error) {
         console.error(error);

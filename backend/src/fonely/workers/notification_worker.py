@@ -95,7 +95,10 @@ async def _deliver_claimed(
 ) -> None:
     event = _snapshot_to_model(claimed)
     attempt_number = claimed.attempts + 1
-    await _record_attempt(session_factory, claimed, attempt_number, "sending")
+    created = await _record_attempt(session_factory, claimed, attempt_number, "sending")
+    if not created:
+        await _record_abandoned_sending(session_factory, claimed, attempt_number)
+        return
     try:
         receipt = await sender.send(event)
     except NotificationDeliveryError as exc:
@@ -226,10 +229,10 @@ async def _record_attempt(
     claimed: ClaimedNotification,
     attempt_number: int,
     status: str,
-) -> None:
+) -> bool:
     async with session_factory() as session:
         await _require_claim(session, claimed)
-        await session.execute(
+        inserted = await session.scalar(
             pg_insert(WhatsAppDeliveryAttempt)
             .values(
                 business_id=claimed.business_id,
@@ -238,6 +241,50 @@ async def _record_attempt(
                 status=status,
             )
             .on_conflict_do_nothing(constraint="uq_whatsapp_delivery_attempt")
+            .returning(WhatsAppDeliveryAttempt.id)
+        )
+        await session.commit()
+        return inserted is not None
+
+
+async def _record_abandoned_sending(
+    session_factory: async_sessionmaker[AsyncSession],
+    claimed: ClaimedNotification,
+    attempt_number: int,
+) -> None:
+    async with session_factory() as session:
+        await _require_claim(session, claimed)
+        now = datetime.now(UTC)
+        await session.execute(
+            update(WhatsAppDeliveryAttempt)
+            .where(
+                WhatsAppDeliveryAttempt.business_id == claimed.business_id,
+                WhatsAppDeliveryAttempt.notification_event_id == claimed.event_id,
+                WhatsAppDeliveryAttempt.attempt_number == attempt_number,
+            )
+            .values(
+                status="unknown",
+                error_class="worker_crash_after_send_possible",
+                updated_at=now,
+            )
+        )
+        await session.execute(
+            update(NotificationOutboxEvent)
+            .where(
+                NotificationOutboxEvent.business_id == claimed.business_id,
+                NotificationOutboxEvent.id == claimed.event_id,
+                NotificationOutboxEvent.status == NotificationStatus.PROCESSING.value,
+                NotificationOutboxEvent.claim_token == claimed.claim_token,
+                NotificationOutboxEvent.claim_version == claimed.claim_version,
+            )
+            .values(
+                status=NotificationStatus.UNKNOWN.value,
+                last_error="worker_crash_after_send_possible",
+                next_attempt_at=None,
+                claim_token=None,
+                lease_expires_at=None,
+                updated_at=now,
+            )
         )
         await session.commit()
 

@@ -221,10 +221,12 @@ class DataRetentionService:
         dead_result = await self._session.execute(
             text(
                 "DELETE FROM whatsapp_inbound_events "
-                "WHERE status = 'dead_letter' AND dead_lettered_at < :before "
+                "WHERE status IN ('dead_letter', 'response_failed') "
+                "AND dead_lettered_at < :before "
                 "AND ctid = ANY(ARRAY("
                 "  SELECT ctid FROM whatsapp_inbound_events "
-                "  WHERE status = 'dead_letter' AND dead_lettered_at < :before "
+                "  WHERE status IN ('dead_letter', 'response_failed') "
+                "  AND dead_lettered_at < :before "
                 "  LIMIT :limit"
                 "))"
             ),

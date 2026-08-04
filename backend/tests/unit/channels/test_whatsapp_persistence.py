@@ -37,7 +37,14 @@ class TestDeferredGateway:
     @pytest.mark.asyncio
     async def test_returns_recorded_response_without_provider_io(self) -> None:
         response = ModelResponse(text="structured facts")
-        gateway = DeferredModelGateway([response])
+        request = ProviderRequest(
+            system_prompt="system",
+            messages=[{"role": "user", "content": "hello"}],
+            tools=None,
+            temperature=0.3,
+            max_tokens=500,
+        )
+        gateway = DeferredModelGateway([(request, response)])
         assert await gateway.complete("system", [{"role": "user", "content": "hello"}]) is response
 
     @pytest.mark.asyncio

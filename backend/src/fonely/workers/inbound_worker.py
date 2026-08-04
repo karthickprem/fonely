@@ -58,10 +58,10 @@ class ProviderCallRequiredError(Exception):
 
 
 class DeferredModelGateway:
-    """Replay recorded provider responses; request missing responses without I/O."""
+    """Replay only responses whose provider request exactly matches."""
 
-    def __init__(self, responses: list[ModelResponse]) -> None:
-        self._responses = responses
+    def __init__(self, exchanges: list[tuple[ProviderRequest, ModelResponse]]) -> None:
+        self._exchanges = exchanges
         self._index = 0
 
     async def complete(
@@ -72,19 +72,20 @@ class DeferredModelGateway:
         temperature: float = 0.3,
         max_tokens: int = 500,
     ) -> ModelResponse:
-        if self._index < len(self._responses):
-            response = self._responses[self._index]
+        request = ProviderRequest(
+            system_prompt=system_prompt,
+            messages=messages,
+            tools=tools,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        if self._index < len(self._exchanges):
+            expected, response = self._exchanges[self._index]
+            if expected != request:
+                raise RuntimeError("provider_request_changed_during_replay")
             self._index += 1
             return response
-        raise ProviderCallRequiredError(
-            ProviderRequest(
-                system_prompt=system_prompt,
-                messages=messages,
-                tools=tools,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-        )
+        raise ProviderCallRequiredError(request)
 
 
 @dataclass(frozen=True)
@@ -169,23 +170,27 @@ async def _process_claimed(
     claimed: ClaimedEvent,
     provider: ModelGateway,
 ) -> None:
-    responses: list[ModelResponse] = []
+    exchanges: list[tuple[ProviderRequest, ModelResponse]] = []
 
     while True:
-        deferred = DeferredModelGateway(responses)
+        deferred = DeferredModelGateway(exchanges)
         try:
             await _commit_attempt(session_factory, claimed, deferred)
             return
         except ProviderCallRequiredError as needed:
             invalidate_conversation_cache(claimed.business_id, _normalized_phone(claimed))
-            response = await provider.complete(
-                system_prompt=needed.request.system_prompt,
-                messages=needed.request.messages,
-                tools=needed.request.tools,
-                temperature=needed.request.temperature,
-                max_tokens=needed.request.max_tokens,
-            )
-            responses.append(response)
+            try:
+                response = await provider.complete(
+                    system_prompt=needed.request.system_prompt,
+                    messages=needed.request.messages,
+                    tools=needed.request.tools,
+                    temperature=needed.request.temperature,
+                    max_tokens=needed.request.max_tokens,
+                )
+            except Exception as exc:
+                await _record_failure(session_factory, claimed, exc)
+                return
+            exchanges.append((needed.request, response))
         except Exception as exc:
             invalidate_conversation_cache(claimed.business_id, _normalized_phone(claimed))
             await _record_failure(session_factory, claimed, exc)
@@ -199,7 +204,7 @@ async def _commit_attempt(
 ) -> None:
     async with session_factory() as session:
         repo = InboundEventRepository(session)
-        await repo.acquire_conversation_lock(claimed.business_id, claimed.sender_phone)
+        await repo.acquire_conversation_lock(claimed.business_id, _normalized_phone(claimed))
         await repo.require_owned_claim(
             claimed.business_id,
             claimed.event_id,
@@ -207,8 +212,13 @@ async def _commit_attempt(
             claimed.claim_version,
         )
 
-        response_text = await _process_domain(claimed, session, gateway)
-        await _enqueue_response(claimed, response_text, session)
+        response_text, recipient_type = await _process_domain(claimed, session, gateway)
+        await _enqueue_response(
+            claimed,
+            response_text,
+            session,
+            recipient_type=recipient_type,
+        )
         await repo.verify_and_mark_domain_processed(
             claimed.business_id,
             claimed.event_id,
@@ -228,11 +238,17 @@ async def _process_domain(
     claimed: ClaimedEvent,
     session: AsyncSession,
     gateway: ModelGateway,
-) -> str:
+) -> tuple[str, str]:
     if claimed.message_type != "text":
-        return "I can currently help with text messages. Please type your request."
+        return (
+            "I can currently help with text messages. Please type your request.",
+            NotificationRecipientType.PATIENT.value,
+        )
     if not claimed.message_body:
-        return "I didn't receive a message. Please try again."
+        return (
+            "I didn't receive a message. Please try again.",
+            NotificationRecipientType.PATIENT.value,
+        )
 
     phone = _normalized_phone(claimed)
     if await _is_owner(claimed.business_id, phone, session):
@@ -241,7 +257,7 @@ async def _process_domain(
         result = await OwnerCommandService(session, gateway).process_command(
             claimed.business_id, phone, claimed.message_body
         )
-        return result.response_text
+        return result.response_text, NotificationRecipientType.OWNER.value
 
     ctx = await find_or_create_conversation_persistent(claimed.business_id, phone, session)
     actor = ActorContext(
@@ -265,13 +281,16 @@ async def _process_domain(
         from fonely.services.conversation_persistence import ConversationPersistenceService
 
         await ConversationPersistenceService(session).mark_completed(ctx.conversation_id)
-    return turn.assistant_response
+    return turn.assistant_response, NotificationRecipientType.PATIENT.value
 
 
 async def _enqueue_response(
     claimed: ClaimedEvent,
     response_text: str,
     session: AsyncSession,
+    *,
+    terminal_fallback: bool = False,
+    recipient_type: str = NotificationRecipientType.PATIENT.value,
 ) -> None:
     await NotificationRepository(session).insert_event_idempotent(
         {
@@ -279,13 +298,14 @@ async def _enqueue_response(
             "event_type": NotificationEventType.WHATSAPP_INBOUND_RESPONSE.value,
             "entity_type": "whatsapp_inbound_event",
             "entity_id": claimed.event_id,
-            "recipient_type": NotificationRecipientType.PATIENT.value,
+            "recipient_type": recipient_type,
             "recipient_phone": claimed.sender_phone,
             "channel": NotificationChannel.WHATSAPP.value,
             "payload": {
                 "response_text": response_text,
                 "phone_number_id": claimed.phone_number_id,
                 "claim_token": str(claimed.claim_token),
+                "terminal_fallback": terminal_fallback,
             },
             "idempotency_key": f"whatsapp-response-{claimed.message_id}",
         }
@@ -309,7 +329,12 @@ async def _record_failure(
                 type(exc).__name__,
             )
             if changed and terminal:
-                await _enqueue_response(claimed, _FALLBACK_RESPONSE, session)
+                await _enqueue_response(
+                    claimed,
+                    _FALLBACK_RESPONSE,
+                    session,
+                    terminal_fallback=True,
+                )
             await session.commit()
     except Exception:
         logger.error(

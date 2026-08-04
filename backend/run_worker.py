@@ -1,10 +1,7 @@
-"""Notification worker entrypoint.
-
-Fails closed if WhatsApp credentials are missing — the worker cannot
-deliver WhatsApp messages without them.
-"""
+"""Notification worker entrypoint with trusted WhatsApp channel routing."""
 
 import asyncio
+import json
 import logging
 
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -21,21 +18,29 @@ logger = logging.getLogger("fonely.workers.main")
 
 
 def _create_sender() -> NotificationSender:
-    if not settings.whatsapp_access_token or not settings.whatsapp_phone_number_id:
-        raise RuntimeError(
-            "WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID are required "
-            "for the notification worker. Cannot deliver WhatsApp messages."
-        )
+    if not settings.whatsapp_access_token:
+        raise RuntimeError("WHATSAPP_ACCESS_TOKEN is required")
+    if not settings.whatsapp_business_mappings:
+        raise RuntimeError("WHATSAPP_BUSINESS_MAPPINGS is required")
+    try:
+        mappings_raw = json.loads(settings.whatsapp_business_mappings)
+        mappings = {str(key): int(value) for key, value in mappings_raw.items()}
+    except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("WHATSAPP_BUSINESS_MAPPINGS is invalid") from exc
+    if not mappings:
+        raise RuntimeError("WHATSAPP_BUSINESS_MAPPINGS must not be empty")
 
-    from fonely.services.whatsapp_notification_sender import WhatsAppNotificationSender
-    from fonely.services.whatsapp_sender import WhatsAppSender
-
-    whatsapp = WhatsAppSender(
-        access_token=settings.whatsapp_access_token,
-        phone_number_id=settings.whatsapp_phone_number_id,
+    from fonely.services.whatsapp_notification_sender import (
+        ConfiguredWhatsAppSenderResolver,
+        WhatsAppNotificationSender,
     )
-    logger.info("notification_sender_configured", extra={"type": "whatsapp"})
-    return WhatsAppNotificationSender(whatsapp)
+
+    resolver = ConfiguredWhatsAppSenderResolver(
+        access_token=settings.whatsapp_access_token,
+        business_mappings=mappings,
+    )
+    logger.info("notification_sender_configured", extra={"type": "whatsapp_resolver"})
+    return WhatsAppNotificationSender(resolver=resolver)
 
 
 async def main() -> None:

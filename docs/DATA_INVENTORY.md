@@ -11,6 +11,8 @@ Tables containing PII or sensitive patient/business data.
 | conversations | customer_phone | 90 days | Automated |
 | conversation_turns | user_message_hash (no text), assistant_response | 90 days (CASCADE) | Automated |
 | notification_outbox | recipient_phone, recipient_name | 30 days (delivered), 90 days (dead letter) | Automated |
+| whatsapp_inbound_events | sender_phone, temporary message_body | 30 days after completed/dead letter | Automated; body cleared immediately on completion |
+| whatsapp_delivery_attempts | provider_message_id, sanitized error class | Follows notification lifecycle | Automated with notification evidence |
 | pending_actions | proposed_payload (contains customer phone/name) | 90 days | Automated |
 | calls | customer_phone | 365 days | Manual |
 
@@ -31,6 +33,7 @@ The retention worker (`run_retention_worker.py`) runs every 6 hours and cleans:
 1. **Conversations** in terminal states (completed/ended/escalated) older than 90 days, with CASCADE deletion of their turns.
 2. **Notifications** that were delivered more than 30 days ago or dead-lettered more than 90 days ago.
 3. **Pending actions** in terminal states (confirmed/rejected/expired) older than 90 days, only when not referenced by active appointments.
+4. **WhatsApp inbound events** completed or dead-lettered more than 30 days ago. Successful processing clears `message_body` immediately; dead-letter bodies remain only for bounded operator investigation.
 
 Active/in-progress records are never deleted regardless of age.
 
@@ -44,6 +47,8 @@ Configurable via environment variables:
 | `RETENTION_APPOINTMENTS_DAYS` | 365 | Appointments and commits |
 | `RETENTION_NOTIFICATIONS_DAYS` | 30 | Delivered notifications |
 | `RETENTION_NOTIFICATIONS_DEAD_LETTER_DAYS` | 90 | Dead-lettered notifications |
+| `RETENTION_WHATSAPP_INBOUND_DAYS` | 30 | Completed inbound WhatsApp events |
+| `RETENTION_WHATSAPP_INBOUND_DEAD_LETTER_DAYS` | 30 | Dead-lettered inbound events with temporary message body |
 
 ## PII access logging
 

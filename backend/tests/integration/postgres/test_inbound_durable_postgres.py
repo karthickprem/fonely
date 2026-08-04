@@ -559,6 +559,58 @@ class TestDeliveryReconciliation:
             assert outbox_row is not None and outbox_row.status == "delivered"
             assert inbound is not None and inbound.status == "completed"
 
+    async def test_final_attempt_provider_failure_dead_letters_and_unblocks_inbound(
+        self, pg_session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        async with pg_session_factory() as seed:
+            await seed_business(seed)
+            event_id = await insert_event(seed, message_id="wamid.finalfailed")
+            await seed.execute(
+                text("UPDATE whatsapp_inbound_events SET status='domain_processed' WHERE id=:id"),
+                {"id": event_id},
+            )
+            outbox = await NotificationRepository(seed).insert_event_idempotent(
+                {
+                    "business_id": 1,
+                    "event_type": "whatsapp_inbound_response",
+                    "entity_type": "whatsapp_inbound_event",
+                    "entity_id": event_id,
+                    "recipient_type": "patient",
+                    "recipient_phone": "919876543210",
+                    "channel": "whatsapp",
+                    "payload": {"response_text": "ok", "phone_number_id": "phone-1"},
+                    "status": "unknown",
+                    "attempts": 5,
+                    "max_attempts": 5,
+                    "idempotency_key": "whatsapp-response-wamid.finalfailed",
+                }
+            )
+            assert outbox is not None
+            seed.add(
+                WhatsAppDeliveryAttempt(
+                    business_id=1,
+                    notification_event_id=outbox.id,
+                    attempt_number=5,
+                    status="accepted",
+                    provider_message_id="meta-finalfailed",
+                )
+            )
+            await seed.commit()
+
+        async with pg_session_factory() as callback:
+            await _persist_delivery_status(
+                callback,
+                {"id": "meta-finalfailed", "status": "failed"},
+                1,
+            )
+            await callback.commit()
+
+        async with pg_session_factory() as check:
+            outbox_row = await check.get(NotificationOutboxEvent, outbox.id)
+            inbound = await check.get(WhatsAppInboundEvent, event_id)
+            assert outbox_row is not None and outbox_row.status == "dead_letter"
+            assert inbound is not None and inbound.status == "response_failed"
+
     async def test_terminal_fallback_delivery_completes_dead_letter(
         self, pg_session_factory: async_sessionmaker[AsyncSession]
     ) -> None:

@@ -71,7 +71,7 @@ function handlePocMessage(data) {
 
 async function attachMeasuredPlayback(track) {
   playbackContext = new AudioContext();
-  await playbackContext.audioWorklet.addModule('/src/playback-meter-worklet.js');
+  await playbackContext.audioWorklet.addModule(new URL('./playback-meter-worklet.js', import.meta.url));
   const source = playbackContext.createMediaStreamSource(new MediaStream([track]));
   playbackMeter = new AudioWorkletNode(playbackContext, 'playback-meter');
   source.connect(playbackMeter).connect(playbackContext.destination);

@@ -127,6 +127,9 @@ def build_anthropic_client(
         if not separator or not name.strip() or not value.strip():
             raise RuntimeError("ANTHROPIC_CUSTOM_HEADERS contains an invalid header line")
         headers[name.strip()] = value.strip()
+    trusted_user = os.environ.get("ANTHROPIC_GATEWAY_USER")
+    if trusted_user and "user" not in {name.casefold() for name in headers}:
+        headers["user"] = trusted_user
     base_url = os.environ.get("ANTHROPIC_BASE_URL")
     if base_url and "api.anthropic.com" not in base_url and not headers:
         raise RuntimeError("configured Anthropic gateway requires approved custom headers")

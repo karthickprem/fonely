@@ -184,7 +184,11 @@ class GenerationOutputGate(FrameProcessor):
         await super().process_frame(frame, direction)
         current = self._coordinator.generations.current.generation_id
         if isinstance(frame, LLMFullResponseStartFrame):
-            self._active_generation = self._coordinator.response_generation
+            self._active_generation = (
+                self._coordinator.response_generation
+                if self._coordinator.response_generation is not None
+                else current
+            )
             self._invalidated_generation = None
         elif isinstance(frame, InterruptionFrame):
             self._invalidated_generation = self._active_generation

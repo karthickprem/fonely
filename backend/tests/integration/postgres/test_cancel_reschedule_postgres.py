@@ -500,6 +500,154 @@ async def test_reschedule_to_conflicting_time(
         await session.rollback()
 
 
+async def test_cancellation_replays_from_fresh_session_without_duplicate_evidence(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with pg_session_factory() as session:
+        await _seed_dental_clinic(session)
+        confirmed = await _create_confirmed_appointment(
+            session, start_at=_future_start(hour=10), key_suffix="cancel-replay-create"
+        )
+        appointment_id = confirmed.appointment.appointment_id
+        service = AppointmentService(session, validation=InternalValidationPort(session))
+        proposal = await service.create_cancellation_proposal(
+            CreatePendingAppointmentCancellationCommand(
+                actor=_customer(),
+                appointment_id=appointment_id,
+                expected_appointment_version=1,
+                reason_code="customer_request",
+                expires_at=datetime.now(UTC) + timedelta(minutes=20),
+                idempotency_key="cancel-fresh-replay",
+            )
+        )
+        first = await service.confirm_cancellation(
+            ConfirmPendingAppointmentCancellationCommand(
+                actor=_customer(),
+                pending_action_id=proposal.pending_action_id,
+                expected_version=proposal.version,
+            )
+        )
+        await session.commit()
+
+    async with pg_session_factory() as session:
+        service = AppointmentService(session, validation=InternalValidationPort(session))
+        replayed_proposal = await service.create_cancellation_proposal(
+            CreatePendingAppointmentCancellationCommand(
+                actor=_customer(),
+                appointment_id=appointment_id,
+                expected_appointment_version=1,
+                reason_code="customer_request",
+                expires_at=datetime.now(UTC) + timedelta(minutes=30),
+                idempotency_key="cancel-fresh-replay",
+            )
+        )
+        replay = await service.confirm_cancellation(
+            ConfirmPendingAppointmentCancellationCommand(
+                actor=_customer(),
+                pending_action_id=replayed_proposal.pending_action_id,
+                expected_version=1,
+            )
+        )
+        assert replay.appointment_commit_id == first.appointment_commit_id
+        assert replay.cancelled_at == first.cancelled_at
+        assert (
+            await session.scalar(
+                text("SELECT count(*) FROM appointment_commits WHERE appointment_id = :id"),
+                {"id": appointment_id},
+            )
+            == 1
+        )
+        assert (
+            await session.scalar(
+                text("SELECT count(*) FROM notification_outbox WHERE entity_id = :id"),
+                {"id": appointment_id},
+            )
+            == 2
+        )
+        await session.rollback()
+
+
+async def test_reschedule_replays_from_fresh_session_without_second_mutation(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    new_start = _future_start(hour=12)
+    async with pg_session_factory() as session:
+        await _seed_dental_clinic(session)
+        confirmed = await _create_confirmed_appointment(
+            session, start_at=_future_start(hour=10), key_suffix="reschedule-replay-create"
+        )
+        appointment_id = confirmed.appointment.appointment_id
+        service = AppointmentService(session, validation=InternalValidationPort(session))
+        proposal = await service.create_reschedule_proposal(
+            CreatePendingAppointmentRescheduleCommand(
+                actor=_customer(),
+                appointment_id=appointment_id,
+                expected_appointment_version=1,
+                service_id=1,
+                start_at=new_start,
+                expires_at=datetime.now(UTC) + timedelta(minutes=20),
+                idempotency_key="reschedule-fresh-replay",
+            )
+        )
+        first = await service.confirm_reschedule(
+            ConfirmPendingAppointmentRescheduleCommand(
+                actor=_customer(),
+                pending_action_id=proposal.pending_action_id,
+                expected_version=proposal.version,
+            )
+        )
+        await session.commit()
+
+    async with pg_session_factory() as session:
+        service = AppointmentService(session, validation=InternalValidationPort(session))
+        replayed_proposal = await service.create_reschedule_proposal(
+            CreatePendingAppointmentRescheduleCommand(
+                actor=_customer(),
+                appointment_id=appointment_id,
+                expected_appointment_version=1,
+                service_id=1,
+                start_at=new_start,
+                expires_at=datetime.now(UTC) + timedelta(minutes=30),
+                idempotency_key="reschedule-fresh-replay",
+            )
+        )
+        replay = await service.confirm_reschedule(
+            ConfirmPendingAppointmentRescheduleCommand(
+                actor=_customer(),
+                pending_action_id=replayed_proposal.pending_action_id,
+                expected_version=1,
+            )
+        )
+        assert replay.appointment_commit_id == first.appointment_commit_id
+        assert replay.version == first.version
+        assert replay.start_at == first.start_at
+        assert (
+            await session.scalar(
+                text("SELECT count(*) FROM appointment_commits WHERE appointment_id = :id"),
+                {"id": appointment_id},
+            )
+            == 1
+        )
+        assert (
+            await session.scalar(
+                text("SELECT count(*) FROM resource_allocations WHERE appointment_id = :id"),
+                {"id": appointment_id},
+            )
+            == 2
+        )
+        assert (
+            await session.scalar(
+                text(
+                    "SELECT count(*) FROM resource_allocations "
+                    "WHERE appointment_id = :id AND status = 'active'"
+                ),
+                {"id": appointment_id},
+            )
+            == 1
+        )
+        await session.rollback()
+
+
 async def test_reschedule_cancelled_appointment(
     pg_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:

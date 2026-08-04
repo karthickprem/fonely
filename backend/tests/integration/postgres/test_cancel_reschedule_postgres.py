@@ -503,6 +503,7 @@ async def test_reschedule_to_conflicting_time(
 async def test_cancellation_replays_from_fresh_session_without_duplicate_evidence(
     pg_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
+    shared_expiry = datetime.now(UTC) + timedelta(minutes=20)
     async with pg_session_factory() as session:
         await _seed_dental_clinic(session)
         confirmed = await _create_confirmed_appointment(
@@ -516,7 +517,7 @@ async def test_cancellation_replays_from_fresh_session_without_duplicate_evidenc
                 appointment_id=appointment_id,
                 expected_appointment_version=1,
                 reason_code="customer_request",
-                expires_at=datetime.now(UTC) + timedelta(minutes=20),
+                expires_at=shared_expiry,
                 idempotency_key="cancel-fresh-replay",
             )
         )
@@ -537,7 +538,7 @@ async def test_cancellation_replays_from_fresh_session_without_duplicate_evidenc
                 appointment_id=appointment_id,
                 expected_appointment_version=1,
                 reason_code="customer_request",
-                expires_at=datetime.now(UTC) + timedelta(minutes=30),
+                expires_at=shared_expiry,
                 idempotency_key="cancel-fresh-replay",
             )
         )
@@ -574,6 +575,7 @@ async def test_reschedule_replays_from_fresh_session_without_second_mutation(
     pg_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
     new_start = _future_start(hour=12)
+    shared_expiry = datetime.now(UTC) + timedelta(minutes=20)
     async with pg_session_factory() as session:
         await _seed_dental_clinic(session)
         confirmed = await _create_confirmed_appointment(
@@ -588,7 +590,7 @@ async def test_reschedule_replays_from_fresh_session_without_second_mutation(
                 expected_appointment_version=1,
                 service_id=1,
                 start_at=new_start,
-                expires_at=datetime.now(UTC) + timedelta(minutes=20),
+                expires_at=shared_expiry,
                 idempotency_key="reschedule-fresh-replay",
             )
         )
@@ -610,7 +612,7 @@ async def test_reschedule_replays_from_fresh_session_without_second_mutation(
                 expected_appointment_version=1,
                 service_id=1,
                 start_at=new_start,
-                expires_at=datetime.now(UTC) + timedelta(minutes=30),
+                expires_at=shared_expiry,
                 idempotency_key="reschedule-fresh-replay",
             )
         )

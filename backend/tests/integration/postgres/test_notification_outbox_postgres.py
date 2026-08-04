@@ -18,6 +18,17 @@ pytestmark = pytest.mark.postgres
 NOW = datetime(2026, 8, 12, 13, 30, tzinfo=UTC)
 
 
+@pytest.fixture(autouse=True)
+def _whatsapp_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fonely.services import whatsapp_config
+
+    monkeypatch.setattr(
+        whatsapp_config.settings,
+        "whatsapp_business_mappings",
+        '{"phone-1": 1}',
+    )
+
+
 async def _seed_clinic(session: AsyncSession) -> None:
     await session.execute(
         text(

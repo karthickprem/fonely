@@ -390,6 +390,7 @@ async def bot(runner_args: RunnerArguments):
                 audio_out_enabled=True,
                 audio_out_sample_rate=24000,
                 audio_out_channels=1,
+                audio_out_10ms_chunks=12,
             )
         },
     )

@@ -37,6 +37,7 @@ MIGRATION_0010 = MIGRATIONS_DIR / "0010_whatsapp_message_dedup.py"
 MIGRATION_0011 = MIGRATIONS_DIR / "0011_conversation_turn_unique.py"
 MIGRATION_0012 = MIGRATIONS_DIR / "0012_whatsapp_inbound_events.py"
 MIGRATION_0013 = MIGRATIONS_DIR / "0013_whatsapp_inbound_event_corrections.py"
+MIGRATION_0014 = MIGRATIONS_DIR / "0014_inbound_event_claim_and_dedup_removal.py"
 
 
 class OperationRecorder:
@@ -199,6 +200,9 @@ class OperationRecorder:
     def drop_table(self, name: str, **_: Any) -> None:
         self.operations.append(("drop_table", name))
         self.dropped_tables.append(name)
+        table = self.metadata.tables.get(name)
+        if table is not None:
+            self.metadata.remove(table)
 
     def add_column(self, table_name: str, column: sa.Column[Any]) -> None:
         self.operations.append(("add_column", f"{table_name}.{column.name}"))
@@ -251,6 +255,7 @@ def _capture_upgrade() -> OperationRecorder:
         (MIGRATION_0011, "fonely_migration_0011"),
         (MIGRATION_0012, "fonely_migration_0012"),
         (MIGRATION_0013, "fonely_migration_0013"),
+        (MIGRATION_0014, "fonely_migration_0014"),
     ):
         module = _load_migration(path, name)
         module.op = recorder
@@ -275,6 +280,9 @@ def _capture_downgrade() -> OperationRecorder:
     recorder = _capture_upgrade()
     recorder.dropped_tables.clear()
     recorder.operations.clear()
+    module_0014 = _load_migration(MIGRATION_0014, "fonely_migration_0014_down")
+    module_0014.op = recorder
+    module_0014.downgrade()
     module_0013 = _load_migration(MIGRATION_0013, "fonely_migration_0013_down")
     module_0013.op = recorder
     module_0013.downgrade()
@@ -415,7 +423,7 @@ def _exclude_signatures(table: sa.Table) -> set[tuple[str, str, str, tuple[tuple
 def test_migration_and_orm_have_identical_application_tables() -> None:
     captured = _capture_upgrade()
     assert set(captured.metadata.tables) == set(Base.metadata.tables)
-    assert len(captured.metadata.tables) == 30
+    assert len(captured.metadata.tables) == 29
 
 
 def test_migration_and_orm_column_parity() -> None:
@@ -479,7 +487,8 @@ def test_migration_and_orm_exclusion_constraint_parity() -> None:
 
 def test_migration_downgrade_drops_all_application_tables() -> None:
     recorder = _capture_downgrade()
-    assert set(recorder.dropped_tables) == set(Base.metadata.tables)
+    expected = set(Base.metadata.tables) | {"whatsapp_processed_messages"}
+    assert set(recorder.dropped_tables) == expected
     assert recorder.dropped_tables[0] == "whatsapp_inbound_events"
     assert recorder.dropped_tables[1] == "whatsapp_processed_messages"
     assert recorder.dropped_tables[2] == "business_daily_context"
@@ -748,7 +757,7 @@ def test_revision_chain_has_single_head() -> None:
     }
     heads = revisions - parent_revisions
 
-    assert heads == {"0013"}
+    assert heads == {"0014"}
     assert {migration.revision: migration.down_revision for migration in migrations} == {
         "0001": None,
         "0002": "0001",
@@ -763,6 +772,7 @@ def test_revision_chain_has_single_head() -> None:
         "0011": "0010",
         "0012": "0011",
         "0013": "0012",
+        "0014": "0013",
     }
 
 

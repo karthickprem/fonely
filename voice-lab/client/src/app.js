@@ -69,9 +69,16 @@ function handlePocMessage(data) {
   if (data.event === 'transcript_stage') transcriptStage.textContent = data.stage;
 }
 
+async function preparePlaybackContext() {
+  if (!playbackContext || playbackContext.state === 'closed') {
+    playbackContext = new AudioContext();
+    await playbackContext.audioWorklet.addModule(new URL('./playback-meter-worklet.js', import.meta.url));
+  }
+  if (playbackContext.state !== 'running') await playbackContext.resume();
+}
+
 async function attachMeasuredPlayback(track) {
-  playbackContext = new AudioContext();
-  await playbackContext.audioWorklet.addModule(new URL('./playback-meter-worklet.js', import.meta.url));
+  await preparePlaybackContext();
   const source = playbackContext.createMediaStreamSource(new MediaStream([track]));
   playbackMeter = new AudioWorkletNode(playbackContext, 'playback-meter');
   source.connect(playbackMeter).connect(playbackContext.destination);
@@ -120,6 +127,12 @@ async function collectStats() {
 async function connect() {
   connectButton.disabled = true;
   setState('Connecting…', 'thinking');
+  try {
+    await preparePlaybackContext();
+  } catch (error) {
+    console.warn('Measured playback setup failed:', error);
+    playbackContext = null;
+  }
   const generation = ++connectionGeneration;
   const isCurrent = () => generation === connectionGeneration;
 
@@ -215,8 +228,13 @@ async function connect() {
     if (!participant?.local && track.kind === 'audio') {
       attachMeasuredPlayback(track).catch((error) => {
         console.warn('Measured playback unavailable:', error);
+        playbackState.textContent = 'Fallback audio';
         audio.srcObject = new MediaStream([track]);
-        audio.play().catch(() => setState('Tap the audio control once', 'thinking'));
+        audio.play().catch(() => {
+          audio.controls = true;
+          audio.style.display = 'block';
+          setState('Tap play once to enable audio', 'thinking');
+        });
       });
     }
   });

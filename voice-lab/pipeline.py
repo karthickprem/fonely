@@ -230,11 +230,16 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
                 vad_signals=False,
             ),
         )
+        def claude_evidence(event):
+            payload = dict(event)
+            name = payload.pop("event")
+            coordinator.emit(name, **payload)
+
         llm = AnthropicLLMService(
             api_key=anthropic_key,
             client=build_anthropic_client(
                 anthropic_key,
-                evidence_sink=coordinator.event_sink,
+                evidence_sink=claude_evidence,
             ),
             settings=AnthropicLLMService.Settings(
                 model="claude-haiku-4-5",

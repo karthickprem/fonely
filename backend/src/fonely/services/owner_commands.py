@@ -9,7 +9,15 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from fonely.domain.appointments.availability import schedule_weekday
+from fonely.domain.appointments.availability import (
+    LocalShift,
+    TimeWindow,
+    can_encode_as_single_interval,
+    fits_one_shift,
+    normalize_local_shifts,
+    schedule_weekday,
+    truncate_shifts_at,
+)
 from fonely.models.enums import CallerRole, DailyContextType
 from fonely.models.schema import (
     Appointment,
@@ -196,17 +204,18 @@ class OwnerCommandService:
             .all()
         )
 
-        earliest_open = None
-        for sched in schedules:
-            if earliest_open is None or sched.open_time < earliest_open:
-                earliest_open = sched.open_time
-
-        if earliest_open is None:
+        weekly_shifts = normalize_local_shifts(
+            tuple(LocalShift(s.open_time, s.close_time) for s in schedules)
+        )
+        if not weekly_shifts:
             return OwnerCommandResult(
                 command_type="close_early",
                 success=False,
                 response_text="No schedule found for this day.",
             )
+
+        earliest_open = weekly_shifts[0].open_time
+        latest_close = weekly_shifts[-1].close_time
 
         if new_close <= earliest_open:
             return OwnerCommandResult(
@@ -214,18 +223,46 @@ class OwnerCommandService:
                 success=False,
                 response_text="Close time must be after the opening time.",
             )
+        if new_close >= latest_close:
+            return OwnerCommandResult(
+                command_type="close_early",
+                success=False,
+                response_text="Close time must be before the current closing time.",
+            )
+
+        truncated = truncate_shifts_at(weekly_shifts, new_close)
+        if not can_encode_as_single_interval(truncated):
+            return OwnerCommandResult(
+                command_type="close_early",
+                success=False,
+                response_text=(
+                    "Cannot close early at this time because the schedule has "
+                    "multiple shifts with gaps. Please close at a time that "
+                    "does not span a gap, or close the clinic entirely."
+                ),
+            )
 
         await self._lock_business_resources(business_id)
         reason = parsed.reason or "Closing early"
-        exc = ScheduleException(
-            business_id=business_id,
-            resource_id=None,
-            exception_date=target_date,
-            is_closed=False,
-            open_time=earliest_open,
-            close_time=new_close,
-            reason=reason,
-        )
+        if truncated:
+            effective = truncated[0]
+            exc = ScheduleException(
+                business_id=business_id,
+                resource_id=None,
+                exception_date=target_date,
+                is_closed=False,
+                open_time=effective.open_time,
+                close_time=effective.close_time,
+                reason=reason,
+            )
+        else:
+            exc = ScheduleException(
+                business_id=business_id,
+                resource_id=None,
+                exception_date=target_date,
+                is_closed=True,
+                reason=reason,
+            )
         self._session.add(exc)
         await self._session.flush()
 
@@ -261,6 +298,15 @@ class OwnerCommandService:
 
         timezone = await self._get_business_timezone(business_id)
         zone = ZoneInfo(timezone)
+        svc = AvailabilityService(self._session)
+        shift_windows = await svc._get_shift_windows(business_id, 0, target_date, timezone)
+        all_resource_ids = await self._appointments.list_active_resource_ids(business_id)
+        resource_shift_cache: dict[int, list[TimeWindow]] = {}
+        for rid in all_resource_ids:
+            resource_shift_cache[rid] = await svc._get_shift_windows(
+                business_id, rid, target_date, timezone
+            )
+
         appointments = (
             (
                 await self._session.execute(
@@ -274,21 +320,17 @@ class OwnerCommandService:
             .all()
         )
 
-        availability = AvailabilityService(self._session)
         cancelled: list[dict[str, str]] = []
         for appointment in appointments:
             local_start = appointment.start_at.astimezone(zone)
             if local_start.date() != target_date:
                 continue
-            decision = await availability.check_exact_slot(
-                business_id,
-                appointment.service_id,
-                appointment.resource_id,
-                appointment.start_at,
-                exclude_appointment_id=appointment.id,
-                alternative_limit=0,
+            effective = TimeWindow(
+                appointment.effective_start_at or appointment.start_at,
+                appointment.effective_end_at or appointment.end_at,
             )
-            if decision.available:
+            resource_windows = resource_shift_cache.get(appointment.resource_id, shift_windows)
+            if fits_one_shift(effective, tuple(resource_windows)):
                 continue
             await self._cancel_via_service(
                 business_id,
@@ -538,6 +580,10 @@ class OwnerCommandService:
             ConfirmPendingAppointmentCancellationCommand,
             CreatePendingAppointmentCancellationCommand,
         )
+        from fonely.domain.appointments.errors import (
+            AppointmentDomainError,
+            AppointmentErrorCode,
+        )
         from fonely.domain.pending_actions.commands import ActorContext
         from fonely.services.appointments import AppointmentService
 
@@ -552,23 +598,35 @@ class OwnerCommandService:
 
         now = datetime.now(UTC)
         key = f"owner-cancel-{appointment_id}-{uuid.uuid4().hex[:8]}"
-        proposal = await appt_service.create_cancellation_proposal(
-            CreatePendingAppointmentCancellationCommand(
-                actor=actor,
-                appointment_id=appointment_id,
-                expected_appointment_version=appointment_version,
-                reason_code=reason_code,
-                expires_at=now + timedelta(minutes=5),
-                idempotency_key=key,
+        try:
+            proposal = await appt_service.create_cancellation_proposal(
+                CreatePendingAppointmentCancellationCommand(
+                    actor=actor,
+                    appointment_id=appointment_id,
+                    expected_appointment_version=appointment_version,
+                    reason_code=reason_code,
+                    expires_at=now + timedelta(minutes=5),
+                    idempotency_key=key,
+                )
             )
-        )
-        await appt_service.confirm_cancellation(
-            ConfirmPendingAppointmentCancellationCommand(
-                actor=actor,
-                pending_action_id=proposal.pending_action_id,
-                expected_version=proposal.version,
+            await appt_service.confirm_cancellation(
+                ConfirmPendingAppointmentCancellationCommand(
+                    actor=actor,
+                    pending_action_id=proposal.pending_action_id,
+                    expected_version=proposal.version,
+                )
             )
-        )
+        except AppointmentDomainError as exc:
+            if exc.code in (
+                AppointmentErrorCode.INVALID_STATE,
+                AppointmentErrorCode.STALE_VERSION,
+            ):
+                reloaded = await self._appointments.get_by_business_and_id(
+                    business_id, appointment_id
+                )
+                if reloaded is not None and reloaded.status == "cancelled":
+                    return
+            raise
 
 
 async def get_daily_context(

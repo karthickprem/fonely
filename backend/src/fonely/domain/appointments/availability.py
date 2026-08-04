@@ -165,6 +165,25 @@ def _exception_shifts(
     return (LocalShift(exception.open_time, exception.close_time),)
 
 
+def truncate_shifts_at(shifts: tuple[LocalShift, ...], cutoff: time) -> tuple[LocalShift, ...]:
+    """Truncate normalized shifts at a cutoff time, preserving gaps."""
+    result: list[LocalShift] = []
+    for shift in normalize_local_shifts(shifts):
+        if shift.open_time >= cutoff:
+            continue
+        if shift.close_time <= cutoff:
+            result.append(shift)
+        else:
+            result.append(LocalShift(shift.open_time, cutoff))
+    return tuple(result)
+
+
+def can_encode_as_single_interval(shifts: tuple[LocalShift, ...]) -> bool:
+    """Return whether normalized shifts can be represented as one continuous interval."""
+    normalized = normalize_local_shifts(shifts)
+    return len(normalized) <= 1
+
+
 def normalize_local_shifts(shifts: tuple[LocalShift, ...]) -> tuple[LocalShift, ...]:
     """Return deterministic disjoint shifts, merging overlap and adjacency."""
     ordered = sorted(shifts, key=lambda shift: (shift.open_time, shift.close_time))

@@ -145,6 +145,7 @@ class TestCancellationProposal:
         session = _mock_session()
         validation = _mock_validation()
         service = AppointmentService(session, validation=validation)
+        service._pa_service.find_idempotent_action = AsyncMock(return_value=None)
 
         appt = _mock_appointment()
         service._repo.get_by_business_and_id = AsyncMock(return_value=appt)
@@ -178,6 +179,7 @@ class TestCancellationProposal:
         session = _mock_session()
         validation = _mock_validation()
         service = AppointmentService(session, validation=validation)
+        service._pa_service.find_idempotent_action = AsyncMock(return_value=None)
 
         appt = _mock_appointment(status="cancelled")
         service._repo.get_by_business_and_id = AsyncMock(return_value=appt)
@@ -199,6 +201,7 @@ class TestCancellationProposal:
         session = _mock_session()
         validation = _mock_validation()
         service = AppointmentService(session, validation=validation)
+        service._pa_service.find_idempotent_action = AsyncMock(return_value=None)
 
         appt = _mock_appointment(status="completed")
         service._repo.get_by_business_and_id = AsyncMock(return_value=appt)
@@ -220,6 +223,7 @@ class TestCancellationProposal:
         session = _mock_session()
         validation = _mock_validation()
         service = AppointmentService(session, validation=validation)
+        service._pa_service.find_idempotent_action = AsyncMock(return_value=None)
         service._repo.get_by_business_and_id = AsyncMock(return_value=None)
 
         with pytest.raises(AppointmentDomainError) as exc_info:
@@ -244,6 +248,7 @@ class TestRescheduleProposal:
         session = _mock_session()
         validation = _mock_validation()
         service = AppointmentService(session, validation=validation)
+        service._pa_service.find_idempotent_action = AsyncMock(return_value=None)
 
         appt = _mock_appointment()
         service._repo.get_by_business_and_id = AsyncMock(return_value=appt)
@@ -280,6 +285,7 @@ class TestRescheduleProposal:
         session = _mock_session()
         validation = _mock_validation()
         service = AppointmentService(session, validation=validation)
+        service._pa_service.find_idempotent_action = AsyncMock(return_value=None)
 
         appt = _mock_appointment(status="cancelled")
         service._repo.get_by_business_and_id = AsyncMock(return_value=appt)
@@ -303,6 +309,7 @@ class TestRescheduleProposal:
         session = _mock_session()
         validation = _mock_validation()
         service = AppointmentService(session, validation=validation)
+        service._pa_service.find_idempotent_action = AsyncMock(return_value=None)
         service._repo.get_by_business_and_id = AsyncMock(return_value=None)
 
         with pytest.raises(AppointmentDomainError) as exc_info:
@@ -329,6 +336,7 @@ class TestTenantIsolation:
         session = _mock_session()
         validation = _mock_validation()
         service = AppointmentService(session, validation=validation)
+        service._pa_service.find_idempotent_action = AsyncMock(return_value=None)
         service._repo.get_by_business_and_id = AsyncMock(return_value=None)
 
         with pytest.raises(AppointmentDomainError):

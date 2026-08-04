@@ -149,11 +149,41 @@ class AppointmentRepository:
         )
         return [(row.effective_start_at, row.effective_end_at) for row in result]
 
+    async def get_commit_by_business_and_pending_action(
+        self,
+        business_id: int,
+        pending_action_id: int,
+    ) -> AppointmentCommit | None:
+        result = await self._session.execute(
+            select(AppointmentCommit)
+            .where(
+                AppointmentCommit.business_id == business_id,
+                AppointmentCommit.pending_action_id == pending_action_id,
+            )
+            .execution_options(populate_existing=True)
+        )
+        return result.scalar_one_or_none()
+
     async def insert_commit(self, values: Mapping[str, Any]) -> AppointmentCommit:
         commit = AppointmentCommit(**values)
         self._session.add(commit)
         await self._session.flush()
         return commit
+
+    async def lock_business_schedule(self, business_id: int) -> None:
+        await self._session.execute(
+            text("SELECT 1 FROM businesses WHERE id = :bid FOR UPDATE"),
+            {"bid": business_id},
+        )
+
+    async def list_active_resource_ids(self, business_id: int) -> tuple[int, ...]:
+        result = await self._session.execute(
+            text(
+                "SELECT id FROM resources WHERE business_id = :bid AND is_active = true ORDER BY id"
+            ),
+            {"bid": business_id},
+        )
+        return tuple(int(row.id) for row in result)
 
     async def lock_resource_schedule(
         self,

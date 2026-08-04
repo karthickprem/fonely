@@ -24,6 +24,7 @@ from fonely.domain.appointments.commit_contract import (
     APPOINTMENT_RESCHEDULE_PRE_COMPLETION_CONSTRAINTS,
     set_constraints_immediate_sql,
 )
+from fonely.domain.appointments.datetimes import instant
 from fonely.domain.appointments.errors import AppointmentDomainError, AppointmentErrorCode
 from fonely.domain.appointments.results import (
     AppointmentCancellationResult,
@@ -39,6 +40,7 @@ from fonely.domain.appointments.results import (
 )
 from fonely.domain.appointments.validation import AppointmentValidationPort
 from fonely.domain.pending_actions.commands import (
+    ActorContext,
     BeginCommitCommand,
     CommitResultContext,
     CompleteCommitCommand,
@@ -46,6 +48,7 @@ from fonely.domain.pending_actions.commands import (
     FailCommitCommand,
     MarkAwaitingConfirmationCommand,
 )
+from fonely.domain.pending_actions.errors import PendingActionIdempotencyConflictError
 from fonely.domain.pending_actions.payloads import (
     AppointmentFacts,
     CancelAppointmentData,
@@ -57,11 +60,13 @@ from fonely.domain.pending_actions.snapshots import canonical_payload_dict
 from fonely.models.enums import (
     AppointmentSource,
     AppointmentStatus,
+    CallerRole,
     PendingActionType,
     ResourceAllocationSource,
     ResourceAllocationStatus,
     ResourceAllocationType,
 )
+from fonely.models.schema import PendingAction
 from fonely.repositories.appointments import AppointmentRepository
 from fonely.services.authorization import require_existing_action_permission
 from fonely.services.pending_actions import PendingActionService
@@ -107,6 +112,9 @@ class AppointmentService:
         self,
         command: CreatePendingAppointmentCommand,
     ) -> AppointmentProposalResult:
+        replay = await self._proposal_replay(command)
+        if replay is not None:
+            return replay
         resolved_envelope = await self._resolve_envelope(command)
         assert isinstance(resolved_envelope.data, CreateAppointmentData)
 
@@ -314,12 +322,16 @@ class AppointmentService:
         self,
         command: CreatePendingAppointmentCancellationCommand,
     ) -> AppointmentProposalResult:
+        replay = await self._proposal_replay(command)
+        if replay is not None:
+            return replay
         appointment = await self._repo.get_by_business_and_id(
             command.actor.business_id,
             command.appointment_id,
         )
         if appointment is None:
             raise AppointmentDomainError(AppointmentErrorCode.NOT_FOUND, "Appointment not found")
+        self._require_target_permission(command.actor, appointment.customer_phone)
         if appointment.status != AppointmentStatus.CONFIRMED:
             raise AppointmentDomainError(
                 AppointmentErrorCode.INVALID_STATE,
@@ -388,6 +400,11 @@ class AppointmentService:
         envelope = PendingAppointmentEnvelope.model_validate(action.proposed_payload)
         data = envelope.data
         assert isinstance(data, CancelAppointmentData)
+        existing_commit = await self._repo.get_commit_by_business_and_pending_action(
+            command.actor.business_id, command.pending_action_id
+        )
+        if existing_commit is not None:
+            return self._replay_cancellation(existing_commit, data)
 
         context = CommitResultContext(
             business_id=command.actor.business_id,
@@ -515,12 +532,16 @@ class AppointmentService:
         self,
         command: CreatePendingAppointmentRescheduleCommand,
     ) -> AppointmentProposalResult:
+        replay = await self._proposal_replay(command)
+        if replay is not None:
+            return replay
         appointment = await self._repo.get_by_business_and_id(
             command.actor.business_id,
             command.appointment_id,
         )
         if appointment is None:
             raise AppointmentDomainError(AppointmentErrorCode.NOT_FOUND, "Appointment not found")
+        self._require_target_permission(command.actor, appointment.customer_phone)
         if appointment.status != AppointmentStatus.CONFIRMED:
             raise AppointmentDomainError(
                 AppointmentErrorCode.INVALID_STATE,
@@ -607,6 +628,11 @@ class AppointmentService:
         envelope = PendingAppointmentEnvelope.model_validate(action.proposed_payload)
         data = envelope.data
         assert isinstance(data, RescheduleAppointmentData)
+        existing_commit = await self._repo.get_commit_by_business_and_pending_action(
+            command.actor.business_id, command.pending_action_id
+        )
+        if existing_commit is not None:
+            return self._replay_reschedule(existing_commit, data)
         new_facts = data.new_facts
 
         context = CommitResultContext(
@@ -614,6 +640,20 @@ class AppointmentService:
             pending_action_id=command.pending_action_id,
             expected_version=command.expected_version,
             engine="appointment_engine",
+        )
+
+        discovered = await self._repo.get_by_business_and_id(
+            command.actor.business_id,
+            data.target_appointment_id,
+        )
+        if discovered is None:
+            raise AppointmentDomainError(
+                AppointmentErrorCode.NOT_FOUND, "Target appointment not found"
+            )
+        discovered_resource_id = discovered.resource_id
+        await self._repo.lock_resource_schedules(
+            command.actor.business_id,
+            (discovered_resource_id, new_facts.resource_id),
         )
 
         appointment = await self._repo.lock_appointment(
@@ -624,6 +664,10 @@ class AppointmentService:
             raise AppointmentDomainError(
                 AppointmentErrorCode.NOT_FOUND, "Target appointment not found"
             )
+        if appointment.resource_id != discovered_resource_id:
+            raise AppointmentDomainError(
+                AppointmentErrorCode.STALE_VERSION, "Appointment resource changed"
+            )
         if appointment.status != AppointmentStatus.CONFIRMED:
             raise AppointmentDomainError(
                 AppointmentErrorCode.INVALID_STATE,
@@ -633,11 +677,11 @@ class AppointmentService:
             raise AppointmentDomainError(
                 AppointmentErrorCode.STALE_VERSION, "Appointment version changed"
             )
-
-        await self._repo.lock_resource_schedules(
-            command.actor.business_id,
-            (appointment.resource_id, new_facts.resource_id),
+        existing_commit = await self._repo.get_commit_by_business_and_pending_action(
+            command.actor.business_id, command.pending_action_id
         )
+        if existing_commit is not None:
+            return self._replay_reschedule(existing_commit, data)
 
         begin_result = await self._pa_service.begin_commit(BeginCommitCommand(context=context))
         committing_context = CommitResultContext(
@@ -808,6 +852,158 @@ class AppointmentService:
             {"id": appointment_id, "bid": business_id},
         )
         return result
+
+    async def _proposal_replay(
+        self,
+        command: CreatePendingAppointmentCommand
+        | CreatePendingAppointmentCancellationCommand
+        | CreatePendingAppointmentRescheduleCommand,
+    ) -> AppointmentProposalResult | None:
+        action = await self._pa_service.find_idempotent_action(
+            command.actor, command.idempotency_key
+        )
+        if action is None:
+            return None
+        envelope = await self._pa_service.validated_stored_appointment_envelope(action)
+        data = envelope.data
+
+        if isinstance(command, CreatePendingAppointmentCommand):
+            if not isinstance(data, CreateAppointmentData):
+                raise PendingActionIdempotencyConflictError(
+                    "Idempotency key already used for another appointment operation"
+                )
+            expected_resource = command.resource_id
+            if (
+                expected_resource is None
+                or data.facts.service_id != command.service_id
+                or data.facts.resource_id != expected_resource
+                or instant(data.facts.start_at) != instant(command.start_at)
+                or data.customer_name != command.customer_name
+                or data.customer_phone != command.customer_phone
+                or data.reason != command.reason
+                or data.call_id != command.call_id
+            ):
+                raise PendingActionIdempotencyConflictError(
+                    "Idempotency key already used for a different appointment request"
+                )
+            return self._proposal_result_from_action(action, envelope)
+
+        if isinstance(command, CreatePendingAppointmentCancellationCommand):
+            if not isinstance(data, CancelAppointmentData) or (
+                data.target_appointment_id != command.appointment_id
+                or data.target_expected_version != command.expected_appointment_version
+                or data.reason_code != command.reason_code
+            ):
+                raise PendingActionIdempotencyConflictError(
+                    "Idempotency key already used for a different cancellation request"
+                )
+            return self._proposal_result_from_action(action, envelope)
+
+        if not isinstance(data, RescheduleAppointmentData):
+            raise PendingActionIdempotencyConflictError(
+                "Idempotency key already used for another appointment operation"
+            )
+        expected_resource = command.resource_id or data.old_facts.resource_id
+        if (
+            data.target_appointment_id != command.appointment_id
+            or data.target_expected_version != command.expected_appointment_version
+            or data.new_facts.service_id != command.service_id
+            or data.new_facts.resource_id != expected_resource
+            or instant(data.new_facts.start_at) != instant(command.start_at)
+        ):
+            raise PendingActionIdempotencyConflictError(
+                "Idempotency key already used for a different reschedule request"
+            )
+        return self._proposal_result_from_action(action, envelope)
+
+    def _proposal_result_from_action(
+        self, action: PendingAction, envelope: PendingAppointmentEnvelope
+    ) -> AppointmentProposalResult:
+        data = envelope.data
+        if isinstance(data, CreateAppointmentData):
+            confirmation = self._to_confirmation_facts(data.facts)
+        elif isinstance(data, CancelAppointmentData):
+            facts = data.current_facts
+            confirmation = ConfirmationFactsResult(
+                operation="cancel",
+                service_id=facts.service_id,
+                service_name=facts.service_name,
+                resource_id=facts.resource_id,
+                resource_name=facts.resource_name,
+                start_at=facts.start_at.isoformat(),
+                end_at=facts.end_at.isoformat(),
+                duration_minutes=facts.duration_minutes,
+                price=str(facts.price) if facts.price is not None else None,
+                business_timezone=facts.business_timezone,
+                target_appointment_id=data.target_appointment_id,
+                reason_code=data.reason_code,
+            )
+        else:
+            facts = data.new_facts
+            confirmation = ConfirmationFactsResult(
+                operation="reschedule",
+                service_id=facts.service_id,
+                service_name=facts.service_name,
+                resource_id=facts.resource_id,
+                resource_name=facts.resource_name,
+                start_at=facts.start_at.isoformat(),
+                end_at=facts.end_at.isoformat(),
+                duration_minutes=facts.duration_minutes,
+                price=str(facts.price) if facts.price is not None else None,
+                business_timezone=facts.business_timezone,
+                target_appointment_id=data.target_appointment_id,
+                old_facts=self._to_scheduling_facts(data.old_facts),
+            )
+        return AppointmentProposalResult(
+            pending_action_id=action.id,
+            version=action.version,
+            expires_at=action.expires_at,
+            confirmation_facts=confirmation,
+        )
+
+    def _replay_cancellation(
+        self, commit: object, data: CancelAppointmentData
+    ) -> AppointmentCancellationResult:
+        if (
+            commit.operation != "cancel"  # type: ignore[attr-defined]
+            or commit.appointment_id != data.target_appointment_id  # type: ignore[attr-defined]
+        ):
+            raise PendingActionIdempotencyConflictError(
+                "Committed cancellation evidence does not match pending action"
+            )
+        after = commit.after_snapshot  # type: ignore[attr-defined]
+        cancelled_at = datetime.fromisoformat(str(after["cancelled_at"]).replace("Z", "+00:00"))
+        return AppointmentCancellationResult(
+            appointment_id=data.target_appointment_id,
+            appointment_commit_id=commit.id,  # type: ignore[attr-defined]
+            cancelled_at=cancelled_at,
+        )
+
+    def _replay_reschedule(
+        self, commit: object, data: RescheduleAppointmentData
+    ) -> AppointmentRescheduleResult:
+        if (
+            commit.operation != "reschedule"  # type: ignore[attr-defined]
+            or commit.appointment_id != data.target_appointment_id  # type: ignore[attr-defined]
+        ):
+            raise PendingActionIdempotencyConflictError(
+                "Committed reschedule evidence does not match pending action"
+            )
+        after = commit.after_snapshot  # type: ignore[attr-defined]
+        return AppointmentRescheduleResult(
+            appointment_id=data.target_appointment_id,
+            appointment_commit_id=commit.id,  # type: ignore[attr-defined]
+            version=int(after["version"]),
+            resource_id=int(after["resource_id"]),
+            resource_name=str(after["resource_name"]),
+            start_at=datetime.fromisoformat(str(after["start_at"]).replace("Z", "+00:00")),
+            end_at=datetime.fromisoformat(str(after["end_at"]).replace("Z", "+00:00")),
+        )
+
+    @staticmethod
+    def _require_target_permission(actor: ActorContext, customer_phone: str) -> None:
+        if actor.verified_role == CallerRole.CUSTOMER and customer_phone != actor.normalized_phone:
+            raise AppointmentDomainError(AppointmentErrorCode.NOT_FOUND, "Appointment not found")
 
     def _to_scheduling_facts(self, facts: AppointmentFacts) -> ConfirmationSchedulingFacts:
         return ConfirmationSchedulingFacts(

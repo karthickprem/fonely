@@ -79,6 +79,7 @@ async def test_create_proposal_returns_awaiting_confirmation() -> None:
     awaiting_result.expires_at = START + timedelta(hours=1)
     awaiting_result.payload = canonical_payload_dict(_resolved_envelope())
 
+    pa_service_mock.find_idempotent_action.return_value = None
     pa_service_mock.create.return_value = create_result
     pa_service_mock.mark_awaiting_confirmation.return_value = awaiting_result
 
@@ -122,6 +123,7 @@ async def test_create_proposal_does_not_commit() -> None:
     awaiting_result.expires_at = START + timedelta(hours=1)
     awaiting_result.payload = canonical_payload_dict(_resolved_envelope())
 
+    pa_service_mock.find_idempotent_action.return_value = None
     pa_service_mock.create.return_value = create_result
     pa_service_mock.mark_awaiting_confirmation.return_value = awaiting_result
 
@@ -155,6 +157,7 @@ async def test_proposal_validates_once() -> None:
     create_result.expires_at = START + timedelta(hours=1)
     create_result.payload = canonical_payload_dict(_resolved_envelope())
 
+    pa_service_mock.find_idempotent_action.return_value = None
     pa_service_mock.create.return_value = create_result
 
     service = AppointmentService(session, validation=validation)

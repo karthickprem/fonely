@@ -106,6 +106,29 @@ class PendingActionService:
         self._repo = PendingActionRepository(session)
         self._appointment_validation = appointment_validation
 
+    async def find_idempotent_action(
+        self,
+        actor: ActorContext,
+        idempotency_key: str,
+    ) -> PendingAction | None:
+        await self._require_business(actor.business_id)
+        await require_action_permission(self._session, actor, PendingActionType.APPOINTMENT)
+        action = await self._repo.get_by_idempotency_key(actor.business_id, idempotency_key)
+        if action is not None:
+            await require_existing_action_permission(self._session, actor, action)
+            self._validated_stored_payload(action)
+        return action
+
+    async def validated_stored_appointment_envelope(
+        self, action: PendingAction
+    ) -> PendingAppointmentEnvelope:
+        payload = self._validated_stored_payload(action)
+        if not isinstance(payload, PendingAppointmentEnvelope):
+            raise PendingActionIdempotencyConflictError(
+                "Idempotency key already used for a different action"
+            )
+        return payload
+
     async def create(self, command: CreatePendingActionCommand) -> PendingActionResult:
         await self._require_business(command.actor.business_id)
         await require_action_permission(self._session, command.actor, command.action_type)

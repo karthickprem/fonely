@@ -808,6 +808,7 @@ class ConversationService:
                     ctx, user_message, "Okay, your appointment is unchanged.", safety, []
                 )
             ctx.transition(ConversationState.FACT_COLLECTION)
+            ctx.booking_attempt += 1
             ctx.collected_facts.pop("start_at", None)
             ctx.proposal_id = None
             ctx.proposal_version = None

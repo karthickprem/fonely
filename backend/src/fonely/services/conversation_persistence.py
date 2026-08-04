@@ -51,6 +51,7 @@ class ConversationPersistenceService:
         turn: ConversationTurn,
     ) -> None:
         facts_for_json = _serialize_facts(ctx.collected_facts)
+        facts_for_json["_booking_attempt"] = ctx.booking_attempt
 
         await self._repo.update_state(
             ctx.conversation_id,
@@ -105,6 +106,9 @@ class ConversationPersistenceService:
             created_at=getattr(db_conv, "created_at", utcnow()),
         )
         ctx._restored_turn_count = getattr(db_conv, "turn_count", 0)
+        raw_attempt = facts.pop("_booking_attempt", 0)
+        attempt_value: int = raw_attempt if isinstance(raw_attempt, int) else 0
+        ctx.booking_attempt = attempt_value
         return ctx
 
 

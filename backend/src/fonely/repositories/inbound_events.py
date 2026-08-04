@@ -220,6 +220,38 @@ class InboundEventRepository:
         if result.rowcount == 0:  # type: ignore[attr-defined]
             raise StaleClaimError(f"event {event_id}: not dead_letter")
 
+    async def reconcile_delivered(
+        self, business_id: int, event_id: int, completed_at: datetime
+    ) -> None:
+        result = await self._session.execute(
+            update(WhatsAppInboundEvent)
+            .where(
+                WhatsAppInboundEvent.business_id == business_id,
+                WhatsAppInboundEvent.id == event_id,
+                WhatsAppInboundEvent.status.in_(
+                    [
+                        InboundEventStatus.DOMAIN_PROCESSED.value,
+                        InboundEventStatus.DEAD_LETTER.value,
+                        InboundEventStatus.RESPONSE_FAILED.value,
+                    ]
+                ),
+            )
+            .values(
+                status=InboundEventStatus.COMPLETED.value,
+                completed_at=completed_at,
+                message_body=None,
+            )
+        )
+        if result.rowcount == 0:  # type: ignore[attr-defined]
+            existing = await self._session.scalar(
+                select(WhatsAppInboundEvent.status).where(
+                    WhatsAppInboundEvent.business_id == business_id,
+                    WhatsAppInboundEvent.id == event_id,
+                )
+            )
+            if existing != InboundEventStatus.COMPLETED.value:
+                raise StaleClaimError(f"event {event_id}: not reconcilable")
+
     async def mark_response_failed(self, business_id: int, event_id: int) -> None:
         await self._session.execute(
             update(WhatsAppInboundEvent)

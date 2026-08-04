@@ -1202,11 +1202,28 @@ class WhatsAppInboundEvent(Base):
     __table_args__ = (
         UniqueConstraint("message_id", name="uq_whatsapp_inbound_message_id"),
         Index("ix_whatsapp_inbound_events_poll", "status", "next_attempt_at"),
+        CheckConstraint("attempts >= 0", name="ck_whatsapp_inbound_attempts_non_negative"),
+        CheckConstraint("max_attempts > 0", name="ck_whatsapp_inbound_max_attempts_positive"),
+        CheckConstraint("attempts <= max_attempts", name="ck_whatsapp_inbound_attempts_bounded"),
+        CheckConstraint(
+            "status IN ('received', 'processing', 'domain_processed', "
+            "'completed', 'failed', 'dead_letter')",
+            name="ck_whatsapp_inbound_status_valid",
+        ),
+        CheckConstraint(
+            "(status != 'completed') OR (completed_at IS NOT NULL)",
+            name="ck_whatsapp_inbound_completed_requires_timestamp",
+        ),
+        CheckConstraint(
+            "(status != 'dead_letter') OR (dead_lettered_at IS NOT NULL)",
+            name="ck_whatsapp_inbound_dead_letter_requires_timestamp",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     message_id: Mapped[str] = mapped_column(String(100), nullable=False)
     business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    phone_number_id: Mapped[str | None] = mapped_column(String(100))
     sender_phone: Mapped[str] = mapped_column(String(20), nullable=False)
     message_type: Mapped[str] = mapped_column(String(20), nullable=False)
     message_body: Mapped[str | None] = mapped_column(Text)
@@ -1219,6 +1236,7 @@ class WhatsAppInboundEvent(Base):
     last_error: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    dead_lettered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 # =============================================================================

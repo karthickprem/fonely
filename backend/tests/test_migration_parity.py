@@ -36,6 +36,7 @@ MIGRATION_0009 = MIGRATIONS_DIR / "0009_daily_context.py"
 MIGRATION_0010 = MIGRATIONS_DIR / "0010_whatsapp_message_dedup.py"
 MIGRATION_0011 = MIGRATIONS_DIR / "0011_conversation_turn_unique.py"
 MIGRATION_0012 = MIGRATIONS_DIR / "0012_whatsapp_inbound_events.py"
+MIGRATION_0013 = MIGRATIONS_DIR / "0013_whatsapp_inbound_event_corrections.py"
 
 
 class OperationRecorder:
@@ -204,9 +205,22 @@ class OperationRecorder:
         self.metadata.tables[table_name].append_column(column)
 
     def alter_column(self, table_name: str, column_name: str, **changes: Any) -> None:
-        column = self.metadata.tables[table_name].c[column_name]
+        table = self.metadata.tables[table_name]
+        column = table.c[column_name]
         if "nullable" in changes:
             column.nullable = changes["nullable"]
+        if "type_" in changes:
+            new_type = changes["type_"]
+            column.type = new_type
+            if isinstance(new_type, sa.Enum) and getattr(new_type, "create_constraint", False):
+                constraint_name = new_type.name
+                if constraint_name:
+                    table.append_constraint(
+                        sa.CheckConstraint(
+                            column.in_(new_type.enums),
+                            name=constraint_name,
+                        )
+                    )
 
     def drop_column(self, table_name: str, column_name: str) -> None:
         table = self.metadata.tables[table_name]
@@ -236,6 +250,7 @@ def _capture_upgrade() -> OperationRecorder:
         (MIGRATION_0010, "fonely_migration_0010"),
         (MIGRATION_0011, "fonely_migration_0011"),
         (MIGRATION_0012, "fonely_migration_0012"),
+        (MIGRATION_0013, "fonely_migration_0013"),
     ):
         module = _load_migration(path, name)
         module.op = recorder
@@ -260,6 +275,9 @@ def _capture_downgrade() -> OperationRecorder:
     recorder = _capture_upgrade()
     recorder.dropped_tables.clear()
     recorder.operations.clear()
+    module_0013 = _load_migration(MIGRATION_0013, "fonely_migration_0013_down")
+    module_0013.op = recorder
+    module_0013.downgrade()
     module_0012 = _load_migration(MIGRATION_0012, "fonely_migration_0012_down")
     module_0012.op = recorder
     module_0012.downgrade()
@@ -341,9 +359,15 @@ def _unique_signatures(table: sa.Table) -> set[tuple[str, ...]]:
     }
 
 
+def _normalize_postcompile(text: str) -> str:
+    import re
+
+    return re.sub(r"__\[POSTCOMPILE_\w+\]", "__[POSTCOMPILE]", text)
+
+
 def _check_signatures(table: sa.Table) -> set[tuple[str | None, str]]:
     return {
-        (constraint.name, " ".join(str(constraint.sqltext).split()))
+        (constraint.name, _normalize_postcompile(" ".join(str(constraint.sqltext).split())))
         for constraint in table.constraints
         if isinstance(constraint, sa.CheckConstraint)
     }
@@ -724,7 +748,7 @@ def test_revision_chain_has_single_head() -> None:
     }
     heads = revisions - parent_revisions
 
-    assert heads == {"0012"}
+    assert heads == {"0013"}
     assert {migration.revision: migration.down_revision for migration in migrations} == {
         "0001": None,
         "0002": "0001",
@@ -738,6 +762,7 @@ def test_revision_chain_has_single_head() -> None:
         "0010": "0009",
         "0011": "0010",
         "0012": "0011",
+        "0013": "0012",
     }
 
 

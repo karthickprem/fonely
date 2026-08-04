@@ -284,7 +284,7 @@ async def test_populated_onboarding_migration_roundtrip(
 
     async with pg_engine.begin() as conn:
         rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-        assert rev == "0012"
+        assert rev == "0013"
 
         await conn.execute(
             text(
@@ -339,7 +339,7 @@ async def test_populated_onboarding_migration_roundtrip(
 
     async with pg_engine.begin() as conn:
         rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-        assert rev == "0012"
+        assert rev == "0013"
 
         tables_exist = await conn.scalar(
             text(

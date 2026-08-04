@@ -78,11 +78,15 @@ async function preparePlaybackContext() {
 }
 
 async function attachMeasuredPlayback(track) {
+  audio.srcObject = new MediaStream([track]);
+  await audio.play();
   await preparePlaybackContext();
-  const source = playbackContext.createMediaStreamSource(new MediaStream([track]));
+  const measurementTrack = track.clone();
+  const source = playbackContext.createMediaStreamSource(new MediaStream([measurementTrack]));
   playbackMeter = new AudioWorkletNode(playbackContext, 'playback-meter');
-  source.connect(playbackMeter).connect(playbackContext.destination);
-  audio.srcObject = null;
+  const silentGain = playbackContext.createGain();
+  silentGain.gain.value = 0;
+  source.connect(playbackMeter).connect(silentGain).connect(playbackContext.destination);
   playbackMeter.port.onmessage = ({data}) => {
     if (data?.type !== 'old-audio-stopped' || interruptionMarker == null) return;
     const outputTimestamp = playbackContext.getOutputTimestamp?.();
@@ -228,8 +232,8 @@ async function connect() {
     if (!participant?.local && track.kind === 'audio') {
       attachMeasuredPlayback(track).catch((error) => {
         console.warn('Measured playback unavailable:', error);
-        playbackState.textContent = 'Fallback audio';
-        audio.srcObject = new MediaStream([track]);
+        playbackState.textContent = 'Audio active · PCM metric unavailable';
+        audio.srcObject ||= new MediaStream([track]);
         audio.play().catch(() => {
           audio.controls = true;
           audio.style.display = 'block';

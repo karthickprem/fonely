@@ -22,6 +22,7 @@ class NotificationDeliveryError(Exception):
 @dataclass(frozen=True)
 class DeliveryReceipt:
     provider_message_id: str | None
+    final: bool = False
 
 
 class WhatsAppSenderResolver(Protocol):
@@ -41,16 +42,21 @@ class ConfiguredWhatsAppSenderResolver:
         self._access_token = access_token
         self._business_mappings = business_mappings
         self._client = client
+        self._senders: dict[str, WhatsAppSender] = {}
 
     def resolve(self, business_id: int, phone_number_id: str) -> WhatsAppSender:
         mapped_business = self._business_mappings.get(phone_number_id)
         if mapped_business != business_id:
             raise NotificationDeliveryError("channel_identity_mismatch")
-        return WhatsAppSender(
-            access_token=self._access_token,
-            phone_number_id=phone_number_id,
-            client=self._client,  # type: ignore[arg-type]
-        )
+        sender = self._senders.get(phone_number_id)
+        if sender is None:
+            sender = WhatsAppSender(
+                access_token=self._access_token,
+                phone_number_id=phone_number_id,
+                client=self._client,  # type: ignore[arg-type]
+            )
+            self._senders[phone_number_id] = sender
+        return sender
 
 
 class WhatsAppNotificationSender:

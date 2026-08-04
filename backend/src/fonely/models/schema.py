@@ -1209,7 +1209,7 @@ class WhatsAppDeliveryAttempt(Base):
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
     notification_event_id: Mapped[int] = mapped_column(
-        ForeignKey("notification_outbox.id"), nullable=False
+        ForeignKey("notification_outbox.id", ondelete="CASCADE"), nullable=False
     )
     attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False)

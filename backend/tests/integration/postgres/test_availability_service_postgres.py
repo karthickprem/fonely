@@ -1,6 +1,6 @@
 """PostgreSQL integration tests for unified AvailabilityService."""
 
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 
 import pytest
 from sqlalchemy import text
@@ -42,7 +42,7 @@ async def _seed_clinic(session: AsyncSession, *, target_date_iso: str) -> None:
 
 
 async def _add_business_schedule(
-    session: AsyncSession, day_of_week: int, open_t: str, close_t: str
+    session: AsyncSession, day_of_week: int, open_t: time, close_t: time
 ) -> None:
     await session.execute(
         text(
@@ -56,7 +56,7 @@ async def _add_business_schedule(
 
 
 async def _add_resource_schedule(
-    session: AsyncSession, resource_id: int, day_of_week: int, open_t: str, close_t: str
+    session: AsyncSession, resource_id: int, day_of_week: int, open_t: time, close_t: time
 ) -> None:
     await session.execute(
         text(
@@ -70,27 +70,27 @@ async def _add_resource_schedule(
 
 
 async def _add_close_early_exception(
-    session: AsyncSession, target_date_iso: str, new_close: str
+    session: AsyncSession, target_date: date, new_close: time
 ) -> None:
     await session.execute(
         text(
             "INSERT INTO schedule_exceptions "
             "(business_id, resource_id, exception_date, is_closed, open_time, close_time, reason) "
-            "VALUES (1, NULL, :d, false, '10:00', :close, 'Closing early')"
+            "VALUES (1, NULL, :d, false, :open, :close, 'Closing early')"
         ),
-        {"d": target_date_iso, "close": new_close},
+        {"d": target_date, "open": time(10, 0), "close": new_close},
     )
     await session.commit()
 
 
-async def _add_closed_exception(session: AsyncSession, target_date_iso: str) -> None:
+async def _add_closed_exception(session: AsyncSession, target_date: date) -> None:
     await session.execute(
         text(
             "INSERT INTO schedule_exceptions "
             "(business_id, resource_id, exception_date, is_closed, reason) "
             "VALUES (1, NULL, :d, true, 'Holiday')"
         ),
-        {"d": target_date_iso},
+        {"d": target_date},
     )
     await session.commit()
 
@@ -153,7 +153,7 @@ def _next_weekday(target_isoweekday: int) -> str:
 async def test_basic_slots_returned(pg_session: AsyncSession) -> None:
     target_date_iso = _next_weekday(1)  # Monday
     await _seed_clinic(pg_session, target_date_iso=target_date_iso)
-    await _add_business_schedule(pg_session, 1, "10:00", "13:00")
+    await _add_business_schedule(pg_session, 1, time(10, 0), time(13, 0))
 
     from datetime import date as date_type
 
@@ -174,8 +174,8 @@ async def test_close_early_blocks_slots_after_new_close(pg_session: AsyncSession
     """P0 bug: owner says 'close at 5 PM' but patient can still book at 6 PM."""
     target_date_iso = _next_weekday(2)  # Tuesday
     await _seed_clinic(pg_session, target_date_iso=target_date_iso)
-    await _add_business_schedule(pg_session, 2, "10:00", "20:00")
-    await _add_close_early_exception(pg_session, target_date_iso, "17:00")
+    await _add_business_schedule(pg_session, 2, time(10, 0), time(20, 0))
+    await _add_close_early_exception(pg_session, date.fromisoformat(target_date_iso), time(17, 0))
 
     from datetime import date as date_type
     from zoneinfo import ZoneInfo
@@ -202,8 +202,8 @@ async def test_close_early_is_slot_available_rejects(pg_session: AsyncSession) -
     """is_slot_available must reject slots after close_early time."""
     target_date_iso = _next_weekday(3)  # Wednesday
     await _seed_clinic(pg_session, target_date_iso=target_date_iso)
-    await _add_business_schedule(pg_session, 3, "10:00", "20:00")
-    await _add_close_early_exception(pg_session, target_date_iso, "17:00")
+    await _add_business_schedule(pg_session, 3, time(10, 0), time(20, 0))
+    await _add_close_early_exception(pg_session, date.fromisoformat(target_date_iso), time(17, 0))
 
     from datetime import date as date_type
     from zoneinfo import ZoneInfo
@@ -230,8 +230,8 @@ async def test_close_early_is_slot_available_rejects(pg_session: AsyncSession) -
 async def test_full_closure_returns_no_slots(pg_session: AsyncSession) -> None:
     target_date_iso = _next_weekday(4)  # Thursday
     await _seed_clinic(pg_session, target_date_iso=target_date_iso)
-    await _add_business_schedule(pg_session, 4, "10:00", "20:00")
-    await _add_closed_exception(pg_session, target_date_iso)
+    await _add_business_schedule(pg_session, 4, time(10, 0), time(20, 0))
+    await _add_closed_exception(pg_session, date.fromisoformat(target_date_iso))
 
     from datetime import date as date_type
 
@@ -249,8 +249,8 @@ async def test_resource_schedule_takes_precedence(pg_session: AsyncSession) -> N
     """When resource has its own schedule, it should be intersected with business hours."""
     target_date_iso = _next_weekday(5)  # Friday
     await _seed_clinic(pg_session, target_date_iso=target_date_iso)
-    await _add_business_schedule(pg_session, 5, "09:00", "18:00")
-    await _add_resource_schedule(pg_session, 1, 5, "10:00", "14:00")
+    await _add_business_schedule(pg_session, 5, time(9, 0), time(18, 0))
+    await _add_resource_schedule(pg_session, 1, 5, time(10, 0), time(14, 0))
 
     from datetime import date as date_type
     from zoneinfo import ZoneInfo
@@ -278,7 +278,7 @@ async def test_resource_schedule_takes_precedence(pg_session: AsyncSession) -> N
 async def test_existing_appointment_blocks_slot(pg_session: AsyncSession) -> None:
     target_date_iso = _next_weekday(6)  # Saturday
     await _seed_clinic(pg_session, target_date_iso=target_date_iso)
-    await _add_business_schedule(pg_session, 6, "10:00", "13:00")
+    await _add_business_schedule(pg_session, 6, time(10, 0), time(13, 0))
 
     from datetime import date as date_type
     from zoneinfo import ZoneInfo
@@ -307,7 +307,7 @@ async def test_exact_slot_matching_no_silent_shift(pg_session: AsyncSession) -> 
     """is_slot_available must not silently shift times — exact match required."""
     target_date_iso = _next_weekday(1)
     await _seed_clinic(pg_session, target_date_iso=target_date_iso)
-    await _add_business_schedule(pg_session, 1, "10:00", "13:00")
+    await _add_business_schedule(pg_session, 1, time(10, 0), time(13, 0))
 
     from datetime import date as date_type
     from zoneinfo import ZoneInfo

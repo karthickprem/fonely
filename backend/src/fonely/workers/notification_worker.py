@@ -40,7 +40,7 @@ class LoggingNotificationSender:
             "notification_logged",
             extra={"event_id": event.id, "event_type": event.event_type},
         )
-        return DeliveryReceipt(provider_message_id=f"logged-{event.id}")
+        return DeliveryReceipt(provider_message_id=f"logged-{event.id}", final=True)
 
 
 @dataclass(frozen=True)
@@ -223,7 +223,11 @@ async def _record_accepted(
     receipt: DeliveryReceipt,
 ) -> None:
     async with session_factory() as session:
-        attempt_status = "accepted" if receipt.provider_message_id else "unknown"
+        attempt_status = (
+            "delivered"
+            if receipt.final
+            else ("accepted" if receipt.provider_message_id else "unknown")
+        )
         await session.execute(
             update(WhatsAppDeliveryAttempt)
             .where(
@@ -240,21 +244,49 @@ async def _record_accepted(
                 updated_at=datetime.now(UTC),
             )
         )
-        await session.execute(
-            update(NotificationOutboxEvent)
-            .where(
-                NotificationOutboxEvent.business_id == claimed.business_id,
-                NotificationOutboxEvent.id == claimed.event_id,
-                NotificationOutboxEvent.status == NotificationStatus.PROCESSING.value,
+        now = datetime.now(UTC)
+        if receipt.final:
+            await session.execute(
+                update(NotificationOutboxEvent)
+                .where(
+                    NotificationOutboxEvent.business_id == claimed.business_id,
+                    NotificationOutboxEvent.id == claimed.event_id,
+                    NotificationOutboxEvent.status == NotificationStatus.PROCESSING.value,
+                )
+                .values(
+                    status=NotificationStatus.DELIVERED.value,
+                    attempts=attempt_number,
+                    delivered_at=now,
+                    last_error=None,
+                    next_attempt_at=None,
+                    updated_at=now,
+                )
             )
-            .values(
-                status=NotificationStatus.UNKNOWN.value,
-                attempts=attempt_number,
-                last_error="awaiting_provider_status",
-                next_attempt_at=None,
-                updated_at=datetime.now(UTC),
+            if _is_inbound_response(claimed):
+                inbound_repo = InboundEventRepository(session)
+                payload = claimed.payload if isinstance(claimed.payload, dict) else {}
+                if payload.get("terminal_fallback") is True:
+                    await inbound_repo.mark_fallback_completed(
+                        claimed.business_id, claimed.entity_id, now
+                    )
+                else:
+                    await inbound_repo.mark_completed(claimed.business_id, claimed.entity_id, now)
+        else:
+            await session.execute(
+                update(NotificationOutboxEvent)
+                .where(
+                    NotificationOutboxEvent.business_id == claimed.business_id,
+                    NotificationOutboxEvent.id == claimed.event_id,
+                    NotificationOutboxEvent.status == NotificationStatus.PROCESSING.value,
+                )
+                .values(
+                    status=NotificationStatus.UNKNOWN.value,
+                    attempts=attempt_number,
+                    last_error="awaiting_provider_status",
+                    next_attempt_at=None,
+                    updated_at=now,
+                )
             )
-        )
         await session.commit()
 
 

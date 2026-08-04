@@ -1,127 +1,342 @@
-"""Unified availability service — single source of truth for scheduling."""
+"""Authoritative tenant-scoped scheduling policy and capacity reads."""
 
-from datetime import date, datetime, timedelta
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
+from enum import StrEnum
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fonely.core.validators import utcnow
 from fonely.domain.appointments.availability import (
     LocalShift,
     ScheduleExceptionRule,
     TimeWindow,
-    contains,
     derive_windows,
+    local_day_utc_bounds,
     overlaps,
+    schedule_weekday,
     shifts_for_date,
 )
+from fonely.domain.appointments.datetimes import add_elapsed, instant, require_aware
 from fonely.models.schema import (
-    Appointment,
     Business,
     OperatingSchedule,
     Resource,
     ScheduleException,
+    Service,
+    ServiceResourceEligibility,
 )
-from fonely.services.conversation_tools import AvailableSlot
+from fonely.repositories.appointments import AppointmentRepository
+
+
+@dataclass(frozen=True, slots=True)
+class AvailableSlot:
+    start_at: datetime
+    end_at: datetime
+    resource_id: int
+    resource_name: str
+
+
+class AvailabilityReason(StrEnum):
+    AVAILABLE = "available"
+    BUSINESS_NOT_FOUND = "business_not_found"
+    SERVICE_NOT_FOUND = "service_not_found"
+    RESOURCE_NOT_FOUND = "resource_not_found"
+    RESOURCE_INELIGIBLE = "resource_ineligible"
+    OUTSIDE_BOOKING_HORIZON = "outside_booking_horizon"
+    INSUFFICIENT_NOTICE = "insufficient_notice"
+    NO_OPERATING_HOURS = "no_operating_hours"
+    OFF_GRID = "off_grid"
+    OUTSIDE_OPERATING_HOURS = "outside_operating_hours"
+    CAPACITY_CONFLICT = "capacity_conflict"
+
+
+@dataclass(frozen=True, slots=True)
+class AvailabilityDecision:
+    available: bool
+    reason: AvailabilityReason
+    alternatives: tuple[AvailableSlot, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _SchedulingContext:
+    business: Business
+    service: Service
+    resource: Resource
 
 
 class AvailabilityService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+        self._appointments = AppointmentRepository(session)
 
     async def get_available_slots(
         self,
         business_id: int,
+        service_id: int,
         resource_id: int,
         target_date: date,
         *,
-        service_duration_minutes: int,
-        buffer_before: int = 0,
-        buffer_after: int = 0,
-        slot_interval: int = 15,
+        now: datetime | None = None,
+        exclude_appointment_id: int | None = None,
+        exclude_allocation_id: int | None = None,
     ) -> list[AvailableSlot]:
-        biz = await self._get_business(business_id)
-        if biz is None:
+        context, _ = await self._load_context(business_id, service_id, resource_id)
+        if context is None:
             return []
-        timezone = biz.timezone
 
-        resource = await self._get_resource(business_id, resource_id)
-        if resource is None:
+        checked_now = self._checked_now(now)
+        if not self._date_within_horizon(context.business, target_date, checked_now):
             return []
 
         shift_windows = await self._get_shift_windows(
-            business_id, resource_id, target_date, timezone
+            business_id,
+            resource_id,
+            target_date,
+            context.business.timezone,
         )
         if not shift_windows:
             return []
 
-        booked = await self._get_booked_windows(business_id, resource_id, target_date, timezone)
+        day_start, day_end = local_day_utc_bounds(target_date, context.business.timezone)
+        occupied = await self._get_occupied_windows(
+            business_id,
+            resource_id,
+            day_start,
+            day_end,
+            exclude_appointment_id=exclude_appointment_id,
+            exclude_allocation_id=exclude_allocation_id,
+        )
 
-        total_effective = service_duration_minutes + buffer_before + buffer_after
+        minimum_start = add_elapsed(
+            checked_now,
+            timedelta(minutes=context.business.appointment_minimum_notice_minutes),
+        )
         slots: list[AvailableSlot] = []
-
-        for window in shift_windows:
-            current = window.start_at
-            while current + timedelta(minutes=total_effective) <= window.end_at:
-                slot_start = current + timedelta(minutes=buffer_before)
-                slot_end = slot_start + timedelta(minutes=service_duration_minutes)
-                effective = TimeWindow(current, slot_end + timedelta(minutes=buffer_after))
-
-                conflict = any(overlaps(effective, booked_win) for booked_win in booked)
-                if not conflict:
+        for shift in shift_windows:
+            slot_start = add_elapsed(
+                shift.start_at,
+                timedelta(minutes=context.service.buffer_before_minutes),
+            )
+            while True:
+                appointment, effective = derive_windows(
+                    slot_start,
+                    duration_minutes=context.service.duration_minutes,
+                    buffer_before_minutes=context.service.buffer_before_minutes,
+                    buffer_after_minutes=context.service.buffer_after_minutes,
+                )
+                if instant(effective.end_at) > instant(shift.end_at):
+                    break
+                if (
+                    instant(slot_start) > instant(checked_now)
+                    and instant(slot_start) >= instant(minimum_start)
+                    and not any(overlaps(effective, blocked) for blocked in occupied)
+                ):
                     slots.append(
                         AvailableSlot(
-                            start_at=slot_start,
-                            end_at=slot_end,
+                            start_at=appointment.start_at,
+                            end_at=appointment.end_at,
                             resource_id=resource_id,
-                            resource_name=resource.name,
+                            resource_name=context.resource.name,
                         )
                     )
-                current += timedelta(minutes=slot_interval)
+                slot_start = add_elapsed(
+                    slot_start,
+                    timedelta(minutes=context.business.appointment_slot_interval_minutes),
+                )
 
-        return slots
+        return sorted(slots, key=lambda slot: instant(slot.start_at))
+
+    async def check_exact_slot(
+        self,
+        business_id: int,
+        service_id: int,
+        resource_id: int,
+        start_at: datetime,
+        *,
+        now: datetime | None = None,
+        exclude_appointment_id: int | None = None,
+        exclude_allocation_id: int | None = None,
+        alternative_limit: int = 3,
+    ) -> AvailabilityDecision:
+        require_aware(start_at, label="Appointment start")
+        context, context_reason = await self._load_context(business_id, service_id, resource_id)
+        if context is None:
+            assert context_reason is not None
+            return AvailabilityDecision(False, context_reason)
+
+        checked_now = self._checked_now(now)
+        local_start = start_at.astimezone(ZoneInfo(context.business.timezone))
+        target_date = local_start.date()
+        if not self._date_within_horizon(context.business, target_date, checked_now):
+            return AvailabilityDecision(False, AvailabilityReason.OUTSIDE_BOOKING_HORIZON)
+
+        minimum_start = add_elapsed(
+            checked_now,
+            timedelta(minutes=context.business.appointment_minimum_notice_minutes),
+        )
+        if instant(start_at) <= instant(checked_now) or instant(start_at) < instant(minimum_start):
+            return AvailabilityDecision(False, AvailabilityReason.INSUFFICIENT_NOTICE)
+
+        shift_windows = await self._get_shift_windows(
+            business_id,
+            resource_id,
+            target_date,
+            context.business.timezone,
+        )
+        if not shift_windows:
+            return AvailabilityDecision(False, AvailabilityReason.NO_OPERATING_HOURS)
+
+        slots = await self.get_available_slots(
+            business_id,
+            service_id,
+            resource_id,
+            target_date,
+            now=checked_now,
+            exclude_appointment_id=exclude_appointment_id,
+            exclude_allocation_id=exclude_allocation_id,
+        )
+        requested = instant(start_at)
+        if any(instant(slot.start_at) == requested for slot in slots):
+            return AvailabilityDecision(True, AvailabilityReason.AVAILABLE)
+
+        _, effective = derive_windows(
+            start_at,
+            duration_minutes=context.service.duration_minutes,
+            buffer_before_minutes=context.service.buffer_before_minutes,
+            buffer_after_minutes=context.service.buffer_after_minutes,
+        )
+        containing_shift = next(
+            (
+                shift
+                for shift in shift_windows
+                if instant(shift.start_at) <= instant(effective.start_at)
+                and instant(effective.end_at) <= instant(shift.end_at)
+            ),
+            None,
+        )
+        reason = AvailabilityReason.OUTSIDE_OPERATING_HOURS
+        if containing_shift is not None:
+            first_start = add_elapsed(
+                containing_shift.start_at,
+                timedelta(minutes=context.service.buffer_before_minutes),
+            )
+            elapsed_seconds = (requested - instant(first_start)).total_seconds()
+            interval_seconds = context.business.appointment_slot_interval_minutes * 60
+            if elapsed_seconds < 0 or elapsed_seconds % interval_seconds != 0:
+                reason = AvailabilityReason.OFF_GRID
+            else:
+                day_start, day_end = local_day_utc_bounds(target_date, context.business.timezone)
+                occupied = await self._get_occupied_windows(
+                    business_id,
+                    resource_id,
+                    day_start,
+                    day_end,
+                    exclude_appointment_id=exclude_appointment_id,
+                    exclude_allocation_id=exclude_allocation_id,
+                )
+                reason = (
+                    AvailabilityReason.CAPACITY_CONFLICT
+                    if any(overlaps(effective, blocked) for blocked in occupied)
+                    else AvailabilityReason.OUTSIDE_OPERATING_HOURS
+                )
+
+        alternatives = tuple(
+            sorted(
+                slots,
+                key=lambda slot: (
+                    abs((instant(slot.start_at) - requested).total_seconds()),
+                    instant(slot.start_at),
+                    slot.resource_id,
+                ),
+            )[:alternative_limit]
+        )
+        return AvailabilityDecision(False, reason, alternatives)
 
     async def is_slot_available(
         self,
         business_id: int,
+        service_id: int,
         resource_id: int,
         start_at: datetime,
-        duration_minutes: int,
-        buffer_before: int = 0,
-        buffer_after: int = 0,
+        *,
+        now: datetime | None = None,
+        exclude_appointment_id: int | None = None,
+        exclude_allocation_id: int | None = None,
     ) -> tuple[bool, str]:
-        biz = await self._get_business(business_id)
-        if biz is None:
-            return False, "Business not found"
-        timezone = biz.timezone
-
-        tz = ZoneInfo(timezone)
-        local_dt = start_at.astimezone(tz)
-        target_date = local_dt.date()
-
-        shift_windows = await self._get_shift_windows(
-            business_id, resource_id, target_date, timezone
-        )
-        if not shift_windows:
-            return False, "No operating hours for this date"
-
-        _, effective = derive_windows(
+        decision = await self.check_exact_slot(
+            business_id,
+            service_id,
+            resource_id,
             start_at,
-            duration_minutes=duration_minutes,
-            buffer_before_minutes=buffer_before,
-            buffer_after_minutes=buffer_after,
+            now=now,
+            exclude_appointment_id=exclude_appointment_id,
+            exclude_allocation_id=exclude_allocation_id,
+            alternative_limit=0,
+        )
+        return decision.available, decision.reason.value
+
+    def _checked_now(self, now: datetime | None) -> datetime:
+        value = now or utcnow()
+        require_aware(value, label="Current time")
+        return value
+
+    def _date_within_horizon(self, business: Business, target_date: date, now: datetime) -> bool:
+        local_today = now.astimezone(ZoneInfo(business.timezone)).date()
+        return (
+            local_today
+            <= target_date
+            <= local_today + timedelta(days=business.appointment_booking_horizon_days)
         )
 
-        fits = any(contains(shift, effective) for shift in shift_windows)
-        if not fits:
-            return False, "Outside operating hours"
+    async def _load_context(
+        self, business_id: int, service_id: int, resource_id: int
+    ) -> tuple[_SchedulingContext | None, AvailabilityReason | None]:
+        business = (
+            await self._session.execute(select(Business).where(Business.id == business_id))
+        ).scalar_one_or_none()
+        if business is None:
+            return None, AvailabilityReason.BUSINESS_NOT_FOUND
 
-        booked = await self._get_booked_windows(business_id, resource_id, target_date, timezone)
-        conflict = any(overlaps(effective, booked_win) for booked_win in booked)
-        if conflict:
-            return False, "Time slot conflicts with existing appointment"
+        service = (
+            await self._session.execute(
+                select(Service).where(
+                    Service.business_id == business_id,
+                    Service.id == service_id,
+                    Service.is_active.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+        if service is None:
+            return None, AvailabilityReason.SERVICE_NOT_FOUND
 
-        return True, "Available"
+        resource = (
+            await self._session.execute(
+                select(Resource).where(
+                    Resource.business_id == business_id,
+                    Resource.id == resource_id,
+                    Resource.is_active.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+        if resource is None:
+            return None, AvailabilityReason.RESOURCE_NOT_FOUND
+
+        eligibility = (
+            await self._session.execute(
+                select(ServiceResourceEligibility.id).where(
+                    ServiceResourceEligibility.business_id == business_id,
+                    ServiceResourceEligibility.service_id == service_id,
+                    ServiceResourceEligibility.resource_id == resource_id,
+                    ServiceResourceEligibility.is_active.is_(True),
+                )
+            )
+        ).scalar_one_or_none()
+        if eligibility is None:
+            return None, AvailabilityReason.RESOURCE_INELIGIBLE
+        return _SchedulingContext(business, service, resource), None
 
     async def _get_shift_windows(
         self,
@@ -130,9 +345,8 @@ class AvailabilityService:
         target_date: date,
         timezone: str,
     ) -> list[TimeWindow]:
-        day_of_week = target_date.isoweekday()
-
-        biz_schedules = (
+        day_of_week = schedule_weekday(target_date)
+        business_schedules = (
             (
                 await self._session.execute(
                     select(OperatingSchedule).where(
@@ -146,7 +360,7 @@ class AvailabilityService:
             .scalars()
             .all()
         )
-        res_schedules = (
+        resource_schedules = (
             (
                 await self._session.execute(
                     select(OperatingSchedule).where(
@@ -160,89 +374,64 @@ class AvailabilityService:
             .scalars()
             .all()
         )
-
-        biz_weekly = tuple(LocalShift(s.open_time, s.close_time) for s in biz_schedules)
-        res_weekly = tuple(LocalShift(s.open_time, s.close_time) for s in res_schedules)
-
-        biz_exc = await self._get_exception(business_id, None, target_date)
-        res_exc = await self._get_exception(business_id, resource_id, target_date)
-
-        windows = shifts_for_date(
-            local_day=target_date,
-            timezone=timezone,
-            business_weekly=biz_weekly,
-            resource_weekly=res_weekly,
-            business_exception=biz_exc,
-            resource_exception=res_exc,
+        business_exception = await self._get_exception(business_id, None, target_date)
+        resource_exception = await self._get_exception(business_id, resource_id, target_date)
+        return list(
+            shifts_for_date(
+                local_day=target_date,
+                timezone=timezone,
+                business_weekly=tuple(
+                    LocalShift(schedule.open_time, schedule.close_time)
+                    for schedule in business_schedules
+                ),
+                resource_weekly=tuple(
+                    LocalShift(schedule.open_time, schedule.close_time)
+                    for schedule in resource_schedules
+                ),
+                business_exception=business_exception,
+                resource_exception=resource_exception,
+            )
         )
-        return list(windows)
 
     async def _get_exception(
         self, business_id: int, resource_id: int | None, target_date: date
     ) -> ScheduleExceptionRule | None:
-        where_clause = [
+        conditions = [
             ScheduleException.business_id == business_id,
             ScheduleException.exception_date == target_date,
         ]
-        if resource_id is None:
-            where_clause.append(ScheduleException.resource_id.is_(None))
-        else:
-            where_clause.append(ScheduleException.resource_id == resource_id)
-
-        exc = (
-            await self._session.execute(select(ScheduleException).where(*where_clause))
+        conditions.append(
+            ScheduleException.resource_id.is_(None)
+            if resource_id is None
+            else ScheduleException.resource_id == resource_id
+        )
+        exception = (
+            await self._session.execute(select(ScheduleException).where(*conditions))
         ).scalar_one_or_none()
-
-        if exc is None:
+        if exception is None:
             return None
         return ScheduleExceptionRule(
-            is_closed=exc.is_closed,
-            open_time=exc.open_time,
-            close_time=exc.close_time,
+            is_closed=exception.is_closed,
+            open_time=exception.open_time,
+            close_time=exception.close_time,
         )
 
-    async def _get_booked_windows(
+    async def _get_occupied_windows(
         self,
         business_id: int,
         resource_id: int,
-        target_date: date,
-        timezone: str,
+        range_start_at: datetime,
+        range_end_at: datetime,
+        *,
+        exclude_appointment_id: int | None,
+        exclude_allocation_id: int | None,
     ) -> list[TimeWindow]:
-        tz = ZoneInfo(timezone)
-        appointments = (
-            (
-                await self._session.execute(
-                    select(Appointment).where(
-                        Appointment.business_id == business_id,
-                        Appointment.resource_id == resource_id,
-                        Appointment.status.in_(["confirmed", "completed", "no_show"]),
-                    )
-                )
-            )
-            .scalars()
-            .all()
+        rows = await self._appointments.list_active_allocation_windows(
+            business_id,
+            resource_id,
+            range_start_at.astimezone(UTC),
+            range_end_at.astimezone(UTC),
+            exclude_appointment_id=exclude_appointment_id,
+            exclude_allocation_id=exclude_allocation_id,
         )
-
-        windows: list[TimeWindow] = []
-        for appt in appointments:
-            eff_start = appt.effective_start_at or appt.start_at
-            eff_end = appt.effective_end_at or appt.end_at
-            if eff_start.astimezone(tz).date() == target_date:
-                windows.append(TimeWindow(eff_start, eff_end))
-        return windows
-
-    async def _get_business(self, business_id: int) -> Business | None:
-        return (
-            await self._session.execute(select(Business).where(Business.id == business_id))
-        ).scalar_one_or_none()
-
-    async def _get_resource(self, business_id: int, resource_id: int) -> Resource | None:
-        return (
-            await self._session.execute(
-                select(Resource).where(
-                    Resource.business_id == business_id,
-                    Resource.id == resource_id,
-                    Resource.is_active.is_(True),
-                )
-            )
-        ).scalar_one_or_none()
+        return [TimeWindow(start_at, end_at) for start_at, end_at in rows]

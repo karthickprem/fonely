@@ -314,7 +314,6 @@ class ConversationService:
                 logger.warning("llm_fact_extraction_failed", exc_info=True)
 
     async def _validate_facts(self, ctx: ConversationContext, biz: object) -> None:
-        from fonely.services.availability import AvailabilityService
         from fonely.services.conversation_tools import BusinessContext
 
         assert isinstance(biz, BusinessContext)
@@ -324,29 +323,7 @@ class ConversationService:
 
             start = ctx.collected_facts["start_at"]
             assert isinstance(start, datetime)
-            now = utcnow()
-            if start <= now:
-                del ctx.collected_facts["start_at"]
-                return
-
-            resource_id_val: int | None = ctx.collected_facts.get("resource_id")  # type: ignore[assignment]
-            if resource_id_val is not None:
-                service_id_val: int | None = ctx.collected_facts.get("service_id")  # type: ignore[assignment]
-                dur = 30
-                if service_id_val is not None:
-                    svc_info = next((s for s in biz.services if s.id == service_id_val), None)
-                    if svc_info is not None:
-                        dur = svc_info.duration_minutes
-                avail_svc = AvailabilityService(self._session)
-                is_valid, _reason = await avail_svc.is_slot_available(
-                    biz.business_id,
-                    resource_id_val,
-                    start,
-                    duration_minutes=dur,
-                )
-            else:
-                is_valid = True
-            if not is_valid:
+            if start <= utcnow():
                 del ctx.collected_facts["start_at"]
                 return
 
@@ -712,50 +689,46 @@ class ConversationService:
         from datetime import datetime
 
         assert isinstance(start_at, datetime)
+        operation = ctx.collected_facts.get("_operation", "book")
+        exclude_appointment_id: int | None = None
+        if operation == "reschedule":
+            target_id = ctx.collected_facts.get("_target_appointment_id")
+            assert isinstance(target_id, int)
+            exclude_appointment_id = target_id
+
         avail_svc = AvailabilityService(self._session)
-        slots = await avail_svc.get_available_slots(
+        decision = await avail_svc.check_exact_slot(
             biz.business_id,
+            service_id,
             resource_id,
-            start_at.date(),
-            service_duration_minutes=svc.duration_minutes,
-            buffer_before=svc.buffer_before_minutes,
-            buffer_after=svc.buffer_after_minutes,
+            start_at,
+            exclude_appointment_id=exclude_appointment_id,
         )
+        if not decision.available:
+            from zoneinfo import ZoneInfo
 
-        if not slots:
-            ctx.state = ConversationState.FACT_COLLECTION
-            return self._fact_turn(
-                ctx,
-                user_message,
-                "That day is full. Would you like to try another date?",
-                safety,
-                ["start_at"],
-            )
-
-        from fonely.domain.appointments.datetimes import instant
-
-        slot_tolerance = timedelta(minutes=15)
-        matching_slot = None
-        for slot in slots:
-            if abs(instant(slot.start_at) - instant(start_at)) <= slot_tolerance:
-                matching_slot = slot
-                break
-
-        if matching_slot is None:
-            alternatives = slots[:3]
-            alt_texts = [s.start_at.strftime("%-I:%M %p") for s in alternatives]
-            alt_msg = ", ".join(alt_texts)
+            clinic_tz = ZoneInfo(biz.timezone)
+            alt_texts = [
+                slot.start_at.astimezone(clinic_tz).strftime("%-I:%M %p")
+                for slot in decision.alternatives
+            ]
             ctx.state = ConversationState.FACT_COLLECTION
             del ctx.collected_facts["start_at"]
+            if alt_texts:
+                response = (
+                    "That exact time isn't available. Nearest slots: "
+                    f"{', '.join(alt_texts)}. Which one works?"
+                )
+            else:
+                response = "That time isn't available. Would you like to try another date?"
             return self._fact_turn(
                 ctx,
                 user_message,
-                f"That exact time isn't available. Nearest slots: {alt_msg}. Which one works?",
+                response,
                 safety,
                 ["start_at"],
             )
 
-        start_at = matching_slot.start_at
         operation = ctx.collected_facts.get("_operation", "book")
 
         if operation == "reschedule":

@@ -1,7 +1,7 @@
 """Tenant-scoped read tools for conversation orchestration."""
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -9,9 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from fonely.models.schema import (
     Appointment,
     Business,
-    OperatingSchedule,
     Resource,
-    ScheduleException,
     Service,
     ServiceResourceEligibility,
 )
@@ -42,14 +40,6 @@ class BusinessContext:
     services: list[ServiceInfo]
     resources: list[ResourceInfo]
     eligibility: list[tuple[int, int]]
-
-
-@dataclass(frozen=True)
-class AvailableSlot:
-    start_at: datetime
-    end_at: datetime
-    resource_id: int
-    resource_name: str
 
 
 async def get_business_context(
@@ -107,205 +97,6 @@ async def get_business_context(
         resources=resources,
         eligibility=eligibility,
     )
-
-
-async def check_availability(
-    business_id: int,
-    service_id: int,
-    resource_id: int,
-    target_date: date,
-    session: AsyncSession,
-    *,
-    timezone: str = "Asia/Kolkata",
-    duration_minutes: int = 30,
-    buffer_before: int = 0,
-    buffer_after: int = 0,
-    slot_interval: int = 15,
-) -> list[AvailableSlot]:
-    day_of_week = target_date.isoweekday()
-
-    schedules = (
-        (
-            await session.execute(
-                select(OperatingSchedule).where(
-                    OperatingSchedule.business_id == business_id,
-                    OperatingSchedule.day_of_week == day_of_week,
-                    OperatingSchedule.is_active.is_(True),
-                    (
-                        (OperatingSchedule.resource_id == resource_id)
-                        | (OperatingSchedule.resource_id.is_(None))
-                    ),
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-
-    if not schedules:
-        return []
-
-    exceptions = (
-        (
-            await session.execute(
-                select(ScheduleException).where(
-                    ScheduleException.business_id == business_id,
-                    ScheduleException.exception_date == target_date,
-                    (
-                        (ScheduleException.resource_id == resource_id)
-                        | (ScheduleException.resource_id.is_(None))
-                    ),
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-
-    for exc in exceptions:
-        if exc.is_closed:
-            return []
-
-    resource = (
-        await session.execute(
-            select(Resource).where(
-                Resource.business_id == business_id,
-                Resource.id == resource_id,
-                Resource.is_active.is_(True),
-            )
-        )
-    ).scalar_one_or_none()
-    if resource is None:
-        return []
-
-    existing_appointments = (
-        (
-            await session.execute(
-                select(Appointment).where(
-                    Appointment.business_id == business_id,
-                    Appointment.resource_id == resource_id,
-                    Appointment.status.in_(["confirmed", "completed", "no_show"]),
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-
-    from fonely.domain.appointments.availability import TimeWindow, derive_windows
-    from fonely.domain.appointments.availability import overlaps as domain_overlaps
-
-    booked: list[TimeWindow] = []
-    for appt in existing_appointments:
-        eff_start = appt.effective_start_at or appt.start_at
-        eff_end = appt.effective_end_at or appt.end_at
-        if eff_start.date() == target_date or eff_end.date() == target_date:
-            booked.append(TimeWindow(eff_start, eff_end))
-
-    slots: list[AvailableSlot] = []
-
-    for schedule in schedules:
-        from zoneinfo import ZoneInfo
-
-        clinic_tz = ZoneInfo(timezone)
-        current = datetime.combine(target_date, schedule.open_time, tzinfo=clinic_tz)
-        day_end = datetime.combine(target_date, schedule.close_time, tzinfo=clinic_tz)
-
-        slot_start = current + timedelta(minutes=buffer_before)
-        while True:
-            appt_window, effective = derive_windows(
-                slot_start,
-                duration_minutes=duration_minutes,
-                buffer_before_minutes=buffer_before,
-                buffer_after_minutes=buffer_after,
-            )
-            if effective.end_at > day_end:
-                break
-
-            conflict = any(domain_overlaps(effective, b) for b in booked)
-            if not conflict:
-                slots.append(
-                    AvailableSlot(
-                        start_at=appt_window.start_at,
-                        end_at=appt_window.end_at,
-                        resource_id=resource_id,
-                        resource_name=resource.name,
-                    )
-                )
-
-            slot_start += timedelta(minutes=slot_interval)
-
-    return slots
-
-
-async def validate_slot_time(
-    business_id: int,
-    resource_id: int | None,
-    target_datetime: datetime,
-    session: AsyncSession,
-    timezone: str = "Asia/Kolkata",
-) -> tuple[bool, str]:
-    from zoneinfo import ZoneInfo
-
-    local_target = target_datetime.astimezone(ZoneInfo(timezone))
-    day_of_week = local_target.isoweekday()
-
-    exceptions = (
-        (
-            await session.execute(
-                select(ScheduleException).where(
-                    ScheduleException.business_id == business_id,
-                    ScheduleException.exception_date == target_datetime.date(),
-                    (
-                        (ScheduleException.resource_id == resource_id)
-                        | (ScheduleException.resource_id.is_(None))
-                    )
-                    if resource_id
-                    else (ScheduleException.resource_id.is_(None)),
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-
-    for exc in exceptions:
-        if exc.is_closed:
-            return False, "Clinic is closed on this date"
-
-    resource_filter = (
-        ((OperatingSchedule.resource_id == resource_id) | (OperatingSchedule.resource_id.is_(None)))
-        if resource_id
-        else (OperatingSchedule.resource_id.is_(None))
-    )
-
-    schedules = (
-        (
-            await session.execute(
-                select(OperatingSchedule).where(
-                    OperatingSchedule.business_id == business_id,
-                    OperatingSchedule.day_of_week == day_of_week,
-                    OperatingSchedule.is_active.is_(True),
-                    resource_filter,
-                )
-            )
-        )
-        .scalars()
-        .all()
-    )
-
-    if not schedules:
-        return False, "No operating schedule for this day"
-
-    from zoneinfo import ZoneInfo
-
-    local_dt = target_datetime.astimezone(ZoneInfo(timezone))
-    target_time = local_dt.time()
-    for schedule in schedules:
-        if schedule.open_time <= target_time < schedule.close_time:
-            return True, "Within schedule"
-
-    return False, "Outside operating hours"
 
 
 def format_confirmation_summary(

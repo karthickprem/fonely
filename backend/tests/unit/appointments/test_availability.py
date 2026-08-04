@@ -101,18 +101,34 @@ def test_resource_exception_cannot_widen_business_modified_hours() -> None:
     assert shifts[0].end_at.hour == 15
 
 
-def test_resource_weekly_replaces_business_weekly() -> None:
+def test_resource_weekly_intersects_business_weekly() -> None:
     shifts = shifts_for_date(
         local_day=date(2026, 8, 3),
         timezone="Asia/Kolkata",
         business_weekly=(LocalShift(time(9), time(18)),),
-        resource_weekly=(LocalShift(time(10), time(13)), LocalShift(time(17), time(20))),
+        resource_weekly=(LocalShift(time(8), time(13)), LocalShift(time(17), time(20))),
         business_exception=None,
         resource_exception=None,
     )
     assert len(shifts) == 2
-    assert shifts[0].start_at.hour == 10
+    assert shifts[0].start_at.hour == 9
+    assert shifts[0].end_at.hour == 13
     assert shifts[1].start_at.hour == 17
+    assert shifts[1].end_at.hour == 18
+
+
+def test_resource_without_schedule_inherits_business_weekly() -> None:
+    shifts = shifts_for_date(
+        local_day=date(2026, 8, 3),
+        timezone="Asia/Kolkata",
+        business_weekly=(LocalShift(time(9), time(18)),),
+        resource_weekly=(),
+        business_exception=None,
+        resource_exception=None,
+    )
+    assert len(shifts) == 1
+    assert shifts[0].start_at.hour == 9
+    assert shifts[0].end_at.hour == 18
 
 
 @pytest.mark.parametrize(

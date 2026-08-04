@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fonely.domain.appointments.availability import schedule_weekday
 from fonely.models.enums import CallerRole, DailyContextType
 from fonely.models.schema import (
     Appointment,
@@ -88,7 +89,7 @@ class OwnerCommandService:
                 f"Available: {', '.join(await self._get_doctor_names(business_id))}",
             )
 
-        target_date = self._resolve_date(parsed.date)
+        target_date = await self._resolve_date(business_id, parsed.date)
         reason = parsed.reason or "Leave"
 
         exc = ScheduleException(
@@ -127,7 +128,7 @@ class OwnerCommandService:
     async def _handle_close_clinic(
         self, business_id: int, owner_phone: str, parsed: ParsedOwnerCommand
     ) -> OwnerCommandResult:
-        target_date = self._resolve_date(parsed.date)
+        target_date = await self._resolve_date(business_id, parsed.date)
         reason = parsed.reason or "Closed"
 
         exc = ScheduleException(
@@ -159,7 +160,7 @@ class OwnerCommandService:
     ) -> OwnerCommandResult:
         from fonely.models.schema import OperatingSchedule
 
-        target_date = self._resolve_date(parsed.date)
+        target_date = await self._resolve_date(business_id, parsed.date)
 
         if not parsed.close_time:
             return OwnerCommandResult(
@@ -178,7 +179,7 @@ class OwnerCommandService:
                 response_text=f"Could not understand the time '{parsed.close_time}'.",
             )
 
-        day_of_week = target_date.isoweekday()
+        day_of_week = schedule_weekday(target_date)
         schedules = (
             (
                 await self._session.execute(
@@ -294,7 +295,7 @@ class OwnerCommandService:
     async def _handle_get_summary(
         self, business_id: int, parsed: ParsedOwnerCommand
     ) -> OwnerCommandResult:
-        target_date = self._resolve_date(parsed.date)
+        target_date = await self._resolve_date(business_id, parsed.date)
         date_str = target_date.strftime("%A, %b %d")
 
         appointments = (
@@ -354,7 +355,7 @@ class OwnerCommandService:
                 response_text="Please provide the content for the note/offer.",
             )
 
-        target_date = self._resolve_date(parsed.for_date or parsed.valid_until)
+        target_date = await self._resolve_date(business_id, parsed.for_date or parsed.valid_until)
         ctx = BusinessDailyContext(
             business_id=business_id,
             context_date=target_date,
@@ -408,11 +409,12 @@ class OwnerCommandService:
                 return r
         return None
 
-    def _resolve_date(self, expr: str | None) -> date:
+    async def _resolve_date(self, business_id: int, expr: str | None) -> date:
+        timezone = await self._get_business_timezone(business_id)
+        today = datetime.now(ZoneInfo(timezone)).date()
         if not expr:
-            return datetime.now(UTC).date()
+            return today
         expr_lower = expr.lower().strip()
-        today = datetime.now(UTC).date()
         if expr_lower in ("today", "innikku", "இன்று"):
             return today
         if expr_lower in ("tomorrow", "naalaikku", "நாளை"):
@@ -554,41 +556,12 @@ class OwnerCommandService:
                 )
                 return True
         except Exception:
-            logger.info(
-                "owner_cancel_service_fallback",
+            logger.warning(
+                "owner_cancel_service_failed",
                 extra={"appointment_id": appointment_id},
                 exc_info=True,
             )
-            return await self._cancel_direct(business_id, appointment_id)
-
-    async def _cancel_direct(self, business_id: int, appointment_id: int) -> bool:
-        from sqlalchemy import update
-
-        from fonely.models.schema import ResourceAllocation
-
-        now = datetime.now(UTC)
-        result = await self._session.execute(
-            update(Appointment)
-            .where(
-                Appointment.id == appointment_id,
-                Appointment.business_id == business_id,
-                Appointment.status == "confirmed",
-            )
-            .values(status="cancelled", cancelled_at=now)
-        )
-        if getattr(result, "rowcount", 0) == 0:
             return False
-        await self._session.execute(
-            update(ResourceAllocation)
-            .where(
-                ResourceAllocation.appointment_id == appointment_id,
-                ResourceAllocation.business_id == business_id,
-                ResourceAllocation.status == "active",
-            )
-            .values(status="cancelled", updated_at=now)
-        )
-        await self._session.flush()
-        return True
 
 
 async def get_daily_context(

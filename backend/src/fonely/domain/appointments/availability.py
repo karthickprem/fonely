@@ -143,6 +143,18 @@ def resolve_local_wall_time(local_day: date, local_time: time, timezone: str) ->
     return next(iter(valid.values()))
 
 
+def local_day_utc_bounds(local_day: date, timezone: str) -> tuple[datetime, datetime]:
+    """Return UTC bounds for one clinic-local calendar day."""
+    start = resolve_local_wall_time(local_day, time.min, timezone).astimezone(UTC)
+    end = resolve_local_wall_time(local_day + timedelta(days=1), time.min, timezone).astimezone(UTC)
+    return start, end
+
+
+def schedule_weekday(local_day: date) -> int:
+    """Return the persisted Sunday-zero weekday value."""
+    return local_day.isoweekday() % 7
+
+
 def _exception_shifts(
     exception: ScheduleExceptionRule,
 ) -> tuple[LocalShift, ...]:
@@ -184,15 +196,12 @@ def shifts_for_date(
     business_effective = (
         _exception_shifts(business_exception) if business_exception is not None else business_weekly
     )
-    if business_exception is None and resource_exception is None:
-        selected = resource_weekly if resource_weekly else business_weekly
-    else:
-        resource_effective = (
-            _exception_shifts(resource_exception)
-            if resource_exception is not None
-            else resource_weekly or business_effective
-        )
-        selected = _intersect_local_shifts(business_effective, resource_effective)
+    resource_effective = (
+        _exception_shifts(resource_exception)
+        if resource_exception is not None
+        else resource_weekly or business_effective
+    )
+    selected = _intersect_local_shifts(business_effective, resource_effective)
 
     return tuple(
         TimeWindow(

@@ -175,6 +175,7 @@ class NotificationStatus(enum.StrEnum):
     DELIVERED = "delivered"
     FAILED = "failed"
     DEAD_LETTER = "dead_letter"
+    UNKNOWN = "unknown"
 
 
 class InboundEventStatus(enum.StrEnum):

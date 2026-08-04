@@ -1184,6 +1184,41 @@ class NotificationOutboxEvent(Base):
 # =============================================================================
 
 
+class WhatsAppDeliveryAttempt(Base):
+    __tablename__ = "whatsapp_delivery_attempts"
+    __table_args__ = (
+        UniqueConstraint(
+            "notification_event_id",
+            "attempt_number",
+            name="uq_whatsapp_delivery_attempt",
+        ),
+        Index(
+            "ix_whatsapp_delivery_attempt_provider_message",
+            "provider_message_id",
+        ),
+        CheckConstraint(
+            "status IN ('queued', 'sending', 'accepted', 'delivered', 'failed', 'unknown')",
+            name="ck_whatsapp_delivery_attempt_status",
+        ),
+        CheckConstraint(
+            "attempt_number > 0",
+            name="ck_whatsapp_delivery_attempt_number",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    notification_event_id: Mapped[int] = mapped_column(
+        ForeignKey("notification_outbox.id"), nullable=False
+    )
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    provider_message_id: Mapped[str | None] = mapped_column(String(200))
+    error_class: Mapped[str | None] = mapped_column(String(100))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class WhatsAppInboundEvent(Base):
     __tablename__ = "whatsapp_inbound_events"
     __table_args__ = (
@@ -1198,23 +1233,34 @@ class WhatsAppInboundEvent(Base):
             name="ck_whatsapp_inbound_status_valid",
         ),
         CheckConstraint(
-            "(status != 'completed') OR (completed_at IS NOT NULL)",
+            "(status != 'completed') OR (completed_at IS NOT NULL AND message_body IS NULL)",
             name="ck_whatsapp_inbound_completed_requires_timestamp",
         ),
         CheckConstraint(
-            "(status != 'dead_letter') OR (dead_lettered_at IS NOT NULL)",
+            "(status NOT IN ('dead_letter', 'response_failed')) OR (dead_lettered_at IS NOT NULL)",
             name="ck_whatsapp_inbound_dead_letter_requires_timestamp",
         ),
         CheckConstraint(
-            "phone_number_id IS NULL OR length(phone_number_id) > 0",
+            "claim_version > 0",
+            name="ck_whatsapp_inbound_claim_version_positive",
+        ),
+        CheckConstraint(
+            "length(phone_number_id) > 0",
             name="ck_whatsapp_inbound_phone_number_id_nonempty",
+        ),
+        CheckConstraint(
+            "(status = 'processing' AND claim_token IS NOT NULL "
+            "AND claimed_at IS NOT NULL AND lease_expires_at IS NOT NULL) "
+            "OR (status != 'processing' AND claim_token IS NULL "
+            "AND claimed_at IS NULL AND lease_expires_at IS NULL)",
+            name="ck_whatsapp_inbound_claim_consistency",
         ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     message_id: Mapped[str] = mapped_column(String(100), nullable=False)
     business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
-    phone_number_id: Mapped[str | None] = mapped_column(String(100))
+    phone_number_id: Mapped[str] = mapped_column(String(100), nullable=False)
     sender_phone: Mapped[str] = mapped_column(String(20), nullable=False)
     message_type: Mapped[str] = mapped_column(String(20), nullable=False)
     message_body: Mapped[str | None] = mapped_column(Text)
@@ -1231,7 +1277,7 @@ class WhatsAppInboundEvent(Base):
     claim_version: Mapped[int] = mapped_column(
         Integer, nullable=False, default=1, server_default="1"
     )
-    provider_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     dead_lettered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

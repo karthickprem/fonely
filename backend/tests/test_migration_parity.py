@@ -423,7 +423,7 @@ def _exclude_signatures(table: sa.Table) -> set[tuple[str, str, str, tuple[tuple
 def test_migration_and_orm_have_identical_application_tables() -> None:
     captured = _capture_upgrade()
     assert set(captured.metadata.tables) == set(Base.metadata.tables)
-    assert len(captured.metadata.tables) == 29
+    assert len(captured.metadata.tables) == 30
 
 
 def test_migration_and_orm_column_parity() -> None:
@@ -489,11 +489,12 @@ def test_migration_downgrade_drops_all_application_tables() -> None:
     recorder = _capture_downgrade()
     expected = set(Base.metadata.tables) | {"whatsapp_processed_messages"}
     assert set(recorder.dropped_tables) == expected
-    assert recorder.dropped_tables[0] == "whatsapp_inbound_events"
-    assert recorder.dropped_tables[1] == "whatsapp_processed_messages"
-    assert recorder.dropped_tables[2] == "business_daily_context"
-    assert recorder.dropped_tables[3] == "conversation_turns"
-    assert recorder.dropped_tables[4] == "conversations"
+    assert recorder.dropped_tables[0] == "whatsapp_delivery_attempts"
+    assert recorder.dropped_tables[1] == "whatsapp_inbound_events"
+    assert recorder.dropped_tables[2] == "whatsapp_processed_messages"
+    assert recorder.dropped_tables[3] == "business_daily_context"
+    assert recorder.dropped_tables[4] == "conversation_turns"
+    assert recorder.dropped_tables[5] == "conversations"
 
 
 def test_appointment_migration_installs_btree_gist_without_dropping_it() -> None:

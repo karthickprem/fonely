@@ -14,7 +14,29 @@ branch_labels = None
 depends_on = None
 
 
+def _notification_status_enum(*values: str) -> sa.Enum:
+    return sa.Enum(
+        *values,
+        name="notification_status",
+        native_enum=False,
+        create_constraint=True,
+    )
+
+
 def upgrade() -> None:
+    op.drop_constraint("notification_status", "notification_outbox")
+    op.alter_column(
+        "notification_outbox",
+        "status",
+        type_=_notification_status_enum(
+            "pending",
+            "processing",
+            "delivered",
+            "failed",
+            "dead_letter",
+            "unknown",
+        ),
+    )
     # Add claim columns
     op.add_column(
         "whatsapp_inbound_events",
@@ -41,6 +63,26 @@ def upgrade() -> None:
         "whatsapp_inbound_events",
         sa.Column("provider_timestamp", sa.DateTime(timezone=True), nullable=True),
     )
+    op.execute(
+        "UPDATE whatsapp_inbound_events "
+        "SET provider_timestamp = created_at "
+        "WHERE provider_timestamp IS NULL"
+    )
+    op.alter_column(
+        "whatsapp_inbound_events",
+        "provider_timestamp",
+        nullable=False,
+    )
+    op.execute(
+        "UPDATE whatsapp_inbound_events "
+        "SET phone_number_id = 'legacy-unknown' "
+        "WHERE phone_number_id IS NULL OR phone_number_id = ''"
+    )
+    op.alter_column(
+        "whatsapp_inbound_events",
+        "phone_number_id",
+        nullable=False,
+    )
 
     # Update status constraint to include response_failed
     op.drop_constraint(
@@ -58,7 +100,85 @@ def upgrade() -> None:
     op.create_check_constraint(
         "ck_whatsapp_inbound_phone_number_id_nonempty",
         "whatsapp_inbound_events",
-        "phone_number_id IS NULL OR length(phone_number_id) > 0",
+        "length(phone_number_id) > 0",
+    )
+    op.create_check_constraint(
+        "ck_whatsapp_inbound_claim_consistency",
+        "whatsapp_inbound_events",
+        "(status = 'processing' AND claim_token IS NOT NULL "
+        "AND claimed_at IS NOT NULL AND lease_expires_at IS NOT NULL) "
+        "OR (status != 'processing' AND claim_token IS NULL "
+        "AND claimed_at IS NULL AND lease_expires_at IS NULL)",
+    )
+    op.create_check_constraint(
+        "ck_whatsapp_inbound_claim_version_positive",
+        "whatsapp_inbound_events",
+        "claim_version > 0",
+    )
+    op.drop_constraint(
+        "ck_whatsapp_inbound_completed_requires_timestamp",
+        "whatsapp_inbound_events",
+    )
+    op.create_check_constraint(
+        "ck_whatsapp_inbound_completed_requires_timestamp",
+        "whatsapp_inbound_events",
+        "(status != 'completed') OR (completed_at IS NOT NULL AND message_body IS NULL)",
+    )
+    op.drop_constraint(
+        "ck_whatsapp_inbound_dead_letter_requires_timestamp",
+        "whatsapp_inbound_events",
+    )
+    op.create_check_constraint(
+        "ck_whatsapp_inbound_dead_letter_requires_timestamp",
+        "whatsapp_inbound_events",
+        "(status NOT IN ('dead_letter', 'response_failed')) OR (dead_lettered_at IS NOT NULL)",
+    )
+
+    op.create_table(
+        "whatsapp_delivery_attempts",
+        sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
+        sa.Column(
+            "business_id",
+            sa.Integer(),
+            sa.ForeignKey("businesses.id"),
+            nullable=False,
+        ),
+        sa.Column(
+            "notification_event_id",
+            sa.Integer(),
+            sa.ForeignKey("notification_outbox.id"),
+            nullable=False,
+        ),
+        sa.Column("attempt_number", sa.Integer(), nullable=False),
+        sa.Column("status", sa.String(20), nullable=False),
+        sa.Column("provider_message_id", sa.String(200), nullable=True),
+        sa.Column("error_class", sa.String(100), nullable=True),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.func.now(),
+            nullable=False,
+        ),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
+        sa.UniqueConstraint(
+            "notification_event_id",
+            "attempt_number",
+            name="uq_whatsapp_delivery_attempt",
+        ),
+        sa.CheckConstraint(
+            "status IN ('queued', 'sending', 'accepted', 'delivered', 'failed', 'unknown')",
+            name="ck_whatsapp_delivery_attempt_status",
+        ),
+        sa.CheckConstraint(
+            "attempt_number > 0",
+            name="ck_whatsapp_delivery_attempt_number",
+        ),
+    )
+    op.create_index(
+        "ix_whatsapp_delivery_attempt_provider_message",
+        "whatsapp_delivery_attempts",
+        ["provider_message_id"],
+        unique=False,
     )
 
     # Remove obsolete dedup table
@@ -66,6 +186,48 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_constraint("notification_status", "notification_outbox")
+    op.alter_column(
+        "notification_outbox",
+        "status",
+        type_=_notification_status_enum(
+            "pending",
+            "processing",
+            "delivered",
+            "failed",
+            "dead_letter",
+        ),
+    )
+
+    op.drop_constraint(
+        "ck_whatsapp_inbound_dead_letter_requires_timestamp",
+        "whatsapp_inbound_events",
+    )
+    op.create_check_constraint(
+        "ck_whatsapp_inbound_dead_letter_requires_timestamp",
+        "whatsapp_inbound_events",
+        "(status != 'dead_letter') OR (dead_lettered_at IS NOT NULL)",
+    )
+    op.drop_constraint(
+        "ck_whatsapp_inbound_completed_requires_timestamp",
+        "whatsapp_inbound_events",
+    )
+    op.create_check_constraint(
+        "ck_whatsapp_inbound_completed_requires_timestamp",
+        "whatsapp_inbound_events",
+        "(status != 'completed') OR (completed_at IS NOT NULL)",
+    )
+    op.drop_constraint(
+        "ck_whatsapp_inbound_claim_version_positive",
+        "whatsapp_inbound_events",
+    )
+
+    op.drop_index(
+        "ix_whatsapp_delivery_attempt_provider_message",
+        table_name="whatsapp_delivery_attempts",
+    )
+    op.drop_table("whatsapp_delivery_attempts")
+
     # Recreate obsolete dedup table
     op.create_table(
         "whatsapp_processed_messages",
@@ -79,10 +241,25 @@ def downgrade() -> None:
         ),
     )
 
+    op.drop_constraint(
+        "ck_whatsapp_inbound_claim_consistency",
+        "whatsapp_inbound_events",
+    )
+
     # Remove phone_number_id nonempty constraint
     op.drop_constraint(
         "ck_whatsapp_inbound_phone_number_id_nonempty",
         "whatsapp_inbound_events",
+    )
+    op.alter_column(
+        "whatsapp_inbound_events",
+        "phone_number_id",
+        nullable=True,
+    )
+    op.alter_column(
+        "whatsapp_inbound_events",
+        "provider_timestamp",
+        nullable=True,
     )
 
     # Restore original status constraint

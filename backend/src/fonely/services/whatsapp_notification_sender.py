@@ -1,9 +1,10 @@
-"""WhatsApp notification sender — delivers outbox events via WhatsApp Cloud API."""
+"""WhatsApp notification delivery with trusted channel identity resolution."""
 
 from __future__ import annotations
 
 import logging
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Protocol
 
 from fonely.models.schema import NotificationOutboxEvent
 from fonely.services.whatsapp_sender import WhatsAppSender
@@ -12,18 +13,75 @@ logger = logging.getLogger("fonely.services.whatsapp_notification")
 
 
 class NotificationDeliveryError(Exception):
-    pass
+    def __init__(self, error: str) -> None:
+        super().__init__(error)
+        self.error = error
+        self.ambiguous = error in {"timeout", "unknown"}
+
+
+@dataclass(frozen=True)
+class DeliveryReceipt:
+    provider_message_id: str | None
+
+
+class WhatsAppSenderResolver(Protocol):
+    def resolve(self, business_id: int, phone_number_id: str) -> WhatsAppSender: ...
+
+
+class ConfiguredWhatsAppSenderResolver:
+    """Resolve trusted tenant/phone identity using configured business mapping."""
+
+    def __init__(
+        self,
+        *,
+        access_token: str,
+        business_mappings: dict[str, int],
+        client: object | None = None,
+    ) -> None:
+        self._access_token = access_token
+        self._business_mappings = business_mappings
+        self._client = client
+
+    def resolve(self, business_id: int, phone_number_id: str) -> WhatsAppSender:
+        mapped_business = self._business_mappings.get(phone_number_id)
+        if mapped_business != business_id:
+            raise NotificationDeliveryError("channel_identity_mismatch")
+        return WhatsAppSender(
+            access_token=self._access_token,
+            phone_number_id=phone_number_id,
+            client=self._client,  # type: ignore[arg-type]
+        )
 
 
 class WhatsAppNotificationSender:
-    def __init__(self, sender: WhatsAppSender) -> None:
+    def __init__(
+        self,
+        sender: WhatsAppSender | None = None,
+        *,
+        resolver: WhatsAppSenderResolver | None = None,
+    ) -> None:
+        if sender is None and resolver is None:
+            raise ValueError("sender or resolver is required")
         self._sender = sender
+        self._resolver = resolver
 
-    async def send(self, event: NotificationOutboxEvent) -> None:
+    async def send(self, event: NotificationOutboxEvent) -> DeliveryReceipt:
         message = self._format_message(event)
-        result = await self._sender.send_text(event.recipient_phone, message)
+        sender = self._resolve_sender(event)
+        result = await sender.send_text(event.recipient_phone, message)
         if not result.success:
             raise NotificationDeliveryError(result.error or "unknown")
+        return DeliveryReceipt(provider_message_id=result.message_id)
+
+    def _resolve_sender(self, event: NotificationOutboxEvent) -> WhatsAppSender:
+        payload = event.payload or {}
+        phone_number_id = payload.get("phone_number_id")
+        if self._resolver is not None:
+            if not isinstance(phone_number_id, str) or not phone_number_id:
+                raise NotificationDeliveryError("missing_phone_number_id")
+            return self._resolver.resolve(event.business_id, phone_number_id)
+        assert self._sender is not None
+        return self._sender
 
     def _format_message(self, event: NotificationOutboxEvent) -> str:
         payload = event.payload or {}

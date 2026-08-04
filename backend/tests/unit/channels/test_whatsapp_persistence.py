@@ -1,15 +1,15 @@
-"""Tests for inbound worker persistence — conversation processing and routing."""
+"""Tests for inbound worker domain processing — returns response text."""
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from fonely.workers.inbound_worker import _process_event
+from fonely.workers.inbound_worker import _process_domain
 
 
-class TestInboundWorkerPersistence:
+class TestInboundWorkerDomainProcessing:
     @pytest.mark.asyncio
-    async def test_text_event_processes_through_conversation(self) -> None:
+    async def test_text_event_returns_conversation_response(self) -> None:
         from fonely.domain.conversation.state import ConversationContext
 
         event = MagicMock()
@@ -21,7 +21,6 @@ class TestInboundWorkerPersistence:
         event.message_body = "Hello doctor"
 
         mock_session = AsyncMock()
-        mock_sender = AsyncMock()
         mock_gateway = MagicMock()
         mock_ctx = ConversationContext(business_id=1)
 
@@ -47,13 +46,13 @@ class TestInboundWorkerPersistence:
             mock_conv.process_message = AsyncMock(return_value=mock_turn)
             conv_cls.return_value = mock_conv
 
-            await _process_event(event, mock_session, mock_gateway, mock_sender)
+            result = await _process_domain(event, mock_session, mock_gateway)
 
+            assert result == "Welcome!"
             mock_conv.process_message.assert_awaited_once()
-            mock_sender.send_text.assert_awaited_once_with("919876543210", "Welcome!")
 
     @pytest.mark.asyncio
-    async def test_non_text_event_sends_polite_response(self) -> None:
+    async def test_non_text_event_returns_polite_decline(self) -> None:
         event = MagicMock()
         event.id = 2
         event.message_id = "wamid.img1"
@@ -62,16 +61,11 @@ class TestInboundWorkerPersistence:
         event.message_type = "image"
         event.message_body = None
 
-        mock_session = AsyncMock()
-        mock_sender = AsyncMock()
-
-        await _process_event(event, mock_session, None, mock_sender)
-
-        mock_sender.send_text.assert_awaited_once()
-        assert "text messages" in mock_sender.send_text.call_args[0][1]
+        result = await _process_domain(event, AsyncMock(), MagicMock())
+        assert "text messages" in result
 
     @pytest.mark.asyncio
-    async def test_owner_message_routes_to_owner_service(self) -> None:
+    async def test_owner_message_returns_command_response(self) -> None:
         event = MagicMock()
         event.id = 3
         event.message_id = "wamid.owner1"
@@ -81,7 +75,6 @@ class TestInboundWorkerPersistence:
         event.message_body = "show tomorrow appointments"
 
         mock_session = AsyncMock()
-        mock_sender = AsyncMock()
         mock_gateway = MagicMock()
 
         owner_result = MagicMock()
@@ -99,9 +92,7 @@ class TestInboundWorkerPersistence:
             mock_owner_svc.process_command = AsyncMock(return_value=owner_result)
             owner_cls.return_value = mock_owner_svc
 
-            await _process_event(event, mock_session, mock_gateway, mock_sender)
+            result = await _process_domain(event, mock_session, mock_gateway)
 
+            assert result == "No appointments tomorrow."
             mock_owner_svc.process_command.assert_awaited_once()
-            mock_sender.send_text.assert_awaited_once_with(
-                "919000000001", "No appointments tomorrow."
-            )

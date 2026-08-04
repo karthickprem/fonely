@@ -9,7 +9,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from fonely.api.channels.whatsapp import router
-from fonely.workers.inbound_worker import _next_attempt_at, run_inbound_worker
+from fonely.repositories.inbound_events import _next_attempt_at
+from fonely.workers.inbound_worker import run_inbound_worker
 
 
 def _create_app(*, business_id: int | None = 1) -> tuple[FastAPI, MagicMock]:
@@ -158,7 +159,7 @@ class TestWebhookPersistsThenReturns:
 
 class TestInboundWorker:
     @pytest.mark.asyncio
-    async def test_processes_event_and_marks_completed(self) -> None:
+    async def test_processes_event_and_enqueues_response(self) -> None:
         mock_event = MagicMock()
         mock_event.id = 1
         mock_event.message_id = "wamid.test1"
@@ -166,12 +167,13 @@ class TestInboundWorker:
         mock_event.sender_phone = "919876543210"
         mock_event.message_type = "text"
         mock_event.message_body = "Hello"
-        mock_event.attempts = 1
+        mock_event.phone_number_id = "12345"
+        mock_event.attempts = 0
         mock_event.max_attempts = 5
 
         mock_repo = AsyncMock()
         mock_repo.claim_pending_events = AsyncMock(return_value=[mock_event])
-        mock_repo.mark_completed = AsyncMock()
+        mock_repo.mark_domain_processed = AsyncMock()
 
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -185,13 +187,18 @@ class TestInboundWorker:
                 return_value=mock_repo,
             ),
             patch(
-                "fonely.workers.inbound_worker._process_event",
+                "fonely.workers.inbound_worker._process_domain",
                 new_callable=AsyncMock,
-            ) as mock_process,
+                return_value="Welcome!",
+            ),
+            patch(
+                "fonely.workers.inbound_worker._enqueue_outbound_response",
+                new_callable=AsyncMock,
+            ) as mock_enqueue,
         ):
-            await run_inbound_worker(mock_factory, None, None, max_iterations=1)
-            mock_process.assert_awaited_once()
-            mock_repo.mark_completed.assert_awaited_once()
+            await run_inbound_worker(mock_factory, MagicMock(), max_iterations=1)
+            mock_enqueue.assert_awaited_once()
+            mock_repo.mark_domain_processed.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_failure_marks_failed_with_retry(self) -> None:
@@ -202,7 +209,8 @@ class TestInboundWorker:
         mock_event.sender_phone = "919876543210"
         mock_event.message_type = "text"
         mock_event.message_body = "Hello"
-        mock_event.attempts = 1
+        mock_event.phone_number_id = "12345"
+        mock_event.attempts = 0
         mock_event.max_attempts = 5
 
         mock_repo = AsyncMock()
@@ -215,22 +223,32 @@ class TestInboundWorker:
         mock_factory = MagicMock()
         mock_factory.return_value = mock_session
 
+        fail_repo = AsyncMock()
+        fail_repo.mark_failed = AsyncMock()
+        repo_call_count = 0
+
+        def _repo_factory(session: object) -> AsyncMock:
+            nonlocal repo_call_count
+            repo_call_count += 1
+            return mock_repo if repo_call_count == 1 else fail_repo
+
         with (
             patch(
                 "fonely.workers.inbound_worker.InboundEventRepository",
-                return_value=mock_repo,
+                side_effect=_repo_factory,
             ),
             patch(
-                "fonely.workers.inbound_worker._process_event",
+                "fonely.workers.inbound_worker._process_domain",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("LLM timeout"),
             ),
         ):
-            await run_inbound_worker(mock_factory, None, None, max_iterations=1)
-            mock_repo.mark_failed.assert_awaited_once()
-            call_args = mock_repo.mark_failed.call_args
-            assert call_args[0][0] == 1
-            assert "RuntimeError" in call_args[0][1]
+            await run_inbound_worker(mock_factory, MagicMock(), max_iterations=1)
+            fail_repo.mark_failed.assert_awaited_once()
+            call_args = fail_repo.mark_failed.call_args
+            assert call_args[0][0] == 1  # business_id
+            assert call_args[0][1] == 1  # event_id
+            assert "RuntimeError" in call_args[0][2]
 
     def test_backoff_increases(self) -> None:
         t1 = _next_attempt_at(0)

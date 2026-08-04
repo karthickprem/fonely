@@ -674,6 +674,17 @@ async def _main() -> int:
     deadline = start + overall_timeout
 
     report = await _run_checks(url, env_label, connect_timeout, deadline)
+    if time.monotonic() >= deadline and report.overall_status == "passed":
+        report.checks.append(
+            {
+                "name": "overall_timeout",
+                "status": "failed",
+                "duration_s": 0.0,
+                "failure_code": "overall_timeout",
+                "message": "orchestration deadline exceeded",
+            }
+        )
+        report.overall_status = "failed"
 
     report.total_duration_s = round(time.monotonic() - start, 3)
     print(json.dumps(report.to_dict(), indent=2))

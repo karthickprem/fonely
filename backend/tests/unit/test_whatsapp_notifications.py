@@ -174,6 +174,7 @@ class TestWorkerSenderSelection:
         from fonely.core.config import Settings
 
         s = Settings(whatsapp_access_token="", whatsapp_phone_number_id="")
-        with patch.object(run_worker, "settings", s):
-            with pytest.raises(RuntimeError, match="WHATSAPP_ACCESS_TOKEN"):
-                run_worker._create_sender()
+        with patch.object(run_worker, "settings", s), pytest.raises(
+            RuntimeError, match="WHATSAPP_ACCESS_TOKEN"
+        ):
+            run_worker._create_sender()

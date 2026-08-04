@@ -211,6 +211,7 @@ async def test_reschedule_flow_moves_appointment(
     async with pg_session_factory() as session:
         gateway = _mock_gateway()
         appt_id = await _book_appointment(session, gateway, slot)
+        await session.commit()
 
     new_slot = _next_weekday_slot(17, 30)
 

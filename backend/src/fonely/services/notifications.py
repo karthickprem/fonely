@@ -7,7 +7,6 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from fonely.core.config import settings
 from fonely.models.enums import (
     NotificationChannel,
     NotificationEventType,
@@ -16,6 +15,7 @@ from fonely.models.enums import (
 )
 from fonely.models.schema import Business
 from fonely.repositories.notifications import NotificationRepository
+from fonely.services.whatsapp_config import WhatsAppBusinessMapping
 
 
 class NotificationService:
@@ -38,6 +38,9 @@ class NotificationService:
         business = await self._session.scalar(select(Business).where(Business.id == business_id))
         clinic_name = business.name if business else "Business"
         owner_phone = business.primary_contact_phone if business else ""
+        phone_number_id = WhatsAppBusinessMapping().get_phone_number_id(business_id)
+        if phone_number_id is None:
+            raise RuntimeError("whatsapp_business_mapping_missing_or_ambiguous")
 
         local_time = start_at.astimezone(ZoneInfo(business_timezone))
         start_local = local_time.strftime("%A, %b %d")
@@ -64,7 +67,7 @@ class NotificationService:
                     "time": time_local,
                     "price": price_str,
                     "appointment_id": appointment_id,
-                    "phone_number_id": settings.whatsapp_phone_number_id,
+                    "phone_number_id": phone_number_id,
                 },
                 "status": NotificationStatus.PENDING.value,
                 "idempotency_key": f"appt-confirm-patient-{appointment_id}",
@@ -91,7 +94,7 @@ class NotificationService:
                     "date": start_local,
                     "time": time_local,
                     "appointment_id": appointment_id,
-                    "phone_number_id": settings.whatsapp_phone_number_id,
+                    "phone_number_id": phone_number_id,
                 },
                 "status": NotificationStatus.PENDING.value,
                 "idempotency_key": f"appt-confirm-owner-{appointment_id}",
@@ -117,6 +120,9 @@ class NotificationService:
         business = await self._session.scalar(select(Business).where(Business.id == business_id))
         clinic_name = business.name if business else "Business"
         owner_phone = business.primary_contact_phone if business else ""
+        phone_number_id = WhatsAppBusinessMapping().get_phone_number_id(business_id)
+        if phone_number_id is None:
+            raise RuntimeError("whatsapp_business_mapping_missing_or_ambiguous")
 
         local_time = start_at.astimezone(ZoneInfo(business_timezone))
         start_local = local_time.strftime("%A, %b %d")
@@ -142,7 +148,7 @@ class NotificationService:
                     "time": time_local,
                     "reason": reason,
                     "appointment_id": appointment_id,
-                    "phone_number_id": settings.whatsapp_phone_number_id,
+                    "phone_number_id": phone_number_id,
                 },
                 "status": NotificationStatus.PENDING.value,
                 "idempotency_key": f"appt-cancel-patient-{appointment_id}",
@@ -170,7 +176,7 @@ class NotificationService:
                     "time": time_local,
                     "reason": reason,
                     "appointment_id": appointment_id,
-                    "phone_number_id": settings.whatsapp_phone_number_id,
+                    "phone_number_id": phone_number_id,
                 },
                 "status": NotificationStatus.PENDING.value,
                 "idempotency_key": f"appt-cancel-owner-{appointment_id}",

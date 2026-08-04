@@ -230,18 +230,22 @@ async def _persist_delivery_status(
         return 0
 
     attempt = await session.scalar(
-        select(WhatsAppDeliveryAttempt).where(
+        select(WhatsAppDeliveryAttempt)
+        .where(
             WhatsAppDeliveryAttempt.business_id == business_id,
             WhatsAppDeliveryAttempt.provider_message_id == provider_id,
         )
+        .with_for_update()
     )
     if attempt is None:
-        return 0
+        raise RuntimeError("provider_status_attempt_not_ready")
     outbox = await session.scalar(
-        select(NotificationOutboxEvent).where(
+        select(NotificationOutboxEvent)
+        .where(
             NotificationOutboxEvent.business_id == business_id,
             NotificationOutboxEvent.id == attempt.notification_event_id,
         )
+        .with_for_update()
     )
     if outbox is None:
         return 0
@@ -271,18 +275,17 @@ async def _persist_delivery_status(
                 delivered_at=now,
                 last_error=None,
                 next_attempt_at=None,
+                claim_token=None,
+                lease_expires_at=None,
             )
         )
         if (
             outbox.event_type == "whatsapp_inbound_response"
             and outbox.entity_type == "whatsapp_inbound_event"
         ):
-            payload = outbox.payload if isinstance(outbox.payload, dict) else {}
-            inbound_repo = InboundEventRepository(session)
-            if payload.get("terminal_fallback") is True:
-                await inbound_repo.mark_fallback_completed(business_id, outbox.entity_id, now)
-            else:
-                await inbound_repo.mark_completed(business_id, outbox.entity_id, now)
+            await InboundEventRepository(session).reconcile_delivered(
+                business_id, outbox.entity_id, now
+            )
     else:
         await session.execute(
             update(WhatsAppDeliveryAttempt)
@@ -299,6 +302,8 @@ async def _persist_delivery_status(
                 status=NotificationStatus.FAILED.value,
                 last_error="provider_failed",
                 next_attempt_at=now,
+                claim_token=None,
+                lease_expires_at=None,
             )
         )
     return 1

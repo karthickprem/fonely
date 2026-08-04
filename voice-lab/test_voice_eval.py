@@ -3,6 +3,7 @@ import hashlib
 import json
 import sys
 import wave
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,24 @@ from voice_eval.analysis import classify_row, semantic_text
 from voice_eval.audio import inspect_wav, verify_fixture_audio
 from voice_eval.contracts import apply_annotations, load_json_schema, validate_manifest, validate_report
 from voice_eval.correction import propose_shadow_correction
-from voice_eval.metrics import nearest_rank_percentile, score_critical_entities, word_error_counts
+from voice_eval.costs import CostComponent, calculate_cost_per_verified_booking
+from voice_eval.critical_fields import (
+    FieldStatus,
+    PhoneNumberState,
+    apply_confirmation,
+    collect_dtmf,
+    collect_phone_attempt,
+    grouped_phone_readback,
+)
+from voice_eval.evidence import write_immutable_jsonl
+from voice_eval.metrics import (
+    character_error_counts,
+    nearest_rank_percentile,
+    score_critical_entities,
+    word_error_counts,
+    wrong_script_characters,
+)
+from voice_eval.stt_contract import STTEvent, STTEventType
 from voice_eval.observer import VoiceEvalObserver
 from voice_eval.cli import safe_output_path
 from voice_eval.server import create_app
@@ -86,6 +104,67 @@ def test_known_wer_counts():
     assert nearest_rank_percentile([10,20,30,40],95)==40
 
 
+def test_character_error_and_raw_script_evidence():
+    counts = character_error_counts("பல்", "கல்")
+    assert counts.substitutions == 1
+    assert wrong_script_characters("என் పేరు Karthik") == (4, 7)
+
+
+def test_provider_neutral_stt_event_preserves_raw_evidence():
+    event = STTEvent(
+        schema_version=1,
+        event_type=STTEventType.TRANSCRIPT_FINAL,
+        session_id="session",
+        turn_id="turn",
+        generation_id="generation",
+        provider="sarvam",
+        model="saaras:v3",
+        raw_text="ఎం పేరు Karthik",
+        normalized_candidate="என் பெயர் Karthik",
+        is_final=True,
+    )
+    record = event.to_record()
+    assert record["event_type"] == "transcript_final"
+    assert record["raw_text"] != record["normalized_candidate"]
+
+
+def test_phone_attempts_replace_and_require_dtmf():
+    state, act = collect_phone_attempt(PhoneNumberState(), "987654321")
+    assert state.candidate == "987654321" and act.reason == "received_9_digits"
+    state, act = collect_phone_attempt(state, "91234567890")
+    assert state.candidate == "91234567890"
+    assert state.status == FieldStatus.REQUIRE_DTMF
+    assert act.act == "request_dtmf_phone"
+    state, act = collect_dtmf(state, "12345 67890")
+    assert act is None and state.status == FieldStatus.AWAITING_CONFIRMATION
+    assert grouped_phone_readback(state.candidate) == ("12345", "67890")
+    ambiguous = apply_confirmation(state, "ஆம் இல்லை")
+    assert ambiguous.status == FieldStatus.AMBIGUOUS
+    confirmed = apply_confirmation(state, "ஆம்")
+    assert confirmed.authoritative_value == "1234567890"
+
+
+def test_immutable_writer_refuses_overwrite(tmp_path):
+    output = tmp_path / "result.jsonl"
+    write_immutable_jsonl(output, [{"result": 1}])
+    with pytest.raises(FileExistsError):
+        write_immutable_jsonl(output, [{"result": 2}])
+    assert json.loads(output.read_text()) == {"result": 1}
+
+
+def test_cost_per_success_fails_closed_on_unknown_cost():
+    result = calculate_cost_per_verified_booking(
+        [CostComponent("stt", None, "INR", None, None)],
+        successful_bookings=1,
+    )
+    assert result.cost_per_verified_booking is None and result.evidence_gaps
+    measured = calculate_cost_per_verified_booking(
+        [CostComponent("stt", Decimal("10"), "INR", "invoice", "2026-08-04")],
+        successful_bookings=2,
+    )
+    assert measured.cost_per_verified_booking == Decimal("5")
+
+
 def test_entity_scoring():
     entities=[{"kind":"doctor","value":"Dr. Priya","variants":["Priya"],"critical":True}]
     assert score_critical_entities(entities,'Doctor Priya நாளைக்கு available','ta-IN')==(1,1)
@@ -118,7 +197,7 @@ def test_observer_writes_sanitized_deduplicated_events(tmp_path):
         observer = VoiceEvalObserver(output_path=output, session_id="opaque-session")
         await observer.on_pipeline_started()
         transcript = TranscriptionFrame(
-            text="Patient Karthick phone 9999999999",
+            text="Synthetic caller phone 1111111111",
             user_id="",
             timestamp="2026-08-03T00:00:00Z",
         )
@@ -132,7 +211,7 @@ def test_observer_writes_sanitized_deduplicated_events(tmp_path):
         assert [row["event"] for row in rows].count("stt_transcript") == 1
         assert [row["event"] for row in rows].count("tts_audio") == 1
         serialized = json.dumps(rows)
-        assert "Karthick" not in serialized and "9999999999" not in serialized
+        assert "Synthetic caller" not in serialized and "1111111111" not in serialized
         assert "audio" not in rows[2]
 
     asyncio.run(run())

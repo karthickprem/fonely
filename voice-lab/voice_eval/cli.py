@@ -20,6 +20,7 @@ from voice_eval.analysis import build_analysis, write_analysis
 from voice_eval.audio import read_pcm16_mono, resolve_audio_path
 from voice_eval.contracts import apply_annotations, validate_manifest, validate_report, validate_results, _validate_records
 from voice_eval.correction import propose_shadow_correction
+from voice_eval.evidence import write_immutable_json, write_immutable_jsonl
 from voice_eval.metrics import aggregate_results, normalize_transcript, score_critical_entities, word_error_counts
 from voice_eval.saaras_runner import transcribe_fixture
 
@@ -34,13 +35,6 @@ def safe_output_path(data_root: Path, path: Path) -> Path:
     if not resolved.is_relative_to(root):
         raise ValueError("output must be stored under the evaluation data root")
     return resolved
-
-
-def write_jsonl(path: Path, records: list[dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text("".join(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n" for record in records))
-    temporary.replace(path)
 
 
 async def run_saaras(args) -> int:
@@ -92,7 +86,7 @@ async def run_saaras(args) -> int:
                 "errors": errors,
             })
     _validate_records(records, "voice-run-result.v1.schema.json")
-    write_jsonl(output_path, records)
+    write_immutable_jsonl(output_path, records)
     print(f"Wrote {len(records)} result rows to {args.output}")
     return 0
 
@@ -136,8 +130,7 @@ def build_report(args) -> int:
         "promotion_status": "evidence_only",
     }
     validate_report(report)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+    write_immutable_json(output_path, report)
     print(f"Wrote report to {output_path}")
     return 0
 

@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 
 import aiohttp
+from anthropic import AsyncAnthropic
 from loguru import logger
 
 from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
@@ -29,7 +30,9 @@ from pipecat.processors.aggregators.llm_response_universal import (
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
 from pipecat.services.anthropic.llm import AnthropicLLMService
+from pipecat.services.cartesia.tts import CartesiaTTSService, GenerationConfig
 from pipecat.services.sarvam.stt import SarvamSTTService
+from pipecat.services.tts_service import TextAggregationMode
 from pipecat.transcriptions.language import Language
 from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
@@ -39,7 +42,6 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
 from processors import ChennaiStyleProcessor, DentalSafetyProcessor
-from services import SarvamStreamingHttpTTSService
 from style_retriever import ChennaiStyleRetriever
 from voice_eval.observer import VoiceEvalObserver
 
@@ -93,31 +95,68 @@ async def clean_spoken_text(text: str, _aggregation_type) -> str:
     return re.sub(r"^ச+ரிங்க", "சரிங்க", text.strip())
 
 
+def cartesia_settings(request_settings: dict) -> tuple[float, str]:
+    """Return bounded, reviewed Cartesia synthesis controls."""
+    speed = request_settings.get("speed", 0.95)
+    if (
+        not isinstance(speed, (int, float))
+        or isinstance(speed, bool)
+        or not math.isfinite(float(speed))
+    ):
+        speed = 0.95
+    speed = max(0.6, min(1.5, float(speed)))
+    emotion = request_settings.get("emotion", "calm")
+    if emotion != "calm":
+        emotion = "calm"
+    return speed, emotion
+
+
+def build_anthropic_client(api_key: str) -> AsyncAnthropic:
+    """Build the official SDK client, including approved gateway headers."""
+    headers = {}
+    for line in os.environ.get("ANTHROPIC_CUSTOM_HEADERS", "").splitlines():
+        if not line.strip():
+            continue
+        name, separator, value = line.partition(":")
+        if not separator or not name.strip() or not value.strip():
+            raise RuntimeError("ANTHROPIC_CUSTOM_HEADERS contains an invalid header line")
+        headers[name.strip()] = value.strip()
+    return AsyncAnthropic(
+        api_key=api_key,
+        base_url=os.environ.get("ANTHROPIC_BASE_URL"),
+        default_headers=headers or None,
+    )
+
+
+def build_cartesia_tts(api_key: str, voice_id: str, speed: float, emotion: str):
+    return CartesiaTTSService(
+        api_key=api_key,
+        sample_rate=24000,
+        text_aggregation_mode=TextAggregationMode.SENTENCE,
+        settings=CartesiaTTSService.Settings(
+            model="sonic-3.5",
+            voice=voice_id,
+            language=Language.TA,
+            generation_config=GenerationConfig(speed=speed, emotion=emotion),
+        ),
+    )
+
+
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
     sarvam_key = os.environ.get("SARVAM_API_KEY")
     anthropic_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not sarvam_key or not anthropic_key:
-        raise RuntimeError("SARVAM_API_KEY and ANTHROPIC_API_KEY are required")
+    cartesia_key = os.environ.get("CARTESIA_API_KEY")
+    cartesia_voice_id = os.environ.get("CARTESIA_VOICE_ID")
+    if not all([sarvam_key, anthropic_key, cartesia_key, cartesia_voice_id]):
+        raise RuntimeError(
+            "SARVAM_API_KEY, ANTHROPIC_API_KEY, CARTESIA_API_KEY, and "
+            "CARTESIA_VOICE_ID are required"
+        )
 
     request_settings = runner_args.body if isinstance(runner_args.body, dict) else {}
-    reviewed_voices = {"priya", "shreya", "ritu", "neha", "roopa"}
-    voice = request_settings.get("voice", "priya")
-    if not isinstance(voice, str) or voice not in reviewed_voices:
-        voice = "priya"
+    speed, emotion = cartesia_settings(request_settings)
 
-    def bounded_number(name: str, default: float, low: float, high: float) -> float:
-        value = request_settings.get(name, default)
-        if not isinstance(value, (int, float)) or isinstance(value, bool):
-            return default
-        value = float(value)
-        if not math.isfinite(value):
-            return default
-        return max(low, min(high, value))
-
-    pace = bounded_number("pace", 0.95, 0.5, 2.0)
-    temperature = bounded_number("temperature", 0.55, 0.01, 1.0)
-
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession():
         stt = SarvamSTTService(
             api_key=sarvam_key,
             mode="codemix",
@@ -131,6 +170,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         )
         llm = AnthropicLLMService(
             api_key=anthropic_key,
+            client=build_anthropic_client(anthropic_key),
             settings=AnthropicLLMService.Settings(
                 model="claude-haiku-4-5",
                 system_instruction=SYSTEM_PROMPT,
@@ -138,14 +178,11 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
                 temperature=0.2,
             ),
         )
-        tts = SarvamStreamingHttpTTSService(
-            api_key=sarvam_key,
-            aiohttp_session=session,
-            voice=voice,
-            language=Language.TA_IN,
-            pace=pace,
-            temperature=temperature,
-            sample_rate=24000,
+        tts = build_cartesia_tts(
+            api_key=cartesia_key,
+            voice_id=cartesia_voice_id,
+            speed=speed,
+            emotion=emotion,
         )
         tts.add_text_transformer(clean_spoken_text)
 

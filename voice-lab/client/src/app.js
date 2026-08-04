@@ -232,7 +232,7 @@ async function connect() {
           speed: Number(speedSelect.value),
           emotion: emotionSelect.value,
           live_poc: livePocSelect.value === 'true',
-          delegate_delay_ms: 750,
+          delegate_delay_ms: Math.min(5000, Math.max(0, Number(new URLSearchParams(location.search).get('delegate_delay_ms')) || 750)),
           checkpoint_run_id: new URLSearchParams(location.search).get('run_id'),
         },
       },

@@ -244,12 +244,19 @@ class RealtimePOCCoordinator:
                 self._task = None
                 self._request_id = None
 
-    async def interrupt(self, reason: str = "user_speech") -> TurnToken:
+    async def interrupt(
+        self,
+        reason: str = "user_speech",
+        *,
+        logical_interruption_id: str | None = None,
+    ) -> TurnToken:
         prior = self.generations.current
         token = self.generations.advance_generation()
         self.emit(
             "generation_advanced",
             old_generation_id=prior.generation_id,
+            logical_interruption_id=logical_interruption_id,
+            advance_count=1,
             reason=reason,
         )
         await self.cancel_delegate(reason)

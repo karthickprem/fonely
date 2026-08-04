@@ -78,7 +78,10 @@ class GenerationDelegationProcessor(FrameProcessor):
             if interruption_key not in self._seen_interruptions:
                 self._seen_interruptions.add(interruption_key)
                 old_generation = self._coordinator.generations.current.generation_id
-                await self._coordinator.interrupt("user_speech")
+                await self._coordinator.interrupt(
+                    "user_speech",
+                    logical_interruption_id="-".join(map(str, interruption_key)),
+                )
                 await self._notify(
                     "generation_advanced",
                     logical_interruption_id="-".join(map(str, interruption_key)),

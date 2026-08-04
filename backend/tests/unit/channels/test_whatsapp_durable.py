@@ -115,6 +115,46 @@ class TestWebhookPersistsThenReturns:
         assert response.status_code == 200
         mock_session.execute.assert_not_awaited()
 
+    def test_returns_503_when_session_factory_missing(self) -> None:
+        app = FastAPI()
+        from fonely.api.channels.whatsapp import router as wa_router
+
+        app.include_router(wa_router)
+        with patch("fonely.api.channels.whatsapp.settings") as s:
+            s.whatsapp_app_secret = ""
+            client = TestClient(app)
+            response = client.post(
+                "/webhooks/whatsapp",
+                json=_webhook_payload(),
+            )
+        assert response.status_code == 503
+
+    def test_returns_503_on_db_failure(self) -> None:
+        app, mock_session = _create_app()
+        mock_session.execute = AsyncMock(side_effect=RuntimeError("db down"))
+        with patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as map_cls:
+            mock_map = MagicMock()
+            mock_map.get_business_id.return_value = 1
+            map_cls.return_value = mock_map
+            client = TestClient(app)
+            response = client.post(
+                "/webhooks/whatsapp",
+                json=_webhook_payload(),
+            )
+        assert response.status_code == 503
+
+    def test_non_dict_json_returns_200(self) -> None:
+        app, _ = _create_app()
+        client = TestClient(app)
+        with patch("fonely.api.channels.whatsapp.settings") as s:
+            s.whatsapp_app_secret = ""
+            response = client.post(
+                "/webhooks/whatsapp",
+                content=b"[1, 2, 3]",
+                headers={"content-type": "application/json"},
+            )
+        assert response.status_code == 200
+
 
 class TestInboundWorker:
     @pytest.mark.asyncio

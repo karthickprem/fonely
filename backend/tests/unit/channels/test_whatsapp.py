@@ -168,6 +168,17 @@ class TestWebhookPersistence:
         mock_session.execute.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_missing_session_factory_returns_503(self):
+        app = FastAPI()
+        app.include_router(router)
+        transport = ASGITransport(app=app)
+        with patch("fonely.api.channels.whatsapp.settings") as s:
+            s.whatsapp_app_secret = ""
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                r = await client.post("/webhooks/whatsapp", json=_webhook_payload())
+        assert r.status_code == 503
+
+    @pytest.mark.asyncio
     async def test_invalid_json_returns_200(self):
         app, _ = _make_app()
         transport = ASGITransport(app=app)
@@ -419,6 +430,12 @@ class TestWebhookSignatureVerification:
 
         app = FastAPI()
         app.include_router(router)
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=None)
+        mock_factory = MagicMock()
+        mock_factory.return_value = mock_session
+        app.state.session_factory = mock_factory
         transport = ASGITransport(app=app)
         test_settings = Settings(whatsapp_app_secret="")
         with patch.object(wa_mod, "settings", test_settings):

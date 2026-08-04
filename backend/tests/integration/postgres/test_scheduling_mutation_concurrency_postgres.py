@@ -201,13 +201,21 @@ async def test_schedule_mutation_first_blocks_and_rejects_confirmation(
         await owner_session.commit()
         result = await task
         assert result is not None, "Confirmation must fail after schedule mutation"
+        from fonely.api.internal.validation import AppointmentAvailabilityError
         from fonely.domain.pending_actions.errors import PendingActionIdempotencyConflictError
 
         assert isinstance(
             result,
-            (ValueError, PendingActionIdempotencyConflictError),
-        ), f"Expected availability/idempotency error, got {type(result).__name__}: {result}"
-        assert not isinstance(result, (TimeoutError, ConnectionError, OSError))
+            (AppointmentAvailabilityError, PendingActionIdempotencyConflictError),
+        ), f"Expected availability or idempotency error, got {type(result).__name__}: {result}"
+        if isinstance(result, AppointmentAvailabilityError):
+            from fonely.services.availability import AvailabilityReason
+
+            assert result.reason in (
+                AvailabilityReason.NO_OPERATING_HOURS,
+                AvailabilityReason.OUTSIDE_OPERATING_HOURS,
+                AvailabilityReason.CAPACITY_CONFLICT,
+            ), f"Expected schedule rejection reason, got {result.reason}"
 
     async with pg_session_factory() as verify:
         assert await verify.scalar(text("SELECT count(*) FROM appointments")) == 0
@@ -219,6 +227,7 @@ async def test_schedule_mutation_first_blocks_and_rejects_confirmation(
             == 0
         )
         assert await verify.scalar(text("SELECT count(*) FROM appointment_commits")) == 0
+        assert await verify.scalar(text("SELECT count(*) FROM notification_outbox")) == 0
 
 
 @pytest.mark.parametrize("command", ["close_clinic", "close_early", "doctor_leave"])

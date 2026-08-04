@@ -20,7 +20,12 @@ from fonely.domain.appointments.availability import (
     schedule_weekday,
     shifts_for_date,
 )
-from fonely.domain.appointments.datetimes import add_elapsed, instant, require_aware
+from fonely.domain.appointments.datetimes import (
+    add_elapsed,
+    instant,
+    require_aware,
+    validate_business_local,
+)
 from fonely.models.schema import (
     Business,
     OperatingSchedule,
@@ -168,6 +173,7 @@ class AvailabilityService:
             return AvailabilityDecision(False, context_reason)
 
         checked_now = self._checked_now(now)
+        validate_business_local(start_at, context.business.timezone, label="Appointment start")
         local_start = start_at.astimezone(ZoneInfo(context.business.timezone))
         target_date = local_start.date()
         if not self._date_within_horizon(context.business, target_date, checked_now):

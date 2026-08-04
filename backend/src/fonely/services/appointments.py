@@ -881,19 +881,29 @@ class AppointmentService:
         envelope = await self._pa_service.validated_stored_appointment_envelope(action)
         data = envelope.data
 
+        self._assert_semantic_equivalence(command, data)
+
         if action.status in ("confirmed", "rejected", "cancelled", "expired"):
             return await self._terminal_proposal_replay(action, envelope)
 
+        return self._proposal_result_from_action(action, envelope)
+
+    @staticmethod
+    def _assert_semantic_equivalence(
+        command: CreatePendingAppointmentCommand
+        | CreatePendingAppointmentCancellationCommand
+        | CreatePendingAppointmentRescheduleCommand,
+        data: object,
+    ) -> None:
         if isinstance(command, CreatePendingAppointmentCommand):
             if not isinstance(data, CreateAppointmentData):
                 raise PendingActionIdempotencyConflictError(
                     "Idempotency key already used for another appointment operation"
                 )
-            expected_resource = command.resource_id
             if (
-                expected_resource is None
+                command.resource_id is None
                 or data.facts.service_id != command.service_id
-                or data.facts.resource_id != expected_resource
+                or data.facts.resource_id != command.resource_id
                 or instant(data.facts.start_at) != instant(command.start_at)
                 or data.customer_name != command.customer_name
                 or data.customer_phone != command.customer_phone
@@ -903,7 +913,7 @@ class AppointmentService:
                 raise PendingActionIdempotencyConflictError(
                     "Idempotency key already used for a different appointment request"
                 )
-            return self._proposal_result_from_action(action, envelope)
+            return
 
         if isinstance(command, CreatePendingAppointmentCancellationCommand):
             if not isinstance(data, CancelAppointmentData) or (
@@ -914,7 +924,7 @@ class AppointmentService:
                 raise PendingActionIdempotencyConflictError(
                     "Idempotency key already used for a different cancellation request"
                 )
-            return self._proposal_result_from_action(action, envelope)
+            return
 
         if not isinstance(data, RescheduleAppointmentData):
             raise PendingActionIdempotencyConflictError(
@@ -931,57 +941,38 @@ class AppointmentService:
             raise PendingActionIdempotencyConflictError(
                 "Idempotency key already used for a different reschedule request"
             )
-        return self._proposal_result_from_action(action, envelope)
 
     async def _terminal_proposal_replay(
         self,
         action: PendingAction,
         envelope: PendingAppointmentEnvelope,
     ) -> AppointmentProposalResult:
+        confirmation = self._operation_facts_from_envelope(envelope)
         if action.status == "confirmed":
-            if isinstance(envelope.data, CreateAppointmentData):
-                existing = await self._repo.get_by_business_and_pending_action(
-                    action.business_id, action.id
-                )
-                if existing is not None:
-                    return AppointmentProposalResult(
-                        pending_action_id=action.id,
-                        version=action.version,
-                        expires_at=action.expires_at,
-                        confirmation_facts=self._to_confirmation_facts(envelope.data.facts),
-                        status="confirmed",
-                    )
-            commit = await self._repo.get_commit_by_business_and_pending_action(
-                action.business_id, action.id
+            return AppointmentProposalResult(
+                pending_action_id=action.id,
+                version=action.version,
+                expires_at=action.expires_at,
+                confirmation_facts=confirmation,
+                status="confirmed",
             )
-            if commit is not None:
-                return AppointmentProposalResult(
-                    pending_action_id=action.id,
-                    version=action.version,
-                    expires_at=action.expires_at,
-                    confirmation_facts=self._to_confirmation_facts(
-                        envelope.data.facts
-                        if isinstance(envelope.data, CreateAppointmentData)
-                        else envelope.data.new_facts
-                        if isinstance(envelope.data, RescheduleAppointmentData)
-                        else envelope.data.current_facts
-                    ),
-                    status="confirmed",
-                )
-        raise AppointmentDomainError(
-            AppointmentErrorCode.INVALID_STATE,
-            f"Action is in terminal status {action.status}",
+        return AppointmentProposalResult(
+            pending_action_id=action.id,
+            version=action.version,
+            expires_at=action.expires_at,
+            confirmation_facts=confirmation,
+            status=action.status,
         )
 
-    def _proposal_result_from_action(
-        self, action: PendingAction, envelope: PendingAppointmentEnvelope
-    ) -> AppointmentProposalResult:
+    def _operation_facts_from_envelope(
+        self, envelope: PendingAppointmentEnvelope
+    ) -> ConfirmationFactsResult:
         data = envelope.data
         if isinstance(data, CreateAppointmentData):
-            confirmation = self._to_confirmation_facts(data.facts)
-        elif isinstance(data, CancelAppointmentData):
+            return self._to_confirmation_facts(data.facts)
+        if isinstance(data, CancelAppointmentData):
             facts = data.current_facts
-            confirmation = ConfirmationFactsResult(
+            return ConfirmationFactsResult(
                 operation="cancel",
                 service_id=facts.service_id,
                 service_name=facts.service_name,
@@ -995,27 +986,31 @@ class AppointmentService:
                 target_appointment_id=data.target_appointment_id,
                 reason_code=data.reason_code,
             )
-        else:
-            facts = data.new_facts
-            confirmation = ConfirmationFactsResult(
-                operation="reschedule",
-                service_id=facts.service_id,
-                service_name=facts.service_name,
-                resource_id=facts.resource_id,
-                resource_name=facts.resource_name,
-                start_at=facts.start_at.isoformat(),
-                end_at=facts.end_at.isoformat(),
-                duration_minutes=facts.duration_minutes,
-                price=str(facts.price) if facts.price is not None else None,
-                business_timezone=facts.business_timezone,
-                target_appointment_id=data.target_appointment_id,
-                old_facts=self._to_scheduling_facts(data.old_facts),
-            )
+        assert isinstance(data, RescheduleAppointmentData)
+        facts = data.new_facts
+        return ConfirmationFactsResult(
+            operation="reschedule",
+            service_id=facts.service_id,
+            service_name=facts.service_name,
+            resource_id=facts.resource_id,
+            resource_name=facts.resource_name,
+            start_at=facts.start_at.isoformat(),
+            end_at=facts.end_at.isoformat(),
+            duration_minutes=facts.duration_minutes,
+            price=str(facts.price) if facts.price is not None else None,
+            business_timezone=facts.business_timezone,
+            target_appointment_id=data.target_appointment_id,
+            old_facts=self._to_scheduling_facts(data.old_facts),
+        )
+
+    def _proposal_result_from_action(
+        self, action: PendingAction, envelope: PendingAppointmentEnvelope
+    ) -> AppointmentProposalResult:
         return AppointmentProposalResult(
             pending_action_id=action.id,
             version=action.version,
             expires_at=action.expires_at,
-            confirmation_facts=confirmation,
+            confirmation_facts=self._operation_facts_from_envelope(envelope),
         )
 
     def _replay_cancellation(

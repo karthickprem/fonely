@@ -45,9 +45,7 @@ class InboundEventRepository:
         await self._session.flush()
         return results
 
-    async def mark_domain_processed(
-        self, business_id: int, event_id: int
-    ) -> None:
+    async def mark_domain_processed(self, business_id: int, event_id: int) -> None:
         await self._session.execute(
             update(WhatsAppInboundEvent)
             .where(
@@ -57,9 +55,7 @@ class InboundEventRepository:
             .values(status=InboundEventStatus.DOMAIN_PROCESSED.value)
         )
 
-    async def mark_completed(
-        self, business_id: int, event_id: int, completed_at: datetime
-    ) -> None:
+    async def mark_completed(self, business_id: int, event_id: int, completed_at: datetime) -> None:
         await self._session.execute(
             update(WhatsAppInboundEvent)
             .where(
@@ -73,9 +69,7 @@ class InboundEventRepository:
             )
         )
 
-    async def mark_failed(
-        self, business_id: int, event_id: int, error: str
-    ) -> None:
+    async def mark_failed(self, business_id: int, event_id: int, error: str) -> None:
         event = await self._session.scalar(
             select(WhatsAppInboundEvent).where(
                 WhatsAppInboundEvent.id == event_id,
@@ -87,9 +81,7 @@ class InboundEventRepository:
         new_attempts = event.attempts + 1
         is_dead = new_attempts >= event.max_attempts
         new_status = (
-            InboundEventStatus.DEAD_LETTER.value
-            if is_dead
-            else InboundEventStatus.FAILED.value
+            InboundEventStatus.DEAD_LETTER.value if is_dead else InboundEventStatus.FAILED.value
         )
         values: dict[str, object] = {
             "status": new_status,

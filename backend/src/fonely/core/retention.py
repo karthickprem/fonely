@@ -61,4 +61,14 @@ def get_retention_policies() -> dict[str, RetentionPolicy]:
             retention_days=_env_days("RETENTION_NOTIFICATIONS_DEAD_LETTER_DAYS", 90),
             description="Dead-lettered notifications for debugging",
         ),
+        "whatsapp_inbound_completed": RetentionPolicy(
+            data_type="whatsapp_inbound_completed",
+            retention_days=_env_days("RETENTION_WHATSAPP_INBOUND_DAYS", 30),
+            description="Completed inbound WhatsApp events",
+        ),
+        "whatsapp_inbound_dead_letter": RetentionPolicy(
+            data_type="whatsapp_inbound_dead_letter",
+            retention_days=_env_days("RETENTION_WHATSAPP_INBOUND_DEAD_LETTER_DAYS", 30),
+            description="Dead-lettered inbound events with message body",
+        ),
     }

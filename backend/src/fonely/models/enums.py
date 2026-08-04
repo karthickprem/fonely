@@ -184,6 +184,7 @@ class InboundEventStatus(enum.StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     DEAD_LETTER = "dead_letter"
+    RESPONSE_FAILED = "response_failed"
 
 
 class DailyContextType(enum.StrEnum):

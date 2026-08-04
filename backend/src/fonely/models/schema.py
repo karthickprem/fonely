@@ -12,6 +12,7 @@ Guarantees status:
   is onboarding metadata only.
 """
 
+import uuid as _uuid
 from datetime import date, datetime, time
 from decimal import Decimal
 from enum import Enum as PythonEnum
@@ -32,6 +33,7 @@ from sqlalchemy import (
     Text,
     Time,
     UniqueConstraint,
+    Uuid,
     literal_column,
 )
 from sqlalchemy.dialects.postgresql import JSONB, ExcludeConstraint
@@ -1207,7 +1209,7 @@ class WhatsAppInboundEvent(Base):
         CheckConstraint("attempts <= max_attempts", name="ck_whatsapp_inbound_attempts_bounded"),
         CheckConstraint(
             "status IN ('received', 'processing', 'domain_processed', "
-            "'completed', 'failed', 'dead_letter')",
+            "'completed', 'failed', 'dead_letter', 'response_failed')",
             name="ck_whatsapp_inbound_status_valid",
         ),
         CheckConstraint(
@@ -1234,6 +1236,13 @@ class WhatsAppInboundEvent(Base):
     )
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(String(500))
+    claim_token: Mapped[_uuid.UUID | None] = mapped_column(Uuid)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    claim_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    provider_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     dead_lettered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

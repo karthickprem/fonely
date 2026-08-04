@@ -287,6 +287,10 @@ async def _persist_delivery_status(
                 business_id, outbox.entity_id, now
             )
     else:
+        terminal = outbox.attempts >= outbox.max_attempts
+        outbox_status = (
+            NotificationStatus.DEAD_LETTER.value if terminal else NotificationStatus.FAILED.value
+        )
         await session.execute(
             update(WhatsAppDeliveryAttempt)
             .where(WhatsAppDeliveryAttempt.id == attempt.id)
@@ -299,11 +303,19 @@ async def _persist_delivery_status(
                 NotificationOutboxEvent.id == outbox.id,
             )
             .values(
-                status=NotificationStatus.FAILED.value,
+                status=outbox_status,
                 last_error="provider_failed",
-                next_attempt_at=now,
+                next_attempt_at=None if terminal else now,
                 claim_token=None,
                 lease_expires_at=None,
             )
         )
+        if (
+            terminal
+            and outbox.event_type == "whatsapp_inbound_response"
+            and outbox.entity_type == "whatsapp_inbound_event"
+        ):
+            await InboundEventRepository(session).mark_response_failed(
+                business_id, outbox.entity_id
+            )
     return 1

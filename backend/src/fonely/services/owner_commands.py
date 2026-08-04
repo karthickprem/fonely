@@ -188,6 +188,8 @@ class OwnerCommandService:
                 response_text=f"Could not understand the time '{parsed.close_time}'.",
             )
 
+        await self._lock_business_resources(business_id)
+
         day_of_week = schedule_weekday(target_date)
         schedules = (
             (
@@ -242,7 +244,6 @@ class OwnerCommandService:
                 ),
             )
 
-        await self._lock_business_resources(business_id)
         reason = parsed.reason or "Closing early"
         if truncated:
             effective = truncated[0]

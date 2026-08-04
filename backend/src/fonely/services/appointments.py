@@ -164,6 +164,14 @@ class AppointmentService:
             engine="appointment_engine",
         )
 
+        proposed = PendingAppointmentEnvelope.model_validate(action.proposed_payload)
+        proposed_data = proposed.data
+        assert isinstance(proposed_data, CreateAppointmentData)
+        await self._repo.lock_resource_schedule(
+            command.actor.business_id,
+            proposed_data.facts.resource_id,
+        )
+
         begin_result = await self._pa_service.begin_commit(BeginCommitCommand(context=context))
         committing_version = begin_result.version
         committing_context = CommitResultContext(
@@ -177,11 +185,6 @@ class AppointmentService:
         data = envelope.data
         assert isinstance(data, CreateAppointmentData)
         facts = data.facts
-
-        await self._repo.lock_resource_schedule(
-            command.actor.business_id,
-            facts.resource_id,
-        )
 
         overlap_exc: IntegrityError | None = None
         try:
@@ -613,14 +616,6 @@ class AppointmentService:
             engine="appointment_engine",
         )
 
-        begin_result = await self._pa_service.begin_commit(BeginCommitCommand(context=context))
-        committing_context = CommitResultContext(
-            business_id=context.business_id,
-            pending_action_id=context.pending_action_id,
-            expected_version=begin_result.version,
-            engine="appointment_engine",
-        )
-
         appointment = await self._repo.lock_appointment(
             command.actor.business_id,
             data.target_appointment_id,
@@ -639,10 +634,22 @@ class AppointmentService:
                 AppointmentErrorCode.STALE_VERSION, "Appointment version changed"
             )
 
-        await self._repo.lock_resource_schedule(
+        await self._repo.lock_resource_schedules(
             command.actor.business_id,
-            new_facts.resource_id,
+            (appointment.resource_id, new_facts.resource_id),
         )
+
+        begin_result = await self._pa_service.begin_commit(BeginCommitCommand(context=context))
+        committing_context = CommitResultContext(
+            business_id=context.business_id,
+            pending_action_id=context.pending_action_id,
+            expected_version=begin_result.version,
+            engine="appointment_engine",
+        )
+        revalidated = PendingAppointmentEnvelope.model_validate(begin_result.payload)
+        revalidated_data = revalidated.data
+        assert isinstance(revalidated_data, RescheduleAppointmentData)
+        new_facts = revalidated_data.new_facts
 
         now = datetime.now(tz=appointment.start_at.tzinfo)
         before_snapshot = await self._authoritative_snapshot(

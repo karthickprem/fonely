@@ -15,7 +15,7 @@ from fonely.api.internal.models import (
     ProposalResponse,
     RetryableFailureResponse,
 )
-from fonely.api.internal.validation import InternalValidationPort
+from fonely.api.internal.validation import AppointmentAvailabilityError, InternalValidationPort
 from fonely.core.config import settings
 from fonely.domain.appointments.commands import (
     ConfirmPendingAppointmentCommand,
@@ -155,6 +155,9 @@ async def create_proposal(
     except PendingActionIdempotencyConflictError as exc:
         await session.rollback()
         raise HTTPException(status_code=409, detail="Idempotency conflict") from exc
+    except AppointmentAvailabilityError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=exc.reason.value) from exc
     except (PendingActionNotFoundError, ValueError) as exc:
         await session.rollback()
         raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -256,6 +256,8 @@ async def test_confirm_does_not_call_outer_commit() -> None:
         },
     }
 
+    action.proposed_payload = begin_result.payload
+
     complete_result = MagicMock()
     complete_result.version = 4
 

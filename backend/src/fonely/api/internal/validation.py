@@ -1,14 +1,15 @@
 """Internal appointment validation port implementation.
 
-Resolves authoritative tenant-scoped facts from the database for the internal
-text appointment slice. Production channels will use richer validation.
+Resolves authoritative tenant-scoped facts and scheduling policy for every
+proposal and confirmation.
 """
 
-from datetime import UTC, timedelta
+from datetime import UTC
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fonely.domain.appointments.availability import derive_windows
 from fonely.domain.appointments.validation import AppointmentValidationPort
 from fonely.domain.pending_actions.commands import ActorContext
 from fonely.domain.pending_actions.errors import PendingActionIdempotencyConflictError
@@ -21,17 +22,33 @@ from fonely.domain.pending_actions.payloads import (
 )
 from fonely.domain.pending_actions.snapshots import payload_digest
 from fonely.models.schema import Business, Resource, Service, ServiceResourceEligibility
+from fonely.services.availability import AvailabilityReason, AvailabilityService
+
+
+class AppointmentAvailabilityError(ValueError):
+    def __init__(self, reason: AvailabilityReason) -> None:
+        super().__init__(reason.value)
+        self.reason = reason
 
 
 class InternalValidationPort(AppointmentValidationPort):
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+        self._availability = AvailabilityService(session)
 
     async def _resolve_facts(
         self,
         business_id: int,
         stub_facts: AppointmentFacts,
+        *,
+        exclude_appointment_id: int | None = None,
     ) -> AppointmentFacts:
+        business = (
+            await self._session.execute(select(Business).where(Business.id == business_id))
+        ).scalar_one_or_none()
+        if business is None:
+            raise ValueError("Business not found")
+
         service = (
             await self._session.execute(
                 select(Service).where(
@@ -58,7 +75,7 @@ class InternalValidationPort(AppointmentValidationPort):
 
         eligibility = (
             await self._session.execute(
-                select(ServiceResourceEligibility).where(
+                select(ServiceResourceEligibility.id).where(
                     ServiceResourceEligibility.business_id == business_id,
                     ServiceResourceEligibility.service_id == stub_facts.service_id,
                     ServiceResourceEligibility.resource_id == stub_facts.resource_id,
@@ -69,32 +86,38 @@ class InternalValidationPort(AppointmentValidationPort):
         if eligibility is None:
             raise ValueError("Resource is not eligible for this service")
 
+        decision = await self._availability.check_exact_slot(
+            business_id,
+            service.id,
+            resource.id,
+            stub_facts.start_at,
+            exclude_appointment_id=exclude_appointment_id,
+            alternative_limit=0,
+        )
+        if not decision.available:
+            raise AppointmentAvailabilityError(decision.reason)
+
         start_at = stub_facts.start_at.astimezone(UTC)
-        end_at = start_at + timedelta(minutes=service.duration_minutes)
-        buffer_before = getattr(service, "buffer_before_minutes", 0) or 0
-        buffer_after = getattr(service, "buffer_after_minutes", 0) or 0
-        effective_start = start_at - timedelta(minutes=buffer_before)
-        effective_end = end_at + timedelta(minutes=buffer_after)
-
-        business = (
-            await self._session.execute(select(Business).where(Business.id == business_id))
-        ).scalar_one_or_none()
-        timezone = business.timezone if business else "Asia/Kolkata"
-
+        appointment, effective = derive_windows(
+            start_at,
+            duration_minutes=service.duration_minutes,
+            buffer_before_minutes=service.buffer_before_minutes,
+            buffer_after_minutes=service.buffer_after_minutes,
+        )
         return AppointmentFacts(
             service_id=service.id,
             service_name=service.name,
             resource_id=resource.id,
             resource_name=resource.name,
-            start_at=start_at,
-            end_at=end_at,
-            effective_start_at=effective_start,
-            effective_end_at=effective_end,
+            start_at=appointment.start_at,
+            end_at=appointment.end_at,
+            effective_start_at=effective.start_at,
+            effective_end_at=effective.end_at,
             duration_minutes=service.duration_minutes,
-            buffer_before_minutes=buffer_before,
-            buffer_after_minutes=buffer_after,
+            buffer_before_minutes=service.buffer_before_minutes,
+            buffer_after_minutes=service.buffer_after_minutes,
             price=service.price,
-            business_timezone=timezone,
+            business_timezone=business.timezone,
         )
 
     async def validate_for_actor(
@@ -105,7 +128,13 @@ class InternalValidationPort(AppointmentValidationPort):
         if isinstance(payload.data, CancelAppointmentData):
             return payload
         if isinstance(payload.data, RescheduleAppointmentData):
-            new_facts = await self._resolve_facts(actor.business_id, payload.data.new_facts)
+            new_facts = await self._resolve_facts(
+                actor.business_id,
+                payload.data.new_facts,
+                exclude_appointment_id=payload.data.target_appointment_id,
+            )
+            if new_facts == payload.data.old_facts:
+                raise ValueError("Reschedule must change appointment facts")
             return PendingAppointmentEnvelope(
                 data=RescheduleAppointmentData(
                     target_appointment_id=payload.data.target_appointment_id,
@@ -132,29 +161,31 @@ class InternalValidationPort(AppointmentValidationPort):
         business_id: int,
         payload: PendingAppointmentEnvelope,
     ) -> PendingAppointmentEnvelope:
-        if isinstance(payload.data, (CancelAppointmentData, RescheduleAppointmentData)):
+        if isinstance(payload.data, CancelAppointmentData):
+            return payload
+        if isinstance(payload.data, RescheduleAppointmentData):
+            stored_facts = payload.data.new_facts
+            current_facts = await self._resolve_facts(
+                business_id,
+                stored_facts,
+                exclude_appointment_id=payload.data.target_appointment_id,
+            )
+            self._require_unchanged(stored_facts, current_facts)
             return payload
         if not isinstance(payload.data, CreateAppointmentData):
             raise ValueError(f"Unsupported appointment operation: {type(payload.data).__name__}")
         stored_facts = payload.data.facts
         current_facts = await self._resolve_facts(business_id, stored_facts)
+        self._require_unchanged(stored_facts, current_facts)
+        return payload
 
-        if (
-            current_facts.service_id != stored_facts.service_id
-            or current_facts.resource_id != stored_facts.resource_id
-            or current_facts.duration_minutes != stored_facts.duration_minutes
-            or current_facts.buffer_before_minutes != stored_facts.buffer_before_minutes
-            or current_facts.buffer_after_minutes != stored_facts.buffer_after_minutes
-            or current_facts.price != stored_facts.price
-            or current_facts.business_timezone != stored_facts.business_timezone
-            or current_facts.service_name != stored_facts.service_name
-            or current_facts.resource_name != stored_facts.resource_name
-        ):
+    def _require_unchanged(
+        self, stored_facts: AppointmentFacts, current_facts: AppointmentFacts
+    ) -> None:
+        if current_facts != stored_facts:
             raise PendingActionIdempotencyConflictError(
                 "Authoritative facts changed since proposal; revalidation required"
             )
-
-        return payload
 
     async def validate_idempotent_retry(
         self,
@@ -174,9 +205,4 @@ class InternalValidationPort(AppointmentValidationPort):
         committed_entity_type: str,
         committed_entity_id: int,
     ) -> None:
-        pass  # PostgreSQL enforces these invariants via deferred constraint triggers:
-        #   - enforce_appointment_provenance: payload facts match appointment row
-        #   - enforce_appointment_mutation_commit: commit snapshot matches DB state
-        #   - enforce_allocation_consistency: exactly one active allocation
-        # Re-checking in Python would duplicate DB guarantees and mask constraint
-        # failures. If a commit succeeds at the DB level, the evidence is valid.
+        pass  # PostgreSQL deferred constraints enforce completion evidence.

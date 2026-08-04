@@ -165,18 +165,31 @@ def _exception_shifts(
     return (LocalShift(exception.open_time, exception.close_time),)
 
 
+def normalize_local_shifts(shifts: tuple[LocalShift, ...]) -> tuple[LocalShift, ...]:
+    """Return deterministic disjoint shifts, merging overlap and adjacency."""
+    ordered = sorted(shifts, key=lambda shift: (shift.open_time, shift.close_time))
+    merged: list[LocalShift] = []
+    for shift in ordered:
+        if not merged or shift.open_time > merged[-1].close_time:
+            merged.append(shift)
+            continue
+        previous = merged[-1]
+        merged[-1] = LocalShift(previous.open_time, max(previous.close_time, shift.close_time))
+    return tuple(merged)
+
+
 def _intersect_local_shifts(
     left: tuple[LocalShift, ...],
     right: tuple[LocalShift, ...],
 ) -> tuple[LocalShift, ...]:
     intersections = []
-    for left_shift in left:
-        for right_shift in right:
+    for left_shift in normalize_local_shifts(left):
+        for right_shift in normalize_local_shifts(right):
             open_time = max(left_shift.open_time, right_shift.open_time)
             close_time = min(left_shift.close_time, right_shift.close_time)
             if open_time < close_time:
                 intersections.append(LocalShift(open_time, close_time))
-    return tuple(sorted(intersections, key=lambda shift: (shift.open_time, shift.close_time)))
+    return normalize_local_shifts(tuple(intersections))
 
 
 def shifts_for_date(
@@ -193,10 +206,10 @@ def shifts_for_date(
     if resource_exception is not None and resource_exception.is_closed:
         return ()
 
-    business_effective = (
+    business_effective = normalize_local_shifts(
         _exception_shifts(business_exception) if business_exception is not None else business_weekly
     )
-    resource_effective = (
+    resource_effective = normalize_local_shifts(
         _exception_shifts(resource_exception)
         if resource_exception is not None
         else resource_weekly or business_effective

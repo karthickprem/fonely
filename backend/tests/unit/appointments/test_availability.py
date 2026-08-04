@@ -15,6 +15,7 @@ from fonely.domain.appointments.availability import (
     derive_windows,
     eligible_resources,
     fits_one_shift,
+    normalize_local_shifts,
     order_slots,
     overlaps,
     resolve_local_wall_time,
@@ -129,6 +130,43 @@ def test_resource_without_schedule_inherits_business_weekly() -> None:
     assert len(shifts) == 1
     assert shifts[0].start_at.hour == 9
     assert shifts[0].end_at.hour == 18
+
+
+def test_normalize_shifts_merges_overlap_containment_chain_and_adjacency() -> None:
+    normalized = normalize_local_shifts(
+        (
+            LocalShift(time(9), time(11)),
+            LocalShift(time(10), time(12)),
+            LocalShift(time(10, 30), time(11, 30)),
+            LocalShift(time(12), time(13)),
+            LocalShift(time(13), time(14)),
+        )
+    )
+    assert normalized == (LocalShift(time(9), time(14)),)
+
+
+def test_normalize_shifts_preserves_real_gaps() -> None:
+    normalized = normalize_local_shifts(
+        (LocalShift(time(9), time(11)), LocalShift(time(11, 15), time(13)))
+    )
+    assert normalized == (
+        LocalShift(time(9), time(11)),
+        LocalShift(time(11, 15), time(13)),
+    )
+
+
+def test_normalized_intersection_merges_business_and_resource_unions() -> None:
+    shifts = shifts_for_date(
+        local_day=date(2026, 8, 3),
+        timezone="Asia/Kolkata",
+        business_weekly=(LocalShift(time(9), time(12)), LocalShift(time(11), time(15))),
+        resource_weekly=(LocalShift(time(10), time(13)), LocalShift(time(13), time(16))),
+        business_exception=None,
+        resource_exception=None,
+    )
+    assert len(shifts) == 1
+    assert shifts[0].start_at.hour == 10
+    assert shifts[0].end_at.hour == 15
 
 
 @pytest.mark.parametrize(

@@ -58,9 +58,7 @@ async def run_inbound_worker(
 
             try:
                 lock_key = hash((event.business_id, event.sender_phone)) & 0x7FFFFFFFFFFFFFFF
-                await session.execute(
-                    text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key}
-                )
+                await session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
 
                 response_text = await _process_domain(event, session, model_gateway)
 
@@ -72,9 +70,7 @@ async def run_inbound_worker(
                 await session.rollback()
                 async with session_factory() as fail_session:
                     fail_repo = InboundEventRepository(fail_session)
-                    await fail_repo.mark_failed(
-                        event.business_id, event.id, type(exc).__name__
-                    )
+                    await fail_repo.mark_failed(event.business_id, event.id, type(exc).__name__)
                     await fail_session.commit()
                 logger.warning(
                     "inbound_event_processing_failed",

@@ -559,7 +559,10 @@ async def test_cancellation_replays_from_fresh_session_without_duplicate_evidenc
         )
         assert (
             await session.scalar(
-                text("SELECT count(*) FROM notification_outbox WHERE entity_id = :id"),
+                text(
+                    "SELECT count(*) FROM notification_outbox "
+                    "WHERE entity_id = :id AND event_type = 'appointment_cancelled'"
+                ),
                 {"id": appointment_id},
             )
             == 2

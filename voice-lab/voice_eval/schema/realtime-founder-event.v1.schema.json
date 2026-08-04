@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "realtime-founder-event.v1",
+  "type": "object",
+  "required": ["schema_version", "session_id", "offset_ms", "event"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "run_id": {"type": ["string", "null"]},
+    "build_id": {"type": ["string", "null"]},
+    "session_id": {"type": "string"},
+    "offset_ms": {"type": "number", "minimum": 0},
+    "event": {"type": "string", "minLength": 1}
+  }
+}

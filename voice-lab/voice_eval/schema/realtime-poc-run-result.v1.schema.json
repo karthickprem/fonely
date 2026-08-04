@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "realtime-poc-run-result.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "freeze_id", "scenario_id", "session_id", "turn_id", "submitted_generation_id", "current_generation_id", "delegate_status", "stale_suppressed", "authoritative_value", "pending_tasks_after_close"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "freeze_id": {"const": "GPT-LIVE-INSPIRED-POC-V1"},
+    "scenario_id": {"type": "string", "minLength": 1},
+    "session_id": {"type": "string", "minLength": 1},
+    "turn_id": {"type": "integer", "minimum": 0},
+    "submitted_generation_id": {"type": "integer", "minimum": 0},
+    "current_generation_id": {"type": "integer", "minimum": 0},
+    "delegate_status": {"enum": ["completed", "cancelled", "timed_out", "stale", "failed"]},
+    "stale_suppressed": {"type": "boolean"},
+    "authoritative_value": {"type": ["string", "null"]},
+    "pending_tasks_after_close": {"const": 0}
+  }
+}

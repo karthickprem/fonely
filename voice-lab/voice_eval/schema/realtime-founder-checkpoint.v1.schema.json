@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "realtime-founder-checkpoint.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "freeze_id", "build_id", "git_head", "clean", "gates", "promotion_status"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "run_id": {"type": "string"},
+    "freeze_id": {"const": "GPT-LIVE-INSPIRED-POC-V1"},
+    "build_id": {"type": "string"},
+    "git_head": {"type": "string", "pattern": "^[a-f0-9]{40}$"},
+    "clean": {"const": true},
+    "gates": {"type": "object"},
+    "promotion_status": {"const": "evidence_only"}
+  }
+}

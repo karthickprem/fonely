@@ -27,6 +27,24 @@ class VoiceEvalObserver(BaseObserver):
         self._output_path.parent.mkdir(parents=True, exist_ok=True)
         self._emit({"event": "session_started"})
 
+    def emit_poc(self, event: dict):
+        """Record one sanitized POC lifecycle event from session coordination."""
+        allowed = {
+            "event", "run_id", "build_id", "event_id", "turn_id", "generation_id",
+            "stage", "finalized", "text_length", "request_id", "request_ordinal",
+            "timeout_ms", "outcome", "reason", "old_generation_id",
+            "submitted_generation_id", "pending_tasks", "milestone", "warm_state",
+            "configured_delay_ms", "context_trigger_id", "final_transcript_event_id",
+            "context_matches_final", "logical_interruption_id", "advance_count",
+            "payload_released", "downstream_targets", "frame_type", "bytes",
+            "method", "path", "model", "stream", "expected_header_names",
+            "required_headers_present", "configured_values_matched", "http_status",
+            "error_category", "measurement_method", "valid", "latency_ms",
+            "threshold_rms", "silence_hold_ms", "sample_rate", "base_latency_ms",
+            "output_latency_ms", "bot_stop_callback_ms",
+        }
+        self._emit({key: value for key, value in event.items() if key in allowed})
+
     def _emit(self, event: dict):
         event = {"schema_version": 1, "session_id": self._session_id, "offset_ms": (time.monotonic_ns() - self._started) / 1_000_000, **event}
         try:

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "realtime-poc-report.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "report_id", "freeze_id", "run_ids", "sessions", "turns", "stale_results", "stale_suppressed", "cross_session_leaks", "leaked_tasks", "deterministic", "promotion_status"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "report_id": {"type": "string", "minLength": 1},
+    "freeze_id": {"const": "GPT-LIVE-INSPIRED-POC-V1"},
+    "run_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "uniqueItems": true},
+    "sessions": {"type": "integer", "minimum": 1},
+    "turns": {"type": "integer", "minimum": 1},
+    "stale_results": {"type": "integer", "minimum": 0},
+    "stale_suppressed": {"type": "integer", "minimum": 0},
+    "cross_session_leaks": {"const": 0},
+    "leaked_tasks": {"const": 0},
+    "deterministic": {"type": "boolean"},
+    "promotion_status": {"const": "evidence_only"}
+  }
+}

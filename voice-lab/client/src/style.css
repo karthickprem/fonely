@@ -17,6 +17,8 @@ main { display: grid; grid-template-columns: minmax(0, 1fr) 320px; height: calc(
 .message { max-width: 78%; padding: 10px 14px; border-radius: 14px; margin: 9px 0; line-height: 1.45; }
 .message.user { margin-left: auto; background: #285f81; }
 .message.bot { background: #262d3a; border: 1px solid #38465c; }
+.message[data-stage="speculative"] { opacity: .68; border-style: dashed; }
+.message[data-stage="final"]::after { content: " · final evidence"; color: #90a4bf; font-size: 10px; }
 .voice-controls { display: flex; justify-content: center; gap: 10px; flex-wrap: wrap; }
 .voice-controls label { display: grid; gap: 4px; color: #7f90aa; font-size: 11px; }
 select { min-width: 150px; background: #151e2b; color: #d6e0ed; border: 1px solid #34445b; border-radius: 8px; padding: 8px 10px; }

@@ -23,26 +23,22 @@
         </div>
         <div class="voice-controls">
           <label>Voice
-            <select id="voice">
-              <option value="priya">Priya</option>
-              <option value="shreya">Shreya</option>
-              <option value="ritu">Ritu</option>
-              <option value="neha">Neha</option>
-              <option value="roopa">Roopa</option>
-            </select>
+            <select id="voice" disabled><option>Cartesia Kavitha</option></select>
           </label>
-          <label>Pace
-            <select id="pace">
+          <label>Speed
+            <select id="speed">
               <option value="0.85">Warm · 0.85</option>
               <option value="0.95" selected>Natural · 0.95</option>
               <option value="1.05">Quick · 1.05</option>
             </select>
           </label>
-          <label>Expression
-            <select id="temperature">
-              <option value="0.35">Consistent · 0.35</option>
-              <option value="0.55" selected>Natural · 0.55</option>
-              <option value="0.75">Expressive · 0.75</option>
+          <label>Emotion
+            <select id="emotion" disabled><option value="calm">Calm</option></select>
+          </label>
+          <label>POC delegate
+            <select id="live-poc">
+              <option value="false" selected>Off</option>
+              <option value="true">750 ms read-only lookup</option>
             </select>
           </label>
         </div>
@@ -58,6 +54,10 @@
         <dl>
           <div><dt>Transport</dt><dd id="transport">SmallWebRTC</dd></div>
           <div><dt>Mic</dt><dd id="mic-state">Off</dd></div>
+          <div><dt>Playback</dt><dd id="playback-state">Idle</dd></div>
+          <div><dt>Delegate</dt><dd id="delegate-state">Off</dd></div>
+          <div><dt>Transcript</dt><dd id="transcript-stage">—</dd></div>
+          <div><dt>Turn / generation</dt><dd id="turn-generation">0 / 0</dd></div>
           <div><dt>User → bot</dt><dd id="latency">—</dd></div>
           <div><dt>Barge-in</dt><dd id="barge-in">—</dd></div>
           <div><dt>RTT</dt><dd id="rtt">—</dd></div>
@@ -66,9 +66,11 @@
         </dl>
         <h2>Pipeline</h2>
         <ol>
-          <li>Sarvam Saaras v3 streaming STT</li>
-          <li>Claude Haiku streaming response</li>
-          <li>Sarvam Bulbul v3 streaming PCM</li>
+          <li>Sarvam Saaras v3 codemix STT</li>
+          <li>Generation-aware read-only delegation POC</li>
+          <li>Deterministic safety + Chennai style</li>
+          <li>Claude Haiku response realization</li>
+          <li>Cartesia Sonic 3.5 · Kavitha · calm</li>
           <li>Silero VAD + Smart Turn endpointing</li>
         </ol>
       </aside>

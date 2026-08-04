@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "scenario_set_id": "LIVE-POC-SCENARIOS-V1",
+  "scenarios": [
+    {"id": "normal", "delay_ms": 10, "cooperative_cancel": true, "failure": null},
+    {"id": "cancel-cooperative", "delay_ms": 100, "cooperative_cancel": true, "interrupt_after_ms": 10, "failure": null},
+    {"id": "cancel-resistant", "delay_ms": 100, "cooperative_cancel": false, "interrupt_after_ms": 10, "failure": null},
+    {"id": "timeout", "delay_ms": 200, "timeout_ms": 20, "cooperative_cancel": true, "failure": null},
+    {"id": "failure", "delay_ms": 10, "cooperative_cancel": true, "failure": "synthetic_failure"},
+    {"id": "disconnect-pending", "delay_ms": 100, "cooperative_cancel": true, "disconnect_after_ms": 10, "failure": null},
+    {"id": "next-generation-first", "delay_ms": 100, "cooperative_cancel": false, "advance_after_ms": 10, "failure": null},
+    {"id": "critical-non-authoritative", "delay_ms": 10, "cooperative_cancel": true, "critical_candidate": "1234567890", "failure": null}
+  ]
+}

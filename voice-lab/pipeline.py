@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 
 import aiohttp
-from anthropic import AsyncAnthropic
+from anthropic import AsyncAnthropic, DefaultAsyncHttpxClient
 from loguru import logger
 
 from pipecat.audio.turn.smart_turn.base_smart_turn import SmartTurnParams
@@ -41,6 +41,8 @@ from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
+from delegation import GenerationDelegationProcessor, GenerationOutputGate
+from live_poc import RealtimePOCCoordinator
 from processors import ChennaiStyleProcessor, DentalSafetyProcessor
 from style_retriever import ChennaiStyleRetriever
 from voice_eval.observer import VoiceEvalObserver
@@ -111,8 +113,12 @@ def cartesia_settings(request_settings: dict) -> tuple[float, str]:
     return speed, emotion
 
 
-def build_anthropic_client(api_key: str) -> AsyncAnthropic:
-    """Build the official SDK client, including approved gateway headers."""
+def build_anthropic_client(
+    api_key: str,
+    *,
+    evidence_sink=None,
+) -> AsyncAnthropic:
+    """Build the official SDK client and prove headers without recording values."""
     headers = {}
     for line in os.environ.get("ANTHROPIC_CUSTOM_HEADERS", "").splitlines():
         if not line.strip():
@@ -121,10 +127,39 @@ def build_anthropic_client(api_key: str) -> AsyncAnthropic:
         if not separator or not name.strip() or not value.strip():
             raise RuntimeError("ANTHROPIC_CUSTOM_HEADERS contains an invalid header line")
         headers[name.strip()] = value.strip()
+    base_url = os.environ.get("ANTHROPIC_BASE_URL")
+    if base_url and "api.anthropic.com" not in base_url and not headers:
+        raise RuntimeError("configured Anthropic gateway requires approved custom headers")
+    ordinal = 0
+
+    async def prove_headers(request):
+        nonlocal ordinal
+        if request.method != "POST" or not request.url.path.endswith("/messages"):
+            return
+        ordinal += 1
+        if ordinal != 1 or evidence_sink is None:
+            return
+        request_headers = {name.casefold(): value for name, value in request.headers.items()}
+        expected = {name.casefold(): value for name, value in headers.items()}
+        evidence_sink(
+            {
+                "event": "claude_request_headers_proved",
+                "request_ordinal": ordinal,
+                "method": request.method,
+                "path": request.url.path,
+                "expected_header_names": sorted(expected),
+                "required_headers_present": all(name in request_headers for name in expected),
+                "configured_values_matched": all(request_headers.get(name) == value for name, value in expected.items()),
+                "stream": True,
+            }
+        )
+
+    http_client = DefaultAsyncHttpxClient(event_hooks={"request": [prove_headers]})
     return AsyncAnthropic(
         api_key=api_key,
-        base_url=os.environ.get("ANTHROPIC_BASE_URL"),
+        base_url=base_url,
         default_headers=headers or None,
+        http_client=http_client,
     )
 
 
@@ -154,7 +189,34 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         )
 
     request_settings = runner_args.body if isinstance(runner_args.body, dict) else {}
+    checkpoint_run_id = request_settings.get("checkpoint_run_id") or os.environ.get("VOICE_CHECKPOINT_RUN_ID")
+    checkpoint_build_id = os.environ.get("VOICE_CHECKPOINT_BUILD_ID")
+    if checkpoint_run_id and not re.fullmatch(r"[a-f0-9-]{32,36}", checkpoint_run_id):
+        raise RuntimeError("checkpoint_run_id must be UUID-shaped")
     speed, emotion = cartesia_settings(request_settings)
+    poc_enabled = request_settings.get("live_poc", False) is True
+    delegate_delay_ms = request_settings.get("delegate_delay_ms", 750)
+    if not isinstance(delegate_delay_ms, int) or isinstance(delegate_delay_ms, bool):
+        delegate_delay_ms = 750
+
+    observer = None
+    data_root = os.environ.get("VOICE_EVAL_DATA_ROOT")
+    if data_root:
+        root = Path(data_root).resolve()
+        worktree = Path(__file__).resolve().parents[1]
+        if root == worktree or root.is_relative_to(worktree):
+            raise RuntimeError("VOICE_EVAL_DATA_ROOT must be outside the Git worktree")
+        observer = VoiceEvalObserver(
+            output_path=root / "telemetry" / f"{runner_args.session_id}.jsonl",
+            session_id=runner_args.session_id,
+        )
+    coordinator = RealtimePOCCoordinator(
+        runner_args.session_id,
+        run_id=checkpoint_run_id,
+        build_id=checkpoint_build_id,
+        event_sink=observer.emit_poc if observer else None,
+    )
+    coordinator.emit("startup_milestone", milestone="bot_factory_entered", warm_state="cold")
 
     async with aiohttp.ClientSession():
         stt = SarvamSTTService(
@@ -170,7 +232,10 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         )
         llm = AnthropicLLMService(
             api_key=anthropic_key,
-            client=build_anthropic_client(anthropic_key),
+            client=build_anthropic_client(
+                anthropic_key,
+                evidence_sink=coordinator.event_sink,
+            ),
             settings=AnthropicLLMService.Settings(
                 model="claude-haiku-4-5",
                 system_instruction=SYSTEM_PROMPT,
@@ -221,32 +286,30 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             ),
         )
 
+        delegation = GenerationDelegationProcessor(
+            coordinator,
+            enabled=poc_enabled,
+            delay_ms=delegate_delay_ms,
+        )
         safety = DentalSafetyProcessor()
         style = ChennaiStyleProcessor(ChennaiStyleRetriever(STYLE_CORPUS))
+        output_gate = GenerationOutputGate(coordinator)
         pipeline = Pipeline(
             [
                 transport.input(),
                 stt,
                 user_aggregator,
+                delegation,
                 safety,
                 style,
                 llm,
                 tts,
+                output_gate,
                 transport.output(),
                 assistant_aggregator,
             ]
         )
-        observer = None
-        data_root = os.environ.get("VOICE_EVAL_DATA_ROOT")
-        if data_root:
-            root = Path(data_root).resolve()
-            worktree = Path(__file__).resolve().parents[1]
-            if root == worktree or root.is_relative_to(worktree):
-                raise RuntimeError("VOICE_EVAL_DATA_ROOT must be outside the Git worktree")
-            observer = VoiceEvalObserver(
-                output_path=root / "telemetry" / f"{runner_args.session_id}.jsonl",
-                session_id=runner_args.session_id,
-            )
+        coordinator.emit("startup_milestone", milestone="pipeline_assembled", warm_state="cold")
         worker = PipelineWorker(
             pipeline,
             conversation_id=runner_args.session_id,
@@ -270,6 +333,8 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         @transport.event_handler("on_client_connected")
         async def on_client_connected(transport, client):
             logger.info("Voice-lab client connected")
+            coordinator.emit("startup_milestone", milestone="webrtc_connected", warm_state="cold")
+            coordinator.emit("startup_milestone", milestone="greeting_queued", warm_state="cold")
             await worker.queue_frames(
                 [
                     LLMFullResponseStartFrame(),

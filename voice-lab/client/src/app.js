@@ -13,9 +13,13 @@ const rttEl = document.querySelector('#rtt');
 const jitterEl = document.querySelector('#jitter');
 const lossEl = document.querySelector('#loss');
 const audio = document.querySelector('#bot-audio');
-const voiceSelect = document.querySelector('#voice');
-const paceSelect = document.querySelector('#pace');
-const temperatureSelect = document.querySelector('#temperature');
+const speedSelect = document.querySelector('#speed');
+const emotionSelect = document.querySelector('#emotion');
+const livePocSelect = document.querySelector('#live-poc');
+const playbackState = document.querySelector('#playback-state');
+const delegateState = document.querySelector('#delegate-state');
+const transcriptStage = document.querySelector('#transcript-stage');
+const turnGeneration = document.querySelector('#turn-generation');
 
 let client = null;
 let connected = false;
@@ -24,20 +28,78 @@ let interruptionStartedAt = null;
 let botWasSpeaking = false;
 let statsTimer = null;
 let connectionGeneration = 0;
+let checkpointRunId = null;
+let checkpointBuildId = null;
+let playbackContext = null;
+let playbackMeter = null;
+let interruptionMarker = null;
+let botStopCallbackMs = null;
 
 function setState(text, className = '') {
   status.textContent = text;
   orb.className = `orb ${className}`.trim();
 }
 
-function addMessage(text, role) {
+function addMessage(text, role, key = null, stage = 'final') {
   if (!text?.trim()) return;
   transcript.querySelector('.placeholder')?.remove();
-  const element = document.createElement('div');
-  element.className = `message ${role}`;
+  let element = key ? transcript.querySelector(`[data-message-key="${key}"]`) : null;
+  if (!element) {
+    element = document.createElement('div');
+    element.className = `message ${role}`;
+    if (key) element.dataset.messageKey = key;
+    transcript.appendChild(element);
+  }
+  element.dataset.stage = stage;
   element.textContent = text;
-  transcript.appendChild(element);
   transcript.scrollTop = transcript.scrollHeight;
+}
+
+function handlePocMessage(data) {
+  if (data?.type !== 'fonely-live-poc') return;
+  checkpointRunId = data.run_id ?? checkpointRunId;
+  checkpointBuildId = data.build_id ?? checkpointBuildId;
+  turnGeneration.textContent = `${data.turn_id ?? 0} / ${data.generation_id ?? 0}`;
+  if (data.event === 'delegate_finished') delegateState.textContent = data.status;
+  if (data.event === 'generation_advanced') {
+    delegateState.textContent = 'Cancelled / stale guarded';
+    interruptionMarker = performance.now();
+    playbackMeter?.port.postMessage({type: 'interrupt'});
+  }
+  if (data.event === 'transcript_stage') transcriptStage.textContent = data.stage;
+}
+
+async function attachMeasuredPlayback(track) {
+  playbackContext = new AudioContext();
+  await playbackContext.audioWorklet.addModule('/src/playback-meter-worklet.js');
+  const source = playbackContext.createMediaStreamSource(new MediaStream([track]));
+  playbackMeter = new AudioWorkletNode(playbackContext, 'playback-meter');
+  source.connect(playbackMeter).connect(playbackContext.destination);
+  audio.srcObject = null;
+  playbackMeter.port.onmessage = ({data}) => {
+    if (data?.type !== 'old-audio-stopped' || interruptionMarker == null) return;
+    const outputTimestamp = playbackContext.getOutputTimestamp?.();
+    const performanceAtContextZero = outputTimestamp
+      ? outputTimestamp.performanceTime - outputTimestamp.contextTime * 1000
+      : performance.now() - playbackContext.currentTime * 1000;
+    const lastRenderedMs = performanceAtContextZero + data.lastSignalContextMs;
+    const latencyMs = Math.max(0, lastRenderedMs - interruptionMarker);
+    bargeInEl.textContent = `${Math.round(latencyMs)} ms rendered PCM`;
+    client?.sendClientMessage('founder-checkpoint-evidence', {
+      run_id: checkpointRunId,
+      build_id: checkpointBuildId,
+      measurement_method: 'audio-worklet-rms-v1',
+      valid: Number.isFinite(latencyMs),
+      latency_ms: latencyMs,
+      threshold_rms: data.thresholdRms,
+      silence_hold_ms: data.silenceHoldMs,
+      sample_rate: data.sampleRate,
+      base_latency_ms: (playbackContext.baseLatency ?? 0) * 1000,
+      output_latency_ms: (playbackContext.outputLatency ?? 0) * 1000,
+      bot_stop_callback_ms: botStopCallbackMs,
+    });
+    interruptionMarker = null;
+  };
 }
 
 async function collectStats() {
@@ -72,9 +134,9 @@ async function connect() {
         connectButton.disabled = false;
         connectButton.textContent = 'Disconnect';
         micButton.disabled = false;
-        voiceSelect.disabled = true;
-        paceSelect.disabled = true;
-        temperatureSelect.disabled = true;
+        speedSelect.disabled = true;
+        livePocSelect.disabled = true;
+        delegateState.textContent = livePocSelect.value === 'true' ? 'Idle' : 'Off';
         micState.textContent = 'Live';
         setState('Listening', 'listening');
         statsTimer = setInterval(collectStats, 2000);
@@ -85,11 +147,14 @@ async function connect() {
         connectButton.disabled = false;
         connectButton.textContent = 'Connect';
         micButton.disabled = true;
-        voiceSelect.disabled = false;
-        paceSelect.disabled = false;
-        temperatureSelect.disabled = false;
+        speedSelect.disabled = false;
+        livePocSelect.disabled = false;
+        playbackState.textContent = 'Idle';
         micState.textContent = 'Off';
         clearInterval(statsTimer);
+        playbackContext?.close();
+        playbackContext = null;
+        playbackMeter = null;
         setState('Disconnected');
       },
       onUserStartedSpeaking() {
@@ -109,6 +174,7 @@ async function connect() {
       },
       onBotStartedSpeaking() {
         botWasSpeaking = true;
+        playbackState.textContent = 'Active · mic still live';
         if (userStoppedAt != null) {
           latencyEl.textContent = `${Math.round(performance.now() - userStoppedAt)} ms`;
           userStoppedAt = null;
@@ -117,14 +183,20 @@ async function connect() {
       },
       onBotStoppedSpeaking() {
         if (botWasSpeaking && interruptionStartedAt != null) {
-          bargeInEl.textContent = `${Math.round(performance.now() - interruptionStartedAt)} ms`;
+          botStopCallbackMs = performance.now() - interruptionStartedAt;
         }
         botWasSpeaking = false;
+        playbackState.textContent = 'Idle';
         interruptionStartedAt = null;
         setState('Listening', 'listening');
       },
       onUserTranscript(data) {
-        if (data.final) addMessage(data.text, 'user');
+        const key = `user-${connectionGeneration}-active`;
+        transcriptStage.textContent = data.final ? 'final evidence' : 'speculative';
+        addMessage(data.text, 'user', key, data.final ? 'final' : 'speculative');
+        if (data.final) {
+          transcript.querySelector(`[data-message-key="${key}"]`)?.removeAttribute('data-message-key');
+        }
       },
       onBotTranscript(data) {
         addMessage(data.text, 'bot');
@@ -133,17 +205,18 @@ async function connect() {
         console.error(error);
         setState(error.message || 'Voice error');
       },
+      onServerMessage(data) {
+        handlePocMessage(data);
+      },
     },
   });
 
   client.on(RTVIEvent.TrackStarted, (track, participant) => {
     if (!participant?.local && track.kind === 'audio') {
-      audio.srcObject = new MediaStream([track]);
-      audio.play().catch((error) => {
-        console.warn('Autoplay blocked:', error);
-        audio.controls = true;
-        audio.style.display = 'block';
-        setState('Tap the audio control once', 'thinking');
+      attachMeasuredPlayback(track).catch((error) => {
+        console.warn('Measured playback unavailable:', error);
+        audio.srcObject = new MediaStream([track]);
+        audio.play().catch(() => setState('Tap the audio control once', 'thinking'));
       });
     }
   });
@@ -156,9 +229,11 @@ async function connect() {
         createDailyRoom: false,
         enableDefaultIceServers: true,
         body: {
-          voice: voiceSelect.value,
-          pace: Number(paceSelect.value),
-          temperature: Number(temperatureSelect.value),
+          speed: Number(speedSelect.value),
+          emotion: emotionSelect.value,
+          live_poc: livePocSelect.value === 'true',
+          delegate_delay_ms: 750,
+          checkpoint_run_id: new URLSearchParams(location.search).get('run_id'),
         },
       },
     });

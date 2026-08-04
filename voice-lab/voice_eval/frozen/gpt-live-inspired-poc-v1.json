@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "freeze_id": "GPT-LIVE-INSPIRED-POC-V1",
+  "source_commit": "3c1a443f00ceb6abe73a63ebee5e699514014ff2",
+  "status": "protocol_frozen",
+  "providers": {
+    "stt": "sarvam/saaras:v3/codemix",
+    "llm": "claude-haiku-4-5",
+    "tts": "cartesia/sonic-3.5/kavitha"
+  },
+  "transport": "pipecat-smallwebrtc",
+  "authority": "deterministic-critical-fields-only",
+  "delegate": {
+    "operation": "delayed_lookup",
+    "read_only": true,
+    "network": false,
+    "mutation": false,
+    "max_in_flight_per_session": 1
+  },
+  "soak": {
+    "sessions": 25,
+    "turns_per_session": 100,
+    "reruns": 3
+  },
+  "acceptance": {
+    "microphone_continuity": 1.0,
+    "stale_result_suppression": 1.0,
+    "cross_session_leaks": 0,
+    "leaked_tasks": 0,
+    "mutation_attempts": 0,
+    "interruption_stop_p95_ms": 350
+  },
+  "non_claims": [
+    "not GPT-Live integration",
+    "not native speech reasoning",
+    "not WARP support",
+    "not production backend integration",
+    "not staging, pilot, or production readiness"
+  ]
+}

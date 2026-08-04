@@ -154,6 +154,7 @@ class NotificationEventType(enum.StrEnum):
     APPOINTMENT_CANCELLED = "appointment_cancelled"
     APPOINTMENT_RESCHEDULED = "appointment_rescheduled"
     APPOINTMENT_REMINDER = "appointment_reminder"
+    WHATSAPP_INBOUND_RESPONSE = "whatsapp_inbound_response"
 
 
 class NotificationRecipientType(enum.StrEnum):
@@ -179,6 +180,7 @@ class NotificationStatus(enum.StrEnum):
 class InboundEventStatus(enum.StrEnum):
     RECEIVED = "received"
     PROCESSING = "processing"
+    DOMAIN_PROCESSED = "domain_processed"
     COMPLETED = "completed"
     FAILED = "failed"
     DEAD_LETTER = "dead_letter"

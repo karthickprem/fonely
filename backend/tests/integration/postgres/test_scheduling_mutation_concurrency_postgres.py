@@ -202,20 +202,20 @@ async def test_schedule_mutation_first_blocks_and_rejects_confirmation(
         result = await task
         assert result is not None, "Confirmation must fail after schedule mutation"
         from fonely.api.internal.validation import AppointmentAvailabilityError
-        from fonely.domain.pending_actions.errors import PendingActionIdempotencyConflictError
 
-        assert isinstance(
-            result,
-            (AppointmentAvailabilityError, PendingActionIdempotencyConflictError),
-        ), f"Expected availability or idempotency error, got {type(result).__name__}: {result}"
-        if isinstance(result, AppointmentAvailabilityError):
-            from fonely.services.availability import AvailabilityReason
+        assert isinstance(result, AppointmentAvailabilityError), (
+            f"Expected AppointmentAvailabilityError, got {type(result).__name__}: {result}"
+        )
+        from fonely.services.availability import AvailabilityReason
 
-            assert result.reason in (
-                AvailabilityReason.NO_OPERATING_HOURS,
-                AvailabilityReason.OUTSIDE_OPERATING_HOURS,
-                AvailabilityReason.CAPACITY_CONFLICT,
-            ), f"Expected schedule rejection reason, got {result.reason}"
+        expected_reason = {
+            "close_clinic": AvailabilityReason.NO_OPERATING_HOURS,
+            "close_early": AvailabilityReason.OUTSIDE_OPERATING_HOURS,
+            "doctor_leave": AvailabilityReason.NO_OPERATING_HOURS,
+        }[command]
+        assert result.reason == expected_reason, (
+            f"Expected {expected_reason} for {command}, got {result.reason}"
+        )
 
     async with pg_session_factory() as verify:
         assert await verify.scalar(text("SELECT count(*) FROM appointments")) == 0

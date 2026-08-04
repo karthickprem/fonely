@@ -210,6 +210,14 @@ class OnboardingService:
     async def _write_configuration(
         self, business_id: int, draft: DomainDraft
     ) -> ActivationEvidence:
+        from fonely.repositories.appointments import AppointmentRepository
+
+        lock_repo = AppointmentRepository(self._session)
+        await lock_repo.lock_business_schedule(business_id)
+        existing_resource_ids = await lock_repo.list_active_resource_ids(business_id)
+        if existing_resource_ids:
+            await lock_repo.lock_resource_schedules(business_id, existing_resource_ids)
+
         services_count = 0
         resources_count = 0
         eligibilities_count = 0
@@ -287,6 +295,12 @@ class OnboardingService:
                     reason=exc.reason,
                 )
                 exceptions_count += 1
+
+        new_resource_ids = tuple(
+            rid for rid in resource_id_map.values() if rid not in existing_resource_ids
+        )
+        if new_resource_ids:
+            await lock_repo.lock_resource_schedules(business_id, new_resource_ids)
 
         for res in draft.resources:
             res_id = resource_id_map.get(res.key)

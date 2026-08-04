@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+import os
+import subprocess
+import sys
+from pathlib import Path
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
@@ -167,77 +171,34 @@ class TestWebhookPersistsThenReturns:
         assert response.status_code == 503
 
 
-class TestInboundWorkerPhases:
+class TestInboundWorkerLoop:
     @pytest.mark.asyncio
-    async def test_three_phase_success(self) -> None:
-        with (
-            patch(
-                "fonely.workers.inbound_worker._phase_a_claim",
-                new_callable=AsyncMock,
-                return_value=MagicMock(
-                    event_id=1,
-                    business_id=1,
-                    message_id="wamid.1",
-                    sender_phone="919876543210",
-                    message_type="text",
-                    message_body="Hello",
-                    phone_number_id="12345",
-                    claim_token="tok",
-                    attempts=0,
-                    max_attempts=5,
-                ),
-            ),
-            patch(
-                "fonely.workers.inbound_worker._phase_b_reason",
-                new_callable=AsyncMock,
-                return_value="Welcome!",
-            ) as mock_b,
-            patch(
-                "fonely.workers.inbound_worker._phase_c_commit",
-                new_callable=AsyncMock,
-            ) as mock_c,
+    async def test_no_event_does_not_call_provider(self) -> None:
+        provider = AsyncMock()
+        with patch(
+            "fonely.workers.inbound_worker._claim",
+            new_callable=AsyncMock,
+            return_value=None,
         ):
-            await run_inbound_worker(MagicMock(), MagicMock(), max_iterations=1)
-            mock_b.assert_awaited_once()
-            mock_c.assert_awaited_once()
+            await run_inbound_worker(MagicMock(), provider, max_iterations=1)
+        provider.complete.assert_not_awaited()
 
     @pytest.mark.asyncio
-    async def test_phase_b_failure_marks_failed(self) -> None:
-        claimed = MagicMock(
-            event_id=1,
-            business_id=1,
-            message_id="wamid.fail",
-            sender_phone="919876543210",
-            attempts=0,
-            max_attempts=5,
-        )
+    async def test_claim_is_processed_once(self) -> None:
+        claimed = MagicMock()
         with (
             patch(
-                "fonely.workers.inbound_worker._phase_a_claim",
+                "fonely.workers.inbound_worker._claim",
                 new_callable=AsyncMock,
                 return_value=claimed,
             ),
             patch(
-                "fonely.workers.inbound_worker._phase_b_reason",
+                "fonely.workers.inbound_worker._process_claimed",
                 new_callable=AsyncMock,
-                side_effect=RuntimeError("LLM timeout"),
-            ),
-            patch(
-                "fonely.workers.inbound_worker._handle_failure",
-                new_callable=AsyncMock,
-            ) as mock_fail,
+            ) as process,
         ):
             await run_inbound_worker(MagicMock(), MagicMock(), max_iterations=1)
-            mock_fail.assert_awaited_once()
-
-    @pytest.mark.asyncio
-    async def test_no_event_does_not_process(self) -> None:
-        with patch(
-            "fonely.workers.inbound_worker._phase_a_claim",
-            new_callable=AsyncMock,
-            return_value=None,
-        ):
-            await run_inbound_worker(MagicMock(), MagicMock(), max_iterations=1)
+        process.assert_awaited_once_with(ANY, claimed, ANY)
 
 
 class TestDeterministicLockKey:
@@ -256,12 +217,49 @@ class TestDeterministicLockKey:
         assert isinstance(key, int)
         assert -(2**63) <= key <= 2**63 - 1
 
+    def test_key_is_stable_across_python_hash_seeds(self) -> None:
+        code = (
+            "from fonely.repositories.inbound_events import deterministic_lock_key; "
+            "print(deterministic_lock_key(1, '+919876543210'))"
+        )
+        values = []
+        for seed in ("1", "999"):
+            env = os.environ.copy()
+            env["PYTHONHASHSEED"] = seed
+            env["PYTHONPATH"] = str(Path(__file__).parents[3] / "src")
+            result = subprocess.run(
+                [sys.executable, "-c", code],
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            values.append(result.stdout.strip())
+        assert values[0] == values[1]
+
+
+class TestDeploymentConfiguration:
+    def test_dockerfile_copies_worker_entrypoints(self) -> None:
+        dockerfile = (Path(__file__).parents[3] / "Dockerfile").read_text()
+        assert "run_worker.py" in dockerfile
+        assert "run_inbound_worker.py" in dockerfile
+
+    def test_compose_has_worker_restart_health_and_required_env(self) -> None:
+        compose = (Path(__file__).parents[4] / "docker-compose.staging.yml").read_text()
+        assert "inbound-worker:" in compose
+        assert "notification-worker:" in compose
+        assert compose.count("restart: unless-stopped") >= 2
+        assert compose.count("disable: true") >= 2
+        assert "SARVAM_API_KEY: ${SARVAM_API_KEY:?" in compose
+        assert "WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:?" in compose
+        assert "WHATSAPP_BUSINESS_MAPPINGS: ${WHATSAPP_BUSINESS_MAPPINGS:?" in compose
+
 
 class TestBackoff:
     def test_backoff_increases(self) -> None:
-        t1 = _next_attempt_at(0)
-        t2 = _next_attempt_at(1)
-        t3 = _next_attempt_at(4)
+        t1 = _next_attempt_at(1)
+        t2 = _next_attempt_at(2)
+        t3 = _next_attempt_at(5)
         assert t2 > t1
         assert t3 > t2
 
@@ -269,6 +267,6 @@ class TestBackoff:
         import time
 
         before = time.time()
-        t = _next_attempt_at(0)
+        t = _next_attempt_at(1)
         delta = t.timestamp() - before
         assert 25 < delta < 35

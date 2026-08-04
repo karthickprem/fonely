@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import json
 import logging
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request, Response
 from sqlalchemy import text
@@ -155,6 +156,14 @@ async def _persist_inbound_event(
     sender_phone = raw_from[:20]
     message_type = raw_type[:20]
 
+    raw_timestamp = message.get("timestamp")
+    try:
+        if not isinstance(raw_timestamp, (str, int)):
+            raise TypeError
+        provider_timestamp = datetime.fromtimestamp(int(raw_timestamp), tz=UTC)
+    except (TypeError, ValueError, OverflowError):
+        provider_timestamp = datetime.now(UTC)
+
     message_body = None
     if message_type == "text":
         text_obj = message.get("text")
@@ -167,8 +176,8 @@ async def _persist_inbound_event(
         text(
             "INSERT INTO whatsapp_inbound_events "
             "(message_id, business_id, sender_phone, message_type, "
-            " message_body, phone_number_id) "
-            "VALUES (:mid, :bid, :phone, :mtype, :body, :pnid) "
+            " message_body, phone_number_id, provider_timestamp) "
+            "VALUES (:mid, :bid, :phone, :mtype, :body, :pnid, :provider_ts) "
             "ON CONFLICT (message_id) DO NOTHING"
         ),
         {
@@ -178,6 +187,7 @@ async def _persist_inbound_event(
             "mtype": message_type,
             "body": message_body,
             "pnid": phone_number_id,
+            "provider_ts": provider_timestamp,
         },
     )
     inserted = result.rowcount or 0  # type: ignore[attr-defined]

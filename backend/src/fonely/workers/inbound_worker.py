@@ -1,16 +1,18 @@
-"""Durable inbound WhatsApp message worker — 3-phase architecture.
+"""Durable inbound WhatsApp worker with lock-free provider calls.
 
-Phase A: Short claim transaction — claim oldest eligible event, commit, release locks.
-Phase B: Provider/reasoning — call LLM with no DB locks held.
-Phase C: Short commit transaction — advisory lock, verify claim, apply domain
-         mutation, enqueue outbound response, mark domain_processed, commit atomically.
-
-Failed events are retried with exponential backoff. The notification worker
-handles actual WhatsApp delivery and marks the inbound event completed.
+Phase A claims one ordered event in a short transaction and commits the lease.
+Phase B/C repeatedly dry-runs domain processing with a deferred model gateway.
+When a model response is needed, the transaction rolls back and the real provider
+is called without a database session or lock. The domain transaction is replayed
+with the durable committed state plus recorded model responses, then commits the
+mutation, conversation turn, outboxes and inbound state atomically.
 """
+
+from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -33,25 +35,69 @@ from fonely.services.conversation import (
     find_or_create_conversation_persistent,
     invalidate_conversation_cache,
 )
-from fonely.services.model_gateway import ModelGateway
+from fonely.services.model_gateway import ModelGateway, ModelResponse
 
 logger = logging.getLogger("fonely.workers.inbound")
 
 _FALLBACK_RESPONSE = "Sorry, I couldn't process that request. Please call the clinic or try again."
 
 
-@dataclass
-class ClaimedEvent:
-    """Immutable snapshot of claimed event scalars — safe to use after rollback."""
+@dataclass(frozen=True)
+class ProviderRequest:
+    system_prompt: str
+    messages: list[dict[str, str]]
+    tools: list[dict[str, object]] | None
+    temperature: float
+    max_tokens: int
 
+
+class ProviderCallRequiredError(Exception):
+    def __init__(self, request: ProviderRequest) -> None:
+        super().__init__("provider response required")
+        self.request = request
+
+
+class DeferredModelGateway:
+    """Replay recorded provider responses; request missing responses without I/O."""
+
+    def __init__(self, responses: list[ModelResponse]) -> None:
+        self._responses = responses
+        self._index = 0
+
+    async def complete(
+        self,
+        system_prompt: str,
+        messages: list[dict[str, str]],
+        tools: list[dict[str, object]] | None = None,
+        temperature: float = 0.3,
+        max_tokens: int = 500,
+    ) -> ModelResponse:
+        if self._index < len(self._responses):
+            response = self._responses[self._index]
+            self._index += 1
+            return response
+        raise ProviderCallRequiredError(
+            ProviderRequest(
+                system_prompt=system_prompt,
+                messages=messages,
+                tools=tools,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        )
+
+
+@dataclass(frozen=True)
+class ClaimedEvent:
     event_id: int
     business_id: int
     message_id: str
     sender_phone: str
     message_type: str
     message_body: str | None
-    phone_number_id: str | None
-    claim_token: object
+    phone_number_id: str
+    claim_token: uuid.UUID
+    claim_version: int
     attempts: int
     max_attempts: int
 
@@ -69,49 +115,38 @@ async def run_inbound_worker(
     while max_iterations is None or iterations < max_iterations:
         iterations += 1
         try:
-            claimed = await _phase_a_claim(session_factory)
+            claimed = await _claim(session_factory)
             if claimed is None:
                 consecutive_failures = 0
                 if max_iterations is None:
                     await asyncio.sleep(poll_interval)
                 continue
 
-            try:
-                response_text = await _phase_b_reason(claimed, session_factory, model_gateway)
-            except Exception as exc:
-                await _handle_failure(session_factory, claimed, exc)
-                continue
-
-            try:
-                await _phase_c_commit(session_factory, claimed, response_text, model_gateway)
-            except Exception as exc:
-                await _handle_failure(session_factory, claimed, exc)
-                continue
-
+            await _process_claimed(session_factory, claimed, model_gateway)
             consecutive_failures = 0
-
+        except asyncio.CancelledError:
+            raise
         except Exception:
             consecutive_failures += 1
-            backoff = min(30.0, 2.0**consecutive_failures)
             logger.error(
                 "inbound_poll_iteration_failed",
                 exc_info=True,
                 extra={"consecutive_failures": consecutive_failures},
             )
             if max_iterations is None:
-                await asyncio.sleep(backoff)
+                await asyncio.sleep(min(30.0, 2.0**consecutive_failures))
 
 
-async def _phase_a_claim(
+async def _claim(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> ClaimedEvent | None:
-    """Short transaction: claim the oldest eligible event, commit immediately."""
     async with session_factory() as session:
-        repo = InboundEventRepository(session)
-        event = await repo.claim_next_eligible()
+        event = await InboundEventRepository(session).claim_next_eligible()
         if event is None:
             await session.commit()
             return None
+        if event.claim_token is None:
+            raise RuntimeError("claim_token_missing_after_claim")
         claimed = ClaimedEvent(
             event_id=event.id,
             business_id=event.business_id,
@@ -121,177 +156,124 @@ async def _phase_a_claim(
             message_body=event.message_body,
             phone_number_id=event.phone_number_id,
             claim_token=event.claim_token,
+            claim_version=event.claim_version,
             attempts=event.attempts,
             max_attempts=event.max_attempts,
         )
         await session.commit()
-    return claimed
+        return claimed
 
 
-async def _phase_b_reason(
-    claimed: ClaimedEvent,
-    session_factory: async_sessionmaker[AsyncSession],
-    model_gateway: ModelGateway,
-) -> str:
-    """Provider/reasoning phase — no DB locks held during LLM calls."""
-    if claimed.message_type != "text":
-        return "I can currently help with text messages. Please type your request."
-
-    text_body = claimed.message_body or ""
-    if not text_body:
-        return "I didn't receive a message. Please try again."
-
-    phone_formatted = (
-        f"+{claimed.sender_phone}"
-        if not claimed.sender_phone.startswith("+")
-        else claimed.sender_phone
-    )
-
-    async with session_factory() as session:
-        is_owner = await _is_owner(claimed.business_id, phone_formatted, session)
-
-    if is_owner:
-        async with session_factory() as session:
-            from fonely.services.owner_commands import OwnerCommandService
-
-            owner_svc = OwnerCommandService(session, model_gateway)
-            result = await owner_svc.process_command(
-                claimed.business_id, phone_formatted, text_body
-            )
-            await session.commit()
-        return result.response_text
-
-    return text_body
-
-
-async def _phase_c_commit(
+async def _process_claimed(
     session_factory: async_sessionmaker[AsyncSession],
     claimed: ClaimedEvent,
-    response_text: str,
-    model_gateway: ModelGateway,
+    provider: ModelGateway,
 ) -> None:
-    """Short commit transaction: advisory lock, verify claim, apply domain, enqueue response."""
-    phone_formatted = (
-        f"+{claimed.sender_phone}"
-        if not claimed.sender_phone.startswith("+")
-        else claimed.sender_phone
-    )
+    responses: list[ModelResponse] = []
 
+    while True:
+        deferred = DeferredModelGateway(responses)
+        try:
+            await _commit_attempt(session_factory, claimed, deferred)
+            return
+        except ProviderCallRequiredError as needed:
+            invalidate_conversation_cache(claimed.business_id, _normalized_phone(claimed))
+            response = await provider.complete(
+                system_prompt=needed.request.system_prompt,
+                messages=needed.request.messages,
+                tools=needed.request.tools,
+                temperature=needed.request.temperature,
+                max_tokens=needed.request.max_tokens,
+            )
+            responses.append(response)
+        except Exception as exc:
+            invalidate_conversation_cache(claimed.business_id, _normalized_phone(claimed))
+            await _record_failure(session_factory, claimed, exc)
+            return
+
+
+async def _commit_attempt(
+    session_factory: async_sessionmaker[AsyncSession],
+    claimed: ClaimedEvent,
+    gateway: ModelGateway,
+) -> None:
     async with session_factory() as session:
         repo = InboundEventRepository(session)
         await repo.acquire_conversation_lock(claimed.business_id, claimed.sender_phone)
+        await repo.require_owned_claim(
+            claimed.business_id,
+            claimed.event_id,
+            claimed.claim_token,
+            claimed.claim_version,
+        )
 
-        if claimed.message_type == "text" and claimed.message_body:
-            from fonely.core.pii_audit import log_pii_access
-
-            log_pii_access(
-                operation="read",
-                data_type="conversation",
-                business_id=claimed.business_id,
-                accessor="worker:inbound",
-                record_count=1,
-            )
-
-            if not await _is_owner(claimed.business_id, phone_formatted, session):
-                ctx = await find_or_create_conversation_persistent(
-                    claimed.business_id, phone_formatted, session
-                )
-                actor = ActorContext(
-                    business_id=claimed.business_id,
-                    normalized_phone=phone_formatted,
-                    verified_role=CallerRole.CUSTOMER,
-                    session_id=None,
-                )
-                validation = InternalValidationPort(session)
-                appt_service = AppointmentService(session, validation=validation)
-                conv_service = ConversationService(
-                    session, model_gateway, appointment_service=appt_service
-                )
-                turn = await conv_service.process_message(
-                    ctx.conversation_id,
-                    claimed.business_id,
-                    actor,
-                    response_text,
-                )
-                response_text = turn.assistant_response
-
-                if ctx.state in (ConversationState.COMPLETED, ConversationState.ENDED):
-                    from fonely.services.conversation_persistence import (
-                        ConversationPersistenceService,
-                    )
-
-                    persistence = ConversationPersistenceService(session)
-                    await persistence.mark_completed(ctx.conversation_id)
-
-        await _enqueue_outbound_response(claimed, response_text, session)
+        response_text = await _process_domain(claimed, session, gateway)
+        await _enqueue_response(claimed, response_text, session)
         await repo.verify_and_mark_domain_processed(
-            claimed.business_id, claimed.event_id, claimed.claim_token
+            claimed.business_id,
+            claimed.event_id,
+            claimed.claim_token,
+            claimed.claim_version,
         )
         await session.commit()
 
 
-async def _handle_failure(
-    session_factory: async_sessionmaker[AsyncSession],
-    claimed: ClaimedEvent,
-    exc: Exception,
-) -> None:
-    """Mark event failed using captured scalars — no ORM state dependency after rollback."""
-    invalidate_conversation_cache(claimed.business_id, claimed.sender_phone)
-
-    error_name = type(exc).__name__
-    is_terminal = claimed.attempts + 1 >= claimed.max_attempts
-
-    try:
-        async with session_factory() as fail_session:
-            fail_repo = InboundEventRepository(fail_session)
-            await fail_repo.mark_failed(claimed.business_id, claimed.event_id, error_name)
-
-            if is_terminal:
-                notif_repo = NotificationRepository(fail_session)
-                await notif_repo.insert_event_idempotent(
-                    {
-                        "business_id": claimed.business_id,
-                        "event_type": NotificationEventType.WHATSAPP_INBOUND_RESPONSE.value,
-                        "entity_type": "whatsapp_inbound_event",
-                        "entity_id": claimed.event_id,
-                        "recipient_type": NotificationRecipientType.PATIENT.value,
-                        "recipient_phone": claimed.sender_phone,
-                        "channel": NotificationChannel.WHATSAPP.value,
-                        "payload": {
-                            "response_text": _FALLBACK_RESPONSE,
-                            "phone_number_id": claimed.phone_number_id,
-                        },
-                        "idempotency_key": f"whatsapp-response-{claimed.message_id}",
-                    }
-                )
-
-            await fail_session.commit()
-    except Exception:
-        logger.error(
-            "inbound_failure_bookkeeping_failed",
-            exc_info=True,
-            extra={"event_id": claimed.event_id},
-        )
-
-    logger.warning(
-        "inbound_event_processing_failed",
-        extra={
-            "event_id": claimed.event_id,
-            "message_id": claimed.message_id,
-            "error": error_name,
-            "attempt": claimed.attempts,
-            "terminal": is_terminal,
-        },
+def _normalized_phone(claimed: ClaimedEvent) -> str:
+    return (
+        claimed.sender_phone if claimed.sender_phone.startswith("+") else f"+{claimed.sender_phone}"
     )
 
 
-async def _enqueue_outbound_response(
+async def _process_domain(
+    claimed: ClaimedEvent,
+    session: AsyncSession,
+    gateway: ModelGateway,
+) -> str:
+    if claimed.message_type != "text":
+        return "I can currently help with text messages. Please type your request."
+    if not claimed.message_body:
+        return "I didn't receive a message. Please try again."
+
+    phone = _normalized_phone(claimed)
+    if await _is_owner(claimed.business_id, phone, session):
+        from fonely.services.owner_commands import OwnerCommandService
+
+        result = await OwnerCommandService(session, gateway).process_command(
+            claimed.business_id, phone, claimed.message_body
+        )
+        return result.response_text
+
+    ctx = await find_or_create_conversation_persistent(claimed.business_id, phone, session)
+    actor = ActorContext(
+        business_id=claimed.business_id,
+        normalized_phone=phone,
+        verified_role=CallerRole.CUSTOMER,
+        session_id=None,
+    )
+    validation = InternalValidationPort(session)
+    appointment_service = AppointmentService(session, validation=validation)
+    turn = await ConversationService(
+        session, gateway, appointment_service=appointment_service
+    ).process_message(
+        ctx.conversation_id,
+        claimed.business_id,
+        actor,
+        claimed.message_body,
+    )
+
+    if ctx.state in (ConversationState.COMPLETED, ConversationState.ENDED):
+        from fonely.services.conversation_persistence import ConversationPersistenceService
+
+        await ConversationPersistenceService(session).mark_completed(ctx.conversation_id)
+    return turn.assistant_response
+
+
+async def _enqueue_response(
     claimed: ClaimedEvent,
     response_text: str,
     session: AsyncSession,
 ) -> None:
-    repo = NotificationRepository(session)
-    await repo.insert_event_idempotent(
+    await NotificationRepository(session).insert_event_idempotent(
         {
             "business_id": claimed.business_id,
             "event_type": NotificationEventType.WHATSAPP_INBOUND_RESPONSE.value,
@@ -303,9 +285,49 @@ async def _enqueue_outbound_response(
             "payload": {
                 "response_text": response_text,
                 "phone_number_id": claimed.phone_number_id,
+                "claim_token": str(claimed.claim_token),
             },
             "idempotency_key": f"whatsapp-response-{claimed.message_id}",
         }
+    )
+
+
+async def _record_failure(
+    session_factory: async_sessionmaker[AsyncSession],
+    claimed: ClaimedEvent,
+    exc: Exception,
+) -> None:
+    terminal = claimed.attempts + 1 >= claimed.max_attempts
+    try:
+        async with session_factory() as session:
+            repo = InboundEventRepository(session)
+            changed = await repo.mark_failed(
+                claimed.business_id,
+                claimed.event_id,
+                claimed.claim_token,
+                claimed.claim_version,
+                type(exc).__name__,
+            )
+            if changed and terminal:
+                await _enqueue_response(claimed, _FALLBACK_RESPONSE, session)
+            await session.commit()
+    except Exception:
+        logger.error(
+            "inbound_failure_bookkeeping_failed",
+            exc_info=True,
+            extra={"event_id": claimed.event_id},
+        )
+        raise
+
+    logger.warning(
+        "inbound_event_processing_failed",
+        extra={
+            "event_id": claimed.event_id,
+            "message_id": claimed.message_id,
+            "error": type(exc).__name__,
+            "attempt": claimed.attempts + 1,
+            "terminal": terminal,
+        },
     )
 
 
@@ -313,7 +335,7 @@ async def _is_owner(business_id: int, phone: str, session: AsyncSession) -> bool
     from fonely.models.enums import BusinessUserRole
     from fonely.models.schema import BusinessUser
 
-    result = await session.scalar(
+    owner = await session.scalar(
         select(BusinessUser).where(
             BusinessUser.business_id == business_id,
             BusinessUser.phone == phone,
@@ -321,4 +343,4 @@ async def _is_owner(business_id: int, phone: str, session: AsyncSession) -> bool
             BusinessUser.is_active.is_(True),
         )
     )
-    return isinstance(result, BusinessUser)
+    return isinstance(owner, BusinessUser)

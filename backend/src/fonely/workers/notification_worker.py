@@ -72,38 +72,48 @@ async def run_notification_worker(
     iterations = 0
     while max_iterations is None or iterations < max_iterations:
         iterations += 1
-        claimed = await _claim_one(session_factory)
-        if claimed is None:
-            if max_iterations is None:
-                await asyncio.sleep(poll_interval)
-            continue
+        processed = 0
+        for _ in range(batch_size):
+            claimed = await _claim_one(session_factory)
+            if claimed is None:
+                break
+            await _deliver_claimed(session_factory, sender, claimed)
+            processed += 1
+        if processed == 0 and max_iterations is None:
+            await asyncio.sleep(poll_interval)
 
-        event = _snapshot_to_model(claimed)
-        attempt_number = claimed.attempts + 1
-        await _record_attempt(session_factory, claimed, attempt_number, "sending")
-        try:
-            receipt = await sender.send(event)
-        except NotificationDeliveryError as exc:
-            await _record_send_failure(
-                session_factory,
-                claimed,
-                attempt_number,
-                exc,
-            )
-        except Exception as exc:
-            await _record_send_failure(
-                session_factory,
-                claimed,
-                attempt_number,
-                NotificationDeliveryError(type(exc).__name__),
-            )
-        else:
-            await _record_accepted(
-                session_factory,
-                claimed,
-                attempt_number,
-                receipt,
-            )
+
+async def _deliver_claimed(
+    session_factory: async_sessionmaker[AsyncSession],
+    sender: NotificationSender,
+    claimed: ClaimedNotification,
+) -> None:
+    event = _snapshot_to_model(claimed)
+    attempt_number = claimed.attempts + 1
+    await _record_attempt(session_factory, claimed, attempt_number, "sending")
+    try:
+        receipt = await sender.send(event)
+    except NotificationDeliveryError as exc:
+        await _record_send_failure(
+            session_factory,
+            claimed,
+            attempt_number,
+            exc,
+        )
+    except Exception as exc:
+        await _record_send_failure(
+            session_factory,
+            claimed,
+            attempt_number,
+            NotificationDeliveryError(type(exc).__name__),
+        )
+    else:
+        await _record_accepted(
+            session_factory,
+            claimed,
+            attempt_number,
+            receipt,
+        )
 
 
 async def _claim_one(

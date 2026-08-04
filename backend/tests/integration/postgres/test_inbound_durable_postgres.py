@@ -422,12 +422,15 @@ class TestLiveConstraintsAndRetention:
             event_id = await insert_event(
                 seed,
                 message_id="wamid.dead",
-                status="dead_letter",
-                attempts=5,
+                attempts=0,
                 max_attempts=5,
             )
             await seed.execute(
-                text("UPDATE whatsapp_inbound_events SET dead_lettered_at=:old WHERE id=:id"),
+                text(
+                    "UPDATE whatsapp_inbound_events "
+                    "SET status='dead_letter', attempts=5, dead_lettered_at=:old "
+                    "WHERE id=:id"
+                ),
                 {"old": old, "id": event_id},
             )
             await seed.commit()

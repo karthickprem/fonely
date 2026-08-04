@@ -14,6 +14,7 @@ from fonely.domain.appointments.availability import (
     ScheduleExceptionRule,
     TimeWindow,
     derive_windows,
+    fits_one_shift,
     local_day_utc_bounds,
     overlaps,
     schedule_weekday,
@@ -114,12 +115,9 @@ class AvailabilityService:
             checked_now,
             timedelta(minutes=context.business.appointment_minimum_notice_minutes),
         )
-        slots: list[AvailableSlot] = []
+        slots_by_start: dict[datetime, AvailableSlot] = {}
         for shift in shift_windows:
-            slot_start = add_elapsed(
-                shift.start_at,
-                timedelta(minutes=context.service.buffer_before_minutes),
-            )
+            slot_start = shift.start_at
             while True:
                 appointment, effective = derive_windows(
                     slot_start,
@@ -130,24 +128,26 @@ class AvailabilityService:
                 if instant(effective.end_at) > instant(shift.end_at):
                     break
                 if (
-                    instant(slot_start) > instant(checked_now)
+                    fits_one_shift(effective, (shift,))
+                    and instant(slot_start) > instant(checked_now)
                     and instant(slot_start) >= instant(minimum_start)
                     and not any(overlaps(effective, blocked) for blocked in occupied)
                 ):
-                    slots.append(
+                    slots_by_start.setdefault(
+                        instant(appointment.start_at),
                         AvailableSlot(
                             start_at=appointment.start_at,
                             end_at=appointment.end_at,
                             resource_id=resource_id,
                             resource_name=context.resource.name,
-                        )
+                        ),
                     )
                 slot_start = add_elapsed(
                     slot_start,
                     timedelta(minutes=context.business.appointment_slot_interval_minutes),
                 )
 
-        return sorted(slots, key=lambda slot: instant(slot.start_at))
+        return sorted(slots_by_start.values(), key=lambda slot: instant(slot.start_at))
 
     async def check_exact_slot(
         self,
@@ -219,11 +219,7 @@ class AvailabilityService:
         )
         reason = AvailabilityReason.OUTSIDE_OPERATING_HOURS
         if containing_shift is not None:
-            first_start = add_elapsed(
-                containing_shift.start_at,
-                timedelta(minutes=context.service.buffer_before_minutes),
-            )
-            elapsed_seconds = (requested - instant(first_start)).total_seconds()
+            elapsed_seconds = (requested - instant(containing_shift.start_at)).total_seconds()
             interval_seconds = context.business.appointment_slot_interval_minutes * 60
             if elapsed_seconds < 0 or elapsed_seconds % interval_seconds != 0:
                 reason = AvailabilityReason.OFF_GRID

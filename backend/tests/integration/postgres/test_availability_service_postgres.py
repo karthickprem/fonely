@@ -390,19 +390,63 @@ async def test_reschedule_excludes_only_original_allocation(pg_session: AsyncSes
     assert unrelated.reason == AvailabilityReason.CAPACITY_CONFLICT
 
 
-async def test_service_buffers_apply_to_hours_and_capacity(pg_session: AsyncSession) -> None:
+async def test_non_aligned_before_buffer_preserves_visible_grid(
+    pg_session: AsyncSession,
+) -> None:
+    day = _target()
+    await _seed_clinic(pg_session, buffer_before=5, buffer_after=10)
+    await _add_schedule(pg_session, day, time(10), time(13))
+    service = AvailabilityService(pg_session)
+
+    slots = await service.get_available_slots(1, 1, 1, day, now=_at(day, 8))
+    starts = [slot.start_at.astimezone(KOLKATA).time() for slot in slots]
+    assert time(10) not in starts
+    assert time(10, 5) not in starts
+    assert time(10, 15) in starts
+    assert all((start.minute % 15) == 0 for start in starts)
+    assert (await service.check_exact_slot(1, 1, 1, _at(day, 10), now=_at(day, 8))).reason == (
+        AvailabilityReason.OUTSIDE_OPERATING_HOURS
+    )
+    assert (await service.check_exact_slot(1, 1, 1, _at(day, 10, 5), now=_at(day, 8))).reason == (
+        AvailabilityReason.OFF_GRID
+    )
+    assert (await service.check_exact_slot(1, 1, 1, _at(day, 10, 15), now=_at(day, 8))).available
+    assert time(12, 30) not in starts
+    assert time(12, 15) in starts
+
+
+async def test_interval_aligned_buffer_does_not_shift_grid(pg_session: AsyncSession) -> None:
     day = _target()
     await _seed_clinic(pg_session, buffer_before=15, buffer_after=15)
     await _add_schedule(pg_session, day, time(10), time(13))
     service = AvailabilityService(pg_session)
 
-    outside = await service.check_exact_slot(1, 1, 1, _at(day, 10), now=_at(day, 8))
-    assert outside.reason in {
-        AvailabilityReason.OFF_GRID,
-        AvailabilityReason.OUTSIDE_OPERATING_HOURS,
-    }
-    assert (await service.check_exact_slot(1, 1, 1, _at(day, 10, 15), now=_at(day, 8))).available
+    slots = await service.get_available_slots(1, 1, 1, day, now=_at(day, 8))
+    starts = [slot.start_at.astimezone(KOLKATA).time() for slot in slots]
+    assert time(10, 15) in starts
+    assert time(10, 30) in starts
+    assert time(12, 30) not in starts
 
     await _add_owner_block(pg_session, _at(day, 11), _at(day, 11, 15))
     buffer_conflict = await service.check_exact_slot(1, 1, 1, _at(day, 10, 30), now=_at(day, 8))
     assert buffer_conflict.reason == AvailabilityReason.CAPACITY_CONFLICT
+
+
+async def test_overlapping_and_adjacent_rows_produce_one_slot_grid(
+    pg_session: AsyncSession,
+) -> None:
+    day = _target()
+    await _seed_clinic(pg_session)
+    await _add_schedule(pg_session, day, time(9), time(11))
+    await _add_schedule(pg_session, day, time(10), time(12))
+    await _add_schedule(pg_session, day, time(11, 30), time(13))
+    await _add_schedule(pg_session, day, time(13), time(14))
+
+    slots = await AvailabilityService(pg_session).get_available_slots(1, 1, 1, day, now=_at(day, 8))
+    starts = [slot.start_at.astimezone(KOLKATA).time() for slot in slots]
+    assert len(starts) == len(set(starts))
+    assert starts[0] == time(9)
+    assert starts[-1] == time(13, 30)
+    assert time(10, 30) in starts
+    assert time(11, 30) in starts
+    assert all((start.minute % 15) == 0 for start in starts)

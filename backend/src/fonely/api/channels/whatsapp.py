@@ -246,6 +246,13 @@ async def _persist_delivery_status(
     if outbox is None:
         return 0
 
+    # Provider statuses are monotonic: delivered/read are terminal successes.
+    # Duplicate read/delivered callbacks and delayed failures are safe no-ops.
+    if outbox.status == NotificationStatus.DELIVERED.value:
+        return 1
+    if attempt.status == "delivered" and provider_status == "failed":
+        return 1
+
     now = datetime.now(UTC)
     if provider_status in {"delivered", "read"}:
         await session.execute(

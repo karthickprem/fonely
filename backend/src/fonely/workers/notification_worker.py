@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
@@ -56,6 +57,8 @@ class ClaimedNotification:
     payload: object
     attempts: int
     max_attempts: int
+    claim_token: uuid.UUID | None = None
+    claim_version: int = 0
 
 
 def _next_attempt_at(attempts: int) -> datetime:
@@ -172,6 +175,8 @@ async def _claim_one(
             payload=item.payload,
             attempts=item.attempts,
             max_attempts=item.max_attempts,
+            claim_token=item.claim_token,
+            claim_version=item.claim_version,
         )
         await session.commit()
         return claimed
@@ -196,6 +201,26 @@ def _snapshot_to_model(claimed: ClaimedNotification) -> NotificationOutboxEvent:
     return event
 
 
+async def _require_claim(
+    session: AsyncSession, claimed: ClaimedNotification
+) -> NotificationOutboxEvent:
+    if claimed.claim_token is None:
+        raise RuntimeError("notification_claim_token_missing")
+    event = await session.scalar(
+        select(NotificationOutboxEvent).where(
+            NotificationOutboxEvent.business_id == claimed.business_id,
+            NotificationOutboxEvent.id == claimed.event_id,
+            NotificationOutboxEvent.status == NotificationStatus.PROCESSING.value,
+            NotificationOutboxEvent.claim_token == claimed.claim_token,
+            NotificationOutboxEvent.claim_version == claimed.claim_version,
+            NotificationOutboxEvent.lease_expires_at > datetime.now(UTC),
+        )
+    )
+    if event is None:
+        raise RuntimeError("notification_claim_stale")
+    return event
+
+
 async def _record_attempt(
     session_factory: async_sessionmaker[AsyncSession],
     claimed: ClaimedNotification,
@@ -203,6 +228,7 @@ async def _record_attempt(
     status: str,
 ) -> None:
     async with session_factory() as session:
+        await _require_claim(session, claimed)
         await session.execute(
             pg_insert(WhatsAppDeliveryAttempt)
             .values(
@@ -223,6 +249,7 @@ async def _record_accepted(
     receipt: DeliveryReceipt,
 ) -> None:
     async with session_factory() as session:
+        await _require_claim(session, claimed)
         attempt_status = (
             "delivered"
             if receipt.final
@@ -252,6 +279,8 @@ async def _record_accepted(
                     NotificationOutboxEvent.business_id == claimed.business_id,
                     NotificationOutboxEvent.id == claimed.event_id,
                     NotificationOutboxEvent.status == NotificationStatus.PROCESSING.value,
+                    NotificationOutboxEvent.claim_token == claimed.claim_token,
+                    NotificationOutboxEvent.claim_version == claimed.claim_version,
                 )
                 .values(
                     status=NotificationStatus.DELIVERED.value,
@@ -259,6 +288,8 @@ async def _record_accepted(
                     delivered_at=now,
                     last_error=None,
                     next_attempt_at=None,
+                    claim_token=None,
+                    lease_expires_at=None,
                     updated_at=now,
                 )
             )
@@ -278,12 +309,16 @@ async def _record_accepted(
                     NotificationOutboxEvent.business_id == claimed.business_id,
                     NotificationOutboxEvent.id == claimed.event_id,
                     NotificationOutboxEvent.status == NotificationStatus.PROCESSING.value,
+                    NotificationOutboxEvent.claim_token == claimed.claim_token,
+                    NotificationOutboxEvent.claim_version == claimed.claim_version,
                 )
                 .values(
                     status=NotificationStatus.UNKNOWN.value,
                     attempts=attempt_number,
                     last_error="awaiting_provider_status",
                     next_attempt_at=None,
+                    claim_token=None,
+                    lease_expires_at=None,
                     updated_at=now,
                 )
             )
@@ -297,6 +332,7 @@ async def _record_send_failure(
     exc: NotificationDeliveryError,
 ) -> None:
     async with session_factory() as session:
+        await _require_claim(session, claimed)
         if exc.ambiguous:
             attempt_status = "unknown"
             outbox_status = NotificationStatus.UNKNOWN.value
@@ -328,12 +364,16 @@ async def _record_send_failure(
                 NotificationOutboxEvent.business_id == claimed.business_id,
                 NotificationOutboxEvent.id == claimed.event_id,
                 NotificationOutboxEvent.status == NotificationStatus.PROCESSING.value,
+                NotificationOutboxEvent.claim_token == claimed.claim_token,
+                NotificationOutboxEvent.claim_version == claimed.claim_version,
             )
             .values(
                 status=outbox_status,
                 attempts=attempt_number,
                 last_error=exc.error[:500],
                 next_attempt_at=next_at,
+                claim_token=None,
+                lease_expires_at=None,
             )
         )
         if outbox_status == NotificationStatus.DEAD_LETTER.value and _is_inbound_response(claimed):

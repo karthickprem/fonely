@@ -1141,6 +1141,17 @@ class NotificationOutboxEvent(Base):
             "entity_type",
             "entity_id",
         ),
+        CheckConstraint(
+            "(status = 'processing' AND claim_token IS NOT NULL "
+            "AND lease_expires_at IS NOT NULL) "
+            "OR (status != 'processing' AND claim_token IS NULL "
+            "AND lease_expires_at IS NULL)",
+            name="ck_notification_claim_consistency",
+        ),
+        CheckConstraint(
+            "claim_version > 0",
+            name="ck_notification_claim_version_positive",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -1170,6 +1181,11 @@ class NotificationOutboxEvent(Base):
         Integer, nullable=False, default=5, server_default="5"
     )
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    claim_token: Mapped[_uuid.UUID | None] = mapped_column(Uuid)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    claim_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(String(500))
     idempotency_key: Mapped[str] = mapped_column(String(100), nullable=False)

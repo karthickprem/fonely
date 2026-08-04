@@ -24,6 +24,32 @@ def _notification_status_enum(*values: str) -> sa.Enum:
 
 
 def upgrade() -> None:
+    op.add_column(
+        "notification_outbox",
+        sa.Column("claim_token", sa.Uuid(), nullable=True),
+    )
+    op.add_column(
+        "notification_outbox",
+        sa.Column("lease_expires_at", sa.DateTime(timezone=True), nullable=True),
+    )
+    op.add_column(
+        "notification_outbox",
+        sa.Column("claim_version", sa.Integer(), nullable=False, server_default="1"),
+    )
+    op.create_check_constraint(
+        "ck_notification_claim_consistency",
+        "notification_outbox",
+        "(status = 'processing' AND claim_token IS NOT NULL "
+        "AND lease_expires_at IS NOT NULL) "
+        "OR (status != 'processing' AND claim_token IS NULL "
+        "AND lease_expires_at IS NULL)",
+    )
+    op.create_check_constraint(
+        "ck_notification_claim_version_positive",
+        "notification_outbox",
+        "claim_version > 0",
+    )
+
     op.drop_constraint("notification_status", "notification_outbox")
     op.alter_column(
         "notification_outbox",
@@ -209,6 +235,17 @@ def downgrade() -> None:
             "dead_letter",
         ),
     )
+    op.drop_constraint(
+        "ck_notification_claim_version_positive",
+        "notification_outbox",
+    )
+    op.drop_constraint(
+        "ck_notification_claim_consistency",
+        "notification_outbox",
+    )
+    op.drop_column("notification_outbox", "claim_version")
+    op.drop_column("notification_outbox", "lease_expires_at")
+    op.drop_column("notification_outbox", "claim_token")
 
     op.drop_constraint(
         "ck_whatsapp_inbound_dead_letter_requires_timestamp",

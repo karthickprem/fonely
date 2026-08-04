@@ -1,5 +1,6 @@
 """Tenant-scoped notification outbox persistence."""
 
+import uuid
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -38,11 +39,6 @@ class NotificationRepository:
         self, limit: int = 10, now: datetime | None = None
     ) -> Sequence[NotificationOutboxEvent]:
         current = now or datetime.now(UTC)
-        stale_before = (
-            current - timedelta(minutes=5)
-            if isinstance(current, datetime)
-            else datetime.now(UTC) - timedelta(minutes=5)
-        )
         statement = (
             select(NotificationOutboxEvent)
             .where(
@@ -57,7 +53,7 @@ class NotificationRepository:
                 )
                 | (
                     (NotificationOutboxEvent.status == NotificationStatus.PROCESSING.value)
-                    & (NotificationOutboxEvent.updated_at < stale_before)
+                    & (NotificationOutboxEvent.lease_expires_at < current)
                 ),
                 NotificationOutboxEvent.attempts < NotificationOutboxEvent.max_attempts,
             )
@@ -66,8 +62,12 @@ class NotificationRepository:
             .with_for_update(skip_locked=True)
         )
         results = (await self._session.scalars(statement)).all()
+        lease_expires_at = datetime.now(UTC) + timedelta(minutes=5)
         for event in results:
             event.status = NotificationStatus.PROCESSING.value
+            event.claim_token = uuid.uuid4()
+            event.claim_version += 1
+            event.lease_expires_at = lease_expires_at
             event.updated_at = func.now()
         await self._session.flush()
         return results

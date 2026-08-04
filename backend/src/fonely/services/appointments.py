@@ -865,11 +865,7 @@ class AppointmentService:
         if action is None:
             return None
 
-        if (
-            action.session_id is not None
-            and command.actor.session_id is not None
-            and action.session_id != command.actor.session_id
-        ):
+        if action.session_id != command.actor.session_id:
             raise PendingActionIdempotencyConflictError(
                 "Idempotency key already used in a different session"
             )

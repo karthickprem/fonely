@@ -123,6 +123,7 @@ class InboundEventRepository:
                 WhatsAppInboundEvent.status == InboundEventStatus.PROCESSING.value,
                 WhatsAppInboundEvent.claim_token == claim_token,
                 WhatsAppInboundEvent.claim_version == claim_version,
+                WhatsAppInboundEvent.lease_expires_at > datetime.now(UTC),
             )
             .values(
                 status=InboundEventStatus.DOMAIN_PROCESSED.value,
@@ -169,7 +170,7 @@ class InboundEventRepository:
         }
         if dead:
             values["dead_lettered_at"] = datetime.now(UTC)
-        await self._session.execute(
+        result = await self._session.execute(
             update(WhatsAppInboundEvent)
             .where(
                 WhatsAppInboundEvent.business_id == business_id,
@@ -180,7 +181,8 @@ class InboundEventRepository:
             )
             .values(**values)
         )
-        return True
+        rowcount: int = result.rowcount  # type: ignore[attr-defined]
+        return rowcount == 1
 
     async def mark_completed(self, business_id: int, event_id: int, completed_at: datetime) -> None:
         result = await self._session.execute(
@@ -198,6 +200,25 @@ class InboundEventRepository:
         )
         if result.rowcount == 0:  # type: ignore[attr-defined]
             raise StaleClaimError(f"event {event_id}: not domain_processed")
+
+    async def mark_fallback_completed(
+        self, business_id: int, event_id: int, completed_at: datetime
+    ) -> None:
+        result = await self._session.execute(
+            update(WhatsAppInboundEvent)
+            .where(
+                WhatsAppInboundEvent.business_id == business_id,
+                WhatsAppInboundEvent.id == event_id,
+                WhatsAppInboundEvent.status == InboundEventStatus.DEAD_LETTER.value,
+            )
+            .values(
+                status=InboundEventStatus.COMPLETED.value,
+                completed_at=completed_at,
+                message_body=None,
+            )
+        )
+        if result.rowcount == 0:  # type: ignore[attr-defined]
+            raise StaleClaimError(f"event {event_id}: not dead_letter")
 
     async def mark_response_failed(self, business_id: int, event_id: int) -> None:
         await self._session.execute(

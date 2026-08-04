@@ -48,6 +48,9 @@ def _evict_stale() -> None:
     for cid in stale:
         del _CONVERSATIONS[cid]
         _CONVERSATION_LOCKS.pop(cid, None)
+        for key, indexed_id in list(_PHONE_INDEX.items()):
+            if indexed_id == cid:
+                _PHONE_INDEX.pop(key, None)
     if stale:
         logger.info("conversations_evicted", extra={"count": len(stale)})
 

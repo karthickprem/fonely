@@ -1,7 +1,7 @@
 """Tenant-scoped notification outbox persistence."""
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select, update
@@ -37,16 +37,29 @@ class NotificationRepository:
     async def claim_pending_events(
         self, limit: int = 10, now: datetime | None = None
     ) -> Sequence[NotificationOutboxEvent]:
-        current = now or func.now()
+        current = now or datetime.now(UTC)
+        stale_before = (
+            current - timedelta(minutes=5)
+            if isinstance(current, datetime)
+            else datetime.now(UTC) - timedelta(minutes=5)
+        )
         statement = (
             select(NotificationOutboxEvent)
             .where(
-                NotificationOutboxEvent.status.in_(
-                    [NotificationStatus.PENDING.value, NotificationStatus.FAILED.value]
+                (
+                    NotificationOutboxEvent.status.in_(
+                        [NotificationStatus.PENDING.value, NotificationStatus.FAILED.value]
+                    )
+                    & (
+                        (NotificationOutboxEvent.next_attempt_at <= current)
+                        | (NotificationOutboxEvent.next_attempt_at.is_(None))
+                    )
+                )
+                | (
+                    (NotificationOutboxEvent.status == NotificationStatus.PROCESSING.value)
+                    & (NotificationOutboxEvent.updated_at < stale_before)
                 ),
                 NotificationOutboxEvent.attempts < NotificationOutboxEvent.max_attempts,
-                (NotificationOutboxEvent.next_attempt_at <= current)
-                | (NotificationOutboxEvent.next_attempt_at.is_(None)),
             )
             .order_by(NotificationOutboxEvent.created_at)
             .limit(limit)

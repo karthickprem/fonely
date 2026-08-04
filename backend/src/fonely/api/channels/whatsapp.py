@@ -15,10 +15,13 @@ import logging
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request, Response
-from sqlalchemy import text
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fonely.core.config import settings
+from fonely.models.enums import NotificationStatus
+from fonely.models.schema import NotificationOutboxEvent, WhatsAppDeliveryAttempt
+from fonely.repositories.inbound_events import InboundEventRepository
 from fonely.services.whatsapp_config import WhatsAppBusinessMapping
 
 logger = logging.getLogger("fonely.api.channels.whatsapp")
@@ -88,14 +91,18 @@ async def handle_webhook(request: Request) -> Response:
             if not isinstance(entries, list):
                 return Response(status_code=200)
 
-            for entry in entries[:_MAX_ENTRIES]:
+            if len(entries) > _MAX_ENTRIES:
+                return Response(status_code=413)
+            for entry in entries:
                 if not isinstance(entry, dict):
                     continue
                 changes = entry.get("changes", [])
                 if not isinstance(changes, list):
                     continue
 
-                for change in changes[:_MAX_CHANGES]:
+                if len(changes) > _MAX_CHANGES:
+                    return Response(status_code=413)
+                for change in changes:
                     if not isinstance(change, dict):
                         continue
                     value = change.get("value")
@@ -113,15 +120,24 @@ async def handle_webhook(request: Request) -> Response:
                     if business_id is None:
                         continue
 
-                    messages = value.get("messages")
+                    messages = value.get("messages", [])
                     if not isinstance(messages, list):
                         continue
-
-                    for message in messages[:_MAX_MESSAGES]:
+                    if len(messages) > _MAX_MESSAGES:
+                        return Response(status_code=413)
+                    for message in messages:
                         count = await _persist_inbound_event(
                             session, message, business_id, phone_number_id
                         )
                         persisted += count
+
+                    statuses = value.get("statuses", [])
+                    if not isinstance(statuses, list):
+                        continue
+                    if len(statuses) > _MAX_MESSAGES:
+                        return Response(status_code=413)
+                    for status in statuses:
+                        persisted += await _persist_delivery_status(session, status, business_id)
 
             if persisted > 0:
                 await session.commit()
@@ -145,16 +161,16 @@ async def _persist_inbound_event(
     raw_from = message.get("from")
     raw_type = message.get("type")
 
-    if not isinstance(raw_id, str) or not raw_id:
+    if not isinstance(raw_id, str) or not raw_id or len(raw_id) > 100:
         return 0
-    if not isinstance(raw_from, str) or not raw_from:
+    if not isinstance(raw_from, str) or not raw_from or len(raw_from) > 20:
         return 0
-    if not isinstance(raw_type, str) or not raw_type:
+    if not isinstance(raw_type, str) or not raw_type or len(raw_type) > 20:
         return 0
 
-    message_id = raw_id[:100]
-    sender_phone = raw_from[:20]
-    message_type = raw_type[:20]
+    message_id = raw_id
+    sender_phone = raw_from
+    message_type = raw_type
 
     raw_timestamp = message.get("timestamp")
     try:
@@ -197,3 +213,85 @@ async def _persist_inbound_event(
             extra={"message_id": message_id, "business_id": business_id},
         )
     return inserted
+
+
+async def _persist_delivery_status(
+    session: AsyncSession,
+    status_payload: object,
+    business_id: int,
+) -> int:
+    if not isinstance(status_payload, dict):
+        return 0
+    provider_id = status_payload.get("id")
+    provider_status = status_payload.get("status")
+    if not isinstance(provider_id, str) or not provider_id:
+        return 0
+    if provider_status not in {"delivered", "read", "failed"}:
+        return 0
+
+    attempt = await session.scalar(
+        select(WhatsAppDeliveryAttempt).where(
+            WhatsAppDeliveryAttempt.business_id == business_id,
+            WhatsAppDeliveryAttempt.provider_message_id == provider_id,
+        )
+    )
+    if attempt is None:
+        return 0
+    outbox = await session.scalar(
+        select(NotificationOutboxEvent).where(
+            NotificationOutboxEvent.business_id == business_id,
+            NotificationOutboxEvent.id == attempt.notification_event_id,
+        )
+    )
+    if outbox is None:
+        return 0
+
+    now = datetime.now(UTC)
+    if provider_status in {"delivered", "read"}:
+        await session.execute(
+            update(WhatsAppDeliveryAttempt)
+            .where(WhatsAppDeliveryAttempt.id == attempt.id)
+            .values(status="delivered", updated_at=now)
+        )
+        await session.execute(
+            update(NotificationOutboxEvent)
+            .where(
+                NotificationOutboxEvent.business_id == business_id,
+                NotificationOutboxEvent.id == outbox.id,
+            )
+            .values(
+                status=NotificationStatus.DELIVERED.value,
+                delivered_at=now,
+                last_error=None,
+                next_attempt_at=None,
+            )
+        )
+        if (
+            outbox.event_type == "whatsapp_inbound_response"
+            and outbox.entity_type == "whatsapp_inbound_event"
+        ):
+            payload = outbox.payload if isinstance(outbox.payload, dict) else {}
+            inbound_repo = InboundEventRepository(session)
+            if payload.get("terminal_fallback") is True:
+                await inbound_repo.mark_fallback_completed(business_id, outbox.entity_id, now)
+            else:
+                await inbound_repo.mark_completed(business_id, outbox.entity_id, now)
+    else:
+        await session.execute(
+            update(WhatsAppDeliveryAttempt)
+            .where(WhatsAppDeliveryAttempt.id == attempt.id)
+            .values(status="failed", error_class="provider_failed", updated_at=now)
+        )
+        await session.execute(
+            update(NotificationOutboxEvent)
+            .where(
+                NotificationOutboxEvent.business_id == business_id,
+                NotificationOutboxEvent.id == outbox.id,
+            )
+            .values(
+                status=NotificationStatus.FAILED.value,
+                last_error="provider_failed",
+                next_attempt_at=now,
+            )
+        )
+    return 1

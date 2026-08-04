@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fonely.core.config import settings
 from fonely.models.enums import (
     NotificationChannel,
     NotificationEventType,
@@ -63,6 +64,7 @@ class NotificationService:
                     "time": time_local,
                     "price": price_str,
                     "appointment_id": appointment_id,
+                    "phone_number_id": settings.whatsapp_phone_number_id,
                 },
                 "status": NotificationStatus.PENDING.value,
                 "idempotency_key": f"appt-confirm-patient-{appointment_id}",
@@ -89,6 +91,7 @@ class NotificationService:
                     "date": start_local,
                     "time": time_local,
                     "appointment_id": appointment_id,
+                    "phone_number_id": settings.whatsapp_phone_number_id,
                 },
                 "status": NotificationStatus.PENDING.value,
                 "idempotency_key": f"appt-confirm-owner-{appointment_id}",
@@ -139,6 +142,7 @@ class NotificationService:
                     "time": time_local,
                     "reason": reason,
                     "appointment_id": appointment_id,
+                    "phone_number_id": settings.whatsapp_phone_number_id,
                 },
                 "status": NotificationStatus.PENDING.value,
                 "idempotency_key": f"appt-cancel-patient-{appointment_id}",
@@ -166,6 +170,7 @@ class NotificationService:
                     "time": time_local,
                     "reason": reason,
                     "appointment_id": appointment_id,
+                    "phone_number_id": settings.whatsapp_phone_number_id,
                 },
                 "status": NotificationStatus.PENDING.value,
                 "idempotency_key": f"appt-cancel-owner-{appointment_id}",

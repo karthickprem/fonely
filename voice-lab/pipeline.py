@@ -61,7 +61,7 @@ Speak like a warm local Chennai person, not a formal Tamil announcer or chatbot.
 - Do not translate familiar English dental words into formal Tamil.
 - Answer the caller's latest request first. Do not continue an older booking flow after the caller changes topic.
 - Ask a question only when information is genuinely required. Otherwise answer directly and stop.
-- Routine acknowledgements: 3-8 spoken words. Booking questions: up to 15 words. Direct explanation or misunderstanding repair: up to 35 spoken words.
+- Use the length needed to answer naturally and completely. Do not cut off an explanation mid-sentence.
 - Never offer a slot unless the latest request is currently about booking or availability.
 - Never repeat the same slot, question, or caller name unless the caller asks or information changed.
 - If you misunderstood, apologize once in natural language, then answer or ask one relevant clarification.
@@ -257,9 +257,9 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
                 evidence_sink=claude_evidence,
             ),
             settings=AnthropicLLMService.Settings(
-                model="claude-haiku-4-5",
+                model="claude-opus-4-6",
                 system_instruction=SYSTEM_PROMPT,
-                max_tokens=80,
+                max_tokens=1024,
                 temperature=0.2,
             ),
         )

@@ -146,17 +146,27 @@ def test_relevance_guard_blocks_slot_and_false_confirmation():
         guard = ResponseRelevanceProcessor(state)
         down, _ = await run_test(
             guard,
-            frames_to_send=[LLMTextFrame(text="நாளைக்கு 10 மணிக்கு வரலாம்?")],
+            frames_to_send=[
+                LLMFullResponseStartFrame(),
+                LLMTextFrame(text="நாளைக்கு 10 மணிக்கு வரலாம்?"),
+                LLMFullResponseEndFrame(),
+            ],
         )
-        assert not contains_unwanted_slot(down[0].text)
-        assert "question" in down[0].text
+        guarded_text = next(frame.text for frame in down if isinstance(frame, LLMTextFrame))
+        assert not contains_unwanted_slot(guarded_text)
+        assert "question" in guarded_text
 
         confirm, _ = await run_test(
             ResponseRelevanceProcessor(state),
-            frames_to_send=[LLMTextFrame(text="Appointment confirmed ஆயிடுச்சு")],
+            frames_to_send=[
+                LLMFullResponseStartFrame(),
+                LLMTextFrame(text="Appointment confirmed ஆயிடுச்சு"),
+                LLMFullResponseEndFrame(),
+            ],
         )
-        assert not contains_false_confirmation(confirm[0].text)
-        assert "demo" in confirm[0].text
+        confirm_text = next(frame.text for frame in confirm if isinstance(frame, LLMTextFrame))
+        assert not contains_false_confirmation(confirm_text)
+        assert "demo" in confirm_text
 
     asyncio.run(run())
 

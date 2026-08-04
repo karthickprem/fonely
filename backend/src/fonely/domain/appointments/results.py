@@ -104,7 +104,7 @@ class AvailabilityResult(AppointmentResult):
 class AppointmentProposalResult(AppointmentResult):
     pending_action_id: PositiveId
     version: PositiveVersion
-    status: Literal["awaiting_confirmation"] = "awaiting_confirmation"
+    status: str = "awaiting_confirmation"
     slot_is_held: Literal[False] = False
     expires_at: ResultDatetime
     confirmation_facts: ConfirmationFactsResult

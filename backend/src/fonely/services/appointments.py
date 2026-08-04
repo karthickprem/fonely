@@ -864,8 +864,25 @@ class AppointmentService:
         )
         if action is None:
             return None
+
+        if (
+            action.session_id is not None
+            and command.actor.session_id is not None
+            and action.session_id != command.actor.session_id
+        ):
+            raise PendingActionIdempotencyConflictError(
+                "Idempotency key already used in a different session"
+            )
+        if action.expires_at != command.expires_at:
+            raise PendingActionIdempotencyConflictError(
+                "Idempotency key already used with a different expiry"
+            )
+
         envelope = await self._pa_service.validated_stored_appointment_envelope(action)
         data = envelope.data
+
+        if action.status in ("confirmed", "rejected", "cancelled", "expired"):
+            return await self._terminal_proposal_replay(action, envelope)
 
         if isinstance(command, CreatePendingAppointmentCommand):
             if not isinstance(data, CreateAppointmentData):
@@ -915,6 +932,46 @@ class AppointmentService:
                 "Idempotency key already used for a different reschedule request"
             )
         return self._proposal_result_from_action(action, envelope)
+
+    async def _terminal_proposal_replay(
+        self,
+        action: PendingAction,
+        envelope: PendingAppointmentEnvelope,
+    ) -> AppointmentProposalResult:
+        if action.status == "confirmed":
+            if isinstance(envelope.data, CreateAppointmentData):
+                existing = await self._repo.get_by_business_and_pending_action(
+                    action.business_id, action.id
+                )
+                if existing is not None:
+                    return AppointmentProposalResult(
+                        pending_action_id=action.id,
+                        version=action.version,
+                        expires_at=action.expires_at,
+                        confirmation_facts=self._to_confirmation_facts(envelope.data.facts),
+                        status="confirmed",
+                    )
+            commit = await self._repo.get_commit_by_business_and_pending_action(
+                action.business_id, action.id
+            )
+            if commit is not None:
+                return AppointmentProposalResult(
+                    pending_action_id=action.id,
+                    version=action.version,
+                    expires_at=action.expires_at,
+                    confirmation_facts=self._to_confirmation_facts(
+                        envelope.data.facts
+                        if isinstance(envelope.data, CreateAppointmentData)
+                        else envelope.data.new_facts
+                        if isinstance(envelope.data, RescheduleAppointmentData)
+                        else envelope.data.current_facts
+                    ),
+                    status="confirmed",
+                )
+        raise AppointmentDomainError(
+            AppointmentErrorCode.INVALID_STATE,
+            f"Action is in terminal status {action.status}",
+        )
 
     def _proposal_result_from_action(
         self, action: PendingAction, envelope: PendingAppointmentEnvelope

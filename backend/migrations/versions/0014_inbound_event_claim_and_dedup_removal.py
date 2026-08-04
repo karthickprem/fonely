@@ -146,7 +146,7 @@ def upgrade() -> None:
         sa.Column(
             "notification_event_id",
             sa.Integer(),
-            sa.ForeignKey("notification_outbox.id"),
+            sa.ForeignKey("notification_outbox.id", ondelete="CASCADE"),
             nullable=False,
         ),
         sa.Column("attempt_number", sa.Integer(), nullable=False),
@@ -186,6 +186,17 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute(
+        "DO $$ BEGIN "
+        "IF EXISTS (SELECT 1 FROM notification_outbox WHERE status = 'unknown') THEN "
+        "RAISE EXCEPTION '0014 downgrade blocked: reconcile unknown notification rows first'; "
+        "END IF; "
+        "IF EXISTS (SELECT 1 FROM whatsapp_inbound_events "
+        "WHERE status = 'response_failed') THEN "
+        "RAISE EXCEPTION '0014 downgrade blocked: repair response_failed inbound rows first'; "
+        "END IF; END $$"
+    )
+
     op.drop_constraint("notification_status", "notification_outbox")
     op.alter_column(
         "notification_outbox",

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -50,7 +50,9 @@ class ClaimedNotification:
     event_type: str
     entity_type: str
     entity_id: int
+    recipient_type: str
     recipient_phone: str
+    channel: str
     payload: object
     attempts: int
     max_attempts: int
@@ -116,10 +118,43 @@ async def _deliver_claimed(
         )
 
 
+async def _expire_unknown(session: AsyncSession) -> None:
+    cutoff = datetime.now(UTC) - timedelta(hours=24)
+    events = (
+        await session.scalars(
+            select(NotificationOutboxEvent).where(
+                NotificationOutboxEvent.status == NotificationStatus.UNKNOWN.value,
+                NotificationOutboxEvent.updated_at < cutoff,
+            )
+        )
+    ).all()
+    inbound_repo = InboundEventRepository(session)
+    for event in events:
+        event.status = NotificationStatus.DEAD_LETTER.value
+        event.last_error = "unknown_delivery_expired"
+        if _is_inbound_response(
+            ClaimedNotification(
+                event_id=event.id,
+                business_id=event.business_id,
+                event_type=event.event_type,
+                entity_type=event.entity_type,
+                entity_id=event.entity_id,
+                recipient_type=event.recipient_type,
+                recipient_phone=event.recipient_phone,
+                channel=event.channel,
+                payload=event.payload,
+                attempts=event.attempts,
+                max_attempts=event.max_attempts,
+            )
+        ):
+            await inbound_repo.mark_response_failed(event.business_id, event.entity_id)
+
+
 async def _claim_one(
     session_factory: async_sessionmaker[AsyncSession],
 ) -> ClaimedNotification | None:
     async with session_factory() as session:
+        await _expire_unknown(session)
         event = await NotificationRepository(session).claim_pending_events(limit=1)
         if not event:
             await session.commit()
@@ -131,7 +166,9 @@ async def _claim_one(
             event_type=item.event_type,
             entity_type=item.entity_type,
             entity_id=item.entity_id,
+            recipient_type=item.recipient_type,
             recipient_phone=item.recipient_phone,
+            channel=item.channel,
             payload=item.payload,
             attempts=item.attempts,
             max_attempts=item.max_attempts,
@@ -147,9 +184,9 @@ def _snapshot_to_model(claimed: ClaimedNotification) -> NotificationOutboxEvent:
         event_type=claimed.event_type,
         entity_type=claimed.entity_type,
         entity_id=claimed.entity_id,
-        recipient_type="patient",
+        recipient_type=claimed.recipient_type,
         recipient_phone=claimed.recipient_phone,
-        channel="whatsapp",
+        channel=claimed.channel,
         payload=claimed.payload,
         status=NotificationStatus.PROCESSING.value,
         attempts=claimed.attempts,
@@ -186,6 +223,7 @@ async def _record_accepted(
     receipt: DeliveryReceipt,
 ) -> None:
     async with session_factory() as session:
+        attempt_status = "accepted" if receipt.provider_message_id else "unknown"
         await session.execute(
             update(WhatsAppDeliveryAttempt)
             .where(
@@ -194,21 +232,29 @@ async def _record_accepted(
                 WhatsAppDeliveryAttempt.attempt_number == attempt_number,
             )
             .values(
-                status="accepted",
+                status=attempt_status,
                 provider_message_id=receipt.provider_message_id,
+                error_class=(
+                    None if receipt.provider_message_id else "missing_provider_message_id"
+                ),
                 updated_at=datetime.now(UTC),
             )
         )
-        await NotificationRepository(session).mark_delivered(
-            claimed.event_id,
-            datetime.now(UTC),
-        )
-        if _is_inbound_response(claimed):
-            await InboundEventRepository(session).mark_completed(
-                claimed.business_id,
-                claimed.entity_id,
-                datetime.now(UTC),
+        await session.execute(
+            update(NotificationOutboxEvent)
+            .where(
+                NotificationOutboxEvent.business_id == claimed.business_id,
+                NotificationOutboxEvent.id == claimed.event_id,
+                NotificationOutboxEvent.status == NotificationStatus.PROCESSING.value,
             )
+            .values(
+                status=NotificationStatus.UNKNOWN.value,
+                attempts=attempt_number,
+                last_error="awaiting_provider_status",
+                next_attempt_at=None,
+                updated_at=datetime.now(UTC),
+            )
+        )
         await session.commit()
 
 

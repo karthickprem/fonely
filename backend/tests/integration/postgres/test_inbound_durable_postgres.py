@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -25,7 +26,9 @@ from fonely.repositories.inbound_events import (
 )
 from fonely.repositories.notifications import NotificationRepository
 from fonely.services.data_retention import DataRetentionService
+from fonely.services.whatsapp_notification_sender import DeliveryReceipt
 from fonely.workers.inbound_worker import ClaimedEvent, _enqueue_response
+from fonely.workers.notification_worker import _claim_one, _record_accepted
 
 pytestmark = pytest.mark.postgres
 
@@ -504,6 +507,58 @@ class TestDeliveryReconciliation:
             assert event.status == "completed"
             assert event.message_body is None
 
+    async def test_duplicate_read_and_late_failed_status_do_not_regress_delivery(
+        self, pg_session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        async with pg_session_factory() as seed:
+            await seed_business(seed)
+            event_id = await insert_event(seed, message_id="wamid.monotonic")
+            await seed.execute(
+                text("UPDATE whatsapp_inbound_events SET status='domain_processed' WHERE id=:id"),
+                {"id": event_id},
+            )
+            outbox = await NotificationRepository(seed).insert_event_idempotent(
+                {
+                    "business_id": 1,
+                    "event_type": "whatsapp_inbound_response",
+                    "entity_type": "whatsapp_inbound_event",
+                    "entity_id": event_id,
+                    "recipient_type": "patient",
+                    "recipient_phone": "919876543210",
+                    "channel": "whatsapp",
+                    "payload": {"response_text": "ok", "phone_number_id": "phone-1"},
+                    "status": "unknown",
+                    "idempotency_key": "whatsapp-response-wamid.monotonic",
+                }
+            )
+            assert outbox is not None
+            seed.add(
+                WhatsAppDeliveryAttempt(
+                    business_id=1,
+                    notification_event_id=outbox.id,
+                    attempt_number=1,
+                    status="accepted",
+                    provider_message_id="meta-monotonic",
+                )
+            )
+            await seed.commit()
+
+        for provider_status in ("delivered", "read", "failed"):
+            async with pg_session_factory() as callback:
+                changed = await _persist_delivery_status(
+                    callback,
+                    {"id": "meta-monotonic", "status": provider_status},
+                    1,
+                )
+                assert changed == 1
+                await callback.commit()
+
+        async with pg_session_factory() as check:
+            outbox_row = await check.get(NotificationOutboxEvent, outbox.id)
+            inbound = await check.get(WhatsAppInboundEvent, event_id)
+            assert outbox_row is not None and outbox_row.status == "delivered"
+            assert inbound is not None and inbound.status == "completed"
+
     async def test_terminal_fallback_delivery_completes_dead_letter(
         self, pg_session_factory: async_sessionmaker[AsyncSession]
     ) -> None:
@@ -575,17 +630,19 @@ class TestDeliveryReconciliation:
                     "recipient_phone": "919876543210",
                     "channel": "whatsapp",
                     "payload": {"phone_number_id": "phone-1"},
-                    "status": "processing",
+                    "status": "pending",
                     "idempotency_key": "stale-notification",
                 }
             )
             assert outbox is not None
             await seed.execute(
                 text(
-                    "UPDATE notification_outbox "
-                    "SET updated_at=NOW()-INTERVAL '6 minutes' WHERE id=:id"
+                    "UPDATE notification_outbox SET status='processing', "
+                    "claim_token=:token, claim_version=2, "
+                    "lease_expires_at=NOW()-INTERVAL '1 minute', "
+                    "updated_at=NOW()-INTERVAL '6 minutes' WHERE id=:id"
                 ),
-                {"id": outbox.id},
+                {"id": outbox.id, "token": uuid.uuid4()},
             )
             await seed.commit()
 
@@ -593,6 +650,51 @@ class TestDeliveryReconciliation:
             claimed = await NotificationRepository(claim).claim_pending_events(limit=1)
             assert len(claimed) == 1
             assert claimed[0].id == outbox.id
+
+    async def test_stale_notification_worker_cannot_finalize_reclaimed_delivery(
+        self, pg_session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        async with pg_session_factory() as seed:
+            await seed_business(seed)
+            outbox = await NotificationRepository(seed).insert_event_idempotent(
+                {
+                    "business_id": 1,
+                    "event_type": "appointment_confirmed",
+                    "entity_type": "appointment",
+                    "entity_id": 1,
+                    "recipient_type": "patient",
+                    "recipient_phone": "919876543210",
+                    "channel": "whatsapp",
+                    "payload": {"phone_number_id": "phone-1"},
+                    "status": "pending",
+                    "idempotency_key": "notification-race",
+                }
+            )
+            assert outbox is not None
+            await seed.commit()
+
+        claim_a = await _claim_one(pg_session_factory)
+        assert claim_a is not None
+        async with pg_session_factory() as expire:
+            await expire.execute(
+                text(
+                    "UPDATE notification_outbox SET "
+                    "lease_expires_at=NOW()-INTERVAL '1 second' WHERE id=:id"
+                ),
+                {"id": outbox.id},
+            )
+            await expire.commit()
+        claim_b = await _claim_one(pg_session_factory)
+        assert claim_b is not None
+        assert claim_b.claim_token != claim_a.claim_token
+
+        with pytest.raises(RuntimeError, match="notification_claim_stale"):
+            await _record_accepted(
+                pg_session_factory,
+                claim_a,
+                1,
+                DeliveryReceipt(provider_message_id="meta-stale", final=True),
+            )
 
     async def test_response_failed_retention_cleanup(
         self, pg_session_factory: async_sessionmaker[AsyncSession]

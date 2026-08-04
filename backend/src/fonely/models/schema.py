@@ -1180,21 +1180,6 @@ class NotificationOutboxEvent(Base):
 
 
 # =============================================================================
-# WhatsApp Message Deduplication
-# =============================================================================
-
-
-class WhatsAppProcessedMessage(Base):
-    __tablename__ = "whatsapp_processed_messages"
-
-    message_id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    business_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    processed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
-    )
-
-
-# =============================================================================
 # WhatsApp Durable Inbound Events
 # =============================================================================
 
@@ -1219,6 +1204,10 @@ class WhatsAppInboundEvent(Base):
         CheckConstraint(
             "(status != 'dead_letter') OR (dead_lettered_at IS NOT NULL)",
             name="ck_whatsapp_inbound_dead_letter_requires_timestamp",
+        ),
+        CheckConstraint(
+            "phone_number_id IS NULL OR length(phone_number_id) > 0",
+            name="ck_whatsapp_inbound_phone_number_id_nonempty",
         ),
     )
 

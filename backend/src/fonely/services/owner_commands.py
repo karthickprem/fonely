@@ -227,10 +227,8 @@ class OwnerCommandService:
         self._session.add(exc)
         await self._session.flush()
 
-        tz_name = await self._get_business_timezone(business_id)
-        tz = ZoneInfo(tz_name)
-        cancelled = await self._cancel_appointments_after(
-            business_id, target_date, new_close, tz, owner_phone
+        cancelled = await self._cancel_appointments_outside_schedule(
+            business_id, target_date, owner_phone
         )
 
         date_str = target_date.strftime("%b %d")
@@ -251,14 +249,16 @@ class OwnerCommandService:
             affected_patients=len(cancelled),
         )
 
-    async def _cancel_appointments_after(
+    async def _cancel_appointments_outside_schedule(
         self,
         business_id: int,
         target_date: date,
-        after_time: dt_time,
-        tz: ZoneInfo,
         owner_phone: str,
     ) -> list[dict[str, str]]:
+        from fonely.services.availability import AvailabilityService
+
+        timezone = await self._get_business_timezone(business_id)
+        zone = ZoneInfo(timezone)
         appointments = (
             (
                 await self._session.execute(
@@ -272,22 +272,35 @@ class OwnerCommandService:
             .all()
         )
 
+        availability = AvailabilityService(self._session)
         cancelled: list[dict[str, str]] = []
-        for appt in appointments:
-            local_dt = appt.start_at.astimezone(tz)
-            if local_dt.date() != target_date:
+        for appointment in appointments:
+            local_start = appointment.start_at.astimezone(zone)
+            if local_start.date() != target_date:
                 continue
-            if local_dt.time() < after_time:
+            decision = await availability.check_exact_slot(
+                business_id,
+                appointment.service_id,
+                appointment.resource_id,
+                appointment.start_at,
+                exclude_appointment_id=appointment.id,
+                alternative_limit=0,
+            )
+            if decision.available:
                 continue
             success = await self._cancel_via_service(
-                business_id, appt.id, appt.version, owner_phone, "owner_close_early"
+                business_id,
+                appointment.id,
+                appointment.version,
+                owner_phone,
+                "owner_close_early",
             )
             if success:
                 cancelled.append(
                     {
-                        "time": local_dt.strftime("%-I:%M %p"),
-                        "patient": appt.customer_name or "Patient",
-                        "service": appt.service_name_snapshot,
+                        "time": local_start.strftime("%-I:%M %p"),
+                        "patient": appointment.customer_name or "Patient",
+                        "service": appointment.service_name_snapshot,
                     }
                 )
         return cancelled

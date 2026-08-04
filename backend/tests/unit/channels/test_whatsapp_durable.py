@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from fonely.api.channels.whatsapp import router
-from fonely.repositories.inbound_events import _next_attempt_at
+from fonely.repositories.inbound_events import _next_attempt_at, deterministic_lock_key
 from fonely.workers.inbound_worker import run_inbound_worker
 
 
@@ -76,10 +76,7 @@ class TestWebhookPersistsThenReturns:
             mock_map.get_business_id.return_value = 1
             map_cls.return_value = mock_map
             client = TestClient(app)
-            response = client.post(
-                "/webhooks/whatsapp",
-                json=_webhook_payload(),
-            )
+            response = client.post("/webhooks/whatsapp", json=_webhook_payload())
         assert response.status_code == 200
         mock_session.execute.assert_awaited()
         mock_session.commit.assert_awaited()
@@ -89,16 +86,12 @@ class TestWebhookPersistsThenReturns:
         dup_result = MagicMock()
         dup_result.rowcount = 0
         mock_session.execute = AsyncMock(return_value=dup_result)
-
         with patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as map_cls:
             mock_map = MagicMock()
             mock_map.get_business_id.return_value = 1
             map_cls.return_value = mock_map
             client = TestClient(app)
-            response = client.post(
-                "/webhooks/whatsapp",
-                json=_webhook_payload(),
-            )
+            response = client.post("/webhooks/whatsapp", json=_webhook_payload())
         assert response.status_code == 200
         mock_session.commit.assert_not_awaited()
 
@@ -109,10 +102,7 @@ class TestWebhookPersistsThenReturns:
             mock_map.get_business_id.return_value = None
             map_cls.return_value = mock_map
             client = TestClient(app)
-            response = client.post(
-                "/webhooks/whatsapp",
-                json=_webhook_payload(),
-            )
+            response = client.post("/webhooks/whatsapp", json=_webhook_payload())
         assert response.status_code == 200
         mock_session.execute.assert_not_awaited()
 
@@ -124,10 +114,7 @@ class TestWebhookPersistsThenReturns:
         with patch("fonely.api.channels.whatsapp.settings") as s:
             s.whatsapp_app_secret = ""
             client = TestClient(app)
-            response = client.post(
-                "/webhooks/whatsapp",
-                json=_webhook_payload(),
-            )
+            response = client.post("/webhooks/whatsapp", json=_webhook_payload())
         assert response.status_code == 503
 
     def test_returns_503_on_db_failure(self) -> None:
@@ -138,10 +125,7 @@ class TestWebhookPersistsThenReturns:
             mock_map.get_business_id.return_value = 1
             map_cls.return_value = mock_map
             client = TestClient(app)
-            response = client.post(
-                "/webhooks/whatsapp",
-                json=_webhook_payload(),
-            )
+            response = client.post("/webhooks/whatsapp", json=_webhook_payload())
         assert response.status_code == 503
 
     def test_non_dict_json_returns_200(self) -> None:
@@ -157,102 +141,108 @@ class TestWebhookPersistsThenReturns:
         assert response.status_code == 200
 
 
-class TestInboundWorker:
+class TestInboundWorkerPhases:
     @pytest.mark.asyncio
-    async def test_processes_event_and_enqueues_response(self) -> None:
-        mock_event = MagicMock()
-        mock_event.id = 1
-        mock_event.message_id = "wamid.test1"
-        mock_event.business_id = 1
-        mock_event.sender_phone = "919876543210"
-        mock_event.message_type = "text"
-        mock_event.message_body = "Hello"
-        mock_event.phone_number_id = "12345"
-        mock_event.attempts = 0
-        mock_event.max_attempts = 5
-
-        mock_repo = AsyncMock()
-        mock_repo.claim_pending_events = AsyncMock(return_value=[mock_event])
-        mock_repo.mark_domain_processed = AsyncMock()
-
-        mock_session = AsyncMock()
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=None)
-        mock_factory = MagicMock()
-        mock_factory.return_value = mock_session
-
+    async def test_three_phase_success(self) -> None:
         with (
             patch(
-                "fonely.workers.inbound_worker.InboundEventRepository",
-                return_value=mock_repo,
+                "fonely.workers.inbound_worker._phase_a_claim",
+                new_callable=AsyncMock,
+                return_value=MagicMock(
+                    event_id=1,
+                    business_id=1,
+                    message_id="wamid.1",
+                    sender_phone="919876543210",
+                    message_type="text",
+                    message_body="Hello",
+                    phone_number_id="12345",
+                    claim_token="tok",
+                    attempts=0,
+                    max_attempts=5,
+                ),
             ),
             patch(
-                "fonely.workers.inbound_worker._process_domain",
+                "fonely.workers.inbound_worker._phase_b_reason",
                 new_callable=AsyncMock,
                 return_value="Welcome!",
-            ),
+            ) as mock_b,
             patch(
-                "fonely.workers.inbound_worker._enqueue_outbound_response",
+                "fonely.workers.inbound_worker._phase_c_commit",
                 new_callable=AsyncMock,
-            ) as mock_enqueue,
+            ) as mock_c,
         ):
-            await run_inbound_worker(mock_factory, MagicMock(), max_iterations=1)
-            mock_enqueue.assert_awaited_once()
-            mock_repo.mark_domain_processed.assert_awaited_once()
+            await run_inbound_worker(MagicMock(), MagicMock(), max_iterations=1)
+            mock_b.assert_awaited_once()
+            mock_c.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_failure_marks_failed_with_retry(self) -> None:
-        mock_event = MagicMock()
-        mock_event.id = 1
-        mock_event.message_id = "wamid.fail"
-        mock_event.business_id = 1
-        mock_event.sender_phone = "919876543210"
-        mock_event.message_type = "text"
-        mock_event.message_body = "Hello"
-        mock_event.phone_number_id = "12345"
-        mock_event.attempts = 0
-        mock_event.max_attempts = 5
-
-        mock_repo = AsyncMock()
-        mock_repo.claim_pending_events = AsyncMock(return_value=[mock_event])
-        mock_repo.mark_failed = AsyncMock()
-
-        mock_session = AsyncMock()
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=None)
-        mock_factory = MagicMock()
-        mock_factory.return_value = mock_session
-
-        fail_repo = AsyncMock()
-        fail_repo.mark_failed = AsyncMock()
-        repo_call_count = 0
-
-        def _repo_factory(session: object) -> AsyncMock:
-            nonlocal repo_call_count
-            repo_call_count += 1
-            return mock_repo if repo_call_count == 1 else fail_repo
-
+    async def test_phase_b_failure_marks_failed(self) -> None:
+        claimed = MagicMock(
+            event_id=1,
+            business_id=1,
+            message_id="wamid.fail",
+            sender_phone="919876543210",
+            attempts=0,
+            max_attempts=5,
+        )
         with (
             patch(
-                "fonely.workers.inbound_worker.InboundEventRepository",
-                side_effect=_repo_factory,
+                "fonely.workers.inbound_worker._phase_a_claim",
+                new_callable=AsyncMock,
+                return_value=claimed,
             ),
             patch(
-                "fonely.workers.inbound_worker._process_domain",
+                "fonely.workers.inbound_worker._phase_b_reason",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("LLM timeout"),
             ),
+            patch(
+                "fonely.workers.inbound_worker._handle_failure",
+                new_callable=AsyncMock,
+            ) as mock_fail,
         ):
-            await run_inbound_worker(mock_factory, MagicMock(), max_iterations=1)
-            fail_repo.mark_failed.assert_awaited_once()
-            call_args = fail_repo.mark_failed.call_args
-            assert call_args[0][0] == 1  # business_id
-            assert call_args[0][1] == 1  # event_id
-            assert "RuntimeError" in call_args[0][2]
+            await run_inbound_worker(MagicMock(), MagicMock(), max_iterations=1)
+            mock_fail.assert_awaited_once()
 
+    @pytest.mark.asyncio
+    async def test_no_event_does_not_process(self) -> None:
+        with patch(
+            "fonely.workers.inbound_worker._phase_a_claim",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            await run_inbound_worker(MagicMock(), MagicMock(), max_iterations=1)
+
+
+class TestDeterministicLockKey:
+    def test_same_input_same_key(self) -> None:
+        k1 = deterministic_lock_key(1, "+919876543210")
+        k2 = deterministic_lock_key(1, "+919876543210")
+        assert k1 == k2
+
+    def test_different_input_different_key(self) -> None:
+        k1 = deterministic_lock_key(1, "+919876543210")
+        k2 = deterministic_lock_key(2, "+919876543210")
+        assert k1 != k2
+
+    def test_key_is_signed_int(self) -> None:
+        key = deterministic_lock_key(1, "+919876543210")
+        assert isinstance(key, int)
+        assert -(2**63) <= key <= 2**63 - 1
+
+
+class TestBackoff:
     def test_backoff_increases(self) -> None:
         t1 = _next_attempt_at(0)
         t2 = _next_attempt_at(1)
         t3 = _next_attempt_at(4)
         assert t2 > t1
         assert t3 > t2
+
+    def test_first_backoff_is_30s(self) -> None:
+        import time
+
+        before = time.time()
+        t = _next_attempt_at(0)
+        delta = t.timestamp() - before
+        assert 25 < delta < 35

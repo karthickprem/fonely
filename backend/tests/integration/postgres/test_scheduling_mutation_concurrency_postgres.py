@@ -190,7 +190,7 @@ async def test_schedule_mutation_first_blocks_and_rejects_confirmation(
                             expected_version=version,
                         )
                     )
-                except Exception as exc:  # expected authoritative rejection
+                except Exception as exc:
                     await customer_session.rollback()
                     return exc
                 await customer_session.commit()
@@ -199,11 +199,20 @@ async def test_schedule_mutation_first_blocks_and_rejects_confirmation(
         task = asyncio.create_task(confirm())
         await _observe_blocker(pg_session_factory, await blocked_pid, owner_pid)
         await owner_session.commit()
-        assert await task is not None
+        result = await task
+        assert result is not None, "Confirmation must fail after schedule mutation"
+        assert isinstance(result, (ValueError, Exception))
+        assert not isinstance(result, (TimeoutError, ConnectionError))
 
     async with pg_session_factory() as verify:
         assert await verify.scalar(text("SELECT count(*) FROM appointments")) == 0
         assert await verify.scalar(text("SELECT count(*) FROM schedule_exceptions")) == 1
+        assert (
+            await verify.scalar(
+                text("SELECT count(*) FROM resource_allocations WHERE status = 'active'")
+            )
+            == 0
+        )
 
 
 @pytest.mark.parametrize("command", ["close_clinic", "close_early", "doctor_leave"])

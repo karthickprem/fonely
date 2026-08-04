@@ -42,6 +42,9 @@ class WhatsAppNotificationSender:
             if recipient_type == "owner":
                 return self._format_owner_cancellation(payload)
 
+        if event_type == "whatsapp_inbound_response":
+            return str(payload.get("response_text", ""))
+
         clinic = payload.get("clinic_name", "your clinic")
         return f"Notification from {clinic}."
 

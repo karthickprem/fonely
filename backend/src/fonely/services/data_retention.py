@@ -25,6 +25,7 @@ class RetentionResult:
     turns_deleted: int = 0
     notifications_deleted: int = 0
     pending_actions_deleted: int = 0
+    inbound_events_deleted: int = 0
     execution_time_ms: float = 0.0
 
     def to_dict(self) -> dict[str, object]:
@@ -33,6 +34,7 @@ class RetentionResult:
             "turns_deleted": self.turns_deleted,
             "notifications_deleted": self.notifications_deleted,
             "pending_actions_deleted": self.pending_actions_deleted,
+            "inbound_events_deleted": self.inbound_events_deleted,
             "execution_time_ms": round(self.execution_time_ms, 1),
         }
 
@@ -60,6 +62,16 @@ class DataRetentionService:
 
         pa_cutoff = now - timedelta(days=policies["pending_actions"].retention_days)
         result.pending_actions_deleted = await self._cleanup_pending_actions(pa_cutoff)
+
+        inbound_completed_cutoff = now - timedelta(
+            days=policies["whatsapp_inbound_completed"].retention_days
+        )
+        inbound_dead_cutoff = now - timedelta(
+            days=policies["whatsapp_inbound_dead_letter"].retention_days
+        )
+        result.inbound_events_deleted = await self._cleanup_inbound_events(
+            inbound_completed_cutoff, inbound_dead_cutoff
+        )
 
         result.execution_time_ms = (time.monotonic() - start) * 1000
         return result
@@ -186,3 +198,44 @@ class DataRetentionService:
                 extra={"count": count},
             )
         return count
+
+    async def _cleanup_inbound_events(
+        self,
+        completed_before: datetime,
+        dead_letter_before: datetime,
+    ) -> int:
+        completed_result = await self._session.execute(
+            text(
+                "DELETE FROM whatsapp_inbound_events "
+                "WHERE status = 'completed' AND completed_at < :before "
+                "AND ctid = ANY(ARRAY("
+                "  SELECT ctid FROM whatsapp_inbound_events "
+                "  WHERE status = 'completed' AND completed_at < :before "
+                "  LIMIT :limit"
+                "))"
+            ),
+            {"before": completed_before, "limit": _BATCH_SIZE},
+        )
+        completed_count = completed_result.rowcount or 0  # type: ignore[attr-defined]
+
+        dead_result = await self._session.execute(
+            text(
+                "DELETE FROM whatsapp_inbound_events "
+                "WHERE status = 'dead_letter' AND dead_lettered_at < :before "
+                "AND ctid = ANY(ARRAY("
+                "  SELECT ctid FROM whatsapp_inbound_events "
+                "  WHERE status = 'dead_letter' AND dead_lettered_at < :before "
+                "  LIMIT :limit"
+                "))"
+            ),
+            {"before": dead_letter_before, "limit": _BATCH_SIZE},
+        )
+        dead_count = dead_result.rowcount or 0  # type: ignore[attr-defined]
+
+        total = completed_count + dead_count
+        if total > 0:
+            logger.info(
+                "retention_inbound_events_cleaned",
+                extra={"completed": completed_count, "dead_letter": dead_count},
+            )
+        return total

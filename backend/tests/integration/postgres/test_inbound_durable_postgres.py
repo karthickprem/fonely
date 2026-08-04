@@ -10,15 +10,20 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from fonely.api.channels.whatsapp import _persist_inbound_event
+from fonely.api.channels.whatsapp import (
+    _persist_delivery_status,
+    _persist_inbound_event,
+)
 from fonely.models.schema import (
     NotificationOutboxEvent,
+    WhatsAppDeliveryAttempt,
     WhatsAppInboundEvent,
 )
 from fonely.repositories.inbound_events import (
     InboundEventRepository,
     StaleClaimError,
 )
+from fonely.repositories.notifications import NotificationRepository
 from fonely.services.data_retention import DataRetentionService
 from fonely.workers.inbound_worker import ClaimedEvent, _enqueue_response
 
@@ -442,3 +447,170 @@ class TestLiveConstraintsAndRetention:
 
         async with pg_session_factory() as check:
             assert await check.get(WhatsAppInboundEvent, event_id) is None
+
+
+class TestDeliveryReconciliation:
+    async def test_provider_status_completes_inbound_and_clears_body(
+        self, pg_session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        async with pg_session_factory() as seed:
+            await seed_business(seed)
+            event_id = await insert_event(seed, message_id="wamid.status")
+            await seed.execute(
+                text("UPDATE whatsapp_inbound_events SET status='domain_processed' WHERE id=:id"),
+                {"id": event_id},
+            )
+            outbox = await NotificationRepository(seed).insert_event_idempotent(
+                {
+                    "business_id": 1,
+                    "event_type": "whatsapp_inbound_response",
+                    "entity_type": "whatsapp_inbound_event",
+                    "entity_id": event_id,
+                    "recipient_type": "patient",
+                    "recipient_phone": "919876543210",
+                    "channel": "whatsapp",
+                    "payload": {
+                        "response_text": "ok",
+                        "phone_number_id": "phone-1",
+                    },
+                    "status": "unknown",
+                    "idempotency_key": "whatsapp-response-wamid.status",
+                }
+            )
+            assert outbox is not None
+            seed.add(
+                WhatsAppDeliveryAttempt(
+                    business_id=1,
+                    notification_event_id=outbox.id,
+                    attempt_number=1,
+                    status="accepted",
+                    provider_message_id="meta-1",
+                )
+            )
+            await seed.commit()
+
+        async with pg_session_factory() as status_session:
+            changed = await _persist_delivery_status(
+                status_session,
+                {"id": "meta-1", "status": "delivered"},
+                1,
+            )
+            assert changed == 1
+            await status_session.commit()
+
+        async with pg_session_factory() as check:
+            event = await check.get(WhatsAppInboundEvent, event_id)
+            assert event is not None
+            assert event.status == "completed"
+            assert event.message_body is None
+
+    async def test_terminal_fallback_delivery_completes_dead_letter(
+        self, pg_session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        async with pg_session_factory() as seed:
+            await seed_business(seed)
+            event_id = await insert_event(seed, message_id="wamid.fallback")
+            await seed.execute(
+                text(
+                    "UPDATE whatsapp_inbound_events SET status='dead_letter', "
+                    "attempts=5, dead_lettered_at=NOW() WHERE id=:id"
+                ),
+                {"id": event_id},
+            )
+            outbox = await NotificationRepository(seed).insert_event_idempotent(
+                {
+                    "business_id": 1,
+                    "event_type": "whatsapp_inbound_response",
+                    "entity_type": "whatsapp_inbound_event",
+                    "entity_id": event_id,
+                    "recipient_type": "patient",
+                    "recipient_phone": "919876543210",
+                    "channel": "whatsapp",
+                    "payload": {
+                        "response_text": "fallback",
+                        "phone_number_id": "phone-1",
+                        "terminal_fallback": True,
+                    },
+                    "status": "unknown",
+                    "idempotency_key": "whatsapp-response-wamid.fallback",
+                }
+            )
+            assert outbox is not None
+            seed.add(
+                WhatsAppDeliveryAttempt(
+                    business_id=1,
+                    notification_event_id=outbox.id,
+                    attempt_number=1,
+                    status="accepted",
+                    provider_message_id="meta-fallback",
+                )
+            )
+            await seed.commit()
+
+        async with pg_session_factory() as session:
+            await _persist_delivery_status(
+                session,
+                {"id": "meta-fallback", "status": "delivered"},
+                1,
+            )
+            await session.commit()
+
+        async with pg_session_factory() as check:
+            event = await check.get(WhatsAppInboundEvent, event_id)
+            assert event is not None and event.status == "completed"
+            assert event.message_body is None
+
+    async def test_stale_processing_notification_is_reclaimed(
+        self, pg_session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        async with pg_session_factory() as seed:
+            await seed_business(seed)
+            outbox = await NotificationRepository(seed).insert_event_idempotent(
+                {
+                    "business_id": 1,
+                    "event_type": "appointment_confirmed",
+                    "entity_type": "appointment",
+                    "entity_id": 1,
+                    "recipient_type": "patient",
+                    "recipient_phone": "919876543210",
+                    "channel": "whatsapp",
+                    "payload": {"phone_number_id": "phone-1"},
+                    "status": "processing",
+                    "idempotency_key": "stale-notification",
+                }
+            )
+            assert outbox is not None
+            await seed.execute(
+                text(
+                    "UPDATE notification_outbox "
+                    "SET updated_at=NOW()-INTERVAL '6 minutes' WHERE id=:id"
+                ),
+                {"id": outbox.id},
+            )
+            await seed.commit()
+
+        async with pg_session_factory() as claim:
+            claimed = await NotificationRepository(claim).claim_pending_events(limit=1)
+            assert len(claimed) == 1
+            assert claimed[0].id == outbox.id
+
+    async def test_response_failed_retention_cleanup(
+        self, pg_session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        old = datetime.now(UTC) - timedelta(days=31)
+        async with pg_session_factory() as seed:
+            await seed_business(seed)
+            event_id = await insert_event(seed, message_id="wamid.responsefailed")
+            await seed.execute(
+                text(
+                    "UPDATE whatsapp_inbound_events SET status='response_failed', "
+                    "dead_lettered_at=:old WHERE id=:id"
+                ),
+                {"old": old, "id": event_id},
+            )
+            await seed.commit()
+
+        async with pg_session_factory() as cleanup:
+            result = await DataRetentionService(cleanup).run_cleanup()
+            await cleanup.commit()
+            assert result.inbound_events_deleted == 1

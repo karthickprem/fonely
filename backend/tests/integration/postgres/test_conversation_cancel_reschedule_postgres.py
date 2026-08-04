@@ -148,6 +148,7 @@ async def test_cancel_flow_produces_cancelled_appointment(
     async with pg_session_factory() as session:
         gateway = _mock_gateway()
         appt_id = await _book_appointment(session, gateway, slot)
+        await session.commit()
 
     async with pg_session_factory() as session:
         gateway = _mock_gateway()

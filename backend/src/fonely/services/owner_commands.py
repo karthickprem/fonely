@@ -1,6 +1,5 @@
 """Owner command execution service."""
 
-import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
@@ -19,10 +18,9 @@ from fonely.models.schema import (
     Resource,
     ScheduleException,
 )
+from fonely.repositories.appointments import AppointmentRepository
 from fonely.services.model_gateway import ModelGateway
 from fonely.services.owner_command_parser import OwnerCommandParser, ParsedOwnerCommand
-
-logger = logging.getLogger("fonely.services.owner_commands")
 
 _UNKNOWN_RESPONSE = (
     "Sorry, I didn't understand that command. You can say things like:\n"
@@ -47,6 +45,7 @@ class OwnerCommandService:
     def __init__(self, session: AsyncSession, model: ModelGateway) -> None:
         self._session = session
         self._parser = OwnerCommandParser(model)
+        self._appointments = AppointmentRepository(session)
 
     async def process_command(
         self, business_id: int, owner_phone: str, message: str
@@ -91,6 +90,7 @@ class OwnerCommandService:
 
         target_date = await self._resolve_date(business_id, parsed.date)
         reason = parsed.reason or "Leave"
+        await self._appointments.lock_resource_schedule(business_id, resource.id)
 
         exc = ScheduleException(
             business_id=business_id,
@@ -130,6 +130,7 @@ class OwnerCommandService:
     ) -> OwnerCommandResult:
         target_date = await self._resolve_date(business_id, parsed.date)
         reason = parsed.reason or "Closed"
+        await self._lock_business_resources(business_id)
 
         exc = ScheduleException(
             business_id=business_id,
@@ -214,6 +215,7 @@ class OwnerCommandService:
                 response_text="Close time must be after the opening time.",
             )
 
+        await self._lock_business_resources(business_id)
         reason = parsed.reason or "Closing early"
         exc = ScheduleException(
             business_id=business_id,
@@ -288,21 +290,20 @@ class OwnerCommandService:
             )
             if decision.available:
                 continue
-            success = await self._cancel_via_service(
+            await self._cancel_via_service(
                 business_id,
                 appointment.id,
                 appointment.version,
                 owner_phone,
                 "owner_close_early",
             )
-            if success:
-                cancelled.append(
-                    {
-                        "time": local_start.strftime("%-I:%M %p"),
-                        "patient": appointment.customer_name or "Patient",
-                        "service": appointment.service_name_snapshot,
-                    }
-                )
+            cancelled.append(
+                {
+                    "time": local_start.strftime("%-I:%M %p"),
+                    "patient": appointment.customer_name or "Patient",
+                    "service": appointment.service_name_snapshot,
+                }
+            )
         return cancelled
 
     async def _handle_get_summary(
@@ -422,6 +423,11 @@ class OwnerCommandService:
                 return r
         return None
 
+    async def _lock_business_resources(self, business_id: int) -> None:
+        await self._appointments.lock_business_schedule(business_id)
+        resource_ids = await self._appointments.list_active_resource_ids(business_id)
+        await self._appointments.lock_resource_schedules(business_id, resource_ids)
+
     async def _resolve_date(self, business_id: int, expr: str | None) -> date:
         timezone = await self._get_business_timezone(business_id)
         today = datetime.now(ZoneInfo(timezone)).date()
@@ -468,19 +474,18 @@ class OwnerCommandService:
         for appt in appointments:
             if appt.start_at.astimezone(tz).date() != target_date:
                 continue
-            success = await self._cancel_via_service(
+            await self._cancel_via_service(
                 business_id, appt.id, appt.version, owner_phone, "owner_leave"
             )
-            if success:
-                local_time = appt.start_at.astimezone(tz).strftime("%-I:%M %p")
-                cancelled.append(
-                    {
-                        "time": local_time,
-                        "patient": appt.customer_name or "Patient",
-                        "service": appt.service_name_snapshot,
-                        "phone": appt.customer_phone,
-                    }
-                )
+            local_time = appt.start_at.astimezone(tz).strftime("%-I:%M %p")
+            cancelled.append(
+                {
+                    "time": local_time,
+                    "patient": appt.customer_name or "Patient",
+                    "service": appt.service_name_snapshot,
+                    "phone": appt.customer_phone,
+                }
+            )
         return cancelled
 
     async def _cancel_all_appointments(
@@ -508,17 +513,16 @@ class OwnerCommandService:
         for appt in appointments:
             if appt.start_at.astimezone(tz).date() != target_date:
                 continue
-            success = await self._cancel_via_service(
+            await self._cancel_via_service(
                 business_id, appt.id, appt.version, owner_phone, "owner_closure"
             )
-            if success:
-                cancelled.append(
-                    {
-                        "time": appt.start_at.astimezone(tz).strftime("%-I:%M %p"),
-                        "patient": appt.customer_name or "Patient",
-                        "service": appt.service_name_snapshot,
-                    }
-                )
+            cancelled.append(
+                {
+                    "time": appt.start_at.astimezone(tz).strftime("%-I:%M %p"),
+                    "patient": appt.customer_name or "Patient",
+                    "service": appt.service_name_snapshot,
+                }
+            )
         return cancelled
 
     async def _cancel_via_service(
@@ -528,53 +532,43 @@ class OwnerCommandService:
         appointment_version: int,
         owner_phone: str,
         reason_code: str,
-    ) -> bool:
-        try:
-            async with self._session.begin_nested():
-                from fonely.api.internal.validation import InternalValidationPort
-                from fonely.domain.appointments.commands import (
-                    ConfirmPendingAppointmentCancellationCommand,
-                    CreatePendingAppointmentCancellationCommand,
-                )
-                from fonely.domain.pending_actions.commands import ActorContext
-                from fonely.services.appointments import AppointmentService
+    ) -> None:
+        from fonely.api.internal.validation import InternalValidationPort
+        from fonely.domain.appointments.commands import (
+            ConfirmPendingAppointmentCancellationCommand,
+            CreatePendingAppointmentCancellationCommand,
+        )
+        from fonely.domain.pending_actions.commands import ActorContext
+        from fonely.services.appointments import AppointmentService
 
-                validation = InternalValidationPort(self._session)
-                appt_service = AppointmentService(self._session, validation=validation)
-                actor = ActorContext(
-                    business_id=business_id,
-                    normalized_phone=owner_phone,
-                    verified_role=CallerRole.OWNER,
-                    session_id=None,
-                )
+        validation = InternalValidationPort(self._session)
+        appt_service = AppointmentService(self._session, validation=validation)
+        actor = ActorContext(
+            business_id=business_id,
+            normalized_phone=owner_phone,
+            verified_role=CallerRole.OWNER,
+            session_id=None,
+        )
 
-                now = datetime.now(UTC)
-                key = f"owner-cancel-{appointment_id}-{uuid.uuid4().hex[:8]}"
-                proposal = await appt_service.create_cancellation_proposal(
-                    CreatePendingAppointmentCancellationCommand(
-                        actor=actor,
-                        appointment_id=appointment_id,
-                        expected_appointment_version=appointment_version,
-                        reason_code=reason_code,
-                        expires_at=now + timedelta(minutes=5),
-                        idempotency_key=key,
-                    )
-                )
-                await appt_service.confirm_cancellation(
-                    ConfirmPendingAppointmentCancellationCommand(
-                        actor=actor,
-                        pending_action_id=proposal.pending_action_id,
-                        expected_version=proposal.version,
-                    )
-                )
-                return True
-        except Exception:
-            logger.warning(
-                "owner_cancel_service_failed",
-                extra={"appointment_id": appointment_id},
-                exc_info=True,
+        now = datetime.now(UTC)
+        key = f"owner-cancel-{appointment_id}-{uuid.uuid4().hex[:8]}"
+        proposal = await appt_service.create_cancellation_proposal(
+            CreatePendingAppointmentCancellationCommand(
+                actor=actor,
+                appointment_id=appointment_id,
+                expected_appointment_version=appointment_version,
+                reason_code=reason_code,
+                expires_at=now + timedelta(minutes=5),
+                idempotency_key=key,
             )
-            return False
+        )
+        await appt_service.confirm_cancellation(
+            ConfirmPendingAppointmentCancellationCommand(
+                actor=actor,
+                pending_action_id=proposal.pending_action_id,
+                expected_version=proposal.version,
+            )
+        )
 
 
 async def get_daily_context(

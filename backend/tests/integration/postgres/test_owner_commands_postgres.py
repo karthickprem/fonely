@@ -49,6 +49,19 @@ async def _seed_clinic(session: AsyncSession) -> None:
             "(2, 1, 'Root Canal', 60, true)"
         )
     )
+    await session.execute(
+        text(
+            "INSERT INTO service_resource_eligibility "
+            "(business_id, service_id, resource_id, is_active) VALUES (1, 1, 1, true)"
+        )
+    )
+    await session.execute(
+        text(
+            "INSERT INTO operating_schedules "
+            "(business_id, day_of_week, open_time, close_time, is_active) "
+            "SELECT 1, day, '09:00', '18:00', true FROM generate_series(0, 6) AS day"
+        )
+    )
 
 
 async def test_doctor_leave_creates_exception_and_cancels(

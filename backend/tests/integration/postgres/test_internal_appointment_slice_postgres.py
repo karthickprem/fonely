@@ -244,19 +244,8 @@ async def test_overlapping_slot_returns_retryable(seeded_app: AsyncClient) -> No
         },
         headers=_headers(),
     )
-    assert p2_resp.status_code == 201
-    p2 = p2_resp.json()
-
-    r2 = await seeded_app.post(
-        f"/internal/v1/appointment-proposals/{p2['pending_action_id']}/confirm",
-        json={"expected_version": p2["version"]},
-        headers=_headers(),
-    )
-    assert r2.status_code == 200
-    data = r2.json()
-    assert data["status"] == "retryable_failure"
-    assert data["error_code"] == "resource_unavailable"
-    assert data["retryable"] is True
+    assert p2_resp.status_code == 409
+    assert p2_resp.json()["detail"] == "capacity_conflict"
 
 
 async def test_missing_auth_returns_401(seeded_app: AsyncClient) -> None:

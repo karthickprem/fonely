@@ -1,7 +1,8 @@
 """End-to-end PostgreSQL tests for internal text appointment slice."""
 
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -59,6 +60,13 @@ async def _seed_salon(session: AsyncSession) -> None:
             "VALUES (1, 1, 1, true)"
         )
     )
+    await session.execute(
+        text(
+            "INSERT INTO operating_schedules "
+            "(business_id, day_of_week, open_time, close_time, is_active) "
+            "SELECT 1, day, '09:00', '18:00', true FROM generate_series(0, 6) AS day"
+        )
+    )
     await session.commit()
 
 
@@ -95,7 +103,9 @@ async def _create_proposal(
     headers: dict[str, str] | None = None,
 ) -> dict[str, object]:
     now = utcnow()
-    slot = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=2)
+    zone = ZoneInfo("Asia/Kolkata")
+    local_day = datetime.now(zone).date() + timedelta(days=2)
+    slot = datetime.combine(local_day, time(10), tzinfo=zone)
     response = await client.post(
         "/internal/v1/appointment-proposals",
         json={
@@ -209,7 +219,9 @@ async def test_unrelated_customer_confirm_returns_403(
 
 async def test_overlapping_slot_returns_retryable(seeded_app: AsyncClient) -> None:
     now = utcnow()
-    slot = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=2)
+    zone = ZoneInfo("Asia/Kolkata")
+    local_day = datetime.now(zone).date() + timedelta(days=2)
+    slot = datetime.combine(local_day, time(10), tzinfo=zone)
 
     p1 = await _create_proposal(seeded_app, idempotency_key="winner-e2e")
     r1 = await seeded_app.post(

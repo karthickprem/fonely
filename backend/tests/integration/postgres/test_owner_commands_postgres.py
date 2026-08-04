@@ -56,7 +56,9 @@ async def test_doctor_leave_creates_exception_and_cancels(
 ) -> None:
     await _seed_clinic(pg_session)
 
-    tomorrow = (datetime.now(UTC) + timedelta(days=1)).date()
+    from zoneinfo import ZoneInfo
+
+    tomorrow = datetime.now(ZoneInfo("Asia/Kolkata")).date() + timedelta(days=1)
     await pg_session.execute(
         text(
             "INSERT INTO pending_actions "
@@ -114,7 +116,9 @@ async def test_get_summary_returns_appointment_list(
 ) -> None:
     await _seed_clinic(pg_session)
 
-    tomorrow = (datetime.now(UTC) + timedelta(days=1)).date()
+    from zoneinfo import ZoneInfo
+
+    tomorrow = datetime.now(ZoneInfo("Asia/Kolkata")).date() + timedelta(days=1)
     tomorrow_10am = datetime.combine(
         tomorrow, datetime.min.time().replace(hour=4, minute=30), tzinfo=UTC
     )

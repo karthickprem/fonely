@@ -1,0 +1,441 @@
+"""Real PostgreSQL contracts for durable WhatsApp inbox correctness."""
+
+from __future__ import annotations
+
+import asyncio
+from datetime import UTC, datetime, timedelta
+
+import pytest
+from sqlalchemy import func, select, text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from fonely.api.channels.whatsapp import _persist_inbound_event
+from fonely.models.schema import (
+    NotificationOutboxEvent,
+    WhatsAppInboundEvent,
+)
+from fonely.repositories.inbound_events import (
+    InboundEventRepository,
+    StaleClaimError,
+)
+from fonely.services.data_retention import DataRetentionService
+from fonely.workers.inbound_worker import ClaimedEvent, _enqueue_response
+
+pytestmark = pytest.mark.postgres
+
+
+async def seed_business(session: AsyncSession, business_id: int = 1) -> None:
+    await session.execute(
+        text(
+            "INSERT INTO businesses "
+            "(id, name, category, primary_contact_phone, timezone, subscription) "
+            "VALUES (:id, :name, 'dental_clinic', :phone, 'Asia/Kolkata', 'trial')"
+        ),
+        {
+            "id": business_id,
+            "name": f"Clinic {business_id}",
+            "phone": f"+9190000000{business_id:02d}",
+        },
+    )
+    await session.flush()
+
+
+async def insert_event(
+    session: AsyncSession,
+    *,
+    message_id: str,
+    sender: str = "919876543210",
+    business_id: int = 1,
+    status: str = "received",
+    attempts: int = 0,
+    max_attempts: int = 5,
+    provider_timestamp: datetime | None = None,
+    next_attempt_at: datetime | None = None,
+    message_body: str | None = "book consultation",
+) -> int:
+    provider_timestamp = provider_timestamp or datetime.now(UTC)
+    result = await session.execute(
+        text(
+            "INSERT INTO whatsapp_inbound_events "
+            "(message_id, business_id, phone_number_id, sender_phone, "
+            " message_type, message_body, status, attempts, max_attempts, "
+            " provider_timestamp, next_attempt_at) "
+            "VALUES (:mid, :bid, :pnid, :sender, 'text', :body, :status, "
+            " :attempts, :max_attempts, :provider_ts, :next_at) RETURNING id"
+        ),
+        {
+            "mid": message_id,
+            "bid": business_id,
+            "pnid": f"phone-{business_id}",
+            "sender": sender,
+            "body": message_body,
+            "status": status,
+            "attempts": attempts,
+            "max_attempts": max_attempts,
+            "provider_ts": provider_timestamp,
+            "next_at": next_attempt_at,
+        },
+    )
+    return result.scalar_one()
+
+
+class TestConcurrentDedup:
+    async def test_concurrent_duplicate_insert_creates_one_row(
+        self, pg_session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        async with pg_session_factory() as seed:
+            await seed_business(seed)
+            await seed.commit()
+
+        async def persist() -> int:
+            async with pg_session_factory() as session:
+                count = await _persist_inbound_event(
+                    session,
+                    {
+                        "id": "wamid.duplicate",
+                        "from": "919876543210",
+                        "type": "text",
+                        "timestamp": "1785800000",
+                        "text": {"body": "hello"},
+                    },
+                    1,
+                    "phone-1",
+                )
+                await session.commit()
+                return count
+
+        results = await asyncio.gather(persist(), persist())
+        assert sorted(results) == [0, 1]
+        async with pg_session_factory() as check:
+            count = await check.scalar(select(func.count()).select_from(WhatsAppInboundEvent))
+            assert count == 1
+
+
+class TestClaimsAndOrdering:
+    async def test_skip_locked_never_claims_same_row_twice(
+        self, pg_session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        async with pg_session_factory() as seed:
+            await seed_business(seed)
+            await insert_event(seed, message_id="wamid.one")
+            await seed.commit()
+
+        session_a = pg_session_factory()
+        session_b = pg_session_factory()
+        try:
+            claim_a = await InboundEventRepository(session_a).claim_next_eligible()
+            assert claim_a is not None
+            claim_b = await InboundEventRepository(session_b).claim_next_eligible()
+            assert claim_b is None
+        finally:
+            await session_a.rollback()
+            await session_b.rollback()
+            await session_a.close()
+            await session_b.close()
+
+    async def test_failed_head_blocks_later_same_conversation(
+        self, pg_session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        now = datetime.now(UTC)
+        async with pg_session_factory() as seed:
+            await seed_business(seed)
+            first_id = await insert_event(
+                seed,
+                message_id="wamid.A",
+                status="failed",
+                next_attempt_at=now + timedelta(hours=1),
+                provider_timestamp=now,
+            )
+            await insert_event(
+                seed,
+                message_id="wamid.B",
+                provider_timestamp=now + timedelta(seconds=1),
+            )
+            await seed.commit()
+
+        async with pg_session_factory() as session:
+            claimed = await InboundEventRepository(session).claim_next_eligible()
+            assert claimed is None
+            first = await session.get(WhatsAppInboundEvent, first_id)
+            assert first is not None and first.status == "failed"
+
+    async def test_different_conversations_can_claim_concurrently(
+        self, pg_session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        now = datetime.now(UTC)
+        async with pg_session_factory() as seed:
+            await seed_business(seed)
+            await insert_event(
+                seed, message_id="wamid.A", sender="911111111111", provider_timestamp=now
+            )
+            await insert_event(
+                seed,
+                message_id="wamid.B",
+                sender="922222222222",
+                provider_timestamp=now,
+            )
+            await seed.commit()
+
+        session_a = pg_session_factory()
+        session_b = pg_session_factory()
+        try:
+            claim_a = await InboundEventRepository(session_a).claim_next_eligible()
+            claim_b = await InboundEventRepository(session_b).claim_next_eligible()
+            assert claim_a is not None and claim_b is not None
+            assert claim_a.id != claim_b.id
+        finally:
+            await session_a.rollback()
+            await session_b.rollback()
+            await session_a.close()
+            await session_b.close()
+
+
+class TestClaimOwnership:
+    async def test_stale_worker_cannot_overwrite_reclaimed_success(
+        self, pg_session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        async with pg_session_factory() as seed:
+            await seed_business(seed)
+            event_id = await insert_event(seed, message_id="wamid.lease")
+            await seed.commit()
+
+        async with pg_session_factory() as session_a:
+            event_a = await InboundEventRepository(session_a).claim_next_eligible()
+            assert event_a is not None and event_a.claim_token is not None
+            token_a = event_a.claim_token
+            version_a = event_a.claim_version
+            await session_a.commit()
+
+        async with pg_session_factory() as expire:
+            await expire.execute(
+                text(
+                    "UPDATE whatsapp_inbound_events "
+                    "SET lease_expires_at = NOW() - INTERVAL '1 second' "
+                    "WHERE id = :id"
+                ),
+                {"id": event_id},
+            )
+            await expire.commit()
+
+        async with pg_session_factory() as session_b:
+            event_b = await InboundEventRepository(session_b).claim_next_eligible()
+            assert event_b is not None and event_b.claim_token is not None
+            await InboundEventRepository(session_b).verify_and_mark_domain_processed(
+                1, event_id, event_b.claim_token, event_b.claim_version
+            )
+            await session_b.commit()
+
+        async with pg_session_factory() as late_a:
+            with pytest.raises(StaleClaimError):
+                await InboundEventRepository(late_a).verify_and_mark_domain_processed(
+                    1, event_id, token_a, version_a
+                )
+
+    async def test_cross_tenant_failure_update_rejected(
+        self, pg_session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        async with pg_session_factory() as seed:
+            await seed_business(seed, 1)
+            await seed_business(seed, 2)
+            event_id = await insert_event(seed, message_id="wamid.tenant", business_id=1)
+            await seed.commit()
+
+        async with pg_session_factory() as claim:
+            event = await InboundEventRepository(claim).claim_next_eligible()
+            assert event is not None and event.claim_token is not None
+            token = event.claim_token
+            version = event.claim_version
+            await claim.commit()
+
+        async with pg_session_factory() as wrong:
+            changed = await InboundEventRepository(wrong).mark_failed(
+                2, event_id, token, version, "RuntimeError"
+            )
+            assert changed is False
+            await wrong.commit()
+
+        async with pg_session_factory() as check:
+            event = await check.get(WhatsAppInboundEvent, event_id)
+            assert event is not None and event.status == "processing"
+
+
+class TestAtomicOutboxAndLifecycle:
+    async def test_response_enqueue_is_idempotent_and_atomic(
+        self, pg_session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        async with pg_session_factory() as seed:
+            await seed_business(seed)
+            event_id = await insert_event(seed, message_id="wamid.atomic")
+            await seed.commit()
+
+        async with pg_session_factory() as claim:
+            event = await InboundEventRepository(claim).claim_next_eligible()
+            assert event is not None and event.claim_token is not None
+            claimed = ClaimedEvent(
+                event_id=event.id,
+                business_id=event.business_id,
+                message_id=event.message_id,
+                sender_phone=event.sender_phone,
+                message_type=event.message_type,
+                message_body=event.message_body,
+                phone_number_id=event.phone_number_id,
+                claim_token=event.claim_token,
+                claim_version=event.claim_version,
+                attempts=event.attempts,
+                max_attempts=event.max_attempts,
+            )
+            await claim.commit()
+
+        async with pg_session_factory() as commit:
+            repo = InboundEventRepository(commit)
+            await repo.acquire_conversation_lock(1, claimed.sender_phone)
+            await repo.require_owned_claim(1, event_id, claimed.claim_token, claimed.claim_version)
+            await _enqueue_response(claimed, "hello", commit)
+            await _enqueue_response(claimed, "hello", commit)
+            await repo.verify_and_mark_domain_processed(
+                1, event_id, claimed.claim_token, claimed.claim_version
+            )
+            await commit.commit()
+
+        async with pg_session_factory() as check:
+            count = await check.scalar(
+                select(func.count())
+                .select_from(NotificationOutboxEvent)
+                .where(NotificationOutboxEvent.entity_id == event_id)
+            )
+            event = await check.get(WhatsAppInboundEvent, event_id)
+            assert count == 1
+            assert event is not None and event.status == "domain_processed"
+
+    async def test_rollback_removes_outbox_and_domain_processed_state(
+        self, pg_session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        async with pg_session_factory() as seed:
+            await seed_business(seed)
+            event_id = await insert_event(seed, message_id="wamid.rollback")
+            await seed.commit()
+
+        async with pg_session_factory() as claim:
+            event = await InboundEventRepository(claim).claim_next_eligible()
+            assert event is not None and event.claim_token is not None
+            claimed = ClaimedEvent(
+                event_id=event.id,
+                business_id=event.business_id,
+                message_id=event.message_id,
+                sender_phone=event.sender_phone,
+                message_type=event.message_type,
+                message_body=event.message_body,
+                phone_number_id=event.phone_number_id,
+                claim_token=event.claim_token,
+                claim_version=event.claim_version,
+                attempts=event.attempts,
+                max_attempts=event.max_attempts,
+            )
+            await claim.commit()
+
+        async with pg_session_factory() as tx:
+            repo = InboundEventRepository(tx)
+            await _enqueue_response(claimed, "hello", tx)
+            await repo.verify_and_mark_domain_processed(
+                1, event_id, claimed.claim_token, claimed.claim_version
+            )
+            await tx.rollback()
+
+        async with pg_session_factory() as check:
+            count = await check.scalar(select(func.count()).select_from(NotificationOutboxEvent))
+            event = await check.get(WhatsAppInboundEvent, event_id)
+            assert count == 0
+            assert event is not None and event.status == "processing"
+
+    async def test_completion_clears_message_body(
+        self, pg_session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        async with pg_session_factory() as seed:
+            await seed_business(seed)
+            event_id = await insert_event(seed, message_id="wamid.complete")
+            await seed.execute(
+                text("UPDATE whatsapp_inbound_events SET status='domain_processed' WHERE id=:id"),
+                {"id": event_id},
+            )
+            await seed.commit()
+
+        async with pg_session_factory() as complete:
+            await InboundEventRepository(complete).mark_completed(1, event_id, datetime.now(UTC))
+            await complete.commit()
+
+        async with pg_session_factory() as check:
+            event = await check.get(WhatsAppInboundEvent, event_id)
+            assert event is not None
+            assert event.status == "completed"
+            assert event.message_body is None
+            assert event.completed_at is not None
+
+
+class TestLiveConstraintsAndRetention:
+    @pytest.mark.parametrize("status", ["bogus", "sent", "done"])
+    async def test_invalid_status_rejected(
+        self, pg_session_factory: async_sessionmaker[AsyncSession], status: str
+    ) -> None:
+        async with pg_session_factory() as session:
+            await seed_business(session)
+            with pytest.raises(IntegrityError):
+                await insert_event(session, message_id="wamid.invalid", status=status)
+                await session.flush()
+
+    @pytest.mark.parametrize(
+        "attempts,max_attempts",
+        [(-1, 5), (0, 0), (6, 5)],
+    )
+    async def test_invalid_attempt_counts_rejected(
+        self,
+        pg_session_factory: async_sessionmaker[AsyncSession],
+        attempts: int,
+        max_attempts: int,
+    ) -> None:
+        async with pg_session_factory() as session:
+            await seed_business(session)
+            with pytest.raises(IntegrityError):
+                await insert_event(
+                    session,
+                    message_id="wamid.invalid",
+                    attempts=attempts,
+                    max_attempts=max_attempts,
+                )
+                await session.flush()
+
+    async def test_completed_requires_timestamp_and_cleared_body(
+        self, pg_session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        async with pg_session_factory() as session:
+            await seed_business(session)
+            with pytest.raises(IntegrityError):
+                await insert_event(session, message_id="wamid.badcomplete", status="completed")
+                await session.flush()
+
+    async def test_dead_letter_retention_cleanup(
+        self, pg_session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        old = datetime.now(UTC) - timedelta(days=31)
+        async with pg_session_factory() as seed:
+            await seed_business(seed)
+            event_id = await insert_event(
+                seed,
+                message_id="wamid.dead",
+                status="dead_letter",
+                attempts=5,
+                max_attempts=5,
+            )
+            await seed.execute(
+                text("UPDATE whatsapp_inbound_events SET dead_lettered_at=:old WHERE id=:id"),
+                {"old": old, "id": event_id},
+            )
+            await seed.commit()
+
+        async with pg_session_factory() as cleanup:
+            result = await DataRetentionService(cleanup).run_cleanup()
+            await cleanup.commit()
+            assert result.inbound_events_deleted == 1
+
+        async with pg_session_factory() as check:
+            assert await check.get(WhatsAppInboundEvent, event_id) is None

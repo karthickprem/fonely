@@ -392,8 +392,16 @@ async def _clean_and_restore(pg_engine: AsyncEngine, database_url: str) -> None:
             )
             await conn.execute(text(f"TRUNCATE TABLE {tables_0004} RESTART IDENTITY CASCADE"))
         elif rev in (
-            "0005", "0006", "0007", "0008", "0009",
-            "0010", "0011", "0012", "0013", "0014",
+            "0005",
+            "0006",
+            "0007",
+            "0008",
+            "0009",
+            "0010",
+            "0011",
+            "0012",
+            "0013",
+            "0014",
         ):
             tables_0005 = (
                 "notification_outbox, "

@@ -1,13 +1,20 @@
-"""Repository for WhatsApp inbound event queue."""
+"""Tenant-scoped repository for WhatsApp inbound event queue."""
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fonely.models.enums import InboundEventStatus
 from fonely.models.schema import WhatsAppInboundEvent
+
+BACKOFF_SECONDS = (30, 60, 120, 300, 600)
+
+
+def _next_attempt_at(attempts: int) -> datetime:
+    index = min(attempts, len(BACKOFF_SECONDS) - 1)
+    return datetime.now(UTC) + timedelta(seconds=BACKOFF_SECONDS[index])
 
 
 class InboundEventRepository:
@@ -35,14 +42,30 @@ class InboundEventRepository:
         results = (await self._session.scalars(statement)).all()
         for event in results:
             event.status = InboundEventStatus.PROCESSING.value
-            event.attempts = event.attempts + 1
         await self._session.flush()
         return results
 
-    async def mark_completed(self, event_id: int, completed_at: datetime) -> None:
+    async def mark_domain_processed(
+        self, business_id: int, event_id: int
+    ) -> None:
         await self._session.execute(
             update(WhatsAppInboundEvent)
-            .where(WhatsAppInboundEvent.id == event_id)
+            .where(
+                WhatsAppInboundEvent.id == event_id,
+                WhatsAppInboundEvent.business_id == business_id,
+            )
+            .values(status=InboundEventStatus.DOMAIN_PROCESSED.value)
+        )
+
+    async def mark_completed(
+        self, business_id: int, event_id: int, completed_at: datetime
+    ) -> None:
+        await self._session.execute(
+            update(WhatsAppInboundEvent)
+            .where(
+                WhatsAppInboundEvent.id == event_id,
+                WhatsAppInboundEvent.business_id == business_id,
+            )
             .values(
                 status=InboundEventStatus.COMPLETED.value,
                 completed_at=completed_at,
@@ -50,21 +73,37 @@ class InboundEventRepository:
             )
         )
 
-    async def mark_failed(self, event_id: int, error: str, next_attempt_at: datetime) -> None:
-        event = await self._session.get(WhatsAppInboundEvent, event_id)
+    async def mark_failed(
+        self, business_id: int, event_id: int, error: str
+    ) -> None:
+        event = await self._session.scalar(
+            select(WhatsAppInboundEvent).where(
+                WhatsAppInboundEvent.id == event_id,
+                WhatsAppInboundEvent.business_id == business_id,
+            )
+        )
         if event is None:
             return
+        new_attempts = event.attempts + 1
+        is_dead = new_attempts >= event.max_attempts
         new_status = (
             InboundEventStatus.DEAD_LETTER.value
-            if event.attempts >= event.max_attempts
+            if is_dead
             else InboundEventStatus.FAILED.value
         )
+        values: dict[str, object] = {
+            "status": new_status,
+            "attempts": new_attempts,
+            "last_error": error[:500],
+            "next_attempt_at": _next_attempt_at(new_attempts - 1),
+        }
+        if is_dead:
+            values["dead_lettered_at"] = datetime.now(UTC)
         await self._session.execute(
             update(WhatsAppInboundEvent)
-            .where(WhatsAppInboundEvent.id == event_id)
-            .values(
-                status=new_status,
-                last_error=error[:500],
-                next_attempt_at=next_attempt_at,
+            .where(
+                WhatsAppInboundEvent.id == event_id,
+                WhatsAppInboundEvent.business_id == business_id,
             )
+            .values(**values)
         )

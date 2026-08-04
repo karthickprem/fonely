@@ -32,6 +32,17 @@ class NotificationSender(Protocol):
     async def send(self, event: NotificationOutboxEvent) -> DeliveryReceipt: ...
 
 
+class LoggingNotificationSender:
+    """Explicit test/development sender; production startup never selects it."""
+
+    async def send(self, event: NotificationOutboxEvent) -> DeliveryReceipt:
+        logger.info(
+            "notification_logged",
+            extra={"event_id": event.id, "event_type": event.event_type},
+        )
+        return DeliveryReceipt(provider_message_id=f"logged-{event.id}")
+
+
 @dataclass(frozen=True)
 class ClaimedNotification:
     event_id: int

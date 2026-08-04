@@ -23,7 +23,7 @@ def _patch_settings():
         mock_settings.whatsapp_access_token = "test-access"
         mock_settings.whatsapp_phone_number_id = "12345"
         mock_settings.whatsapp_business_mappings = ""
-        mock_settings.whatsapp_app_secret = ""
+        mock_settings.whatsapp_app_secret = "test-app-secret"
         yield mock_settings
 
 
@@ -45,6 +45,13 @@ def _make_app(*, insert_rowcount: int = 1) -> tuple[FastAPI, MagicMock]:
 
     app.state.session_factory = mock_factory
     return app, mock_session
+
+
+def _sign(body: bytes, secret: str = "test-app-secret") -> str:
+    import hashlib
+    import hmac as _hmac
+
+    return "sha256=" + _hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
 
 
 def _webhook_payload(
@@ -130,13 +137,21 @@ class TestWebhookPersistence:
     @pytest.mark.asyncio
     async def test_post_persists_and_returns_200(self):
         app, mock_session = _make_app()
+        body = json.dumps(_webhook_payload()).encode()
         with patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as map_cls:
             mock_map = MagicMock()
             mock_map.get_business_id.return_value = 1
             map_cls.return_value = mock_map
             transport = ASGITransport(app=app)
             async with AsyncClient(transport=transport, base_url="http://test") as client:
-                r = await client.post("/webhooks/whatsapp", json=_webhook_payload())
+                r = await client.post(
+                    "/webhooks/whatsapp",
+                    content=body,
+                    headers={
+                        "content-type": "application/json",
+                        "X-Hub-Signature-256": _sign(body),
+                    },
+                )
         assert r.status_code == 200
         mock_session.execute.assert_awaited()
         mock_session.commit.assert_awaited()
@@ -424,18 +439,12 @@ class TestWebhookSignatureVerification:
         assert response.status_code == 200
 
     @pytest.mark.asyncio
-    async def test_webhook_skips_verification_without_secret(self) -> None:
+    async def test_webhook_fails_closed_without_secret(self) -> None:
         import fonely.api.channels.whatsapp as wa_mod
         from fonely.core.config import Settings
 
         app = FastAPI()
         app.include_router(router)
-        mock_session = AsyncMock()
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=None)
-        mock_factory = MagicMock()
-        mock_factory.return_value = mock_session
-        app.state.session_factory = mock_factory
         transport = ASGITransport(app=app)
         test_settings = Settings(whatsapp_app_secret="")
         with patch.object(wa_mod, "settings", test_settings):
@@ -444,7 +453,7 @@ class TestWebhookSignatureVerification:
                     "/webhooks/whatsapp",
                     content=b'{"entry":[]}',
                 )
-        assert response.status_code == 200
+        assert response.status_code == 503
 
 
 class TestConstantTimeVerifyToken:

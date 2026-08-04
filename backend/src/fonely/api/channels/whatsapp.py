@@ -4,6 +4,8 @@ Messages are persisted to the whatsapp_inbound_events table before
 returning 200 to Meta. A separate inbound worker processes them with
 retry. No message is permanently lost as long as the database is
 available.
+
+Signature verification is mandatory when the route is enabled.
 """
 
 import hashlib
@@ -21,6 +23,11 @@ from fonely.services.whatsapp_config import WhatsAppBusinessMapping
 logger = logging.getLogger("fonely.api.channels.whatsapp")
 
 router = APIRouter(prefix="/webhooks/whatsapp", tags=["whatsapp"])
+
+_MAX_BODY_BYTES = 1_048_576
+_MAX_ENTRIES = 10
+_MAX_CHANGES = 10
+_MAX_MESSAGES = 20
 
 
 def _verify_webhook_signature(body: bytes, signature: str, secret: str) -> bool:
@@ -44,13 +51,21 @@ async def verify_webhook(request: Request) -> Response:
 
 @router.post("")
 async def handle_webhook(request: Request) -> Response:
+    if not settings.whatsapp_app_secret:
+        logger.error("whatsapp_webhook_secret_not_configured")
+        return Response(status_code=503)
+
     try:
         body = await request.body()
-        if settings.whatsapp_app_secret:
-            sig = request.headers.get("X-Hub-Signature-256", "")
-            if not _verify_webhook_signature(body, sig, settings.whatsapp_app_secret):
-                logger.warning("whatsapp_invalid_signature")
-                return Response(status_code=200)
+        if len(body) > _MAX_BODY_BYTES:
+            logger.warning("whatsapp_webhook_body_too_large", extra={"size": len(body)})
+            return Response(status_code=200)
+
+        sig = request.headers.get("X-Hub-Signature-256", "")
+        if not _verify_webhook_signature(body, sig, settings.whatsapp_app_secret):
+            logger.warning("whatsapp_invalid_signature")
+            return Response(status_code=200)
+
         payload = json.loads(body)
     except Exception:
         return Response(status_code=200)
@@ -68,17 +83,40 @@ async def handle_webhook(request: Request) -> Response:
 
     try:
         async with factory() as session:
-            for entry in payload.get("entry", []):
-                for change in entry.get("changes", []):
-                    value = change.get("value", {})
-                    metadata = value.get("metadata", {})
-                    phone_number_id = metadata.get("phone_number_id", "")
+            entries = payload.get("entry", [])
+            if not isinstance(entries, list):
+                return Response(status_code=200)
+
+            for entry in entries[:_MAX_ENTRIES]:
+                if not isinstance(entry, dict):
+                    continue
+                changes = entry.get("changes", [])
+                if not isinstance(changes, list):
+                    continue
+
+                for change in changes[:_MAX_CHANGES]:
+                    if not isinstance(change, dict):
+                        continue
+                    value = change.get("value")
+                    if not isinstance(value, dict):
+                        continue
+                    metadata = value.get("metadata")
+                    if not isinstance(metadata, dict):
+                        continue
+
+                    phone_number_id = metadata.get("phone_number_id")
+                    if not isinstance(phone_number_id, str) or not phone_number_id:
+                        continue
 
                     business_id = mapping.get_business_id(phone_number_id)
                     if business_id is None:
                         continue
 
-                    for message in value.get("messages", []):
+                    messages = value.get("messages")
+                    if not isinstance(messages, list):
+                        continue
+
+                    for message in messages[:_MAX_MESSAGES]:
                         count = await _persist_inbound_event(
                             session, message, business_id, phone_number_id
                         )
@@ -95,22 +133,35 @@ async def handle_webhook(request: Request) -> Response:
 
 async def _persist_inbound_event(
     session: AsyncSession,
-    message: dict[str, object],
+    message: object,
     business_id: int,
     phone_number_id: str,
 ) -> int:
-    message_id = str(message.get("id", ""))
-    sender_phone = str(message.get("from", ""))
-    message_type = str(message.get("type", ""))
-
-    if not message_id or not sender_phone:
+    if not isinstance(message, dict):
         return 0
+
+    raw_id = message.get("id")
+    raw_from = message.get("from")
+    raw_type = message.get("type")
+
+    if not isinstance(raw_id, str) or not raw_id:
+        return 0
+    if not isinstance(raw_from, str) or not raw_from:
+        return 0
+    if not isinstance(raw_type, str) or not raw_type:
+        return 0
+
+    message_id = raw_id[:100]
+    sender_phone = raw_from[:20]
+    message_type = raw_type[:20]
 
     message_body = None
     if message_type == "text":
         text_obj = message.get("text")
         if isinstance(text_obj, dict):
-            message_body = str(text_obj.get("body", ""))
+            raw_body = text_obj.get("body")
+            if isinstance(raw_body, str):
+                message_body = raw_body
 
     result = await session.execute(
         text(

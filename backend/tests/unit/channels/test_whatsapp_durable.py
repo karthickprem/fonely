@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -68,15 +69,32 @@ def _webhook_payload(
     }
 
 
+def _signed_post(client: TestClient, payload: dict) -> object:
+    import hashlib
+    import hmac as _hmac
+
+    body = json.dumps(payload).encode()
+    sig = "sha256=" + _hmac.new(b"test-app-secret", body, hashlib.sha256).hexdigest()
+    return client.post(
+        "/webhooks/whatsapp",
+        content=body,
+        headers={"content-type": "application/json", "X-Hub-Signature-256": sig},
+    )
+
+
 class TestWebhookPersistsThenReturns:
     def test_returns_200_after_persisting(self) -> None:
         app, mock_session = _create_app()
-        with patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as map_cls:
+        with (
+            patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as map_cls,
+            patch("fonely.api.channels.whatsapp.settings") as s,
+        ):
+            s.whatsapp_app_secret = "test-app-secret"
             mock_map = MagicMock()
             mock_map.get_business_id.return_value = 1
             map_cls.return_value = mock_map
             client = TestClient(app)
-            response = client.post("/webhooks/whatsapp", json=_webhook_payload())
+            response = _signed_post(client, _webhook_payload())
         assert response.status_code == 200
         mock_session.execute.assert_awaited()
         mock_session.commit.assert_awaited()
@@ -86,23 +104,31 @@ class TestWebhookPersistsThenReturns:
         dup_result = MagicMock()
         dup_result.rowcount = 0
         mock_session.execute = AsyncMock(return_value=dup_result)
-        with patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as map_cls:
+        with (
+            patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as map_cls,
+            patch("fonely.api.channels.whatsapp.settings") as s,
+        ):
+            s.whatsapp_app_secret = "test-app-secret"
             mock_map = MagicMock()
             mock_map.get_business_id.return_value = 1
             map_cls.return_value = mock_map
             client = TestClient(app)
-            response = client.post("/webhooks/whatsapp", json=_webhook_payload())
+            response = _signed_post(client, _webhook_payload())
         assert response.status_code == 200
         mock_session.commit.assert_not_awaited()
 
     def test_unknown_business_skipped(self) -> None:
         app, mock_session = _create_app()
-        with patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as map_cls:
+        with (
+            patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as map_cls,
+            patch("fonely.api.channels.whatsapp.settings") as s,
+        ):
+            s.whatsapp_app_secret = "test-app-secret"
             mock_map = MagicMock()
             mock_map.get_business_id.return_value = None
             map_cls.return_value = mock_map
             client = TestClient(app)
-            response = client.post("/webhooks/whatsapp", json=_webhook_payload())
+            response = _signed_post(client, _webhook_payload())
         assert response.status_code == 200
         mock_session.execute.assert_not_awaited()
 
@@ -120,25 +146,25 @@ class TestWebhookPersistsThenReturns:
     def test_returns_503_on_db_failure(self) -> None:
         app, mock_session = _create_app()
         mock_session.execute = AsyncMock(side_effect=RuntimeError("db down"))
-        with patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as map_cls:
+        with (
+            patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as map_cls,
+            patch("fonely.api.channels.whatsapp.settings") as s,
+        ):
+            s.whatsapp_app_secret = "test-app-secret"
             mock_map = MagicMock()
             mock_map.get_business_id.return_value = 1
             map_cls.return_value = mock_map
             client = TestClient(app)
-            response = client.post("/webhooks/whatsapp", json=_webhook_payload())
+            response = _signed_post(client, _webhook_payload())
         assert response.status_code == 503
 
-    def test_non_dict_json_returns_200(self) -> None:
+    def test_missing_secret_returns_503(self) -> None:
         app, _ = _create_app()
         client = TestClient(app)
         with patch("fonely.api.channels.whatsapp.settings") as s:
             s.whatsapp_app_secret = ""
-            response = client.post(
-                "/webhooks/whatsapp",
-                content=b"[1, 2, 3]",
-                headers={"content-type": "application/json"},
-            )
-        assert response.status_code == 200
+            response = client.post("/webhooks/whatsapp", json=_webhook_payload())
+        assert response.status_code == 503
 
 
 class TestInboundWorkerPhases:

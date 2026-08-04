@@ -22,6 +22,10 @@ INTENT_TERMS = {
     "service": ["service", "treatment", "cleaning", "scaling", "root canal"],
     "handoff": ["human", "person", "receptionist", "staff"],
     "clarification": ["which", "when", "what", "எது", "எப்ப", "என்ன"],
+    "education": ["types of teeth", "different teeth", "incisor", "canine", "premolar", "molar", "பல்லு பேர்"],
+    "repair": ["புரியல", "புரிஞ்சுக்கல", "wrong", "வேற கேக்குறேன்"],
+    "topic_change": ["timing வேண்டாம்", "வேற question", "மட்டும் சொல்லுங்க"],
+    "booking_procedure": ["procedure", "எப்படி book", "how to book"],
 }
 
 EMOTION_TERMS = {
@@ -75,7 +79,16 @@ def matched_labels(text: str, rules: dict[str, list[str]]) -> set[str]:
 
 
 def build_query(text: str) -> StyleQuery:
+    lower = text.casefold()
     intents = matched_labels(text, INTENT_TERMS) or {"clarification"}
+    if any(term in lower for term in ["types of teeth", "different teeth", "canine", "molar", "premolar", "பல்லு பேர்"]):
+        intents = {"education"}
+    elif any(term in lower for term in ["புரியல", "புரிஞ்சுக்கல", "வேற கேக்குறேன்", "wrong answer"]):
+        intents = {"repair"}
+    elif any(term in lower for term in ["timing வேண்டாம்", "வேற question", "மட்டும் சொல்லுங்க"]):
+        intents = {"topic_change"}
+    elif any(term in lower for term in ["procedure", "எப்படி book", "how to book"]):
+        intents = {"booking_procedure"}
     emotions = matched_labels(text, EMOTION_TERMS)
     emotion = next(iter(emotions), "calm")
     safety = "emergency" if "urgent" in intents else "medical" if "pain" in intents else "routine"
@@ -137,7 +150,7 @@ class ChennaiStyleRetriever:
         scored.sort(key=lambda item: (-item[0], item[1]))
         selected: list[dict] = []
         seen_scenarios: set[str] = set()
-        minimum_score = max(1, scored[0][0] - 4) if scored else 1
+        minimum_score = max(8, scored[0][0] - 3) if scored else 8
         for score, _, example in scored:
             if score < minimum_score or example["scenario"] in seen_scenarios:
                 continue

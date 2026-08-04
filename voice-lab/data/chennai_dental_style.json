@@ -2111,6 +2111,70 @@
       "emotion": "calm",
       "safety_level": "routine",
       "stage": "response"
+    },
+    {
+      "id": "curated-education",
+      "section": "R",
+      "scenario": "Simple dental education",
+      "caller": "What are the different types of teeth?",
+      "agent": "Front teeth incisors, next canines, then premolars, back-la molars.",
+      "delivery": "Direct, friendly, natural Tanglish.",
+      "intents": [
+        "education"
+      ],
+      "language_mix": "balanced_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "response",
+      "agent_tts": "Front teeth incisors, அடுத்து canines, அதுக்கப்புறம் premolars, பின்னாடி molars ங்க."
+    },
+    {
+      "id": "curated-topic-change",
+      "section": "R",
+      "scenario": "Caller stops booking flow",
+      "caller": "Timing vendam, enakku oru question irukku.",
+      "agent": "Seri, enna question sollunga?",
+      "delivery": "Immediately follow the latest request.",
+      "intents": [
+        "topic_change"
+      ],
+      "language_mix": "balanced_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "response",
+      "agent_tts": "சரிங்க, என்ன question சொல்லுங்க?"
+    },
+    {
+      "id": "curated-repair",
+      "section": "R",
+      "scenario": "Assistant misunderstood caller",
+      "caller": "Neenga purinjukkala, naan vera kekkuren.",
+      "agent": "Sorry, naan thappa purinjukitten. Neenga kettadhu marubadi sollunga?",
+      "delivery": "One apology, then relevant clarification.",
+      "intents": [
+        "repair"
+      ],
+      "language_mix": "balanced_tanglish",
+      "emotion": "confused",
+      "safety_level": "routine",
+      "stage": "clarification",
+      "agent_tts": "Sorry, நான் தவறா புரிஞ்சுக்கிட்டேன். நீங்க கேட்டது மறுபடி சொல்லுங்க?"
+    },
+    {
+      "id": "curated-booking-procedure",
+      "section": "R",
+      "scenario": "Caller asks booking procedure",
+      "caller": "Appointment book panna procedure enna?",
+      "agent": "Unga details kettu read back pannuven; idhu demo, actual booking save aagadhu.",
+      "delivery": "Transparent and concise.",
+      "intents": [
+        "booking_procedure"
+      ],
+      "language_mix": "balanced_tanglish",
+      "emotion": "calm",
+      "safety_level": "routine",
+      "stage": "response",
+      "agent_tts": "உங்க details கேட்டு read back பண்ணுவேன்; இது demo, actual booking save ஆகாது."
     }
   ]
 }

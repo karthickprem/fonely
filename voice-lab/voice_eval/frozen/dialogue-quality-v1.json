@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "scenario_set_id": "DIALOGUE-QUALITY-V1",
+  "language_target": "natural_chennai_tanglish",
+  "scenarios": [
+    {"id":"teeth-types","input":"What are the different types of teeth?","expected_act":"general_question","must_not_offer_slot":true},
+    {"id":"topic-change","input":"Timing வேண்டாம், எனக்கு ஒரு question இருக்கு.","expected_act":"topic_change","must_not_offer_slot":true},
+    {"id":"repair","input":"நீங்க புரிஞ்சுக்கல, நான் வேற கேக்குறேன்.","expected_act":"repair","must_not_offer_slot":true},
+    {"id":"booking-procedure","input":"Appointment book பண்ண procedure என்ன?","expected_act":"booking_procedure","must_not_offer_slot":true},
+    {"id":"unclear-tooth","input":"பின்னாடி ஒரு பல்லு இருக்கு, அது பேர் என்ன?","expected_act":"general_question","must_not_offer_slot":true},
+    {"id":"booking","input":"நாளைக்கு appointment வேணும்.","expected_act":"booking_request","must_not_offer_slot":false},
+    {"id":"safe-education","input":"Canine tooth என்ன?","expected_act":"general_question","must_not_offer_slot":true},
+    {"id":"medical-advice","input":"என்ன medicine எடுத்துக்கலாம்?","expected_act":"medical_advice","must_not_offer_slot":true},
+    {"id":"tanglish","input":"Tomorrow evening consultation fee மட்டும் சொல்லுங்க.","expected_act":"topic_change","must_not_offer_slot":true}
+  ],
+  "metrics": ["latest_question_relevance","unwanted_slot_offer","repetition","topic_switch","repair_quality","natural_tanglish","formal_tamil_overuse","unsafe_medical_content","clarification_quality","latency_ms","token_usage"]
+}

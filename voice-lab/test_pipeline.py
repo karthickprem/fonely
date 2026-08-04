@@ -17,7 +17,13 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.tests.utils import run_test
 
 from pipeline import clean_spoken_text
-from processors import ChennaiStyleProcessor, DentalSafetyProcessor
+from dialogue import classify_dialogue_act, contains_false_confirmation, contains_unwanted_slot
+from processors import (
+    ChennaiStyleProcessor,
+    DentalSafetyProcessor,
+    DialogueStateProcessor,
+    ResponseRelevanceProcessor,
+)
 from safety import classify
 from style_retriever import ChennaiStyleRetriever
 
@@ -80,6 +86,57 @@ def test_style_processor_does_not_mutate_conversation_history():
         assert isinstance(styled, LLMContextFrame)
         assert context.messages == original
         assert "<chennai_style_references>" in styled.context.messages[-1]["content"]
+
+    asyncio.run(run())
+
+
+def test_dialogue_state_stops_irrelevant_booking_flow():
+    assert classify_dialogue_act("Timing வேண்டாம், ஒரு question இருக்கு").must_not_offer_slot
+    assert classify_dialogue_act("நீங்க புரிஞ்சுக்கல").latest_user_act == "repair"
+    assert classify_dialogue_act("Appointment book பண்ண procedure என்ன?").latest_user_act == "booking_procedure"
+    booking = classify_dialogue_act("நாளைக்கு appointment வேணும்")
+    assert booking.booking_flow_active and not booking.must_not_offer_slot
+
+
+def test_style_retrieval_is_intent_aware_for_education_and_repair():
+    retriever = ChennaiStyleRetriever(STYLE_CORPUS)
+    education = retriever.retrieve("What are the different types of teeth?", limit=2)
+    repair = retriever.retrieve("நீங்க புரிஞ்சுக்கல, நான் வேற கேக்குறேன்", limit=2)
+    assert education and all("education" in item["intents"] for item in education)
+    assert repair and all("repair" in item["intents"] for item in repair)
+    assert all("booking" not in item["intents"] for item in [*education, *repair])
+
+
+def test_dialogue_state_processor_does_not_mutate_history():
+    async def run():
+        context = LLMContext(messages=[{"role": "user", "content": "Timing வேண்டாம்"}])
+        original = list(context.messages)
+        processor = DialogueStateProcessor()
+        down, _ = await run_test(processor, frames_to_send=[LLMContextFrame(context=context)])
+        assert context.messages == original
+        assert "must_not_offer_slot: true" in down[0].context.messages[-1]["content"]
+
+    asyncio.run(run())
+
+
+def test_relevance_guard_blocks_slot_and_false_confirmation():
+    async def run():
+        state = DialogueStateProcessor()
+        state.current_state = classify_dialogue_act("Timing வேண்டாம், கேள்வி இருக்கு")
+        guard = ResponseRelevanceProcessor(state)
+        down, _ = await run_test(
+            guard,
+            frames_to_send=[LLMTextFrame(text="நாளைக்கு 10 மணிக்கு வரலாம்?")],
+        )
+        assert not contains_unwanted_slot(down[0].text)
+        assert "question" in down[0].text
+
+        confirm, _ = await run_test(
+            ResponseRelevanceProcessor(state),
+            frames_to_send=[LLMTextFrame(text="Appointment confirmed ஆயிடுச்சு")],
+        )
+        assert not contains_false_confirmation(confirm[0].text)
+        assert "demo" in confirm[0].text
 
     asyncio.run(run())
 

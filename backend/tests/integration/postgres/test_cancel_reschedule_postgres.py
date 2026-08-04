@@ -3,7 +3,8 @@
 Every test exercises real PostgreSQL transactions through the AppointmentService.
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import text
@@ -31,8 +32,10 @@ from fonely.services.appointments import AppointmentService
 pytestmark = pytest.mark.postgres
 
 
-def _future_start() -> datetime:
-    return datetime.now(UTC) + timedelta(hours=2)
+def _future_start(*, days: int = 2, hour: int = 10, minute: int = 0) -> datetime:
+    zone = ZoneInfo("Asia/Kolkata")
+    day = datetime.now(zone).date() + timedelta(days=days)
+    return datetime.combine(day, time(hour, minute), tzinfo=zone).astimezone(UTC)
 
 
 def _customer(business_id: int = 1) -> ActorContext:
@@ -93,6 +96,15 @@ async def _seed_dental_clinic(session: AsyncSession, business_id: int = 1) -> No
             "VALUES (:bid, :sid, :rid, true) ON CONFLICT DO NOTHING"
         ),
         {"bid": business_id, "sid": business_id, "rid": business_id},
+    )
+    await session.execute(
+        text(
+            "INSERT INTO operating_schedules "
+            "(business_id, day_of_week, open_time, close_time, is_active) "
+            "SELECT :bid, day, '00:00', '23:59', true FROM generate_series(0, 6) AS day "
+            "ON CONFLICT DO NOTHING"
+        ),
+        {"bid": business_id},
     )
     await session.flush()
 
@@ -327,7 +339,7 @@ async def test_cancellation_proposal_idempotency(
 ) -> None:
     async with pg_session_factory() as session:
         await _seed_dental_clinic(session)
-        fixed_start = datetime.now(UTC) + timedelta(hours=3)
+        fixed_start = _future_start(hour=11)
         confirmed = await _create_confirmed_appointment(
             session, start_at=fixed_start, key_suffix="idemp"
         )
@@ -367,7 +379,7 @@ async def test_full_rescheduling_lifecycle(
 ) -> None:
     async with pg_session_factory() as session:
         await _seed_dental_clinic(session)
-        old_start = datetime.now(UTC) + timedelta(hours=2)
+        old_start = _future_start(hour=10)
         confirmed = await _create_confirmed_appointment(
             session, start_at=old_start, key_suffix="resched-life"
         )
@@ -376,7 +388,7 @@ async def test_full_rescheduling_lifecycle(
         validation = InternalValidationPort(session)
         service = AppointmentService(session, validation=validation)
 
-        new_start = datetime.now(UTC) + timedelta(hours=8)
+        new_start = _future_start(hour=12)
         proposal = await service.create_reschedule_proposal(
             CreatePendingAppointmentRescheduleCommand(
                 actor=_customer(),
@@ -442,7 +454,7 @@ async def test_reschedule_to_conflicting_time(
 ) -> None:
     async with pg_session_factory() as session:
         await _seed_dental_clinic(session)
-        start1 = datetime.now(UTC) + timedelta(hours=2)
+        start1 = _future_start(hour=10)
         start2 = start1 + timedelta(minutes=30)
 
         confirmed1 = await _create_confirmed_appointment(
@@ -454,27 +466,18 @@ async def test_reschedule_to_conflicting_time(
         validation = InternalValidationPort(session)
         service = AppointmentService(session, validation=validation)
 
-        proposal = await service.create_reschedule_proposal(
-            CreatePendingAppointmentRescheduleCommand(
-                actor=_customer(),
-                appointment_id=appt_id_1,
-                expected_appointment_version=1,
-                service_id=1,
-                start_at=start2,
-                expires_at=datetime.now(UTC) + timedelta(minutes=20),
-                idempotency_key="resched-conflict",
-            )
-        )
-
-        with pytest.raises(AppointmentDomainError) as exc_info:
-            await service.confirm_reschedule(
-                ConfirmPendingAppointmentRescheduleCommand(
+        with pytest.raises(ValueError, match="capacity_conflict"):
+            await service.create_reschedule_proposal(
+                CreatePendingAppointmentRescheduleCommand(
                     actor=_customer(),
-                    pending_action_id=proposal.pending_action_id,
-                    expected_version=proposal.version,
+                    appointment_id=appt_id_1,
+                    expected_appointment_version=1,
+                    service_id=1,
+                    start_at=start2,
+                    expires_at=datetime.now(UTC) + timedelta(minutes=20),
+                    idempotency_key="resched-conflict",
                 )
             )
-        assert exc_info.value.code == AppointmentErrorCode.SLOT_CONFLICT
 
         appt_unchanged = (
             await session.execute(
@@ -533,7 +536,7 @@ async def test_reschedule_cancelled_appointment(
                     appointment_id=appt_id,
                     expected_appointment_version=2,
                     service_id=1,
-                    start_at=datetime.now(UTC) + timedelta(hours=5),
+                    start_at=_future_start(hour=13),
                     expires_at=datetime.now(UTC) + timedelta(minutes=20),
                     idempotency_key="resched-after-cancel",
                 )

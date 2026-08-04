@@ -32,6 +32,12 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?Set INTERNAL_API_SECRET}
+      SARVAM_API_KEY: ${SARVAM_API_KEY:-}
+      WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN:-}
+      WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:-}
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
+      WHATSAPP_BUSINESS_MAPPINGS: ${WHATSAPP_BUSINESS_MAPPINGS:-}
+      WHATSAPP_APP_SECRET: ${WHATSAPP_APP_SECRET:-}
       LOG_FORMAT: ${LOG_FORMAT:-json}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
@@ -52,9 +58,27 @@ services:
     command: [".venv/bin/python", "run_inbound_worker.py"]
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
-      INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:-}
+      SARVAM_API_KEY: ${SARVAM_API_KEY:?Set SARVAM_API_KEY}
       LOG_FORMAT: ${LOG_FORMAT:-json}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    healthcheck:
+      disable: true
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  notification-worker:
+    build:
+      context: backend
+    command: [".venv/bin/python", "run_worker.py"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:-}
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    healthcheck:
+      disable: true
     depends_on:
       migrate:
         condition: service_completed_successfully

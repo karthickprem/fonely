@@ -13,7 +13,7 @@ RUN uv sync --frozen --no-dev --no-editable
 COPY src/ src/
 COPY migrations/ migrations/
 COPY alembic.ini ./
-COPY run.py ./
+COPY run.py run_worker.py run_inbound_worker.py ./
 
 RUN uv pip install --no-deps -e .
 

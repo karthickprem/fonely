@@ -564,6 +564,61 @@ class TestDeliveryReconciliation:
             assert outbox_row is not None and outbox_row.status == "delivered"
             assert inbound is not None and inbound.status == "completed"
 
+    async def test_older_attempt_callback_cannot_regress_newer_attempt(
+        self, pg_session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        async with pg_session_factory() as seed:
+            await seed_business(seed)
+            outbox = await NotificationRepository(seed).insert_event_idempotent(
+                {
+                    "business_id": 1,
+                    "event_type": "appointment_confirmed",
+                    "entity_type": "appointment",
+                    "entity_id": 1,
+                    "recipient_type": "patient",
+                    "recipient_phone": "919876543210",
+                    "channel": "whatsapp",
+                    "payload": {"phone_number_id": "phone-1"},
+                    "status": "unknown",
+                    "attempts": 2,
+                    "max_attempts": 5,
+                    "idempotency_key": "older-callback",
+                }
+            )
+            assert outbox is not None
+            seed.add_all(
+                [
+                    WhatsAppDeliveryAttempt(
+                        business_id=1,
+                        notification_event_id=outbox.id,
+                        attempt_number=1,
+                        status="accepted",
+                        provider_message_id="meta-old",
+                    ),
+                    WhatsAppDeliveryAttempt(
+                        business_id=1,
+                        notification_event_id=outbox.id,
+                        attempt_number=2,
+                        status="accepted",
+                        provider_message_id="meta-new",
+                    ),
+                ]
+            )
+            await seed.commit()
+
+        async with pg_session_factory() as callback:
+            changed = await _persist_delivery_status(
+                callback,
+                {"id": "meta-old", "status": "failed"},
+                1,
+            )
+            assert changed == 1
+            await callback.commit()
+
+        async with pg_session_factory() as check:
+            outbox_row = await check.get(NotificationOutboxEvent, outbox.id)
+            assert outbox_row is not None and outbox_row.status == "unknown"
+
     async def test_final_attempt_provider_failure_dead_letters_and_unblocks_inbound(
         self, pg_session_factory: async_sessionmaker[AsyncSession]
     ) -> None:

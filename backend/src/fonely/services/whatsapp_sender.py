@@ -35,7 +35,9 @@ class WhatsAppSender:
             self._resilient = ResilientClient(
                 "whatsapp",
                 timeout=10.0,
-                max_retries=2,
+                # WhatsApp sends are non-idempotent. Durable outbox retries own
+                # retry timing; the HTTP client must never replay one send.
+                max_retries=0,
                 circuit_breaker_threshold=5,
                 client=client,
             )

@@ -15,7 +15,7 @@ import logging
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Request, Response
-from sqlalchemy import select, text, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fonely.core.config import settings
@@ -249,6 +249,15 @@ async def _persist_delivery_status(
     )
     if outbox is None:
         return 0
+
+    latest_attempt = await session.scalar(
+        select(func.max(WhatsAppDeliveryAttempt.attempt_number)).where(
+            WhatsAppDeliveryAttempt.business_id == business_id,
+            WhatsAppDeliveryAttempt.notification_event_id == outbox.id,
+        )
+    )
+    if latest_attempt is not None and attempt.attempt_number < latest_attempt:
+        return 1
 
     # Provider statuses are monotonic: delivered/read are terminal successes.
     # Duplicate read/delivered callbacks and delayed failures are safe no-ops.

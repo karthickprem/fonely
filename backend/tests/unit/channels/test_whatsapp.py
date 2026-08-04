@@ -269,6 +269,7 @@ class TestWhatsAppSender:
         result = await sender.send_text("919876543210", "Hello")
         assert result.success is False
         assert result.error == "timeout"
+        mock_client.post.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_send_text_http_error(self):

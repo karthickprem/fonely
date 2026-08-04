@@ -1,330 +1,408 @@
-"""PostgreSQL integration tests for unified AvailabilityService."""
+"""PostgreSQL evidence for authoritative scheduling policy and capacity."""
 
 from datetime import UTC, date, datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from fonely.services.availability import AvailabilityService
+from fonely.domain.appointments.availability import schedule_weekday
+from fonely.services.availability import AvailabilityReason, AvailabilityService
 
 pytestmark = pytest.mark.postgres
 
+KOLKATA = ZoneInfo("Asia/Kolkata")
 
-async def _seed_clinic(session: AsyncSession, *, target_date_iso: str) -> None:
+
+def _target(days: int = 2) -> date:
+    return datetime.now(KOLKATA).date() + timedelta(days=days)
+
+
+def _at(day: date, hour: int, minute: int = 0) -> datetime:
+    return datetime.combine(day, time(hour, minute), tzinfo=KOLKATA)
+
+
+async def _seed_clinic(
+    session: AsyncSession,
+    *,
+    business_id: int = 1,
+    resource_id: int = 1,
+    service_id: int = 1,
+    horizon: int = 90,
+    notice: int = 0,
+    interval: int = 15,
+    buffer_before: int = 0,
+    buffer_after: int = 0,
+) -> None:
+    phone = f"+91442835{business_id:04d}"
     await session.execute(
         text(
             "INSERT INTO businesses "
-            "(id, name, category, primary_contact_phone, timezone, subscription) "
-            "VALUES (1, 'Smile Dental', 'clinic', '+914428350001', "
-            "'Asia/Kolkata', 'trial')"
-        )
-    )
-    await session.execute(
-        text(
-            "INSERT INTO business_users (business_id, phone, role, is_active) "
-            "VALUES (1, '+914428350001', 'owner', true)"
-        )
+            "(id, name, category, primary_contact_phone, timezone, subscription, "
+            "appointment_booking_horizon_days, appointment_minimum_notice_minutes, "
+            "appointment_slot_interval_minutes) VALUES "
+            "(:bid, :name, 'clinic', :phone, 'Asia/Kolkata', 'trial', :horizon, :notice, :interval)"
+        ),
+        {
+            "bid": business_id,
+            "name": f"Clinic {business_id}",
+            "phone": phone,
+            "horizon": horizon,
+            "notice": notice,
+            "interval": interval,
+        },
     )
     await session.execute(
         text(
             "INSERT INTO resources (id, business_id, name, resource_type, is_active) "
-            "VALUES (1, 1, 'Dr. Priya Krishnan', 'staff', true)"
-        )
+            "VALUES (:rid, :bid, :name, 'staff', true)"
+        ),
+        {"rid": resource_id, "bid": business_id, "name": f"Doctor {resource_id}"},
     )
     await session.execute(
         text(
-            "INSERT INTO services (id, business_id, name, duration_minutes, is_active) "
-            "VALUES (1, 1, 'General Consultation', 30, true)"
-        )
+            "INSERT INTO services "
+            "(id, business_id, name, duration_minutes, buffer_before_minutes, "
+            "buffer_after_minutes, is_active) VALUES "
+            "(:sid, :bid, 'Consultation', 30, :before, :after, true)"
+        ),
+        {
+            "sid": service_id,
+            "bid": business_id,
+            "before": buffer_before,
+            "after": buffer_after,
+        },
     )
-    await session.commit()
+    await session.execute(
+        text(
+            "INSERT INTO service_resource_eligibility "
+            "(business_id, service_id, resource_id, is_active) "
+            "VALUES (:bid, :sid, :rid, true)"
+        ),
+        {"bid": business_id, "sid": service_id, "rid": resource_id},
+    )
+    await session.flush()
 
 
-async def _add_business_schedule(
-    session: AsyncSession, day_of_week: int, open_t: time, close_t: time
+async def _add_schedule(
+    session: AsyncSession,
+    day: date,
+    open_at: time,
+    close_at: time,
+    *,
+    business_id: int = 1,
+    resource_id: int | None = None,
 ) -> None:
     await session.execute(
         text(
             "INSERT INTO operating_schedules "
             "(business_id, resource_id, day_of_week, open_time, close_time, is_active) "
-            "VALUES (1, NULL, :day, :open, :close, true)"
+            "VALUES (:bid, :rid, :dow, :open, :close, true)"
         ),
-        {"day": day_of_week, "open": open_t, "close": close_t},
+        {
+            "bid": business_id,
+            "rid": resource_id,
+            "dow": schedule_weekday(day),
+            "open": open_at,
+            "close": close_at,
+        },
     )
-    await session.commit()
+    await session.flush()
 
 
-async def _add_resource_schedule(
-    session: AsyncSession, resource_id: int, day_of_week: int, open_t: time, close_t: time
-) -> None:
-    await session.execute(
-        text(
-            "INSERT INTO operating_schedules "
-            "(business_id, resource_id, day_of_week, open_time, close_time, is_active) "
-            "VALUES (1, :rid, :day, :open, :close, true)"
-        ),
-        {"rid": resource_id, "day": day_of_week, "open": open_t, "close": close_t},
-    )
-    await session.commit()
-
-
-async def _add_close_early_exception(
-    session: AsyncSession, target_date: date, new_close: time
+async def _add_exception(
+    session: AsyncSession,
+    day: date,
+    *,
+    is_closed: bool,
+    open_at: time | None = None,
+    close_at: time | None = None,
+    business_id: int = 1,
+    resource_id: int | None = None,
 ) -> None:
     await session.execute(
         text(
             "INSERT INTO schedule_exceptions "
             "(business_id, resource_id, exception_date, is_closed, open_time, close_time, reason) "
-            "VALUES (1, NULL, :d, false, :open, :close, 'Closing early')"
-        ),
-        {"d": target_date, "open": time(10, 0), "close": new_close},
-    )
-    await session.commit()
-
-
-async def _add_closed_exception(session: AsyncSession, target_date: date) -> None:
-    await session.execute(
-        text(
-            "INSERT INTO schedule_exceptions "
-            "(business_id, resource_id, exception_date, is_closed, reason) "
-            "VALUES (1, NULL, :d, true, 'Holiday')"
-        ),
-        {"d": target_date},
-    )
-    await session.commit()
-
-
-async def _add_appointment(
-    session: AsyncSession,
-    resource_id: int,
-    start_utc: datetime,
-    end_utc: datetime,
-) -> None:
-    await session.execute(
-        text(
-            "INSERT INTO pending_actions "
-            "(id, business_id, action_type, payload_schema_version, proposed_payload, "
-            "status, expires_at, idempotency_key, version, payload_digest) VALUES "
-            "(DEFAULT, 1, 'appointment', 1, :payload, 'confirmed', :exp, "
-            ":key, 1, :digest)"
+            "VALUES (:bid, :rid, :day, :closed, :open, :close, 'Test exception')"
         ),
         {
-            "payload": "{}",
-            "exp": datetime.now(UTC) + timedelta(hours=24),
-            "key": f"pa-{start_utc.isoformat()}",
-            "digest": f"d{abs(hash(start_utc.isoformat())):064x}"[:64],
+            "bid": business_id,
+            "rid": resource_id,
+            "day": day,
+            "closed": is_closed,
+            "open": open_at,
+            "close": close_at,
         },
     )
-    pa_id = (await session.execute(text("SELECT max(id) FROM pending_actions"))).scalar_one()
+    await session.flush()
+
+
+async def _add_owner_block(
+    session: AsyncSession,
+    start_at: datetime,
+    end_at: datetime,
+    *,
+    business_id: int = 1,
+    resource_id: int = 1,
+    key: str = "block-1",
+    status: str = "active",
+) -> int:
+    result = await session.execute(
+        text(
+            "INSERT INTO resource_allocations "
+            "(business_id, resource_id, allocation_type, status, source, "
+            "effective_start_at, effective_end_at, reason, idempotency_key, version) "
+            "VALUES (:bid, :rid, 'owner_block', :status, 'owner_block', "
+            ":start, :end, 'Owner block', :key, 1) RETURNING id"
+        ),
+        {
+            "bid": business_id,
+            "rid": resource_id,
+            "status": status,
+            "start": start_at.astimezone(UTC),
+            "end": end_at.astimezone(UTC),
+            "key": key,
+        },
+    )
+    await session.flush()
+    return result.scalar_one()
+
+
+async def _add_manual_appointment(
+    session: AsyncSession,
+    start_at: datetime,
+    *,
+    appointment_id: int = 1,
+    business_id: int = 1,
+    resource_id: int = 1,
+    service_id: int = 1,
+) -> None:
+    end_at = start_at + timedelta(minutes=30)
     await session.execute(
         text(
             "INSERT INTO appointments "
-            "(business_id, resource_id, service_id, customer_name, customer_phone, "
-            "start_at, end_at, effective_start_at, effective_end_at, "
-            "service_name_snapshot, resource_name_snapshot, "
-            "duration_minutes_snapshot, buffer_before_minutes_snapshot, "
-            "buffer_after_minutes_snapshot, business_timezone_snapshot, "
-            "status, source, idempotency_key, pending_action_id, version) VALUES "
-            "(1, :rid, 1, 'Patient', '+919000000001', :start, :end, :start, :end, "
-            "'Consultation', 'Dr. Priya', 30, 0, 0, 'Asia/Kolkata', "
-            "'confirmed', 'customer_conversation', :key, :pa_id, 1)"
+            "(id, business_id, resource_id, service_id, customer_name, customer_phone, "
+            "start_at, end_at, effective_start_at, effective_end_at, service_name_snapshot, "
+            "resource_name_snapshot, duration_minutes_snapshot, buffer_before_minutes_snapshot, "
+            "buffer_after_minutes_snapshot, business_timezone_snapshot, status, source, "
+            "idempotency_key, version) VALUES "
+            "(:aid, :bid, :rid, :sid, 'Patient', '+919000000001', :start, :end, :start, :end, "
+            "'Consultation', 'Doctor', 30, 0, 0, 'Asia/Kolkata', 'confirmed', "
+            "'owner_manual', :appointment_key, 1)"
         ),
         {
+            "aid": appointment_id,
+            "bid": business_id,
             "rid": resource_id,
-            "start": start_utc,
-            "end": end_utc,
-            "key": f"appt-{start_utc.isoformat()}",
-            "pa_id": pa_id,
+            "sid": service_id,
+            "start": start_at.astimezone(UTC),
+            "end": end_at.astimezone(UTC),
+            "appointment_key": f"manual-{business_id}-{appointment_id}",
         },
     )
-    await session.commit()
-
-
-def _next_weekday(target_isoweekday: int) -> str:
-    """Return ISO date string for the next occurrence of the given weekday."""
-    today = datetime.now(UTC).date()
-    days_ahead = target_isoweekday - today.isoweekday()
-    if days_ahead <= 0:
-        days_ahead += 7
-    return (today + timedelta(days=days_ahead)).isoformat()
-
-
-async def test_basic_slots_returned(pg_session: AsyncSession) -> None:
-    target_date_iso = _next_weekday(1)  # Monday
-    await _seed_clinic(pg_session, target_date_iso=target_date_iso)
-    await _add_business_schedule(pg_session, 1, time(10, 0), time(13, 0))
-
-    from datetime import date as date_type
-
-    svc = AvailabilityService(pg_session)
-    slots = await svc.get_available_slots(
-        business_id=1,
-        resource_id=1,
-        target_date=date_type.fromisoformat(target_date_iso),
-        service_duration_minutes=30,
+    await session.execute(
+        text(
+            "INSERT INTO resource_allocations "
+            "(business_id, resource_id, appointment_id, allocation_type, status, source, "
+            "effective_start_at, effective_end_at, idempotency_key, version) VALUES "
+            "(:bid, :rid, :aid, 'manual_appointment', 'active', 'owner_manual', "
+            ":start, :end, :allocation_key, 1)"
+        ),
+        {
+            "bid": business_id,
+            "rid": resource_id,
+            "aid": appointment_id,
+            "start": start_at.astimezone(UTC),
+            "end": end_at.astimezone(UTC),
+            "allocation_key": f"manual-allocation-{business_id}-{appointment_id}",
+        },
     )
-    assert len(slots) > 0
-    for slot in slots:
-        assert slot.resource_id == 1
-        assert slot.resource_name == "Dr. Priya Krishnan"
+    await session.flush()
 
 
-async def test_close_early_blocks_slots_after_new_close(pg_session: AsyncSession) -> None:
-    """P0 bug: owner says 'close at 5 PM' but patient can still book at 6 PM."""
-    target_date_iso = _next_weekday(2)  # Tuesday
-    await _seed_clinic(pg_session, target_date_iso=target_date_iso)
-    await _add_business_schedule(pg_session, 2, time(10, 0), time(20, 0))
-    await _add_close_early_exception(pg_session, date.fromisoformat(target_date_iso), time(17, 0))
+async def test_close_early_and_full_closure(pg_session: AsyncSession) -> None:
+    day = _target()
+    await _seed_clinic(pg_session)
+    await _add_schedule(pg_session, day, time(10), time(20))
+    await _add_exception(pg_session, day, is_closed=False, open_at=time(10), close_at=time(17))
+    service = AvailabilityService(pg_session)
 
-    from datetime import date as date_type
-    from zoneinfo import ZoneInfo
+    slots = await service.get_available_slots(1, 1, 1, day, now=_at(day, 8))
+    assert slots
+    assert max(slot.end_at.astimezone(KOLKATA).time() for slot in slots) <= time(17)
+    decision = await service.check_exact_slot(1, 1, 1, _at(day, 18), now=_at(day, 8))
+    assert decision.reason == AvailabilityReason.OUTSIDE_OPERATING_HOURS
 
-    svc = AvailabilityService(pg_session)
-    slots = await svc.get_available_slots(
-        business_id=1,
-        resource_id=1,
-        target_date=date_type.fromisoformat(target_date_iso),
-        service_duration_minutes=30,
+    await pg_session.rollback()
+    await _seed_clinic(pg_session)
+    await _add_schedule(pg_session, day, time(10), time(20))
+    await _add_exception(pg_session, day, is_closed=True)
+    assert (
+        await AvailabilityService(pg_session).get_available_slots(1, 1, 1, day, now=_at(day, 8))
+        == []
     )
 
-    tz = ZoneInfo("Asia/Kolkata")
-    for slot in slots:
-        local_end = slot.end_at.astimezone(tz)
-        assert local_end.time() <= time(17, 0), (
-            f"Slot ends at {local_end.time()}, but clinic closes early at 17:00"
-        )
 
-    assert len(slots) > 0, "Should still have morning/afternoon slots"
+async def test_resource_hours_cannot_widen_business_hours(pg_session: AsyncSession) -> None:
+    day = _target()
+    await _seed_clinic(pg_session)
+    await _add_schedule(pg_session, day, time(9), time(18))
+    await _add_schedule(pg_session, day, time(8), time(20), resource_id=1)
+
+    slots = await AvailabilityService(pg_session).get_available_slots(1, 1, 1, day, now=_at(day, 7))
+    assert slots[0].start_at.astimezone(KOLKATA).time() == time(9)
+    assert slots[-1].end_at.astimezone(KOLKATA).time() == time(18)
 
 
-async def test_close_early_is_slot_available_rejects(pg_session: AsyncSession) -> None:
-    """is_slot_available must reject slots after close_early time."""
-    target_date_iso = _next_weekday(3)  # Wednesday
-    await _seed_clinic(pg_session, target_date_iso=target_date_iso)
-    await _add_business_schedule(pg_session, 3, time(10, 0), time(20, 0))
-    await _add_close_early_exception(pg_session, date.fromisoformat(target_date_iso), time(17, 0))
+async def test_local_midnight_uses_local_weekday_and_exception(pg_session: AsyncSession) -> None:
+    day = _target()
+    await _seed_clinic(pg_session)
+    await _add_schedule(pg_session, day, time(0), time(2))
+    requested = _at(day, 0, 30)
+    assert requested.astimezone(UTC).date() == day - timedelta(days=1)
 
-    from datetime import date as date_type
-    from zoneinfo import ZoneInfo
-
-    tz = ZoneInfo("Asia/Kolkata")
-    target = date_type.fromisoformat(target_date_iso)
-
-    svc = AvailabilityService(pg_session)
-
-    slot_6pm = datetime.combine(target, time(18, 0), tzinfo=tz)
-    available, reason = await svc.is_slot_available(
-        business_id=1, resource_id=1, start_at=slot_6pm, duration_minutes=30
+    decision = await AvailabilityService(pg_session).check_exact_slot(
+        1, 1, 1, requested, now=_at(day - timedelta(days=1), 20)
     )
-    assert not available
-    assert "operating hours" in reason.lower()
+    assert decision.available
 
-    slot_11am = datetime.combine(target, time(11, 0), tzinfo=tz)
-    available, reason = await svc.is_slot_available(
-        business_id=1, resource_id=1, start_at=slot_11am, duration_minutes=30
+    await _add_exception(pg_session, day, is_closed=True)
+    closed = await AvailabilityService(pg_session).check_exact_slot(
+        1, 1, 1, requested, now=_at(day - timedelta(days=1), 20)
     )
-    assert available
+    assert closed.reason == AvailabilityReason.NO_OPERATING_HOURS
 
 
-async def test_full_closure_returns_no_slots(pg_session: AsyncSession) -> None:
-    target_date_iso = _next_weekday(4)  # Thursday
-    await _seed_clinic(pg_session, target_date_iso=target_date_iso)
-    await _add_business_schedule(pg_session, 4, time(10, 0), time(20, 0))
-    await _add_closed_exception(pg_session, date.fromisoformat(target_date_iso))
+async def test_exact_slot_and_configured_grid(pg_session: AsyncSession) -> None:
+    day = _target()
+    await _seed_clinic(pg_session, interval=15)
+    await _add_schedule(pg_session, day, time(10), time(13))
+    service = AvailabilityService(pg_session)
 
-    from datetime import date as date_type
+    exact = await service.check_exact_slot(1, 1, 1, _at(day, 10, 15), now=_at(day, 8))
+    assert exact.available
+    off_grid = await service.check_exact_slot(1, 1, 1, _at(day, 10, 7), now=_at(day, 8))
+    assert off_grid.reason == AvailabilityReason.OFF_GRID
+    assert _at(day, 10, 15) in [slot.start_at for slot in off_grid.alternatives]
 
-    svc = AvailabilityService(pg_session)
-    slots = await svc.get_available_slots(
-        business_id=1,
-        resource_id=1,
-        target_date=date_type.fromisoformat(target_date_iso),
-        service_duration_minutes=30,
+    await pg_session.rollback()
+    await _seed_clinic(pg_session, interval=30)
+    await _add_schedule(pg_session, day, time(10), time(13))
+    slots = await AvailabilityService(pg_session).get_available_slots(1, 1, 1, day, now=_at(day, 8))
+    assert {slot.start_at.astimezone(KOLKATA).minute for slot in slots} == {0, 30}
+    rejected = await AvailabilityService(pg_session).check_exact_slot(
+        1, 1, 1, _at(day, 10, 15), now=_at(day, 8)
     )
-    assert slots == []
+    assert rejected.reason == AvailabilityReason.OFF_GRID
 
 
-async def test_resource_schedule_takes_precedence(pg_session: AsyncSession) -> None:
-    """When resource has its own schedule, it should be intersected with business hours."""
-    target_date_iso = _next_weekday(5)  # Friday
-    await _seed_clinic(pg_session, target_date_iso=target_date_iso)
-    await _add_business_schedule(pg_session, 5, time(9, 0), time(18, 0))
-    await _add_resource_schedule(pg_session, 1, 5, time(10, 0), time(14, 0))
+async def test_minimum_notice_boundaries(pg_session: AsyncSession) -> None:
+    day = _target()
+    await _seed_clinic(pg_session, notice=60)
+    await _add_schedule(pg_session, day, time(9), time(13))
+    now = _at(day, 9)
+    service = AvailabilityService(pg_session)
 
-    from datetime import date as date_type
-    from zoneinfo import ZoneInfo
-
-    tz = ZoneInfo("Asia/Kolkata")
-    svc = AvailabilityService(pg_session)
-    slots = await svc.get_available_slots(
-        business_id=1,
-        resource_id=1,
-        target_date=date_type.fromisoformat(target_date_iso),
-        service_duration_minutes=30,
-    )
-
-    for slot in slots:
-        local_start = slot.start_at.astimezone(tz)
-        local_end = slot.end_at.astimezone(tz)
-        assert local_start.time() >= time(10, 0), (
-            f"Slot starts at {local_start.time()}, before resource opens at 10:00"
-        )
-        assert local_end.time() <= time(14, 0), (
-            f"Slot ends at {local_end.time()}, after resource closes at 14:00"
-        )
+    assert (await service.check_exact_slot(1, 1, 1, _at(day, 10), now=now)).available
+    inside = await service.check_exact_slot(1, 1, 1, _at(day, 9, 45), now=now)
+    assert inside.reason == AvailabilityReason.INSUFFICIENT_NOTICE
 
 
-async def test_existing_appointment_blocks_slot(pg_session: AsyncSession) -> None:
-    target_date_iso = _next_weekday(6)  # Saturday
-    await _seed_clinic(pg_session, target_date_iso=target_date_iso)
-    await _add_business_schedule(pg_session, 6, time(10, 0), time(13, 0))
+async def test_booking_horizon_local_date_boundaries(pg_session: AsyncSession) -> None:
+    today = _target()
+    final_day = today + timedelta(days=2)
+    beyond = final_day + timedelta(days=1)
+    await _seed_clinic(pg_session, horizon=2)
+    await _add_schedule(pg_session, final_day, time(9), time(13))
+    await _add_schedule(pg_session, beyond, time(9), time(13))
+    now = _at(today, 8)
+    service = AvailabilityService(pg_session)
 
-    from datetime import date as date_type
-    from zoneinfo import ZoneInfo
+    assert (await service.check_exact_slot(1, 1, 1, _at(final_day, 10), now=now)).available
+    rejected = await service.check_exact_slot(1, 1, 1, _at(beyond, 10), now=now)
+    assert rejected.reason == AvailabilityReason.OUTSIDE_BOOKING_HORIZON
 
-    tz = ZoneInfo("Asia/Kolkata")
-    target = date_type.fromisoformat(target_date_iso)
 
-    booked_start = datetime.combine(target, time(11, 0), tzinfo=tz).astimezone(UTC)
-    booked_end = booked_start + timedelta(minutes=30)
-    await _add_appointment(pg_session, 1, booked_start, booked_end)
+async def test_owner_block_and_half_open_adjacency(pg_session: AsyncSession) -> None:
+    day = _target()
+    await _seed_clinic(pg_session)
+    await _add_schedule(pg_session, day, time(10), time(13))
+    await _add_owner_block(pg_session, _at(day, 11), _at(day, 11, 30))
+    service = AvailabilityService(pg_session)
 
-    svc = AvailabilityService(pg_session)
-    slots = await svc.get_available_slots(
-        business_id=1,
-        resource_id=1,
-        target_date=target,
-        service_duration_minutes=30,
+    assert not (await service.check_exact_slot(1, 1, 1, _at(day, 11), now=_at(day, 8))).available
+    assert (await service.check_exact_slot(1, 1, 1, _at(day, 10, 30), now=_at(day, 8))).available
+    assert (await service.check_exact_slot(1, 1, 1, _at(day, 11, 30), now=_at(day, 8))).available
+
+
+async def test_cross_midnight_allocation_is_loaded_by_overlap(pg_session: AsyncSession) -> None:
+    day = _target()
+    await _seed_clinic(pg_session)
+    await _add_schedule(pg_session, day, time(0), time(3))
+    await _add_owner_block(
+        pg_session,
+        _at(day - timedelta(days=1), 23, 45),
+        _at(day, 0, 45),
     )
 
-    for slot in slots:
-        local_start = slot.start_at.astimezone(tz)
-        assert local_start.time() != time(11, 0), "11:00 slot should be blocked by appointment"
-
-
-async def test_exact_slot_matching_no_silent_shift(pg_session: AsyncSession) -> None:
-    """is_slot_available must not silently shift times — exact match required."""
-    target_date_iso = _next_weekday(1)
-    await _seed_clinic(pg_session, target_date_iso=target_date_iso)
-    await _add_business_schedule(pg_session, 1, time(10, 0), time(13, 0))
-
-    from datetime import date as date_type
-    from zoneinfo import ZoneInfo
-
-    tz = ZoneInfo("Asia/Kolkata")
-    target = date_type.fromisoformat(target_date_iso)
-
-    svc = AvailabilityService(pg_session)
-
-    slot_before_open = datetime.combine(target, time(9, 0), tzinfo=tz)
-    available, _ = await svc.is_slot_available(
-        business_id=1, resource_id=1, start_at=slot_before_open, duration_minutes=30
+    decision = await AvailabilityService(pg_session).check_exact_slot(
+        1, 1, 1, _at(day, 0, 15), now=_at(day - timedelta(days=1), 20)
     )
-    assert not available
+    assert decision.reason == AvailabilityReason.CAPACITY_CONFLICT
 
-    slot_past_close = datetime.combine(target, time(12, 45), tzinfo=tz)
-    available, _ = await svc.is_slot_available(
-        business_id=1, resource_id=1, start_at=slot_past_close, duration_minutes=30
+
+async def test_other_tenant_and_resource_allocations_do_not_interfere(
+    pg_session: AsyncSession,
+) -> None:
+    day = _target()
+    await _seed_clinic(pg_session, business_id=1, resource_id=1, service_id=1)
+    await _seed_clinic(pg_session, business_id=2, resource_id=2, service_id=2)
+    await _add_schedule(pg_session, day, time(10), time(13), business_id=1)
+    await _add_schedule(pg_session, day, time(10), time(13), business_id=2)
+    await _add_owner_block(pg_session, _at(day, 11), _at(day, 11, 30), business_id=2, resource_id=2)
+
+    decision = await AvailabilityService(pg_session).check_exact_slot(
+        1, 1, 1, _at(day, 11), now=_at(day, 8)
     )
-    assert not available
+    assert decision.available
+
+
+async def test_reschedule_excludes_only_original_allocation(pg_session: AsyncSession) -> None:
+    day = _target()
+    await _seed_clinic(pg_session)
+    await _add_schedule(pg_session, day, time(10), time(13))
+    await _add_manual_appointment(pg_session, _at(day, 11), appointment_id=1)
+    service = AvailabilityService(pg_session)
+
+    without_exclusion = await service.check_exact_slot(1, 1, 1, _at(day, 11), now=_at(day, 8))
+    assert without_exclusion.reason == AvailabilityReason.CAPACITY_CONFLICT
+    same_time = await service.check_exact_slot(
+        1, 1, 1, _at(day, 11), now=_at(day, 8), exclude_appointment_id=1
+    )
+    assert same_time.available
+
+    await _add_owner_block(pg_session, _at(day, 11, 30), _at(day, 12), key="other-patient")
+    unrelated = await service.check_exact_slot(
+        1, 1, 1, _at(day, 11, 30), now=_at(day, 8), exclude_appointment_id=1
+    )
+    assert unrelated.reason == AvailabilityReason.CAPACITY_CONFLICT
+
+
+async def test_service_buffers_apply_to_hours_and_capacity(pg_session: AsyncSession) -> None:
+    day = _target()
+    await _seed_clinic(pg_session, buffer_before=15, buffer_after=15)
+    await _add_schedule(pg_session, day, time(10), time(13))
+    service = AvailabilityService(pg_session)
+
+    outside = await service.check_exact_slot(1, 1, 1, _at(day, 10), now=_at(day, 8))
+    assert outside.reason in {
+        AvailabilityReason.OFF_GRID,
+        AvailabilityReason.OUTSIDE_OPERATING_HOURS,
+    }
+    assert (await service.check_exact_slot(1, 1, 1, _at(day, 10, 15), now=_at(day, 8))).available
+
+    await _add_owner_block(pg_session, _at(day, 11), _at(day, 11, 15))
+    buffer_conflict = await service.check_exact_slot(1, 1, 1, _at(day, 10, 30), now=_at(day, 8))
+    assert buffer_conflict.reason == AvailabilityReason.CAPACITY_CONFLICT

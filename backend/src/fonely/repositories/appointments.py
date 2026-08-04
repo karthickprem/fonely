@@ -1,9 +1,10 @@
 """Tenant-scoped appointment and resource-allocation repository."""
 
 from collections.abc import Mapping
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select, text, update
+from sqlalchemy import or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fonely.models.schema import Appointment, AppointmentCommit, ResourceAllocation
@@ -114,6 +115,40 @@ class AppointmentRepository:
         )
         await self._session.flush()
 
+    async def list_active_allocation_windows(
+        self,
+        business_id: int,
+        resource_id: int,
+        range_start_at: datetime,
+        range_end_at: datetime,
+        *,
+        exclude_appointment_id: int | None = None,
+        exclude_allocation_id: int | None = None,
+    ) -> list[tuple[datetime, datetime]]:
+        stmt = select(
+            ResourceAllocation.effective_start_at,
+            ResourceAllocation.effective_end_at,
+        ).where(
+            ResourceAllocation.business_id == business_id,
+            ResourceAllocation.resource_id == resource_id,
+            ResourceAllocation.status == "active",
+            ResourceAllocation.effective_start_at < range_end_at,
+            ResourceAllocation.effective_end_at > range_start_at,
+        )
+        if exclude_appointment_id is not None:
+            stmt = stmt.where(
+                or_(
+                    ResourceAllocation.appointment_id.is_(None),
+                    ResourceAllocation.appointment_id != exclude_appointment_id,
+                )
+            )
+        if exclude_allocation_id is not None:
+            stmt = stmt.where(ResourceAllocation.id != exclude_allocation_id)
+        result = await self._session.execute(
+            stmt.order_by(ResourceAllocation.effective_start_at, ResourceAllocation.id)
+        )
+        return [(row.effective_start_at, row.effective_end_at) for row in result]
+
     async def insert_commit(self, values: Mapping[str, Any]) -> AppointmentCommit:
         commit = AppointmentCommit(**values)
         self._session.add(commit)
@@ -125,7 +160,15 @@ class AppointmentRepository:
         business_id: int,
         resource_id: int,
     ) -> None:
-        await self._session.execute(
-            text("SELECT 1 FROM resources WHERE business_id = :bid AND id = :rid FOR UPDATE"),
-            {"bid": business_id, "rid": resource_id},
-        )
+        await self.lock_resource_schedules(business_id, (resource_id,))
+
+    async def lock_resource_schedules(
+        self,
+        business_id: int,
+        resource_ids: tuple[int, ...],
+    ) -> None:
+        for resource_id in sorted(set(resource_ids)):
+            await self._session.execute(
+                text("SELECT 1 FROM resources WHERE business_id = :bid AND id = :rid FOR UPDATE"),
+                {"bid": business_id, "rid": resource_id},
+            )

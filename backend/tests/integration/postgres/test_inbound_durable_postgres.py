@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
+from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import func, select, text
@@ -28,7 +29,11 @@ from fonely.repositories.notifications import NotificationRepository
 from fonely.services.data_retention import DataRetentionService
 from fonely.services.whatsapp_notification_sender import DeliveryReceipt
 from fonely.workers.inbound_worker import ClaimedEvent, _enqueue_response
-from fonely.workers.notification_worker import _claim_one, _record_accepted
+from fonely.workers.notification_worker import (
+    _claim_one,
+    _deliver_claimed,
+    _record_accepted,
+)
 
 pytestmark = pytest.mark.postgres
 
@@ -747,6 +752,60 @@ class TestDeliveryReconciliation:
                 1,
                 DeliveryReceipt(provider_message_id="meta-stale", final=True),
             )
+
+    async def test_reclaimed_sending_attempt_is_not_sent_twice(
+        self, pg_session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        async with pg_session_factory() as seed:
+            await seed_business(seed)
+            outbox = await NotificationRepository(seed).insert_event_idempotent(
+                {
+                    "business_id": 1,
+                    "event_type": "appointment_confirmed",
+                    "entity_type": "appointment",
+                    "entity_id": 1,
+                    "recipient_type": "patient",
+                    "recipient_phone": "919876543210",
+                    "channel": "whatsapp",
+                    "payload": {"phone_number_id": "phone-1"},
+                    "status": "pending",
+                    "idempotency_key": "crash-window",
+                }
+            )
+            assert outbox is not None
+            await seed.commit()
+
+        first_claim = await _claim_one(pg_session_factory)
+        assert first_claim is not None
+        async with pg_session_factory() as attempt_session:
+            attempt_session.add(
+                WhatsAppDeliveryAttempt(
+                    business_id=1,
+                    notification_event_id=outbox.id,
+                    attempt_number=1,
+                    status="sending",
+                )
+            )
+            await attempt_session.commit()
+        async with pg_session_factory() as expire:
+            await expire.execute(
+                text(
+                    "UPDATE notification_outbox SET "
+                    "lease_expires_at=NOW()-INTERVAL '1 second' WHERE id=:id"
+                ),
+                {"id": outbox.id},
+            )
+            await expire.commit()
+
+        reclaimed = await _claim_one(pg_session_factory)
+        assert reclaimed is not None
+        sender = AsyncMock()
+        await _deliver_claimed(pg_session_factory, sender, reclaimed)
+        sender.send.assert_not_awaited()
+
+        async with pg_session_factory() as check:
+            row = await check.get(NotificationOutboxEvent, outbox.id)
+            assert row is not None and row.status == "unknown"
 
     async def test_response_failed_retention_cleanup(
         self, pg_session_factory: async_sessionmaker[AsyncSession]

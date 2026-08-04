@@ -27,9 +27,9 @@ def normalize_transcript(text: str, locale: str) -> list[str]:
     return text.split()
 
 
-def word_error_counts(reference: str, hypothesis: str, locale: str) -> ErrorCounts:
-    ref = normalize_transcript(reference, locale)
-    hyp = normalize_transcript(hypothesis, locale)
+def _error_counts(reference: list[str], hypothesis: list[str]) -> ErrorCounts:
+    ref = reference
+    hyp = hypothesis
     rows = len(ref) + 1
     cols = len(hyp) + 1
     table: list[list[tuple[int, int, int, int]]] = [[(0, 0, 0, 0)] * cols for _ in range(rows)]
@@ -50,6 +50,29 @@ def word_error_counts(reference: str, hypothesis: str, locale: str) -> ErrorCoun
             table[i][j] = min(candidates)
     _, substitutions, insertions, deletions = table[-1][-1]
     return ErrorCounts(substitutions, insertions, deletions, len(ref))
+
+
+def word_error_counts(reference: str, hypothesis: str, locale: str) -> ErrorCounts:
+    return _error_counts(
+        normalize_transcript(reference, locale),
+        normalize_transcript(hypothesis, locale),
+    )
+
+
+def character_error_counts(reference: str, hypothesis: str) -> ErrorCounts:
+    ref = list(unicodedata.normalize("NFC", reference).casefold())
+    hyp = list(unicodedata.normalize("NFC", hypothesis).casefold())
+    return _error_counts(ref, hyp)
+
+
+def wrong_script_characters(text: str) -> tuple[int, int]:
+    """Return non-Tamil Indic characters and all Indic-script characters."""
+    wrong = sum("ఀ" <= char <= "౿" for char in text)
+    indic = sum(
+        "ऀ" <= char <= "ൿ"
+        for char in text
+    )
+    return wrong, indic
 
 
 def score_critical_entities(entities: list[dict], hypothesis: str, locale: str) -> tuple[int, int]:

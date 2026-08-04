@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "freeze_id": "STT-V0-SAARAS-V3-20260803",
+  "status": "failed_baseline",
+  "source_commit": "eca2f2f0625cf11ebb57753928081cae669db67c",
+  "tested_at": "2026-08-03T12:05:02.610378+00:00",
+  "account_region": "provider_default_unrecorded",
+  "provider": "sarvam",
+  "model": "saaras:v3",
+  "arms": [
+    {
+      "arm_id": "saaras-v3-transcribe-v0",
+      "mode": "transcribe"
+    },
+    {
+      "arm_id": "saaras-v3-codemix-v0",
+      "mode": "codemix"
+    }
+  ],
+  "runtime": {
+    "python": "3.12.13",
+    "pipecat_ai": "1.7.0",
+    "sarvamai": "0.1.28",
+    "input_sample_rate_hz": 16000,
+    "input_channels": 1,
+    "input_sample_width_bits": 16,
+    "input_audio_codec": "wav",
+    "language": null,
+    "vad_signals": false,
+    "audio_chunk_bytes": 640,
+    "post_speech_wait_seconds": 2.5,
+    "phrase_hints": [],
+    "vocabulary_hints": [],
+    "reconnect_policy": "pipecat-1.7.0-provider-default"
+  },
+  "turn_boundaries": {
+    "start": "VADUserStartedSpeakingFrame",
+    "stop": "VADUserStoppedSpeakingFrame",
+    "offline_fixture_endpointing": true
+  },
+  "corpus": {
+    "manifest": "manifests/founder-chennai-v1.jsonl",
+    "manifest_sha256": "0731d2abe56e6f6a55d077d3be561aeadfaee129bd4f3fb7f0be1bdcfe4d4edd",
+    "fixture_count": 50,
+    "speaker_count": 1,
+    "split": "development",
+    "annotation_status": "draft"
+  },
+  "evidence": {
+    "results": "runs/VR-founder-50-v1.jsonl",
+    "retry_results": "runs/VR-founder-50-retry1.jsonl",
+    "report": "reports/founder-50-v1.json",
+    "analysis": "analysis/founder-50-v1.json",
+    "summary": "analysis/founder-50-summary.md"
+  },
+  "measured_results": {
+    "transcribe": {
+      "successful_fixtures": 49,
+      "failed_fixtures": 1,
+      "raw_macro_wer": 0.7184645286686103,
+      "reported_p50_ms": 312.75200843811035,
+      "reported_p95_ms": 648.3280658721924,
+      "semantic_critical_entity_exactness": 0.76
+    },
+    "codemix": {
+      "successful_fixtures": 50,
+      "failed_fixtures": 0,
+      "raw_macro_wer": 0.49986507936507935,
+      "reported_p50_ms": 317.54589080810547,
+      "reported_p95_ms": 616.5614128112793,
+      "semantic_critical_entity_exactness": 0.824
+    }
+  },
+  "known_failures": [
+    "critical entity exactness below 98 percent gate",
+    "wrong-script output observed by native listener",
+    "names, symptoms, phone numbers, dates and times unreliable",
+    "duplicate and fragmented turns observed in live lab"
+  ],
+  "measurement_caveats": [
+    "single-speaker development corpus only",
+    "semantic review queue is incomplete",
+    "reported timing may use provider processing latency and is not first-final latency",
+    "no simulated 8 kHz or real PSTN evidence",
+    "pricing source and account region were not recorded in the historical run"
+  ],
+  "pricing_source": null,
+  "freeze_rule": "Do not alter these arms, evidence paths, results, or thresholds. New Saaras configurations require a new freeze ID."
+}

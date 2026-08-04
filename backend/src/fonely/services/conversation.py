@@ -60,6 +60,15 @@ def _evict_stale() -> None:
         logger.info("conversations_evicted_capacity", extra={"count": to_remove})
 
 
+def invalidate_conversation_cache(business_id: int, phone: str) -> None:
+    """Remove cached conversation state for a tenant+phone after rollback."""
+    key = (business_id, phone)
+    conv_id = _PHONE_INDEX.pop(key, None)
+    if conv_id:
+        _CONVERSATIONS.pop(conv_id, None)
+        _CONVERSATION_LOCKS.pop(conv_id, None)
+
+
 def _get_lock(conversation_id: str) -> asyncio.Lock:
     lock = _CONVERSATION_LOCKS.get(conversation_id)
     if lock is None:
@@ -901,7 +910,6 @@ class ConversationService:
             )
 
         assert isinstance(result, PreCommitAppointmentSuccess)
-        await self._session.commit()
 
         ctx.transition(ConversationState.CONFIRMED)
         ctx.transition(ConversationState.COMPLETED)
@@ -934,7 +942,6 @@ class ConversationService:
                 expected_version=ctx.proposal_version or 1,
             )
         )
-        await self._session.commit()
 
         ctx.transition(ConversationState.CONFIRMED)
         ctx.transition(ConversationState.COMPLETED)
@@ -979,8 +986,6 @@ class ConversationService:
                 safety,
                 ["start_at"],
             )
-
-        await self._session.commit()
 
         ctx.transition(ConversationState.CONFIRMED)
         ctx.transition(ConversationState.COMPLETED)

@@ -85,6 +85,9 @@ async def test_doctor_leave_creates_exception_and_cancels(
             "exp": datetime.now(UTC) + timedelta(hours=24),
         },
     )
+    await pg_session.execute(
+        text("SELECT setval(pg_get_serial_sequence('pending_actions', 'id'), 1, true)")
+    )
     tomorrow_10am = datetime.combine(
         tomorrow, datetime.min.time().replace(hour=4, minute=30), tzinfo=UTC
     )

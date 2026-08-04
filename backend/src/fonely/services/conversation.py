@@ -713,6 +713,7 @@ class ConversationService:
                 for slot in decision.alternatives
             ]
             ctx.state = ConversationState.FACT_COLLECTION
+            ctx.booking_attempt += 1
             del ctx.collected_facts["start_at"]
             if alt_texts:
                 response = (
@@ -747,7 +748,7 @@ class ConversationService:
                     resource_id=resource_id,
                     start_at=start_at,
                     expires_at=utcnow() + timedelta(minutes=15),
-                    idempotency_key=f"conv-{ctx.conversation_id}-reschedule-{target_appt_id}",
+                    idempotency_key=f"conv-{ctx.conversation_id}-reschedule-{target_appt_id}-a{ctx.booking_attempt}",
                 )
             )
         else:
@@ -768,7 +769,7 @@ class ConversationService:
                     reason=None,
                     call_id=None,
                     expires_at=utcnow() + timedelta(minutes=15),
-                    idempotency_key=f"conv-{ctx.conversation_id}",
+                    idempotency_key=f"conv-{ctx.conversation_id}-a{ctx.booking_attempt}",
                 )
             )
 
@@ -854,22 +855,38 @@ class ConversationService:
         safety: SafetyClassification,
     ) -> ConversationTurn:
         from fonely.domain.appointments.commands import ConfirmPendingAppointmentCommand
+        from fonely.domain.appointments.errors import AppointmentDomainError
         from fonely.domain.appointments.results import (
             PreCommitAppointmentFailure,
             PreCommitAppointmentSuccess,
         )
 
         assert ctx.proposal_id is not None
-        result = await self._appointment_service.confirm_and_commit(  # type: ignore[attr-defined]
-            ConfirmPendingAppointmentCommand(
-                actor=actor,
-                pending_action_id=ctx.proposal_id,
-                expected_version=ctx.proposal_version or 1,
+        try:
+            result = await self._appointment_service.confirm_and_commit(  # type: ignore[attr-defined]
+                ConfirmPendingAppointmentCommand(
+                    actor=actor,
+                    pending_action_id=ctx.proposal_id,
+                    expected_version=ctx.proposal_version or 1,
+                )
             )
-        )
+        except (AppointmentDomainError, ValueError):
+            ctx.state = ConversationState.FACT_COLLECTION
+            ctx.booking_attempt += 1
+            ctx.collected_facts.pop("start_at", None)
+            ctx.proposal_id = None
+            ctx.proposal_version = None
+            return self._fact_turn(
+                ctx,
+                user_message,
+                "That time is no longer available. Would you like to try another time?",
+                safety,
+                ["start_at"],
+            )
 
         if isinstance(result, PreCommitAppointmentFailure):
-            ctx.transition(ConversationState.FACT_COLLECTION)
+            ctx.state = ConversationState.FACT_COLLECTION
+            ctx.booking_attempt += 1
             ctx.collected_facts.pop("start_at", None)
             ctx.proposal_id = None
             ctx.proposal_version = None
@@ -948,8 +965,9 @@ class ConversationService:
                     expected_version=ctx.proposal_version or 1,
                 )
             )
-        except AppointmentDomainError:
-            ctx.transition(ConversationState.FACT_COLLECTION)
+        except (AppointmentDomainError, ValueError):
+            ctx.state = ConversationState.FACT_COLLECTION
+            ctx.booking_attempt += 1
             ctx.collected_facts.pop("start_at", None)
             ctx.proposal_id = None
             ctx.proposal_version = None

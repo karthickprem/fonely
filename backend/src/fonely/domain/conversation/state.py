@@ -128,6 +128,7 @@ class ConversationContext:
     collected_facts: dict[str, object] = field(default_factory=dict)
     proposal_id: int | None = None
     proposal_version: int | None = None
+    booking_attempt: int = 0
     created_at: datetime = field(default_factory=utcnow)
     _restored_turn_count: int = 0
 

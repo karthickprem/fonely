@@ -1,4 +1,8 @@
-"""Notification worker entrypoint."""
+"""Notification worker entrypoint.
+
+Fails closed if WhatsApp credentials are missing — the worker cannot
+deliver WhatsApp messages without them.
+"""
 
 import asyncio
 import logging
@@ -8,7 +12,6 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from fonely.core.config import settings
 from fonely.core.logging_config import configure_logging
 from fonely.workers.notification_worker import (
-    LoggingNotificationSender,
     NotificationSender,
     run_notification_worker,
 )
@@ -18,19 +21,21 @@ logger = logging.getLogger("fonely.workers.main")
 
 
 def _create_sender() -> NotificationSender:
-    if settings.whatsapp_access_token and settings.whatsapp_phone_number_id:
-        from fonely.services.whatsapp_notification_sender import WhatsAppNotificationSender
-        from fonely.services.whatsapp_sender import WhatsAppSender
-
-        whatsapp = WhatsAppSender(
-            access_token=settings.whatsapp_access_token,
-            phone_number_id=settings.whatsapp_phone_number_id,
+    if not settings.whatsapp_access_token or not settings.whatsapp_phone_number_id:
+        raise RuntimeError(
+            "WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID are required "
+            "for the notification worker. Cannot deliver WhatsApp messages."
         )
-        logger.info("notification_sender_configured", extra={"type": "whatsapp"})
-        return WhatsAppNotificationSender(whatsapp)
 
-    logger.info("notification_sender_configured", extra={"type": "logging"})
-    return LoggingNotificationSender()
+    from fonely.services.whatsapp_notification_sender import WhatsAppNotificationSender
+    from fonely.services.whatsapp_sender import WhatsAppSender
+
+    whatsapp = WhatsAppSender(
+        access_token=settings.whatsapp_access_token,
+        phone_number_id=settings.whatsapp_phone_number_id,
+    )
+    logger.info("notification_sender_configured", extra={"type": "whatsapp"})
+    return WhatsAppNotificationSender(whatsapp)
 
 
 async def main() -> None:

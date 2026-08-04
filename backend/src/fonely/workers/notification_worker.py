@@ -8,6 +8,7 @@ from typing import Protocol
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fonely.models.schema import NotificationOutboxEvent
+from fonely.repositories.inbound_events import InboundEventRepository
 from fonely.repositories.notifications import NotificationRepository
 
 logger = logging.getLogger("fonely.workers.notification")
@@ -56,17 +57,26 @@ async def run_notification_worker(
             from fonely.core.metrics import metrics
 
             events = await repo.claim_pending_events(limit=batch_size)
+            inbound_repo = InboundEventRepository(session)
             for event in events:
                 try:
                     await sender.send(event)
-                    await repo.mark_delivered(event.id, datetime.now(UTC))
+                    now = datetime.now(UTC)
+                    await repo.mark_delivered(event.id, now)
+                    if _is_inbound_response(event):
+                        await inbound_repo.mark_completed(
+                            event.business_id, event.entity_id, now
+                        )
                     metrics.increment("notifications_processed_total", {"outcome": "delivered"})
                 except Exception as exc:
                     next_at = _next_attempt_at(event.attempts)
                     await repo.mark_failed(event.id, type(exc).__name__, next_at)
-                    outcome = (
-                        "dead_letter" if event.attempts + 1 >= event.max_attempts else "failed"
-                    )
+                    is_dead = event.attempts + 1 >= event.max_attempts
+                    outcome = "dead_letter" if is_dead else "failed"
+                    if is_dead and _is_inbound_response(event):
+                        await inbound_repo.mark_response_failed(
+                            event.business_id, event.entity_id
+                        )
                     metrics.increment("notifications_processed_total", {"outcome": outcome})
                     metrics.increment("notification_retry_total")
                     logger.warning(
@@ -80,3 +90,10 @@ async def run_notification_worker(
             await session.commit()
         if max_iterations is None:
             await asyncio.sleep(poll_interval)
+
+
+def _is_inbound_response(event: NotificationOutboxEvent) -> bool:
+    return (
+        event.event_type == "whatsapp_inbound_response"
+        and event.entity_type == "whatsapp_inbound_event"
+    )

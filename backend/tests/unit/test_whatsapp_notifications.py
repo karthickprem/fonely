@@ -166,7 +166,7 @@ class TestWorkerSenderSelection:
             sender = run_worker._create_sender()
         assert type(sender).__name__ == "WhatsAppNotificationSender"
 
-    def test_uses_logging_when_not_configured(self) -> None:
+    def test_fails_closed_when_not_configured(self) -> None:
         from unittest.mock import patch
 
         import run_worker
@@ -175,5 +175,5 @@ class TestWorkerSenderSelection:
 
         s = Settings(whatsapp_access_token="", whatsapp_phone_number_id="")
         with patch.object(run_worker, "settings", s):
-            sender = run_worker._create_sender()
-        assert type(sender).__name__ == "LoggingNotificationSender"
+            with pytest.raises(RuntimeError, match="WHATSAPP_ACCESS_TOKEN"):
+                run_worker._create_sender()

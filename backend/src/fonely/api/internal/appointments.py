@@ -21,6 +21,7 @@ from fonely.domain.appointments.commands import (
     ConfirmPendingAppointmentCommand,
     CreatePendingAppointmentCommand,
 )
+from fonely.domain.appointments.errors import AppointmentDomainError
 from fonely.domain.appointments.results import (
     PreCommitAppointmentFailure,
     PreCommitAppointmentSuccess,
@@ -267,6 +268,13 @@ async def confirm_proposal(
     except PendingActionIdempotencyConflictError as exc:
         await session.rollback()
         raise HTTPException(status_code=409, detail="Revalidation required") from exc
+    except AppointmentAvailabilityError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=exc.reason.value) from exc
+    except AppointmentDomainError as exc:
+        await session.rollback()
+        status = 409 if "conflict" in str(exc.code) or "slot" in str(exc.code) else 422
+        raise HTTPException(status_code=status, detail=str(exc.code)) from exc
     except Exception as exc:
         await session.rollback()
         _safe_log_error(correlation_id, "confirm_proposal", exc)

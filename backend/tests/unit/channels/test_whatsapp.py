@@ -217,6 +217,11 @@ class TestWhatsAppBusinessMapping:
         m = WhatsAppBusinessMapping(mappings={})
         assert m.get_business_id("anything") is None
 
+    def test_reverse_mapping_prefers_trusted_configured_number(self):
+        m = WhatsAppBusinessMapping(mappings={"phone1": 100, "phone2": 100})
+        assert m.get_phone_number_id(100, preferred="phone2") == "phone2"
+        assert m.get_phone_number_id(100) is None
+
     def test_from_settings_json(self):
         with patch("fonely.services.whatsapp_config.settings") as mock_s:
             mock_s.whatsapp_business_mappings = json.dumps({"ph1": 10})

@@ -72,3 +72,10 @@ The webhook, inbound worker/repository, notification delivery evidence, sender r
 3. Dev1 availability, booking-attempt, replay, locking, and conflict behavior wins wherever unrelated to transaction ownership.
 4. Dev2 caller-owned transaction boundary and cache invalidation are added without reverting Dev1 code.
 5. All other conflicts are resolved semantically against current-main callers and tests; no unconditional ours/theirs.
+
+## Post-reconciliation review resolutions
+
+- Legacy pre-0014 `processing` inbound/outbox rows are normalized to retryable `failed` before claim-consistency constraints are installed.
+- `whatsapp_processed_messages` IDs are copied to terminal durable-inbox tombstones before table removal; downgrade repopulates the legacy table from inbox rows.
+- Appointment notification routing prefers the configured phone ID when it is one of multiple trusted mappings for the tenant; otherwise exactly one mapping is required.
+- Staging now requires webhook verify token, app secret, access token, phone ID, and business mappings instead of starting with a broken inbound channel.

@@ -24,12 +24,14 @@ class WhatsAppBusinessMapping:
     def get_business_id(self, phone_number_id: str) -> int | None:
         return self._mappings.get(phone_number_id)
 
-    def get_phone_number_id(self, business_id: int) -> str | None:
+    def get_phone_number_id(self, business_id: int, *, preferred: str | None = None) -> str | None:
         matches = [
             phone_number_id
             for phone_number_id, mapped_business_id in self._mappings.items()
             if mapped_business_id == business_id
         ]
+        if preferred and preferred in matches:
+            return preferred
         if len(matches) != 1:
             return None
         return matches[0]

@@ -36,6 +36,13 @@ def upgrade() -> None:
         "notification_outbox",
         sa.Column("claim_version", sa.Integer(), nullable=False, server_default="1"),
     )
+    # Pre-0014 workers could leave processing rows without durable ownership.
+    # Return them to failed so the leased worker can reclaim them safely.
+    op.execute(
+        "UPDATE notification_outbox SET status='failed', "
+        "next_attempt_at=NOW(), last_error='migration_recovered_processing' "
+        "WHERE status='processing'"
+    )
     op.create_check_constraint(
         "ck_notification_claim_consistency",
         "notification_outbox",
@@ -108,6 +115,11 @@ def upgrade() -> None:
         "whatsapp_inbound_events",
         "phone_number_id",
         nullable=False,
+    )
+    op.execute(
+        "UPDATE whatsapp_inbound_events SET status='failed', "
+        "next_attempt_at=NOW(), last_error='migration_recovered_processing' "
+        "WHERE status='processing'"
     )
 
     # Update status constraint to include response_failed
@@ -207,7 +219,18 @@ def upgrade() -> None:
         unique=False,
     )
 
-    # Remove obsolete dedup table
+    # Preserve historical dedup evidence as terminal inbox tombstones before
+    # removing the obsolete second source of truth.
+    op.execute(
+        "INSERT INTO whatsapp_inbound_events "
+        "(message_id, business_id, phone_number_id, sender_phone, message_type, "
+        "message_body, status, attempts, max_attempts, provider_timestamp, "
+        "created_at, completed_at) "
+        "SELECT message_id, business_id, 'legacy-unknown', 'legacy-unknown', "
+        "'legacy_processed', NULL, 'completed', 0, 5, processed_at, "
+        "processed_at, processed_at FROM whatsapp_processed_messages "
+        "ON CONFLICT (message_id) DO NOTHING"
+    )
     op.drop_table("whatsapp_processed_messages")
 
 
@@ -287,6 +310,12 @@ def downgrade() -> None:
             server_default=sa.func.now(),
             nullable=False,
         ),
+    )
+    op.execute(
+        "INSERT INTO whatsapp_processed_messages "
+        "(message_id, business_id, processed_at) "
+        "SELECT message_id, business_id, COALESCE(completed_at, created_at) "
+        "FROM whatsapp_inbound_events ON CONFLICT (message_id) DO NOTHING"
     )
 
     op.drop_constraint(

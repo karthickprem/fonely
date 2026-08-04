@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from fonely.core.config import settings
 from fonely.models.enums import (
     NotificationChannel,
     NotificationEventType,
@@ -38,7 +39,9 @@ class NotificationService:
         business = await self._session.scalar(select(Business).where(Business.id == business_id))
         clinic_name = business.name if business else "Business"
         owner_phone = business.primary_contact_phone if business else ""
-        phone_number_id = WhatsAppBusinessMapping().get_phone_number_id(business_id)
+        phone_number_id = WhatsAppBusinessMapping().get_phone_number_id(
+            business_id, preferred=settings.whatsapp_phone_number_id or None
+        )
         if phone_number_id is None:
             raise RuntimeError("whatsapp_business_mapping_missing_or_ambiguous")
 
@@ -120,7 +123,9 @@ class NotificationService:
         business = await self._session.scalar(select(Business).where(Business.id == business_id))
         clinic_name = business.name if business else "Business"
         owner_phone = business.primary_contact_phone if business else ""
-        phone_number_id = WhatsAppBusinessMapping().get_phone_number_id(business_id)
+        phone_number_id = WhatsAppBusinessMapping().get_phone_number_id(
+            business_id, preferred=settings.whatsapp_phone_number_id or None
+        )
         if phone_number_id is None:
             raise RuntimeError("whatsapp_business_mapping_missing_or_ambiguous")
 

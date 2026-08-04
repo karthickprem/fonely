@@ -32,6 +32,16 @@ from fonely.services.appointments import AppointmentService
 pytestmark = pytest.mark.postgres
 
 
+@pytest.fixture(autouse=True)
+def _whatsapp_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fonely.services import notifications, whatsapp_config
+
+    mappings = '{"phone-1": 1}'
+    monkeypatch.setattr(whatsapp_config.settings, "whatsapp_business_mappings", mappings)
+    monkeypatch.setattr(notifications.settings, "whatsapp_business_mappings", mappings)
+    monkeypatch.setattr(notifications.settings, "whatsapp_phone_number_id", "phone-1")
+
+
 def _future_start(*, days: int = 2, hour: int = 10, minute: int = 0) -> datetime:
     zone = ZoneInfo("Asia/Kolkata")
     day = datetime.now(zone).date() + timedelta(days=days)

@@ -1,6 +1,7 @@
 """PostgreSQL integration tests for notification outbox transactional guarantees."""
 
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import text
@@ -386,3 +387,140 @@ async def test_global_idempotency_collision_across_tenants_fails_closed(
 
     assert await repo.get_event_by_idempotency_key(2, "shared-semantic-key") is None
     assert (await repo.get_event_by_global_idempotency_key("shared-semantic-key")).business_id == 1
+
+
+def _legacy_pair_values(operation: str) -> tuple[dict[str, object], dict[str, object]]:
+    local = NOW.astimezone(ZoneInfo("Asia/Kolkata"))
+    common = {
+        "service": "Consultation",
+        "doctor": "Dr. Priya",
+        "appointment_id": 777,
+        "phone_number_id": "legacy-phone",
+    }
+    patient_payload = {"clinic_name": "Smile Dental", **common}
+    owner_payload = {
+        "patient_name": "Legacy Patient",
+        "patient_phone": "+919123456789",
+        **common,
+    }
+    if operation in {"create", "cancel"}:
+        for payload in (patient_payload, owner_payload):
+            payload.update(
+                date=local.strftime("%A, %b %d"),
+                time=local.strftime("%-I:%M %p"),
+            )
+    if operation == "create":
+        event_type = "appointment_confirmed"
+        patient_payload["price"] = "₹300"
+        key = "appt-confirm-{recipient}-777"
+    elif operation == "cancel":
+        event_type = "appointment_cancelled"
+        patient_payload["reason"] = "Requested"
+        owner_payload["reason"] = "Requested"
+        key = "appt-cancel-{recipient}-777"
+    else:
+        event_type = "appointment_rescheduled"
+        new_local = (NOW + timedelta(hours=2)).astimezone(ZoneInfo("Asia/Kolkata"))
+        for payload in (patient_payload, owner_payload):
+            payload.update(
+                old_date=local.strftime("%A, %b %d"),
+                old_time=local.strftime("%-I:%M %p"),
+                new_date=new_local.strftime("%A, %b %d"),
+                new_time=new_local.strftime("%-I:%M %p"),
+            )
+        key = "appt-resched-{recipient}-777-44"
+    base = {
+        "business_id": 1,
+        "event_type": event_type,
+        "entity_type": "appointment",
+        "entity_id": 777,
+        "channel": "whatsapp",
+        "status": "pending",
+    }
+    return (
+        {
+            **base,
+            "recipient_type": "patient",
+            "recipient_phone": "+919123456789",
+            "recipient_name": "Legacy Patient",
+            "payload": patient_payload,
+            "idempotency_key": key.format(recipient="patient"),
+        },
+        {
+            **base,
+            "recipient_type": "owner",
+            "recipient_phone": "+914428350001",
+            "recipient_name": None,
+            "payload": owner_payload,
+            "idempotency_key": key.format(recipient="owner"),
+        },
+    )
+
+
+async def _verify_legacy(service: NotificationService, operation: str) -> list[int]:
+    common = {
+        "business_id": 1,
+        "appointment_id": 777,
+        "customer_phone": "+919123456789",
+        "customer_name": "Legacy Patient",
+        "service_name": "Consultation",
+        "resource_name": "Dr. Priya",
+        "business_timezone": "Asia/Kolkata",
+    }
+    if operation == "create":
+        return await service.verify_appointment_notifications(**common, start_at=NOW, price=300)
+    if operation == "cancel":
+        return await service.verify_cancellation_notifications(
+            **common, start_at=NOW, reason="Requested"
+        )
+    return await service.verify_reschedule_notifications(
+        **common,
+        pending_action_id=44,
+        old_start_at=NOW,
+        new_start_at=NOW + timedelta(hours=2),
+    )
+
+
+@pytest.mark.parametrize("operation", ["create", "cancel", "reschedule"])
+async def test_complete_populated_legacy_pair_replays_exactly(
+    pg_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    await _seed_clinic(pg_session)
+    repo = NotificationRepository(pg_session)
+    patient, owner = _legacy_pair_values(operation)
+    patient_row = await repo.insert_event(patient)
+    owner_row = await repo.insert_event(owner)
+    await pg_session.flush()
+
+    from fonely.services import notifications, whatsapp_config
+
+    monkeypatch.setattr(whatsapp_config.settings, "whatsapp_business_mappings", "")
+    monkeypatch.setattr(notifications.settings, "whatsapp_business_mappings", "")
+    assert await _verify_legacy(NotificationService(pg_session), operation) == [
+        patient_row.id,
+        owner_row.id,
+    ]
+
+
+@pytest.mark.parametrize("operation", ["create", "cancel", "reschedule"])
+@pytest.mark.parametrize("missing", ["patient", "owner"])
+async def test_incomplete_populated_legacy_pair_fails_without_repair(
+    pg_session: AsyncSession,
+    operation: str,
+    missing: str,
+) -> None:
+    await _seed_clinic(pg_session)
+    repo = NotificationRepository(pg_session)
+    patient, owner = _legacy_pair_values(operation)
+    await repo.insert_event(owner if missing == "patient" else patient)
+    await pg_session.flush()
+    before = await pg_session.scalar(text("SELECT count(*) FROM notification_outbox"))
+
+    from fonely.services.notifications import NotificationIdempotencyConflictError
+
+    with pytest.raises(NotificationIdempotencyConflictError, match="cannot be reconstructed"):
+        await _verify_legacy(NotificationService(pg_session), operation)
+    after = await pg_session.scalar(text("SELECT count(*) FROM notification_outbox"))
+    assert after == before == 1

@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,9 +45,9 @@ class NotificationPairSnapshot(BaseModel):
     service_name: str = Field(min_length=1, max_length=200)
     resource_name: str = Field(min_length=1, max_length=200)
     business_timezone: str = Field(min_length=1, max_length=50)
-    start_at: datetime | None = None
-    old_start_at: datetime | None = None
-    new_start_at: datetime | None = None
+    start_at: AwareDatetime | None = None
+    old_start_at: AwareDatetime | None = None
+    new_start_at: AwareDatetime | None = None
     price: str | None = None
     reason: str | None = Field(default=None, max_length=500)
 
@@ -250,39 +250,308 @@ class NotificationService:
 
     async def _create_or_verify_pair(self, snapshot: NotificationPairSnapshot) -> list[int]:
         patient, owner = self._event_values(snapshot)
-        return [
-            await self._insert_or_verify(patient),
-            await self._insert_or_verify(owner),
-        ]
+        async with self._session.begin_nested():
+            return [
+                await self._insert_or_verify(patient),
+                await self._insert_or_verify(owner),
+            ]
 
-    async def _load_committed_snapshot(
+    @staticmethod
+    def _event_format(event: NotificationOutboxEvent) -> Literal["v1", "legacy"]:
+        if not isinstance(event.payload, dict):
+            raise NotificationIdempotencyConflictError(
+                "Committed notification payload is malformed"
+            )
+        has_snapshot = "equivalence_snapshot" in event.payload
+        has_digest = "equivalence_digest" in event.payload
+        if has_snapshot != has_digest:
+            raise NotificationIdempotencyConflictError(
+                "Committed notification format is partially versioned"
+            )
+        return "v1" if has_snapshot else "legacy"
+
+    @staticmethod
+    def _valid_status(event: NotificationOutboxEvent) -> bool:
+        return event.status in {
+            NotificationStatus.PENDING.value,
+            NotificationStatus.PROCESSING.value,
+            NotificationStatus.DELIVERED.value,
+            NotificationStatus.FAILED.value,
+            NotificationStatus.DEAD_LETTER.value,
+            NotificationStatus.UNKNOWN.value,
+        }
+
+    def _legacy_payloads(
+        self, snapshot: NotificationPairSnapshot
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        timezone = ZoneInfo(snapshot.business_timezone)
+        patient: dict[str, object] = {
+            "clinic_name": snapshot.clinic_name,
+            "service": snapshot.service_name,
+            "doctor": snapshot.resource_name,
+            "appointment_id": snapshot.appointment_id,
+            "phone_number_id": snapshot.phone_number_id,
+        }
+        owner: dict[str, object] = {
+            "patient_name": snapshot.patient_name,
+            "patient_phone": snapshot.patient_phone,
+            "service": snapshot.service_name,
+            "doctor": snapshot.resource_name,
+            "appointment_id": snapshot.appointment_id,
+            "phone_number_id": snapshot.phone_number_id,
+        }
+        if snapshot.operation in {"create", "cancel"}:
+            assert snapshot.start_at is not None
+            local = snapshot.start_at.astimezone(timezone)
+            for payload in (patient, owner):
+                payload.update(
+                    date=local.strftime("%A, %b %d"),
+                    time=local.strftime("%-I:%M %p"),
+                )
+        if snapshot.operation == "create":
+            patient["price"] = f"₹{snapshot.price}" if snapshot.price else None
+        elif snapshot.operation == "cancel":
+            patient["reason"] = snapshot.reason
+            owner["reason"] = snapshot.reason
+        else:
+            assert snapshot.old_start_at is not None
+            assert snapshot.new_start_at is not None
+            old_local = snapshot.old_start_at.astimezone(timezone)
+            new_local = snapshot.new_start_at.astimezone(timezone)
+            for payload in (patient, owner):
+                payload.update(
+                    old_date=old_local.strftime("%A, %b %d"),
+                    old_time=old_local.strftime("%-I:%M %p"),
+                    new_date=new_local.strftime("%A, %b %d"),
+                    new_time=new_local.strftime("%-I:%M %p"),
+                )
+        return patient, owner
+
+    def _assert_base_event(
+        self,
+        event: NotificationOutboxEvent,
+        *,
+        business_id: int,
+        key: str,
+        event_type: str,
+        appointment_id: int,
+        recipient_type: str,
+    ) -> None:
+        if (
+            event.business_id != business_id
+            or event.idempotency_key != key
+            or event.event_type != event_type
+            or event.entity_type != "appointment"
+            or event.entity_id != appointment_id
+            or event.recipient_type != recipient_type
+            or event.channel != NotificationChannel.WHATSAPP.value
+            or not event.recipient_phone
+            or not self._valid_status(event)
+        ):
+            raise NotificationIdempotencyConflictError(
+                "Committed notification row does not match required identity"
+            )
+
+    def _legacy_snapshot(
+        self,
+        patient: NotificationOutboxEvent,
+        owner: NotificationOutboxEvent,
+        *,
+        operation: Literal["create", "cancel", "reschedule"],
+        business_id: int,
+        appointment_id: int,
+        pending_action_id: int | None,
+        patient_phone: str,
+        patient_name: str | None,
+        service_name: str,
+        resource_name: str,
+        business_timezone: str,
+        start_at: datetime | None,
+        old_start_at: datetime | None,
+        new_start_at: datetime | None,
+        price: object | None,
+        reason: str | None,
+    ) -> NotificationPairSnapshot:
+        patient_payload = patient.payload
+        owner_payload = owner.payload
+        assert isinstance(patient_payload, dict)
+        assert isinstance(owner_payload, dict)
+        phone_number_id = patient_payload.get("phone_number_id")
+        clinic_name = patient_payload.get("clinic_name")
+        if (
+            not isinstance(phone_number_id, str)
+            or not phone_number_id
+            or owner_payload.get("phone_number_id") != phone_number_id
+            or not isinstance(clinic_name, str)
+            or not clinic_name
+            or patient.recipient_phone != patient_phone
+            or patient.recipient_name != patient_name
+            or owner.recipient_name is not None
+            or owner_payload.get("patient_phone") != patient_phone
+            or owner_payload.get("patient_name") != patient_name
+        ):
+            raise NotificationIdempotencyConflictError(
+                "Legacy notification pair cannot reconstruct immutable identity"
+            )
+        try:
+            snapshot = NotificationPairSnapshot(
+                schema_version=1,
+                operation=operation,
+                business_id=business_id,
+                appointment_id=appointment_id,
+                pending_action_id=pending_action_id,
+                clinic_name=clinic_name,
+                patient_phone=patient_phone,
+                patient_name=patient_name,
+                owner_phone=owner.recipient_phone,
+                phone_number_id=phone_number_id,
+                service_name=service_name,
+                resource_name=resource_name,
+                business_timezone=business_timezone,
+                start_at=start_at,
+                old_start_at=old_start_at,
+                new_start_at=new_start_at,
+                price=str(price) if price is not None else None,
+                reason=reason,
+            )
+        except Exception as exc:
+            raise NotificationIdempotencyConflictError(
+                "Legacy notification evidence contains invalid time or facts"
+            ) from exc
+        expected_patient, expected_owner = self._legacy_payloads(snapshot)
+        if patient_payload != expected_patient or owner_payload != expected_owner:
+            raise NotificationIdempotencyConflictError(
+                "Legacy notification pair is not fully equivalent"
+            )
+        return snapshot
+
+    async def _verify_or_repair_committed_pair(
         self,
         *,
         business_id: int,
         keys: tuple[str, str],
-    ) -> NotificationPairSnapshot:
-        events = [await self._repo.get_event_by_idempotency_key(business_id, key) for key in keys]
-        source = next((event for event in events if event is not None), None)
-        if source is None:
+        operation: Literal["create", "cancel", "reschedule"],
+        appointment_id: int,
+        patient_phone: str,
+        patient_name: str | None,
+        service_name: str,
+        resource_name: str,
+        business_timezone: str,
+        start_at: datetime | None = None,
+        old_start_at: datetime | None = None,
+        new_start_at: datetime | None = None,
+        price: object | None = None,
+        reason: str | None = None,
+        pending_action_id: int | None = None,
+    ) -> list[int]:
+        patient = await self._repo.get_event_by_idempotency_key(business_id, keys[0])
+        owner = await self._repo.get_event_by_idempotency_key(business_id, keys[1])
+        existing = [event for event in (patient, owner) if event is not None]
+        if not existing:
             raise NotificationIdempotencyConflictError(
                 "Required committed notification evidence is missing"
             )
-        payload = source.payload if isinstance(source.payload, dict) else {}
-        try:
-            snapshot = NotificationPairSnapshot.model_validate(payload["equivalence_snapshot"])
-        except Exception as exc:
+        formats = {self._event_format(event) for event in existing}
+        if len(formats) != 1:
             raise NotificationIdempotencyConflictError(
-                "Committed notification equivalence snapshot is invalid"
-            ) from exc
-        if (
-            snapshot.business_id != business_id
-            or payload.get("equivalence_digest") != self._snapshot_digest(snapshot)
-            or self._keys(snapshot) != keys
-        ):
-            raise NotificationIdempotencyConflictError(
-                "Committed notification equivalence snapshot does not match key"
+                "Committed notification pair mixes incompatible versions"
             )
-        return snapshot
+        event_type = {
+            "create": NotificationEventType.APPOINTMENT_CONFIRMED.value,
+            "cancel": NotificationEventType.APPOINTMENT_CANCELLED.value,
+            "reschedule": NotificationEventType.APPOINTMENT_RESCHEDULED.value,
+        }[operation]
+        for event, key, recipient in (
+            (patient, keys[0], NotificationRecipientType.PATIENT.value),
+            (owner, keys[1], NotificationRecipientType.OWNER.value),
+        ):
+            if event is not None:
+                self._assert_base_event(
+                    event,
+                    business_id=business_id,
+                    key=key,
+                    event_type=event_type,
+                    appointment_id=appointment_id,
+                    recipient_type=recipient,
+                )
+
+        if formats == {"legacy"}:
+            if patient is None or owner is None:
+                raise NotificationIdempotencyConflictError(
+                    "Legacy notification member is missing and cannot be reconstructed"
+                )
+            self._legacy_snapshot(
+                patient,
+                owner,
+                operation=operation,
+                business_id=business_id,
+                appointment_id=appointment_id,
+                pending_action_id=pending_action_id,
+                patient_phone=patient_phone,
+                patient_name=patient_name,
+                service_name=service_name,
+                resource_name=resource_name,
+                business_timezone=business_timezone,
+                start_at=start_at,
+                old_start_at=old_start_at,
+                new_start_at=new_start_at,
+                price=price,
+                reason=reason,
+            )
+            return [patient.id, owner.id]
+
+        parsed: list[NotificationPairSnapshot] = []
+        for event in existing:
+            assert isinstance(event.payload, dict)
+            try:
+                snapshot = NotificationPairSnapshot.model_validate(
+                    event.payload["equivalence_snapshot"]
+                )
+            except Exception as exc:
+                raise NotificationIdempotencyConflictError(
+                    "Committed notification equivalence snapshot is invalid"
+                ) from exc
+            if event.payload.get("equivalence_digest") != self._snapshot_digest(snapshot):
+                raise NotificationIdempotencyConflictError(
+                    "Committed notification equivalence digest is invalid"
+                )
+            parsed.append(snapshot)
+        snapshot = parsed[0]
+        if any(item != snapshot for item in parsed[1:]) or self._keys(snapshot) != keys:
+            raise NotificationIdempotencyConflictError(
+                "Committed notification pair snapshots disagree"
+            )
+        self._assert_snapshot_facts(
+            snapshot,
+            operation=operation,
+            business_id=business_id,
+            appointment_id=appointment_id,
+            patient_phone=patient_phone,
+            patient_name=patient_name,
+            service_name=service_name,
+            resource_name=resource_name,
+            business_timezone=business_timezone,
+            start_at=start_at,
+            old_start_at=old_start_at,
+            new_start_at=new_start_at,
+            price=price,
+            reason=reason,
+            pending_action_id=pending_action_id,
+        )
+        expected_values = self._event_values(snapshot)
+        for event, expected in zip((patient, owner), expected_values, strict=True):
+            if event is not None and not self._event_equivalent(event, expected):
+                raise NotificationIdempotencyConflictError(
+                    "Committed notification member is not fully equivalent"
+                )
+
+        async with self._session.begin_nested():
+            ids = []
+            for event, expected in zip((patient, owner), expected_values, strict=True):
+                ids.append(
+                    event.id if event is not None else await self._insert_or_verify(expected)
+                )
+        return ids
 
     @staticmethod
     def _assert_snapshot_facts(
@@ -424,11 +693,10 @@ class NotificationService:
             f"appt-confirm-patient-{appointment_id}",
             f"appt-confirm-owner-{appointment_id}",
         )
-        snapshot = await self._load_committed_snapshot(business_id=business_id, keys=keys)
-        self._assert_snapshot_facts(
-            snapshot,
-            operation="create",
+        return await self._verify_or_repair_committed_pair(
             business_id=business_id,
+            keys=keys,
+            operation="create",
             appointment_id=appointment_id,
             patient_phone=customer_phone,
             patient_name=customer_name,
@@ -438,7 +706,6 @@ class NotificationService:
             start_at=start_at,
             price=price,
         )
-        return await self._create_or_verify_pair(snapshot)
 
     async def create_cancellation_notifications(
         self,
@@ -484,11 +751,10 @@ class NotificationService:
             f"appt-cancel-patient-{appointment_id}",
             f"appt-cancel-owner-{appointment_id}",
         )
-        snapshot = await self._load_committed_snapshot(business_id=business_id, keys=keys)
-        self._assert_snapshot_facts(
-            snapshot,
-            operation="cancel",
+        return await self._verify_or_repair_committed_pair(
             business_id=business_id,
+            keys=keys,
+            operation="cancel",
             appointment_id=appointment_id,
             patient_phone=customer_phone,
             patient_name=customer_name,
@@ -498,7 +764,6 @@ class NotificationService:
             start_at=start_at,
             reason=reason,
         )
-        return await self._create_or_verify_pair(snapshot)
 
     async def create_reschedule_notifications(
         self,
@@ -546,11 +811,10 @@ class NotificationService:
             f"appt-resched-patient-{appointment_id}-{pending_action_id}",
             f"appt-resched-owner-{appointment_id}-{pending_action_id}",
         )
-        snapshot = await self._load_committed_snapshot(business_id=business_id, keys=keys)
-        self._assert_snapshot_facts(
-            snapshot,
-            operation="reschedule",
+        return await self._verify_or_repair_committed_pair(
             business_id=business_id,
+            keys=keys,
+            operation="reschedule",
             appointment_id=appointment_id,
             patient_phone=customer_phone,
             patient_name=customer_name,
@@ -561,4 +825,3 @@ class NotificationService:
             old_start_at=old_start_at,
             new_start_at=new_start_at,
         )
-        return await self._create_or_verify_pair(snapshot)

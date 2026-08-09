@@ -79,7 +79,7 @@ class TestPopulated0014Downgrade:
         try:
             result = _run_alembic(postgres_database_url, "downgrade", "0013", check=False)
             assert result.returncode != 0
-            assert "in-flight inbound events" in result.stderr
+            assert "non-terminal inbound events" in result.stderr
             async with pg_engine.connect() as conn:
                 rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
                 assert rev == "0014"
@@ -113,7 +113,7 @@ class TestPopulated0014Downgrade:
         try:
             result = _run_alembic(postgres_database_url, "downgrade", "0013", check=False)
             assert result.returncode != 0
-            assert "in-flight inbound events" in result.stderr
+            assert "non-terminal inbound events" in result.stderr
             async with pg_engine.connect() as conn:
                 rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
                 assert rev == "0014"
@@ -146,7 +146,7 @@ class TestPopulated0014Downgrade:
         try:
             result = _run_alembic(postgres_database_url, "downgrade", "0013", check=False)
             assert result.returncode != 0
-            assert "in-flight inbound events" in result.stderr
+            assert "non-terminal inbound events" in result.stderr
             async with pg_engine.connect() as conn:
                 rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
                 assert rev == "0014"
@@ -294,7 +294,73 @@ class TestPopulated0014Downgrade:
                 )
             _run_alembic(postgres_database_url, "upgrade", "head", check=False)
 
-    async def test_provider_retry_after_downgrade_remains_processable(
+    async def test_retryable_failed_blocks_downgrade(
+        self, pg_engine: AsyncEngine, postgres_database_url: str
+    ) -> None:
+        await _seed_business(pg_engine)
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO whatsapp_inbound_events "
+                    "(message_id, business_id, phone_number_id, sender_phone, "
+                    " message_type, status, attempts, max_attempts, "
+                    " provider_timestamp) "
+                    "VALUES ('wamid.mig-retryable', 900, 'phone-900', '919000000001', "
+                    " 'text', 'failed', 3, 5, :ts)"
+                ),
+                {"ts": NOW},
+            )
+        try:
+            result = _run_alembic(postgres_database_url, "downgrade", "0013", check=False)
+            assert result.returncode != 0
+            assert "non-terminal inbound events" in result.stderr
+            async with pg_engine.connect() as conn:
+                rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
+                assert rev == "0014"
+        finally:
+            async with pg_engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "DELETE FROM whatsapp_inbound_events "
+                        "WHERE message_id = 'wamid.mig-retryable'"
+                    )
+                )
+            _run_alembic(postgres_database_url, "upgrade", "head", check=False)
+
+    async def test_exhausted_failed_also_blocks_downgrade(
+        self, pg_engine: AsyncEngine, postgres_database_url: str
+    ) -> None:
+        await _seed_business(pg_engine)
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO whatsapp_inbound_events "
+                    "(message_id, business_id, phone_number_id, sender_phone, "
+                    " message_type, status, attempts, max_attempts, "
+                    " provider_timestamp) "
+                    "VALUES ('wamid.mig-exhausted', 900, 'phone-900', '919000000001', "
+                    " 'text', 'failed', 5, 5, :ts)"
+                ),
+                {"ts": NOW},
+            )
+        try:
+            result = _run_alembic(postgres_database_url, "downgrade", "0013", check=False)
+            assert result.returncode != 0
+            assert "non-terminal inbound events" in result.stderr
+            async with pg_engine.connect() as conn:
+                rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
+                assert rev == "0014"
+        finally:
+            async with pg_engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "DELETE FROM whatsapp_inbound_events "
+                        "WHERE message_id = 'wamid.mig-exhausted'"
+                    )
+                )
+            _run_alembic(postgres_database_url, "upgrade", "head", check=False)
+
+    async def test_dead_letter_becomes_tombstone(
         self, pg_engine: AsyncEngine, postgres_database_url: str
     ) -> None:
         await _seed_business(pg_engine)
@@ -305,8 +371,8 @@ class TestPopulated0014Downgrade:
                     "(message_id, business_id, phone_number_id, sender_phone, "
                     " message_type, status, attempts, max_attempts, "
                     " provider_timestamp, dead_lettered_at) "
-                    "VALUES ('wamid.mig-retryable', 900, 'phone-900', '919000000001', "
-                    " 'text', 'failed', 3, 5, :ts, NULL)"
+                    "VALUES ('wamid.mig-dl-tomb', 900, 'phone-900', '919000000001', "
+                    " 'text', 'dead_letter', 5, 5, :ts, :ts)"
                 ),
                 {"ts": NOW},
             )
@@ -316,26 +382,63 @@ class TestPopulated0014Downgrade:
                 is_tombstone = await conn.scalar(
                     text(
                         "SELECT 1 FROM whatsapp_processed_messages "
-                        "WHERE message_id = 'wamid.mig-retryable'"
+                        "WHERE message_id = 'wamid.mig-dl-tomb'"
                     )
                 )
                 assert is_tombstone == 1
             _run_alembic(postgres_database_url, "upgrade", "head")
-            async with pg_engine.connect() as conn:
-                event = await conn.execute(
+        finally:
+            async with pg_engine.begin() as conn:
+                await conn.execute(
                     text(
-                        "SELECT status FROM whatsapp_inbound_events "
-                        "WHERE message_id = 'wamid.mig-retryable'"
+                        "DELETE FROM whatsapp_inbound_events WHERE message_id = 'wamid.mig-dl-tomb'"
                     )
                 )
-                row = event.first()
-                assert row is not None and row[0] == "failed"
+            _run_alembic(postgres_database_url, "upgrade", "head", check=False)
+
+    async def test_retryable_failed_remediation_permits_downgrade(
+        self, pg_engine: AsyncEngine, postgres_database_url: str
+    ) -> None:
+        await _seed_business(pg_engine)
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO whatsapp_inbound_events "
+                    "(message_id, business_id, phone_number_id, sender_phone, "
+                    " message_type, status, attempts, max_attempts, "
+                    " provider_timestamp) "
+                    "VALUES ('wamid.mig-fail-rem', 900, 'phone-900', '919000000001', "
+                    " 'text', 'failed', 2, 5, :ts)"
+                ),
+                {"ts": NOW},
+            )
+        result = _run_alembic(postgres_database_url, "downgrade", "0013", check=False)
+        assert result.returncode != 0
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "UPDATE whatsapp_inbound_events SET status='completed', "
+                    "completed_at=NOW(), message_body=NULL "
+                    "WHERE message_id = 'wamid.mig-fail-rem'"
+                )
+            )
+        try:
+            _run_alembic(postgres_database_url, "downgrade", "0013")
+            async with pg_engine.connect() as conn:
+                is_tombstone = await conn.scalar(
+                    text(
+                        "SELECT 1 FROM whatsapp_processed_messages "
+                        "WHERE message_id = 'wamid.mig-fail-rem'"
+                    )
+                )
+                assert is_tombstone == 1
+            _run_alembic(postgres_database_url, "upgrade", "head")
         finally:
             async with pg_engine.begin() as conn:
                 await conn.execute(
                     text(
                         "DELETE FROM whatsapp_inbound_events "
-                        "WHERE message_id = 'wamid.mig-retryable'"
+                        "WHERE message_id = 'wamid.mig-fail-rem'"
                     )
                 )
             _run_alembic(postgres_database_url, "upgrade", "head", check=False)

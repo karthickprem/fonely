@@ -245,9 +245,9 @@ def downgrade() -> None:
         "RAISE EXCEPTION '0014 downgrade blocked: repair response_failed inbound rows first'; "
         "END IF; "
         "IF EXISTS (SELECT 1 FROM whatsapp_inbound_events "
-        "WHERE status IN ('received', 'processing', 'domain_processed')) THEN "
-        "RAISE EXCEPTION '0014 downgrade blocked: in-flight inbound events must be "
-        "completed or failed before downgrade'; "
+        "WHERE status IN ('received', 'processing', 'domain_processed', 'failed')) THEN "
+        "RAISE EXCEPTION '0014 downgrade blocked: non-terminal inbound events must be "
+        "resolved to completed or dead_letter before downgrade'; "
         "END IF; END $$"
     )
 
@@ -321,7 +321,7 @@ def downgrade() -> None:
         "(message_id, business_id, processed_at) "
         "SELECT message_id, business_id, COALESCE(completed_at, created_at) "
         "FROM whatsapp_inbound_events "
-        "WHERE status IN ('completed', 'dead_letter', 'failed') "
+        "WHERE status IN ('completed', 'dead_letter') "
         "ON CONFLICT (message_id) DO NOTHING"
     )
 

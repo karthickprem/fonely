@@ -62,7 +62,7 @@ async def _cleanup_non_downgradable_rows(
                 "UPDATE whatsapp_inbound_events SET status='completed', "
                 "completed_at=NOW(), message_body=NULL, claim_token=NULL, "
                 "claimed_at=NULL, lease_expires_at=NULL "
-                "WHERE status IN ('received', 'processing', 'domain_processed')"
+                "WHERE status IN ('received', 'processing', 'domain_processed', 'failed')"
             )
         )
         await session.execute(

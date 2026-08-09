@@ -10,9 +10,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
+
 from fonely.api.channels.whatsapp import router
 from fonely.services.whatsapp_config import WhatsAppBusinessMapping
-from httpx import ASGITransport, AsyncClient
 
 
 @pytest.fixture(autouse=True)
@@ -336,6 +337,7 @@ class TestWhatsAppSender:
     @pytest.mark.asyncio
     async def test_send_text_timeout(self):
         import httpx
+
         from fonely.services.whatsapp_sender import WhatsAppSender
 
         mock_client = AsyncMock()
@@ -354,6 +356,7 @@ class TestWhatsAppSender:
     @pytest.mark.asyncio
     async def test_send_text_http_error(self):
         import httpx
+
         from fonely.services.whatsapp_sender import WhatsAppSender
 
         mock_response = MagicMock()
@@ -461,6 +464,7 @@ class TestPIISafety:
     @pytest.mark.asyncio
     async def test_sender_never_logs_access_token(self, caplog):
         import httpx
+
         from fonely.services.whatsapp_sender import WhatsAppSender
 
         mock_client = AsyncMock()

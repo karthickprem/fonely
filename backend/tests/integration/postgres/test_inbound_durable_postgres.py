@@ -10,6 +10,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import func, select, text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
 from fonely.api.channels.whatsapp import (
     _persist_delivery_status,
     _persist_inbound_event,
@@ -32,9 +36,6 @@ from fonely.workers.notification_worker import (
     _deliver_claimed,
     _record_accepted,
 )
-from sqlalchemy import func, select, text
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 pytestmark = pytest.mark.postgres
 

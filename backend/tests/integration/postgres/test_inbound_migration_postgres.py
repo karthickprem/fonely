@@ -543,3 +543,278 @@ class TestPopulated0013Downgrade:
                     )
                 )
             _run_alembic(postgres_database_url, "upgrade", "head", check=False)
+
+
+class TestDeliveryAttemptDowngradeGuard:
+    async def test_sending_attempt_blocks_downgrade(
+        self, pg_engine: AsyncEngine, postgres_database_url: str
+    ) -> None:
+        await _seed_business(pg_engine)
+        async with pg_engine.begin() as conn:
+            outbox_id = await conn.scalar(
+                text(
+                    "INSERT INTO notification_outbox "
+                    "(business_id, event_type, entity_type, entity_id, "
+                    " recipient_type, recipient_phone, channel, "
+                    " idempotency_key, payload, status, "
+                    " claim_token, lease_expires_at) "
+                    "VALUES (900, 'appointment_confirmed', 'appointment', 1, "
+                    " 'patient', '+919000000001', 'whatsapp', "
+                    " 'mig-sending-attempt', '{}'::jsonb, 'processing', "
+                    " 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', :ts) "
+                    "RETURNING id"
+                ),
+                {"ts": NOW},
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO whatsapp_delivery_attempts "
+                    "(business_id, notification_event_id, attempt_number, status) "
+                    "VALUES (900, :oid, 1, 'sending')"
+                ),
+                {"oid": outbox_id},
+            )
+        try:
+            result = _run_alembic(postgres_database_url, "downgrade", "0013", check=False)
+            assert result.returncode != 0
+            assert "delivery-attempt evidence" in result.stderr
+            async with pg_engine.connect() as conn:
+                rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
+                assert rev == "0014"
+        finally:
+            async with pg_engine.begin() as conn:
+                await conn.execute(
+                    text("DELETE FROM whatsapp_delivery_attempts WHERE business_id = 900")
+                )
+                await conn.execute(text("DELETE FROM notification_outbox WHERE business_id = 900"))
+            _run_alembic(postgres_database_url, "upgrade", "head", check=False)
+
+    async def test_accepted_attempt_with_provider_id_blocks(
+        self, pg_engine: AsyncEngine, postgres_database_url: str
+    ) -> None:
+        await _seed_business(pg_engine)
+        async with pg_engine.begin() as conn:
+            outbox_id = await conn.scalar(
+                text(
+                    "INSERT INTO notification_outbox "
+                    "(business_id, event_type, entity_type, entity_id, "
+                    " recipient_type, recipient_phone, channel, "
+                    " idempotency_key, payload, status) "
+                    "VALUES (900, 'appointment_confirmed', 'appointment', 1, "
+                    " 'patient', '+919000000001', 'whatsapp', "
+                    " 'mig-accepted-attempt', '{}'::jsonb, 'unknown') "
+                    "RETURNING id"
+                ),
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO whatsapp_delivery_attempts "
+                    "(business_id, notification_event_id, attempt_number, "
+                    " status, provider_message_id) "
+                    "VALUES (900, :oid, 1, 'accepted', 'wamid.provider123')"
+                ),
+                {"oid": outbox_id},
+            )
+        try:
+            result = _run_alembic(postgres_database_url, "downgrade", "0013", check=False)
+            assert result.returncode != 0
+            assert "delivery-attempt evidence" in result.stderr
+            assert "wamid.provider123" not in result.stderr
+            assert "+919000000001" not in result.stderr
+        finally:
+            async with pg_engine.begin() as conn:
+                await conn.execute(
+                    text("DELETE FROM whatsapp_delivery_attempts WHERE business_id = 900")
+                )
+                await conn.execute(text("DELETE FROM notification_outbox WHERE business_id = 900"))
+            _run_alembic(postgres_database_url, "upgrade", "head", check=False)
+
+    async def test_delivered_attempt_blocks(
+        self, pg_engine: AsyncEngine, postgres_database_url: str
+    ) -> None:
+        await _seed_business(pg_engine)
+        async with pg_engine.begin() as conn:
+            outbox_id = await conn.scalar(
+                text(
+                    "INSERT INTO notification_outbox "
+                    "(business_id, event_type, entity_type, entity_id, "
+                    " recipient_type, recipient_phone, channel, "
+                    " idempotency_key, payload, status, delivered_at) "
+                    "VALUES (900, 'appointment_confirmed', 'appointment', 1, "
+                    " 'patient', '+919000000001', 'whatsapp', "
+                    " 'mig-delivered-attempt', '{}'::jsonb, 'delivered', :ts) "
+                    "RETURNING id"
+                ),
+                {"ts": NOW},
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO whatsapp_delivery_attempts "
+                    "(business_id, notification_event_id, attempt_number, status) "
+                    "VALUES (900, :oid, 1, 'delivered')"
+                ),
+                {"oid": outbox_id},
+            )
+        try:
+            result = _run_alembic(postgres_database_url, "downgrade", "0013", check=False)
+            assert result.returncode != 0
+            assert "delivery-attempt evidence" in result.stderr
+        finally:
+            async with pg_engine.begin() as conn:
+                await conn.execute(
+                    text("DELETE FROM whatsapp_delivery_attempts WHERE business_id = 900")
+                )
+                await conn.execute(text("DELETE FROM notification_outbox WHERE business_id = 900"))
+            _run_alembic(postgres_database_url, "upgrade", "head", check=False)
+
+    async def test_empty_attempts_with_safe_state_permits_downgrade(
+        self, pg_engine: AsyncEngine, postgres_database_url: str
+    ) -> None:
+        await _seed_business(pg_engine)
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO whatsapp_inbound_events "
+                    "(message_id, business_id, phone_number_id, sender_phone, "
+                    " message_type, status, attempts, max_attempts, "
+                    " provider_timestamp, completed_at) "
+                    "VALUES ('wamid.mig-safe-down', 900, 'phone-900', "
+                    " '919000000001', 'text', 'completed', 1, 5, :ts, :ts)"
+                ),
+                {"ts": NOW},
+            )
+        try:
+            _run_alembic(postgres_database_url, "downgrade", "0013")
+            async with pg_engine.connect() as conn:
+                rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
+                assert rev == "0013"
+            _run_alembic(postgres_database_url, "upgrade", "head")
+        finally:
+            async with pg_engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "DELETE FROM whatsapp_inbound_events "
+                        "WHERE message_id = 'wamid.mig-safe-down'"
+                    )
+                )
+            _run_alembic(postgres_database_url, "upgrade", "head", check=False)
+
+
+class TestActiveClaimDowngradeGuard:
+    async def test_processing_notification_with_claim_blocks(
+        self, pg_engine: AsyncEngine, postgres_database_url: str
+    ) -> None:
+        await _seed_business(pg_engine)
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO notification_outbox "
+                    "(business_id, event_type, entity_type, entity_id, "
+                    " recipient_type, recipient_phone, channel, "
+                    " idempotency_key, payload, status, "
+                    " claim_token, lease_expires_at) "
+                    "VALUES (900, 'appointment_confirmed', 'appointment', 1, "
+                    " 'patient', '+919000000001', 'whatsapp', "
+                    " 'mig-active-claim', '{}'::jsonb, 'processing', "
+                    " 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', :ts)"
+                ),
+                {"ts": NOW},
+            )
+        try:
+            result = _run_alembic(postgres_database_url, "downgrade", "0013", check=False)
+            assert result.returncode != 0
+            assert "active notification claims" in result.stderr
+            async with pg_engine.connect() as conn:
+                rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
+                assert rev == "0014"
+        finally:
+            async with pg_engine.begin() as conn:
+                await conn.execute(text("DELETE FROM notification_outbox WHERE business_id = 900"))
+            _run_alembic(postgres_database_url, "upgrade", "head", check=False)
+
+
+class TestInboxHistoryDowngradeGuard:
+    async def test_completed_inbox_blocks_0012_downgrade(
+        self, pg_engine: AsyncEngine, postgres_database_url: str
+    ) -> None:
+        await _seed_business(pg_engine)
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO whatsapp_inbound_events "
+                    "(message_id, business_id, phone_number_id, sender_phone, "
+                    " message_type, status, attempts, max_attempts, "
+                    " provider_timestamp, completed_at) "
+                    "VALUES ('wamid.mig-hist', 900, 'phone-900', "
+                    " '919000000001', 'text', 'completed', 1, 5, :ts, :ts)"
+                ),
+                {"ts": NOW},
+            )
+        try:
+            _run_alembic(postgres_database_url, "downgrade", "0013")
+            _run_alembic(postgres_database_url, "downgrade", "0012")
+            result = _run_alembic(postgres_database_url, "downgrade", "0011", check=False)
+            assert result.returncode != 0
+            assert "durable inbox history" in result.stderr
+            async with pg_engine.connect() as conn:
+                rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
+                assert rev == "0012"
+        finally:
+            async with pg_engine.begin() as conn:
+                await conn.execute(
+                    text("DELETE FROM whatsapp_inbound_events WHERE message_id = 'wamid.mig-hist'")
+                )
+            _run_alembic(postgres_database_url, "upgrade", "head", check=False)
+
+    async def test_empty_inbox_permits_full_downgrade(
+        self, pg_engine: AsyncEngine, postgres_database_url: str
+    ) -> None:
+        await _seed_business(pg_engine)
+        try:
+            _run_alembic(postgres_database_url, "downgrade", "0011")
+            async with pg_engine.connect() as conn:
+                rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
+                assert rev == "0011"
+            _run_alembic(postgres_database_url, "upgrade", "head")
+        finally:
+            _run_alembic(postgres_database_url, "upgrade", "head", check=False)
+
+    async def test_0012_failure_preserves_data(
+        self, pg_engine: AsyncEngine, postgres_database_url: str
+    ) -> None:
+        await _seed_business(pg_engine)
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO whatsapp_inbound_events "
+                    "(message_id, business_id, phone_number_id, sender_phone, "
+                    " message_type, status, attempts, max_attempts, "
+                    " provider_timestamp, dead_lettered_at) "
+                    "VALUES ('wamid.mig-hist-dl', 900, 'phone-900', "
+                    " '919000000001', 'text', 'dead_letter', 5, 5, :ts, :ts)"
+                ),
+                {"ts": NOW},
+            )
+        try:
+            _run_alembic(postgres_database_url, "downgrade", "0013")
+            _run_alembic(postgres_database_url, "downgrade", "0012")
+            result = _run_alembic(postgres_database_url, "downgrade", "0011", check=False)
+            assert result.returncode != 0
+            async with pg_engine.connect() as conn:
+                rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
+                assert rev == "0012"
+                exists = await conn.scalar(
+                    text(
+                        "SELECT 1 FROM whatsapp_inbound_events "
+                        "WHERE message_id = 'wamid.mig-hist-dl'"
+                    )
+                )
+                assert exists == 1
+        finally:
+            async with pg_engine.begin() as conn:
+                await conn.execute(
+                    text(
+                        "DELETE FROM whatsapp_inbound_events WHERE message_id = 'wamid.mig-hist-dl'"
+                    )
+                )
+            _run_alembic(postgres_database_url, "upgrade", "head", check=False)

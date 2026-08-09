@@ -53,6 +53,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute("LOCK TABLE whatsapp_inbound_events IN SHARE ROW EXCLUSIVE MODE")
+    op.execute(
+        "DO $$ BEGIN "
+        "IF EXISTS (SELECT 1 FROM whatsapp_inbound_events) THEN "
+        "RAISE EXCEPTION '0012 downgrade blocked: "
+        "durable inbox history exists and cannot be truthfully represented "
+        "by legacy dedup tombstones alone'; "
+        "END IF; END $$"
+    )
     op.drop_index(
         "ix_whatsapp_inbound_events_poll",
         table_name="whatsapp_inbound_events",

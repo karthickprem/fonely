@@ -235,19 +235,35 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute("LOCK TABLE notification_outbox IN SHARE ROW EXCLUSIVE MODE")
+    op.execute("LOCK TABLE whatsapp_delivery_attempts IN SHARE ROW EXCLUSIVE MODE")
+    op.execute("LOCK TABLE whatsapp_inbound_events IN SHARE ROW EXCLUSIVE MODE")
     op.execute(
         "DO $$ BEGIN "
+        "IF EXISTS (SELECT 1 FROM whatsapp_delivery_attempts) THEN "
+        "RAISE EXCEPTION '0014 downgrade blocked: "
+        "delivery-attempt evidence exists and cannot be represented in 0013'; "
+        "END IF; "
+        "IF EXISTS (SELECT 1 FROM notification_outbox "
+        "WHERE status = 'processing' OR claim_token IS NOT NULL "
+        "OR lease_expires_at IS NOT NULL) THEN "
+        "RAISE EXCEPTION '0014 downgrade blocked: "
+        "active notification claims must be drained before downgrade'; "
+        "END IF; "
         "IF EXISTS (SELECT 1 FROM notification_outbox WHERE status = 'unknown') THEN "
-        "RAISE EXCEPTION '0014 downgrade blocked: reconcile unknown notification rows first'; "
+        "RAISE EXCEPTION '0014 downgrade blocked: "
+        "reconcile unknown notification rows first'; "
         "END IF; "
         "IF EXISTS (SELECT 1 FROM whatsapp_inbound_events "
         "WHERE status = 'response_failed') THEN "
-        "RAISE EXCEPTION '0014 downgrade blocked: repair response_failed inbound rows first'; "
+        "RAISE EXCEPTION '0014 downgrade blocked: "
+        "repair response_failed inbound rows first'; "
         "END IF; "
         "IF EXISTS (SELECT 1 FROM whatsapp_inbound_events "
         "WHERE status IN ('received', 'processing', 'domain_processed', 'failed')) THEN "
-        "RAISE EXCEPTION '0014 downgrade blocked: non-terminal inbound events must be "
-        "resolved to completed or dead_letter before downgrade'; "
+        "RAISE EXCEPTION '0014 downgrade blocked: "
+        "non-terminal inbound events must be resolved to completed or dead_letter "
+        "before downgrade'; "
         "END IF; END $$"
     )
 

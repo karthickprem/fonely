@@ -351,9 +351,11 @@ class TestPopulated0013Downgrade:
                 text(
                     "INSERT INTO notification_outbox "
                     "(business_id, event_type, entity_type, entity_id, "
-                    " recipient_phone, payload, status) "
+                    " recipient_type, recipient_phone, channel, "
+                    " idempotency_key, payload, status) "
                     "VALUES (900, 'whatsapp_inbound_response', 'whatsapp_inbound_event', "
-                    " 1, '+919000000001', '{}'::jsonb, 'pending')"
+                    " 1, 'patient', '+919000000001', 'whatsapp', "
+                    " 'mig-test-inbound-resp', '{}'::jsonb, 'pending')"
                 )
             )
         try:
@@ -384,9 +386,11 @@ class TestPopulated0013Downgrade:
                 text(
                     "INSERT INTO notification_outbox "
                     "(business_id, event_type, entity_type, entity_id, "
-                    " recipient_phone, payload, status) "
+                    " recipient_type, recipient_phone, channel, "
+                    " idempotency_key, payload, status) "
                     "VALUES (900, 'appointment_confirmed', 'appointment', "
-                    " 1, '+919000000001', '{}'::jsonb, 'pending')"
+                    " 1, 'patient', '+919000000001', 'whatsapp', "
+                    " 'mig-test-appt-confirm', '{}'::jsonb, 'pending')"
                 )
             )
         try:

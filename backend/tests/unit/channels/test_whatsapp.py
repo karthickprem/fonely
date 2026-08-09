@@ -10,10 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient
-
 from fonely.api.channels.whatsapp import router
 from fonely.services.whatsapp_config import WhatsAppBusinessMapping
+from httpx import ASGITransport, AsyncClient
 
 
 @pytest.fixture(autouse=True)
@@ -131,6 +130,83 @@ class TestWebhookVerification:
                 },
             )
             assert r.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_empty_configured_and_empty_supplied_returns_403(self, _patch_settings):
+        _patch_settings.whatsapp_verify_token = ""
+        app, _ = _make_app()
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get(
+                "/webhooks/whatsapp",
+                params={
+                    "hub.mode": "subscribe",
+                    "hub.verify_token": "",
+                    "hub.challenge": "challenge_string_123",
+                },
+            )
+            assert r.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_missing_request_token_returns_403(self):
+        app, _ = _make_app()
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get(
+                "/webhooks/whatsapp",
+                params={
+                    "hub.mode": "subscribe",
+                    "hub.challenge": "challenge_string_123",
+                },
+            )
+            assert r.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_wrong_mode_returns_403(self):
+        app, _ = _make_app()
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get(
+                "/webhooks/whatsapp",
+                params={
+                    "hub.mode": "unsubscribe",
+                    "hub.verify_token": "test-token",
+                    "hub.challenge": "challenge_string_123",
+                },
+            )
+            assert r.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_unconfigured_verify_token_returns_403(self, _patch_settings):
+        _patch_settings.whatsapp_verify_token = ""
+        app, _ = _make_app()
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get(
+                "/webhooks/whatsapp",
+                params={
+                    "hub.mode": "subscribe",
+                    "hub.verify_token": "test-token",
+                    "hub.challenge": "challenge_string_123",
+                },
+            )
+            assert r.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_verify_token_not_in_response_body(self):
+        app, _ = _make_app()
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            r = await client.get(
+                "/webhooks/whatsapp",
+                params={
+                    "hub.mode": "subscribe",
+                    "hub.verify_token": "wrong-token",
+                    "hub.challenge": "challenge_string_123",
+                },
+            )
+            assert "test-token" not in r.text
+            assert "wrong-token" not in r.text
 
 
 class TestWebhookPersistence:
@@ -260,7 +336,6 @@ class TestWhatsAppSender:
     @pytest.mark.asyncio
     async def test_send_text_timeout(self):
         import httpx
-
         from fonely.services.whatsapp_sender import WhatsAppSender
 
         mock_client = AsyncMock()
@@ -279,7 +354,6 @@ class TestWhatsAppSender:
     @pytest.mark.asyncio
     async def test_send_text_http_error(self):
         import httpx
-
         from fonely.services.whatsapp_sender import WhatsAppSender
 
         mock_response = MagicMock()
@@ -387,7 +461,6 @@ class TestPIISafety:
     @pytest.mark.asyncio
     async def test_sender_never_logs_access_token(self, caplog):
         import httpx
-
         from fonely.services.whatsapp_sender import WhatsAppSender
 
         mock_client = AsyncMock()

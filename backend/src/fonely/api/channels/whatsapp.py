@@ -43,11 +43,19 @@ def _verify_webhook_signature(body: bytes, signature: str, secret: str) -> bool:
 
 @router.get("")
 async def verify_webhook(request: Request) -> Response:
+    configured = settings.whatsapp_verify_token
+    if not configured:
+        logger.error("whatsapp_verify_token_not_configured")
+        return Response(status_code=403)
+
     mode = request.query_params.get("hub.mode")
     token = request.query_params.get("hub.verify_token")
-    challenge = request.query_params.get("hub.challenge", "")
 
-    if mode == "subscribe" and hmac.compare_digest(token or "", settings.whatsapp_verify_token):
+    if not token or mode != "subscribe":
+        return Response(status_code=403)
+
+    if hmac.compare_digest(token, configured):
+        challenge = request.query_params.get("hub.challenge", "")
         return Response(content=challenge, media_type="text/plain")
 
     return Response(status_code=403)

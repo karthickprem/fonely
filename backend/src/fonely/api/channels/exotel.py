@@ -20,6 +20,7 @@ from typing import Any
 
 from fastapi import APIRouter, Request, Response, WebSocket, WebSocketDisconnect
 from sqlalchemy import text
+from starlette.requests import ClientDisconnect
 
 from fonely.core.config import settings
 from fonely.services.exotel_config import ExotelNumberMapping
@@ -33,14 +34,24 @@ _MAX_BODY_BYTES = 65_536
 _MIN_SECRET_CHARS = 32
 
 
+def _ascii_secret(secret: str) -> bytes | None:
+    """Return byte-safe secret material or None when configuration is unsafe."""
+    if len(secret) < _MIN_SECRET_CHARS or secret != secret.strip():
+        return None
+    try:
+        return secret.encode("ascii")
+    except UnicodeEncodeError:
+        return None
+
+
 def is_interim_webhook_secret_strong(secret: str) -> bool:
     """Enforce the minimum deploy-time strength for the interim secret.
 
     This length check does not measure entropy. Operators must generate the
-    value from a cryptographically secure random source and rotate it through
-    the deployment secret-management procedure.
+    ASCII value from a cryptographically secure random source and rotate it
+    through the deployment secret-management procedure.
     """
-    return len(secret) >= _MIN_SECRET_CHARS and secret == secret.strip()
+    return _ascii_secret(secret) is not None
 
 
 def _verify_webhook_auth(request: Request) -> bool:
@@ -49,8 +60,8 @@ def _verify_webhook_auth(request: Request) -> bool:
     Rejects duplicate/ambiguous auth headers, leading/trailing whitespace,
     and empty values. Never logs or returns the secret or header value.
     """
-    configured = settings.exotel_webhook_secret
-    if not is_interim_webhook_secret_strong(configured):
+    configured = _ascii_secret(settings.exotel_webhook_secret)
+    if configured is None:
         return False
     raw_values = request.headers.getlist(_AUTH_HEADER)
     if len(raw_values) != 1:
@@ -58,16 +69,23 @@ def _verify_webhook_auth(request: Request) -> bool:
     provided = raw_values[0]
     if not provided or provided != provided.strip():
         return False
-    return hmac.compare_digest(configured, provided)
+    try:
+        provided_bytes = provided.encode("ascii")
+    except UnicodeEncodeError:
+        return False
+    return hmac.compare_digest(configured, provided_bytes)
 
 
 async def _read_bounded_body(request: Request) -> bytes | None:
-    """Stream at most 64 KiB; return None as soon as the limit is exceeded."""
+    """Stream at most 64 KiB without copying an oversized chunk."""
     body = bytearray()
-    async for chunk in request.stream():
-        body.extend(chunk)
-        if len(body) > _MAX_BODY_BYTES:
-            return None
+    try:
+        async for chunk in request.stream():
+            if len(chunk) > _MAX_BODY_BYTES - len(body):
+                return None
+            body.extend(chunk)
+    except (ClientDisconnect, RuntimeError, TypeError, ValueError):
+        return None
     return bytes(body)
 
 
@@ -91,10 +109,13 @@ async def call_status_webhook(request: Request) -> Response:
     content_length = request.headers.get("content-length")
     if content_length is not None:
         try:
-            if int(content_length) > _MAX_BODY_BYTES:
-                return Response(status_code=413, content="request too large")
-        except ValueError:
+            declared_length = int(content_length)
+        except (OverflowError, ValueError):
             return Response(status_code=400, content="invalid content-length")
+        if declared_length < 0:
+            return Response(status_code=400, content="invalid content-length")
+        if declared_length > _MAX_BODY_BYTES:
+            return Response(status_code=413, content="request too large")
 
     raw = await _read_bounded_body(request)
     if raw is None:

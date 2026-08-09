@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 from starlette.requests import Request
 
-from fonely.api.channels.exotel import call_status_webhook, router
+from fonely.api.channels.exotel import _read_bounded_body, call_status_webhook, router
 from fonely.app import create_app
 from fonely.core.config import settings
 from fonely.services.exotel_config import ExotelNumberMapping
@@ -64,13 +64,16 @@ def _request(
     *,
     secret: str,
     content_length: int | None = None,
+    extra_headers: list[tuple[bytes, bytes]] | None = None,
 ) -> Request:
     headers = [
         (b"content-type", b"application/json"),
-        (b"x-exotel-webhook-secret", secret.encode("ascii")),
+        (b"x-exotel-webhook-secret", secret.encode("latin-1")),
     ]
     if content_length is not None:
         headers.append((b"content-length", str(content_length).encode("ascii")))
+    if extra_headers:
+        headers.extend(extra_headers)
     scope = {
         "type": "http",
         "method": "POST",
@@ -177,7 +180,19 @@ class TestWebhookAuth:
                 json=_ringing_body(),
                 headers=_auth_headers(),
             )
-        mock_cmp.assert_called_once_with(_TEST_SECRET, _TEST_SECRET)
+        encoded = _TEST_SECRET.encode("ascii")
+        mock_cmp.assert_called_once_with(encoded, encoded)
+
+    async def test_non_ascii_presented_secret_returns_401_without_500(self) -> None:
+        app, mock_session = _create_app()
+        receive = AsyncMock(
+            side_effect=[{"type": "http.request", "body": b"{}", "more_body": False}]
+        )
+        request = _request(app, receive, secret="é" * 32)
+        response = await call_status_webhook(request)
+        assert response.status_code == 401
+        receive.assert_not_awaited()
+        mock_session.execute.assert_not_awaited()
 
     def test_duplicate_auth_header_returns_401(self) -> None:
         app, _ = _create_app()
@@ -269,6 +284,65 @@ class TestWebhookAuth:
         assert receive.await_count == 2
         mock_session.execute.assert_not_awaited()
 
+    async def test_single_multimegabyte_chunk_rejected_after_one_receive(self) -> None:
+        app, mock_session = _create_app()
+        receive = AsyncMock(
+            side_effect=[
+                {
+                    "type": "http.request",
+                    "body": b"x" * 2_000_000,
+                    "more_body": True,
+                },
+                AssertionError("second receive must not occur"),
+            ]
+        )
+        request = _request(app, receive, secret=_TEST_SECRET)
+        response = await call_status_webhook(request)
+        assert response.status_code == 413
+        assert receive.await_count == 1
+        mock_session.execute.assert_not_awaited()
+
+    async def test_exact_boundary_is_accepted_by_bounded_reader(self) -> None:
+        receive = AsyncMock(
+            side_effect=[
+                {
+                    "type": "http.request",
+                    "body": b"x" * 65_536,
+                    "more_body": False,
+                }
+            ]
+        )
+        request = _request(_create_app()[0], receive, secret=_TEST_SECRET)
+        body = await _read_bounded_body(request)
+        assert body is not None
+        assert len(body) == 65_536
+        assert receive.await_count == 1
+
+    async def test_boundary_plus_one_is_rejected_after_one_receive(self) -> None:
+        app, mock_session = _create_app()
+        receive = AsyncMock(
+            side_effect=[
+                {
+                    "type": "http.request",
+                    "body": b"x" * 65_537,
+                    "more_body": False,
+                }
+            ]
+        )
+        request = _request(app, receive, secret=_TEST_SECRET)
+        response = await call_status_webhook(request)
+        assert response.status_code == 413
+        assert receive.await_count == 1
+        mock_session.execute.assert_not_awaited()
+
+    async def test_client_disconnect_fails_safely_without_db(self) -> None:
+        app, mock_session = _create_app()
+        receive = AsyncMock(side_effect=[{"type": "http.disconnect"}])
+        request = _request(app, receive, secret=_TEST_SECRET)
+        response = await call_status_webhook(request)
+        assert response.status_code == 413
+        mock_session.execute.assert_not_awaited()
+
 
 class TestProductionRouteMounting:
     def test_empty_config_does_not_mount_exotel_routes(self) -> None:
@@ -286,6 +360,23 @@ class TestProductionRouteMounting:
             mock_settings.internal_api_secret = ""
             mock_settings.whatsapp_verify_token = ""
             mock_settings.exotel_webhook_secret = "short"
+            mock_settings.readiness_timeout_seconds = 3.0
+            app = create_app()
+        paths = {route.path for route in app.routes}
+        assert "/webhooks/exotel/call-status" not in paths
+        assert app.state.exotel_webhook_auth_ready is False
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/health/ready")
+        assert response.status_code == 503
+        assert response.json() == {"status": "unavailable"}
+
+    async def test_non_ascii_config_unmounts_route_and_fails_readiness(self) -> None:
+        with patch("fonely.app.settings") as mock_settings:
+            mock_settings.internal_api_secret = ""
+            mock_settings.whatsapp_verify_token = ""
+            mock_settings.exotel_webhook_secret = "é" * 32
             mock_settings.readiness_timeout_seconds = 3.0
             app = create_app()
         paths = {route.path for route in app.routes}
@@ -386,10 +477,18 @@ class TestCallStatusWebhook:
                 headers=_auth_headers(),
             )
         assert response.status_code == 404
-        output = " ".join(record.getMessage() for record in caplog.records)
-        assert "09999999999" not in output
-        assert "+919876543210" not in output
-        assert "fictional-sensitive-call-id" not in output
+        sensitive = (
+            "09999999999",
+            "+919876543210",
+            "fictional-sensitive-call-id",
+            _TEST_SECRET,
+        )
+        records = [
+            record for record in caplog.records if record.name == "fonely.api.channels.exotel"
+        ]
+        assert len(records) == 1
+        serialized = repr(records[0].__dict__)
+        assert all(value not in serialized for value in sensitive)
 
     def test_failed_status_returns_200(self) -> None:
         app, _ = _create_app()

@@ -1036,6 +1036,7 @@ class AppointmentService:
             business_id=commit.business_id,  # type: ignore[attr-defined]
             appointment_id=data.target_appointment_id,
             customer_phone=str(before.get("customer_phone", "")),
+            customer_name=before.get("customer_name"),
             service_name=str(before.get("service_name", "")),
             resource_name=str(before.get("resource_name", "")),
             start_at=datetime.fromisoformat(str(before["start_at"]).replace("Z", "+00:00")),
@@ -1068,6 +1069,7 @@ class AppointmentService:
             appointment_id=data.target_appointment_id,
             pending_action_id=commit.pending_action_id,  # type: ignore[attr-defined]
             customer_phone=str(before.get("customer_phone", "")),
+            customer_name=before.get("customer_name"),
             service_name=str(after.get("service_name", "")),
             resource_name=str(after.get("resource_name", "")),
             old_start_at=datetime.fromisoformat(str(before["start_at"]).replace("Z", "+00:00")),
@@ -1162,9 +1164,11 @@ class AppointmentService:
             business_id=appt.business_id,  # type: ignore[attr-defined]
             appointment_id=appt.id,  # type: ignore[attr-defined]
             customer_phone=committed_data.customer_phone,
+            customer_name=committed_data.customer_name,
             service_name=facts.service_name,
             resource_name=facts.resource_name,
             start_at=facts.start_at,
+            price=facts.price,
             business_timezone=facts.business_timezone,
         )
         return PreCommitAppointmentSuccess(

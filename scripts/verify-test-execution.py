@@ -225,6 +225,30 @@ def load_allowlist(path: Path, now: datetime) -> list[dict[str, Any]]:
     return entries
 
 
+def parse_events(path: Path, partition: str) -> dict[str, list[dict[str, Any]]]:
+    raw = safe_input(path, f"{partition} events")
+    events: dict[str, list[dict[str, Any]]] = {}
+    try:
+        lines = raw.decode().splitlines()
+    except UnicodeDecodeError as exc:
+        fail_input(f"{partition} events malformed: {type(exc).__name__}")
+    for index, line in enumerate(lines):
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError as exc:
+            fail_input(f"{partition} events line {index + 1} malformed: {exc}")
+        if (
+            not isinstance(event, dict)
+            or event.get("schema_version") != 1
+            or event.get("when") not in ("setup", "call", "teardown")
+            or event.get("outcome") not in ("passed", "failed", "skipped")
+            or not isinstance(event.get("node_id"), str)
+        ):
+            fail_input(f"{partition} events line {index + 1} invalid")
+        events.setdefault(event["node_id"], []).append(event)
+    return events
+
+
 def digest_results(non_pg: dict[str, str], pg: dict[str, str]) -> str:
     rows = [f"non_pg:{node}:{outcome}" for node, outcome in sorted(non_pg.items())]
     rows += [f"pg:{node}:{outcome}" for node, outcome in sorted(pg.items())]
@@ -236,6 +260,8 @@ def main() -> None:
     parser.add_argument("--inventory", required=True, type=Path)
     parser.add_argument("--non-pg-junit", required=True, type=Path)
     parser.add_argument("--pg-junit", required=True, type=Path)
+    parser.add_argument("--non-pg-events", required=True, type=Path)
+    parser.add_argument("--pg-events", required=True, type=Path)
     parser.add_argument("--skip-allowlist", required=True, type=Path)
     parser.add_argument("--report", required=True, type=Path)
     parser.add_argument("--environment", choices=VALID_ENVS, default="ci")
@@ -248,6 +274,8 @@ def main() -> None:
         non_pg_expected, pg_expected = validate_inventory(inventory)
         non_pg = parse_junit(args.non_pg_junit, "non_pg")
         pg = parse_junit(args.pg_junit, "pg")
+        non_pg_events = parse_events(args.non_pg_events, "non_pg")
+        pg_events = parse_events(args.pg_events, "pg")
         now = (
             datetime.fromisoformat(args.now.replace("Z", "+00:00"))
             if args.now
@@ -292,9 +320,33 @@ def main() -> None:
                             break
                 if not matched:
                     errors.append(f"unexpected skip: {node}")
+        for label, expected, events in (
+            ("non_pg", non_pg_expected, non_pg_events),
+            ("pg", pg_expected, pg_events),
+        ):
+            missing_events = expected - set(events)
+            extra_events = set(events) - expected
+            if missing_events:
+                errors.append(
+                    f"{label}: missing execution events for {len(missing_events)} nodes"
+                )
+            if extra_events:
+                errors.append(
+                    f"{label}: extra execution events for {len(extra_events)} nodes"
+                )
         body_executed_pg = sum(
-            outcome in ("passed", "failed", "error", "xpass") for outcome in pg.values()
+            any(
+                event["when"] == "call" and event["outcome"] != "skipped"
+                for event in pg_events.get(node, [])
+            )
+            for node in pg_expected
         )
+        for node, events in {**non_pg_events, **pg_events}.items():
+            for event in events:
+                if event.get("wasxfail") and event["when"] == "call":
+                    errors.append(
+                        f"xfail/xpass requires explicit governed waiver: {node}"
+                    )
         if body_executed_pg == 0:
             errors.append("PG inventory has zero genuinely executed test bodies")
         for index, entry in enumerate(allowlist):

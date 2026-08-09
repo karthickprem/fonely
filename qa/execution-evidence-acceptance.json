@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "frozen": true,
+  "success": ["complete manifest", "nonempty partitions", "exact node membership", "PG call-phase body evidence", "valid terminal success"],
+  "failures": [
+    "all PG skipped", "PG setup skip/no call", "marker skip", "skipif", "param skip literal brackets", "strict-false XPASS", "ungoverned xfail",
+    "allowlist schema/env/time/duplicate/expired-other-env/non-exact-ID", "empty inventory", "zero footer", "footer mismatch", "digest mismatch", "partition overlap",
+    "flat/root/nested JUnit aggregate contradiction", "terminal writer failure", "terminal not finalized", "early gate failure", "completeness missing/hash/schema/SHA/env/status mismatch",
+    "live/dangling report symlink", "temporary symlink attack", "malformed XML/JSON/Unicode", "duplicate JUnit/event node", "extra/missing/cross-partition node"
+  ],
+  "policy": {"node_patterns":"exact only including literal [param]", "clock":"authoritative UTC only", "unused_allowlist":"fail only when applicable to current environment", "expired_allowlist":"fail globally"}
+}

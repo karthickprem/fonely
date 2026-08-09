@@ -113,6 +113,30 @@ def exec_args(
 ) -> tuple[list[str], Path]:
     npg = write(tmp, "npg.xml", junit(npg_cases))
     pg = write(tmp, "pg.xml", junit(pg_cases))
+
+    def events(cases: list[tuple[str, str]]) -> str:
+        rows = []
+        for node, outcome in cases:
+            call_outcome = (
+                "skipped"
+                if outcome in ("skipped", "xfail", "xpass")
+                else ("failed" if outcome in ("failed", "error") else "passed")
+            )
+            rows.append(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "node_id": node,
+                        "when": "call",
+                        "outcome": call_outcome,
+                        "wasxfail": "xfail" if outcome in ("xfail", "xpass") else None,
+                    }
+                )
+            )
+        return "\n".join(rows) + "\n"
+
+    npg_events = write(tmp, "npg.events", events(npg_cases))
+    pg_events = write(tmp, "pg.events", events(pg_cases))
     report = tmp / "report.json"
     return [
         "--inventory",
@@ -121,6 +145,10 @@ def exec_args(
         str(npg),
         "--pg-junit",
         str(pg),
+        "--non-pg-events",
+        str(npg_events),
+        "--pg-events",
+        str(pg_events),
         "--skip-allowlist",
         str(skips or allowlist(tmp)),
         "--environment",
@@ -237,7 +265,7 @@ def test_partition_invalid_cases(tmp_path: Path, mode: str) -> None:
         ("passed", 0),
         ("failed", 1),
         ("error", 1),
-        ("xfail", 0),
+        ("xfail", 1),
         ("xpass", 1),
         ("skipped", 1),
     ],
@@ -344,24 +372,9 @@ def test_missing_allowlist_is_error(tmp_path: Path) -> None:
 
 def test_malformed_xml(tmp_path: Path) -> None:
     inv = inventory(tmp_path, [NPG], [PG])
-    bad = write(tmp_path, "npg.xml", "not xml")
-    pg = write(tmp_path, "pg.xml", junit([(PG, "passed")]))
-    r = tmp_path / "r.json"
-    rc = run(
-        EXEC,
-        [
-            "--inventory",
-            str(inv),
-            "--non-pg-junit",
-            str(bad),
-            "--pg-junit",
-            str(pg),
-            "--skip-allowlist",
-            str(allowlist(tmp_path)),
-            "--report",
-            str(r),
-        ],
-    ).returncode
+    args, r = exec_args(tmp_path, inv, [(NPG, "passed")], [(PG, "passed")])
+    write(tmp_path, "npg.xml", "not xml")
+    rc = run(EXEC, args).returncode
     assert rc == 2 and json.loads(r.read_text())["valid"] is False
 
 
@@ -453,49 +466,14 @@ def test_report_symlink_rejected(tmp_path: Path) -> None:
 
 def test_hierarchical_junit_counted_once(tmp_path: Path) -> None:
     inv = inventory(tmp_path, [NPG], [PG])
+    args, _ = exec_args(tmp_path, inv, [(NPG, "passed")], [(PG, "passed")])
     xml = f'<testsuites><testsuite tests="1">{tc(NPG)}</testsuite></testsuites>'
-    npg = write(tmp_path, "n.xml", xml)
-    pg = write(tmp_path, "p.xml", junit([(PG, "passed")]))
-    r = tmp_path / "r.json"
-    rc = run(
-        EXEC,
-        [
-            "--inventory",
-            str(inv),
-            "--non-pg-junit",
-            str(npg),
-            "--pg-junit",
-            str(pg),
-            "--skip-allowlist",
-            str(allowlist(tmp_path)),
-            "--report",
-            str(r),
-        ],
-    ).returncode
-    assert rc == 0
+    write(tmp_path, "npg.xml", xml)
+    assert run(EXEC, args).returncode == 0
 
 
 def test_class_node_property_exact(tmp_path: Path) -> None:
     node = "tests/test_a.py::TestA::test_m"
     inv = inventory(tmp_path, [node], [PG])
-    npg = write(tmp_path, "n.xml", junit([(node, "passed")]))
-    pg = write(tmp_path, "p.xml", junit([(PG, "passed")]))
-    r = tmp_path / "r.json"
-    assert (
-        run(
-            EXEC,
-            [
-                "--inventory",
-                str(inv),
-                "--non-pg-junit",
-                str(npg),
-                "--pg-junit",
-                str(pg),
-                "--skip-allowlist",
-                str(allowlist(tmp_path)),
-                "--report",
-                str(r),
-            ],
-        ).returncode
-        == 0
-    )
+    args, _ = exec_args(tmp_path, inv, [(node, "passed")], [(PG, "passed")])
+    assert run(EXEC, args).returncode == 0

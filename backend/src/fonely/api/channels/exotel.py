@@ -30,6 +30,17 @@ router = APIRouter(prefix="/webhooks/exotel", tags=["exotel"])
 
 _AUTH_HEADER = "X-Exotel-Webhook-Secret"
 _MAX_BODY_BYTES = 65_536
+_MIN_SECRET_CHARS = 32
+
+
+def is_interim_webhook_secret_strong(secret: str) -> bool:
+    """Enforce the minimum deploy-time strength for the interim secret.
+
+    This length check does not measure entropy. Operators must generate the
+    value from a cryptographically secure random source and rotate it through
+    the deployment secret-management procedure.
+    """
+    return len(secret) >= _MIN_SECRET_CHARS and secret == secret.strip()
 
 
 def _verify_webhook_auth(request: Request) -> bool:
@@ -39,7 +50,7 @@ def _verify_webhook_auth(request: Request) -> bool:
     and empty values. Never logs or returns the secret or header value.
     """
     configured = settings.exotel_webhook_secret
-    if not configured:
+    if not is_interim_webhook_secret_strong(configured):
         return False
     raw_values = request.headers.getlist(_AUTH_HEADER)
     if len(raw_values) != 1:
@@ -48,6 +59,16 @@ def _verify_webhook_auth(request: Request) -> bool:
     if not provided or provided != provided.strip():
         return False
     return hmac.compare_digest(configured, provided)
+
+
+async def _read_bounded_body(request: Request) -> bytes | None:
+    """Stream at most 64 KiB; return None as soon as the limit is exceeded."""
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > _MAX_BODY_BYTES:
+            return None
+    return bytes(body)
 
 
 def _get_mapping(app: object) -> ExotelNumberMapping:
@@ -75,8 +96,8 @@ async def call_status_webhook(request: Request) -> Response:
         except ValueError:
             return Response(status_code=400, content="invalid content-length")
 
-    raw = await request.body()
-    if len(raw) > _MAX_BODY_BYTES:
+    raw = await _read_bounded_body(request)
+    if raw is None:
         return Response(status_code=413, content="request too large")
 
     import json as _json
@@ -99,10 +120,7 @@ async def call_status_webhook(request: Request) -> Response:
     mapping = _get_mapping(request.app)
     business_id = mapping.get_business_id(exotel_number)
     if business_id is None:
-        logger.warning(
-            "exotel_unknown_number",
-            extra={"exotel_number": exotel_number, "call_sid": call_sid},
-        )
+        logger.warning("exotel_unknown_number")
         return Response(status_code=404, content="unknown number")
 
     factory = request.app.state.session_factory

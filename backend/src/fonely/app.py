@@ -90,12 +90,22 @@ def create_app() -> FastAPI:
 
         app.include_router(whatsapp_router)
 
-    if settings.exotel_webhook_secret:
-        from fonely.api.channels.exotel import router as exotel_router
+    exotel_secret = settings.exotel_webhook_secret
+    if exotel_secret:
+        from fonely.api.channels.exotel import (
+            is_interim_webhook_secret_strong,
+        )
+        from fonely.api.channels.exotel import (
+            router as exotel_router,
+        )
         from fonely.services.exotel_config import ExotelNumberMapping
 
-        app.state.exotel_mapping = ExotelNumberMapping()
-        app.include_router(exotel_router)
+        app.state.exotel_webhook_auth_ready = is_interim_webhook_secret_strong(exotel_secret)
+        if app.state.exotel_webhook_auth_ready:
+            app.state.exotel_mapping = ExotelNumberMapping()
+            app.include_router(exotel_router)
+    else:
+        app.state.exotel_webhook_auth_ready = True
 
     @app.get("/metrics")
     async def metrics_endpoint(request: Request) -> Response:
@@ -126,6 +136,12 @@ def create_app() -> FastAPI:
 
     @app.get("/health/ready")
     async def readiness(request: Request) -> Response:
+        if not getattr(request.app.state, "exotel_webhook_auth_ready", True):
+            return Response(
+                content='{"status":"unavailable"}',
+                media_type="application/json",
+                status_code=503,
+            )
         timeout = settings.readiness_timeout_seconds
         engine: AsyncEngine = request.app.state.engine
         try:

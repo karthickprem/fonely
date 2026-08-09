@@ -7,8 +7,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
+from starlette.requests import Request
 
-from fonely.api.channels.exotel import router
+from fonely.api.channels.exotel import call_status_webhook, router
+from fonely.app import create_app
 from fonely.core.config import settings
 from fonely.services.exotel_config import ExotelNumberMapping
 
@@ -53,6 +56,29 @@ def _ringing_body() -> dict[str, str]:
         "To": "08012345678",
         "From": "+919876543210",
     }
+
+
+def _request(
+    app: FastAPI,
+    receive: AsyncMock,
+    *,
+    secret: str,
+    content_length: int | None = None,
+) -> Request:
+    headers = [
+        (b"content-type", b"application/json"),
+        (b"x-exotel-webhook-secret", secret.encode("ascii")),
+    ]
+    if content_length is not None:
+        headers.append((b"content-length", str(content_length).encode("ascii")))
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/webhooks/exotel/call-status",
+        "headers": headers,
+        "app": app,
+    }
+    return Request(scope, receive)
 
 
 class TestWebhookAuth:
@@ -105,6 +131,17 @@ class TestWebhookAuth:
                 "/webhooks/exotel/call-status",
                 json=_ringing_body(),
                 headers={"X-Exotel-Webhook-Secret": "anything"},
+            )
+        assert response.status_code == 401
+
+    def test_short_config_secret_fails_closed(self) -> None:
+        with patch.object(settings, "exotel_webhook_secret", "too-short"):
+            app, _ = _create_app()
+            client = TestClient(app)
+            response = client.post(
+                "/webhooks/exotel/call-status",
+                json=_ringing_body(),
+                headers={"X-Exotel-Webhook-Secret": "too-short"},
             )
         assert response.status_code == 401
 
@@ -207,6 +244,60 @@ class TestWebhookAuth:
         assert response.status_code == 401
         mock_session.execute.assert_not_awaited()
 
+    async def test_unauthorized_request_does_not_consume_body(self) -> None:
+        app, mock_session = _create_app()
+        receive = AsyncMock(side_effect=AssertionError("unauthorized body must not be consumed"))
+        request = _request(app, receive, secret="wrong")
+        response = await call_status_webhook(request)
+        assert response.status_code == 401
+        receive.assert_not_awaited()
+        mock_session.execute.assert_not_awaited()
+
+    async def test_chunked_oversize_rejected_before_buffering_all_chunks(self) -> None:
+        app, mock_session = _create_app()
+        chunk = b"x" * 40_000
+        receive = AsyncMock(
+            side_effect=[
+                {"type": "http.request", "body": chunk, "more_body": True},
+                {"type": "http.request", "body": chunk, "more_body": True},
+                AssertionError("third chunk must not be consumed"),
+            ]
+        )
+        request = _request(app, receive, secret=_TEST_SECRET)
+        response = await call_status_webhook(request)
+        assert response.status_code == 413
+        assert receive.await_count == 2
+        mock_session.execute.assert_not_awaited()
+
+
+class TestProductionRouteMounting:
+    def test_empty_config_does_not_mount_exotel_routes(self) -> None:
+        with patch("fonely.app.settings") as mock_settings:
+            mock_settings.internal_api_secret = ""
+            mock_settings.whatsapp_verify_token = ""
+            mock_settings.exotel_webhook_secret = ""
+            app = create_app()
+        paths = {route.path for route in app.routes}
+        assert "/webhooks/exotel/call-status" not in paths
+        assert "/webhooks/exotel/audio-stream" not in paths
+
+    async def test_short_config_unmounts_route_and_fails_readiness(self) -> None:
+        with patch("fonely.app.settings") as mock_settings:
+            mock_settings.internal_api_secret = ""
+            mock_settings.whatsapp_verify_token = ""
+            mock_settings.exotel_webhook_secret = "short"
+            mock_settings.readiness_timeout_seconds = 3.0
+            app = create_app()
+        paths = {route.path for route in app.routes}
+        assert "/webhooks/exotel/call-status" not in paths
+        assert app.state.exotel_webhook_auth_ready is False
+
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/health/ready")
+        assert response.status_code == 503
+        assert response.json() == {"status": "unavailable"}
+
 
 class TestCallStatusWebhook:
     def test_ringing_returns_200(self) -> None:
@@ -279,6 +370,26 @@ class TestCallStatusWebhook:
             headers=_auth_headers(),
         )
         assert response.status_code == 404
+
+    def test_unknown_number_log_has_no_phone_or_call_sid(self, caplog) -> None:  # type: ignore[no-untyped-def]
+        app, _ = _create_app()
+        client = TestClient(app)
+        with caplog.at_level("WARNING", logger="fonely.api.channels.exotel"):
+            response = client.post(
+                "/webhooks/exotel/call-status",
+                json={
+                    "CallSid": "fictional-sensitive-call-id",
+                    "Status": "ringing",
+                    "To": "09999999999",
+                    "From": "+919876543210",
+                },
+                headers=_auth_headers(),
+            )
+        assert response.status_code == 404
+        output = " ".join(record.getMessage() for record in caplog.records)
+        assert "09999999999" not in output
+        assert "+919876543210" not in output
+        assert "fictional-sensitive-call-id" not in output
 
     def test_failed_status_returns_200(self) -> None:
         app, _ = _create_app()

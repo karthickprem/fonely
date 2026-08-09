@@ -17,6 +17,7 @@ _PATCHES = (
 def _configure(mock_app: MagicMock, mock_route: MagicMock, secret: str) -> None:
     for m in (mock_app, mock_route):
         m.internal_api_secret = secret
+        m.exotel_webhook_secret = ""
         m.database_url = "postgresql+asyncpg://localhost/test"
         m.readiness_timeout_seconds = 3.0
 

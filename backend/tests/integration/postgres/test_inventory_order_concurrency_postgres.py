@@ -387,6 +387,7 @@ async def test_final_stock_order_race_has_exactly_one_winner(
                 blocked_pid=loser_pid,
                 expected_blocker_pid=winner_pid,
             )
+            assert not loser_task.done(), "contender must still be blocked before holder releases"
             winner = await OrderService(winner_session).confirm(
                 confirmation_command(
                     action_id=first[0],
@@ -473,6 +474,7 @@ async def test_duplicate_confirmation_race_has_one_effect(
                 blocked_pid=loser_pid,
                 expected_blocker_pid=winner_pid,
             )
+            assert not loser_task.done(), "contender must still be blocked before holder releases"
             winner = await OrderService(winner_session).confirm(command)
             await winner_session.commit()
             loser = await asyncio.wait_for(loser_task, timeout=5)

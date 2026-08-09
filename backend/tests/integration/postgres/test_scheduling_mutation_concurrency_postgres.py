@@ -216,6 +216,7 @@ async def test_schedule_mutation_first_blocks_and_rejects_confirmation(
 
         task = asyncio.create_task(confirm())
         await _observe_blocker(pg_session_factory, await blocked_pid, owner_pid)
+        assert not task.done(), "contender must still be blocked before holder releases"
         await owner_session.commit()
         result = await task
         assert result is not None, "Confirmation must fail after schedule mutation"
@@ -282,6 +283,7 @@ async def test_confirmation_first_is_seen_and_cancelled_by_schedule_mutation(
 
         task = asyncio.create_task(mutate())
         await _observe_blocker(pg_session_factory, await blocked_pid, customer_pid)
+        assert not task.done(), "contender must still be blocked before holder releases"
         await customer_session.commit()
         owner_result = await task
         assert owner_result.affected_appointments == 1  # type: ignore[attr-defined]

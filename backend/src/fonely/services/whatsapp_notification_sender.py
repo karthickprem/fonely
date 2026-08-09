@@ -106,6 +106,12 @@ class WhatsAppNotificationSender:
             if recipient_type == "owner":
                 return self._format_owner_cancellation(payload)
 
+        if event_type == "appointment_rescheduled":
+            if recipient_type == "patient":
+                return self._format_patient_reschedule(payload)
+            if recipient_type == "owner":
+                return self._format_owner_reschedule(payload)
+
         if event_type == "whatsapp_inbound_response":
             return str(payload.get("response_text", ""))
 
@@ -173,4 +179,31 @@ class WhatsAppNotificationSender:
         ]
         if p.get("reason"):
             lines.append(f"Reason: {p['reason']}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_patient_reschedule(p: dict[str, Any]) -> str:
+        lines = [
+            "Your appointment has been rescheduled.",
+            p.get("clinic_name", ""),
+            f"Service: {p.get('service', '')}",
+            f"Doctor: {p.get('doctor', '')}",
+            f"Previous: {p.get('old_date', '')} at {p.get('old_time', '')}",
+            f"New: {p.get('new_date', '')} at {p.get('new_time', '')}",
+            "",
+            "To cancel or reschedule again, reply to this message.",
+        ]
+        return "\n".join(lines)
+
+    @staticmethod
+    def _format_owner_reschedule(p: dict[str, Any]) -> str:
+        patient = p.get("patient_name") or "Patient"
+        lines = [
+            "Appointment rescheduled",
+            f"Patient: {patient}",
+            f"Service: {p.get('service', '')}",
+            f"Doctor: {p.get('doctor', '')}",
+            f"Previous: {p.get('old_date', '')} at {p.get('old_time', '')}",
+            f"New: {p.get('new_date', '')} at {p.get('new_time', '')}",
+        ]
         return "\n".join(lines)

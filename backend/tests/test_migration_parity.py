@@ -38,6 +38,7 @@ MIGRATION_0011 = MIGRATIONS_DIR / "0011_conversation_turn_unique.py"
 MIGRATION_0012 = MIGRATIONS_DIR / "0012_whatsapp_inbound_events.py"
 MIGRATION_0013 = MIGRATIONS_DIR / "0013_whatsapp_inbound_event_corrections.py"
 MIGRATION_0014 = MIGRATIONS_DIR / "0014_inbound_event_claim_and_dedup_removal.py"
+MIGRATION_0015 = MIGRATIONS_DIR / "0015_owner_command_proposals.py"
 
 
 class OperationRecorder:
@@ -256,6 +257,7 @@ def _capture_upgrade() -> OperationRecorder:
         (MIGRATION_0012, "fonely_migration_0012"),
         (MIGRATION_0013, "fonely_migration_0013"),
         (MIGRATION_0014, "fonely_migration_0014"),
+        (MIGRATION_0015, "fonely_migration_0015"),
     ):
         module = _load_migration(path, name)
         module.op = recorder
@@ -280,6 +282,9 @@ def _capture_downgrade() -> OperationRecorder:
     recorder = _capture_upgrade()
     recorder.dropped_tables.clear()
     recorder.operations.clear()
+    module_0015 = _load_migration(MIGRATION_0015, "fonely_migration_0015_down")
+    module_0015.op = recorder
+    module_0015.downgrade()
     module_0014 = _load_migration(MIGRATION_0014, "fonely_migration_0014_down")
     module_0014.op = recorder
     module_0014.downgrade()
@@ -423,7 +428,7 @@ def _exclude_signatures(table: sa.Table) -> set[tuple[str, str, str, tuple[tuple
 def test_migration_and_orm_have_identical_application_tables() -> None:
     captured = _capture_upgrade()
     assert set(captured.metadata.tables) == set(Base.metadata.tables)
-    assert len(captured.metadata.tables) == 30
+    assert len(captured.metadata.tables) == 31
 
 
 def test_migration_and_orm_column_parity() -> None:
@@ -489,12 +494,29 @@ def test_migration_downgrade_drops_all_application_tables() -> None:
     recorder = _capture_downgrade()
     expected = set(Base.metadata.tables) | {"whatsapp_processed_messages"}
     assert set(recorder.dropped_tables) == expected
-    assert recorder.dropped_tables[0] == "whatsapp_delivery_attempts"
-    assert recorder.dropped_tables[1] == "whatsapp_inbound_events"
-    assert recorder.dropped_tables[2] == "whatsapp_processed_messages"
-    assert recorder.dropped_tables[3] == "business_daily_context"
-    assert recorder.dropped_tables[4] == "conversation_turns"
-    assert recorder.dropped_tables[5] == "conversations"
+    assert recorder.dropped_tables[0] == "owner_command_proposals"
+    assert recorder.dropped_tables[1] == "whatsapp_delivery_attempts"
+    assert recorder.dropped_tables[2] == "whatsapp_inbound_events"
+    assert recorder.dropped_tables[3] == "whatsapp_processed_messages"
+    assert recorder.dropped_tables[4] == "business_daily_context"
+    assert recorder.dropped_tables[5] == "conversation_turns"
+    assert recorder.dropped_tables[6] == "conversations"
+
+
+def test_owner_proposal_downgrade_locks_and_blocks_populated_loss() -> None:
+    recorder = _capture_downgrade()
+    lock_index = next(
+        index
+        for index, operation in enumerate(recorder.operations)
+        if operation[0] == "execute" and "LOCK TABLE owner_command_proposals" in operation[1]
+    )
+    preflight_index = next(
+        index
+        for index, operation in enumerate(recorder.operations)
+        if operation[0] == "execute" and "Cannot downgrade 0015" in operation[1]
+    )
+    drop_index = recorder.operations.index(("drop_table", "owner_command_proposals"))
+    assert lock_index < preflight_index < drop_index
 
 
 def test_appointment_migration_installs_btree_gist_without_dropping_it() -> None:
@@ -758,7 +780,7 @@ def test_revision_chain_has_single_head() -> None:
     }
     heads = revisions - parent_revisions
 
-    assert heads == {"0014"}
+    assert heads == {"0015"}
     assert {migration.revision: migration.down_revision for migration in migrations} == {
         "0001": None,
         "0002": "0001",
@@ -774,6 +796,7 @@ def test_revision_chain_has_single_head() -> None:
         "0012": "0011",
         "0013": "0012",
         "0014": "0013",
+        "0015": "0014",
     }
 
 

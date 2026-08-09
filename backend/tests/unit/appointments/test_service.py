@@ -4,6 +4,8 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from fonely.domain.appointments.commands import (
     ConfirmPendingAppointmentCommand,
     CreatePendingAppointmentCommand,
@@ -178,7 +180,9 @@ async def test_proposal_validates_once() -> None:
     assert validation.validate_for_actor.call_count == 1
 
 
-async def test_confirm_replay_returns_authoritative_version() -> None:
+async def test_confirm_replay_returns_authoritative_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     session = AsyncMock()
     validation = _mock_validation()
     service = AppointmentService(session, validation=validation)
@@ -206,6 +210,11 @@ async def test_confirm_replay_returns_authoritative_version() -> None:
     service._pa_service = AsyncMock()
     service._pa_service._require_action = AsyncMock(return_value=action)
 
+    from fonely.services.notifications import NotificationService
+
+    notifications = AsyncMock(return_value=[])
+    monkeypatch.setattr(NotificationService, "create_appointment_notifications", notifications)
+
     result = await service.confirm_and_commit(
         ConfirmPendingAppointmentCommand(
             actor=_actor(),
@@ -220,7 +229,9 @@ async def test_confirm_replay_returns_authoritative_version() -> None:
     session.commit.assert_not_called()
 
 
-async def test_confirm_does_not_call_outer_commit() -> None:
+async def test_confirm_does_not_call_outer_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     session = AsyncMock(spec=[])
     session.commit = AsyncMock()
     session.rollback = AsyncMock()
@@ -282,6 +293,14 @@ async def test_confirm_does_not_call_outer_commit() -> None:
 
     session.begin_nested = _fake_nested
 
+    from fonely.services.notifications import NotificationService
+
+    monkeypatch.setattr(
+        NotificationService,
+        "create_appointment_notifications",
+        AsyncMock(return_value=[1, 2]),
+    )
+
     result = await service.confirm_and_commit(
         ConfirmPendingAppointmentCommand(
             actor=_actor(),
@@ -293,3 +312,127 @@ async def test_confirm_does_not_call_outer_commit() -> None:
     assert isinstance(result, PreCommitAppointmentSuccess)
     session.commit.assert_not_called()
     session.rollback.assert_not_called()
+
+
+async def test_confirm_orders_begin_outbox_complete_inside_savepoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    order: list[str] = []
+    session = AsyncMock(spec=[])
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    session.execute = AsyncMock()
+    session.add = MagicMock()
+
+    @asynccontextmanager
+    async def nested():  # type: ignore[no-untyped-def]
+        order.append("savepoint_enter")
+        try:
+            yield
+        finally:
+            order.append("savepoint_exit")
+
+    session.begin_nested = nested
+    service = AppointmentService(session, validation=_mock_validation())
+
+    action = MagicMock(
+        business_id=1,
+        version=2,
+        initiated_by="+919123456789",
+        action_type="appointment",
+        proposed_payload=canonical_payload_dict(_resolved_envelope()),
+    )
+    begin_result = MagicMock(
+        version=3,
+        payload=canonical_payload_dict(_resolved_envelope()),
+    )
+    complete_result = MagicMock(version=4)
+
+    async def begin(*args: object, **kwargs: object) -> MagicMock:
+        order.append("begin")
+        return begin_result
+
+    async def complete(*args: object, **kwargs: object) -> MagicMock:
+        order.append("complete")
+        return complete_result
+
+    service._pa_service = AsyncMock()
+    service._pa_service._require_action = AsyncMock(return_value=action)
+    service._pa_service.begin_commit = begin
+    service._pa_service.complete_commit = complete
+    service._repo = AsyncMock()
+    service._repo.get_by_business_and_pending_action.return_value = None
+    service._repo.insert.return_value = MagicMock(id=1)
+
+    async def insert_allocation(*args: object, **kwargs: object) -> None:
+        order.append("mutation")
+
+    service._repo.insert_allocation = insert_allocation
+
+    from fonely.services.notifications import NotificationService
+
+    async def outbox(*args: object, **kwargs: object) -> list[int]:
+        order.append("outbox")
+        return [1, 2]
+
+    monkeypatch.setattr(NotificationService, "create_appointment_notifications", outbox)
+
+    await service.confirm_and_commit(
+        ConfirmPendingAppointmentCommand(actor=_actor(), pending_action_id=10, expected_version=2)
+    )
+
+    assert order == [
+        "savepoint_enter",
+        "begin",
+        "mutation",
+        "outbox",
+        "complete",
+        "savepoint_exit",
+    ]
+
+
+async def test_confirm_outbox_failure_propagates_before_complete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = AsyncMock(spec=[])
+    session.execute = AsyncMock()
+    session.add = MagicMock()
+
+    @asynccontextmanager
+    async def nested():  # type: ignore[no-untyped-def]
+        yield
+
+    session.begin_nested = nested
+    service = AppointmentService(session, validation=_mock_validation())
+    action = MagicMock(
+        business_id=1,
+        version=2,
+        initiated_by="+919123456789",
+        action_type="appointment",
+        proposed_payload=canonical_payload_dict(_resolved_envelope()),
+    )
+    service._pa_service = AsyncMock()
+    service._pa_service._require_action = AsyncMock(return_value=action)
+    service._pa_service.begin_commit = AsyncMock(
+        return_value=MagicMock(version=3, payload=canonical_payload_dict(_resolved_envelope()))
+    )
+    service._repo = AsyncMock()
+    service._repo.get_by_business_and_pending_action.return_value = None
+    service._repo.insert.return_value = MagicMock(id=1)
+
+    from fonely.services.notifications import NotificationService
+
+    monkeypatch.setattr(
+        NotificationService,
+        "create_appointment_notifications",
+        AsyncMock(side_effect=RuntimeError("forced_outbox_failure")),
+    )
+
+    with pytest.raises(RuntimeError, match="forced_outbox_failure"):
+        await service.confirm_and_commit(
+            ConfirmPendingAppointmentCommand(
+                actor=_actor(), pending_action_id=10, expected_version=2
+            )
+        )
+
+    service._pa_service.complete_commit.assert_not_awaited()

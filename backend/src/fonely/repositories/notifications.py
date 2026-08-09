@@ -105,6 +105,14 @@ class NotificationRepository:
             )
         )
 
+    async def get_event_by_idempotency_key(
+        self, idempotency_key: str
+    ) -> NotificationOutboxEvent | None:
+        statement = select(NotificationOutboxEvent).where(
+            NotificationOutboxEvent.idempotency_key == idempotency_key,
+        )
+        return (await self._session.scalars(statement)).one_or_none()
+
     async def get_events_for_entity(
         self, business_id: int, entity_type: str, entity_id: int
     ) -> Sequence[NotificationOutboxEvent]:

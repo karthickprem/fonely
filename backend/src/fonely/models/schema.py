@@ -218,7 +218,10 @@ class BusinessUser(Base):
     """Sole authority for owner/manager authorization."""
 
     __tablename__ = "business_users"
-    __table_args__ = (UniqueConstraint("business_id", "phone"),)
+    __table_args__ = (
+        UniqueConstraint("business_id", "phone"),
+        UniqueConstraint("business_id", "id", name="uq_business_users_business_id_id"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
@@ -1072,6 +1075,97 @@ class OwnerAuditLog(Base):
     details: Mapped[Any | None] = mapped_column(JSONB, nullable=True)
     pending_action_id: Mapped[int | None] = mapped_column(ForeignKey("pending_actions.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# =============================================================================
+# Owner Command Proposals
+# =============================================================================
+
+
+class OwnerCommandProposal(Base):
+    __tablename__ = "owner_command_proposals"
+    __table_args__ = (
+        UniqueConstraint("business_id", "idempotency_key", name="uq_owner_proposal_idempotency"),
+        CheckConstraint("expected_version > 0", name="ck_owner_proposal_version_positive"),
+        CheckConstraint(
+            "status IN ('pending_confirmation', 'confirmed', 'executing', "
+            "'completed', 'rejected', 'expired', 'failed')",
+            name="ck_owner_proposal_status",
+        ),
+        CheckConstraint(
+            "command_type IN ('close_clinic', 'close_early', 'doctor_leave')",
+            name="ck_owner_proposal_command_type",
+        ),
+        CheckConstraint(
+            "length(idempotency_key) > 0",
+            name="ck_owner_proposal_idempotency_nonempty",
+        ),
+        CheckConstraint(
+            "length(owner_phone_snapshot) > 0",
+            name="ck_owner_proposal_phone_nonempty",
+        ),
+        CheckConstraint("length(payload_digest) > 0", name="ck_owner_proposal_digest_nonempty"),
+        CheckConstraint(
+            "jsonb_typeof(command_payload) = 'object'",
+            name="ck_owner_proposal_payload_object",
+        ),
+        CheckConstraint(
+            "jsonb_typeof(preview_snapshot) = 'object'",
+            name="ck_owner_proposal_snapshot_object",
+        ),
+        CheckConstraint(
+            "(status != 'completed') OR (completed_at IS NOT NULL AND result_evidence IS NOT NULL)",
+            name="ck_owner_proposal_completed_requires_evidence",
+        ),
+        CheckConstraint(
+            "(status != 'confirmed') OR (confirmed_at IS NOT NULL)",
+            name="ck_owner_proposal_confirmed_requires_timestamp",
+        ),
+        CheckConstraint(
+            "(status NOT IN ('failed')) OR (failure_code IS NOT NULL)",
+            name="ck_owner_proposal_failed_requires_code",
+        ),
+        ForeignKeyConstraint(
+            ["business_id", "owner_user_id"],
+            ["business_users.business_id", "business_users.id"],
+            name="fk_owner_proposal_business_user",
+        ),
+        Index(
+            "ix_owner_proposal_owner_pending",
+            "business_id",
+            "owner_user_id",
+            "status",
+            postgresql_where="status = 'pending_confirmation'",
+        ),
+        Index(
+            "ix_owner_proposal_expiry",
+            "status",
+            "expires_at",
+            postgresql_where="status = 'pending_confirmation'",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    owner_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    owner_phone_snapshot: Mapped[str] = mapped_column(String(20), nullable=False)
+    command_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    command_payload: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    preview_snapshot: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    payload_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(30), nullable=False, server_default="pending_confirmation"
+    )
+    expected_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    idempotency_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failure_code: Mapped[str | None] = mapped_column(String(100))
+    failure_message: Mapped[str | None] = mapped_column(String(500))
+    result_evidence: Mapped[Any | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 # =============================================================================

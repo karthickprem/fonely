@@ -4,6 +4,8 @@ Every test exercises real PostgreSQL transactions through the AppointmentService
 """
 
 from datetime import UTC, datetime, time, timedelta
+from typing import Any
+from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -712,3 +714,306 @@ async def test_reschedule_cancelled_appointment(
         )
         assert status == "cancelled"
         await session.rollback()
+
+
+@pytest.mark.parametrize("operation", ["cancel", "reschedule"])
+async def test_mutation_outbox_failure_rolls_back_cancel_or_reschedule(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    original_start = _future_start(days=4, hour=10)
+    async with pg_session_factory() as session:
+        await _seed_dental_clinic(session)
+        confirmed = await _create_confirmed_appointment(
+            session, start_at=original_start, key_suffix=f"{operation}-failure-create"
+        )
+        appointment_id = confirmed.appointment.appointment_id
+        service = AppointmentService(session, validation=InternalValidationPort(session))
+        if operation == "cancel":
+            proposal = await service.create_cancellation_proposal(
+                CreatePendingAppointmentCancellationCommand(
+                    actor=_customer(),
+                    appointment_id=appointment_id,
+                    expected_appointment_version=1,
+                    expires_at=datetime.now(UTC) + timedelta(minutes=20),
+                    idempotency_key="cancel-outbox-failure",
+                )
+            )
+        else:
+            proposal = await service.create_reschedule_proposal(
+                CreatePendingAppointmentRescheduleCommand(
+                    actor=_customer(),
+                    appointment_id=appointment_id,
+                    expected_appointment_version=1,
+                    service_id=1,
+                    start_at=_future_start(days=4, hour=12),
+                    expires_at=datetime.now(UTC) + timedelta(minutes=20),
+                    idempotency_key="reschedule-outbox-failure",
+                )
+            )
+        action_id = proposal.pending_action_id
+        action_version = proposal.version
+        await session.commit()
+
+    from fonely.services.notifications import NotificationService
+
+    method_name = (
+        "create_cancellation_notifications"
+        if operation == "cancel"
+        else "create_reschedule_notifications"
+    )
+    original = getattr(NotificationService, method_name)
+
+    async def fail_after_outbox(*args: Any, **kwargs: Any) -> Any:
+        await original(*args, **kwargs)
+        raise RuntimeError("forced_outbox_failure")
+
+    monkeypatch.setattr(NotificationService, method_name, fail_after_outbox)
+
+    async with pg_session_factory() as session:
+        service = AppointmentService(session, validation=InternalValidationPort(session))
+        with pytest.raises(RuntimeError, match="forced_outbox_failure"):
+            if operation == "cancel":
+                await service.confirm_cancellation(
+                    ConfirmPendingAppointmentCancellationCommand(
+                        actor=_customer(),
+                        pending_action_id=action_id,
+                        expected_version=action_version,
+                    )
+                )
+            else:
+                await service.confirm_reschedule(
+                    ConfirmPendingAppointmentRescheduleCommand(
+                        actor=_customer(),
+                        pending_action_id=action_id,
+                        expected_version=action_version,
+                    )
+                )
+        await session.rollback()
+
+    async with pg_session_factory() as observer:
+        action = (
+            await observer.execute(
+                text("SELECT status, version FROM pending_actions WHERE id = :id"),
+                {"id": action_id},
+            )
+        ).one()
+        appointment = (
+            await observer.execute(
+                text("SELECT status, version, start_at FROM appointments WHERE id = :id"),
+                {"id": appointment_id},
+            )
+        ).one()
+        assert action == ("awaiting_confirmation", action_version)
+        assert appointment[0] == "confirmed"
+        assert appointment[1] == 1
+        assert appointment[2] == original_start
+        assert (
+            await observer.scalar(
+                text("SELECT count(*) FROM appointment_commits WHERE pending_action_id = :id"),
+                {"id": action_id},
+            )
+            == 0
+        )
+        assert (
+            await observer.scalar(
+                text("SELECT count(*) FROM notification_outbox WHERE idempotency_key LIKE :p"),
+                {"p": f"appt-{operation}%"},
+            )
+            == 0
+        )
+
+
+@pytest.mark.parametrize("operation", ["cancel", "reschedule"])
+async def test_complete_failure_rolls_back_cancel_or_reschedule(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    async with pg_session_factory() as session:
+        await _seed_dental_clinic(session)
+        confirmed = await _create_confirmed_appointment(
+            session, start_at=_future_start(days=5, hour=10), key_suffix=f"{operation}-complete"
+        )
+        appointment_id = confirmed.appointment.appointment_id
+        service = AppointmentService(session, validation=InternalValidationPort(session))
+        if operation == "cancel":
+            proposal = await service.create_cancellation_proposal(
+                CreatePendingAppointmentCancellationCommand(
+                    actor=_customer(),
+                    appointment_id=appointment_id,
+                    expected_appointment_version=1,
+                    expires_at=datetime.now(UTC) + timedelta(minutes=20),
+                    idempotency_key="cancel-complete-failure",
+                )
+            )
+        else:
+            proposal = await service.create_reschedule_proposal(
+                CreatePendingAppointmentRescheduleCommand(
+                    actor=_customer(),
+                    appointment_id=appointment_id,
+                    expected_appointment_version=1,
+                    service_id=1,
+                    start_at=_future_start(days=5, hour=12),
+                    expires_at=datetime.now(UTC) + timedelta(minutes=20),
+                    idempotency_key="reschedule-complete-failure",
+                )
+            )
+        action_id = proposal.pending_action_id
+        action_version = proposal.version
+        await session.commit()
+
+    async with pg_session_factory() as session:
+        service = AppointmentService(session, validation=InternalValidationPort(session))
+        monkeypatch.setattr(
+            service._pa_service,
+            "complete_commit",
+            AsyncMock(side_effect=RuntimeError("forced_complete_failure")),
+        )
+        with pytest.raises(RuntimeError, match="forced_complete_failure"):
+            if operation == "cancel":
+                await service.confirm_cancellation(
+                    ConfirmPendingAppointmentCancellationCommand(
+                        actor=_customer(),
+                        pending_action_id=action_id,
+                        expected_version=action_version,
+                    )
+                )
+            else:
+                await service.confirm_reschedule(
+                    ConfirmPendingAppointmentRescheduleCommand(
+                        actor=_customer(),
+                        pending_action_id=action_id,
+                        expected_version=action_version,
+                    )
+                )
+        await session.rollback()
+
+    async with pg_session_factory() as observer:
+        assert (
+            await observer.scalar(
+                text("SELECT status FROM pending_actions WHERE id = :id"),
+                {"id": action_id},
+            )
+            == "awaiting_confirmation"
+        )
+        assert (
+            await observer.scalar(
+                text("SELECT count(*) FROM appointment_commits WHERE pending_action_id = :id"),
+                {"id": action_id},
+            )
+            == 0
+        )
+
+
+@pytest.mark.parametrize("operation", ["cancel", "reschedule"])
+@pytest.mark.parametrize("boundary", ["after_begin", "after_evidence"])
+async def test_begin_or_evidence_failure_rolls_back_cancel_or_reschedule(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+    boundary: str,
+) -> None:
+    async with pg_session_factory() as session:
+        await _seed_dental_clinic(session)
+        confirmed = await _create_confirmed_appointment(
+            session,
+            start_at=_future_start(days=6, hour=10),
+            key_suffix=f"{operation}-{boundary}",
+        )
+        appointment_id = confirmed.appointment.appointment_id
+        service = AppointmentService(session, validation=InternalValidationPort(session))
+        if operation == "cancel":
+            proposal = await service.create_cancellation_proposal(
+                CreatePendingAppointmentCancellationCommand(
+                    actor=_customer(),
+                    appointment_id=appointment_id,
+                    expected_appointment_version=1,
+                    expires_at=datetime.now(UTC) + timedelta(minutes=20),
+                    idempotency_key=f"cancel-{boundary}",
+                )
+            )
+        else:
+            proposal = await service.create_reschedule_proposal(
+                CreatePendingAppointmentRescheduleCommand(
+                    actor=_customer(),
+                    appointment_id=appointment_id,
+                    expected_appointment_version=1,
+                    service_id=1,
+                    start_at=_future_start(days=6, hour=12),
+                    expires_at=datetime.now(UTC) + timedelta(minutes=20),
+                    idempotency_key=f"reschedule-{boundary}",
+                )
+            )
+        action_id = proposal.pending_action_id
+        action_version = proposal.version
+        await session.commit()
+
+    async with pg_session_factory() as session:
+        service = AppointmentService(session, validation=InternalValidationPort(session))
+        if boundary == "after_begin":
+            original = service._pa_service.begin_commit
+
+            async def fail_after_begin(*args: Any, **kwargs: Any) -> Any:
+                await original(*args, **kwargs)
+                raise RuntimeError("forced_after_begin")
+
+            monkeypatch.setattr(service._pa_service, "begin_commit", fail_after_begin)
+        else:
+            original = service._repo.insert_commit
+
+            async def fail_after_evidence(*args: Any, **kwargs: Any) -> Any:
+                await original(*args, **kwargs)
+                raise RuntimeError("forced_after_evidence")
+
+            monkeypatch.setattr(service._repo, "insert_commit", fail_after_evidence)
+
+        with pytest.raises(RuntimeError, match=f"forced_{boundary}"):
+            if operation == "cancel":
+                await service.confirm_cancellation(
+                    ConfirmPendingAppointmentCancellationCommand(
+                        actor=_customer(),
+                        pending_action_id=action_id,
+                        expected_version=action_version,
+                    )
+                )
+            else:
+                await service.confirm_reschedule(
+                    ConfirmPendingAppointmentRescheduleCommand(
+                        actor=_customer(),
+                        pending_action_id=action_id,
+                        expected_version=action_version,
+                    )
+                )
+        await session.rollback()
+
+    async with pg_session_factory() as observer:
+        assert (
+            await observer.scalar(
+                text("SELECT status FROM pending_actions WHERE id = :id"),
+                {"id": action_id},
+            )
+            == "awaiting_confirmation"
+        )
+        assert (
+            await observer.scalar(
+                text("SELECT status FROM appointments WHERE id = :id"),
+                {"id": appointment_id},
+            )
+            == "confirmed"
+        )
+        assert (
+            await observer.scalar(
+                text("SELECT count(*) FROM appointment_commits WHERE pending_action_id = :id"),
+                {"id": action_id},
+            )
+            == 0
+        )
+        assert (
+            await observer.scalar(
+                text("SELECT count(*) FROM notification_outbox WHERE entity_id = :id"),
+                {"id": appointment_id},
+            )
+            == 2
+        )

@@ -2,19 +2,52 @@
 
 Receives call status webhooks and audio stream WebSocket connections
 from Exotel. Audio processing will be wired to Pipecat by Dev4.
+
+INTERIM AUTH: generic shared-secret possession check via
+X-Exotel-Webhook-Secret header. This is NOT replay protection,
+NOT provider-native signature verification, and does NOT
+authenticate the WebSocket/media stream. Before production 10/10,
+replace with Exotel-native request signing once the provider
+contract specifies it. CallSid idempotency/replay remains open.
+
+Deployment requires a high-entropy secret (>= 32 random chars)
+rotated on a documented schedule. See ops runbook for rotation.
 """
 
+import hmac
 import logging
 from typing import Any
 
 from fastapi import APIRouter, Request, Response, WebSocket, WebSocketDisconnect
 from sqlalchemy import text
 
+from fonely.core.config import settings
 from fonely.services.exotel_config import ExotelNumberMapping
 
 logger = logging.getLogger("fonely.api.channels.exotel")
 
 router = APIRouter(prefix="/webhooks/exotel", tags=["exotel"])
+
+_AUTH_HEADER = "X-Exotel-Webhook-Secret"
+_MAX_BODY_BYTES = 65_536
+
+
+def _verify_webhook_auth(request: Request) -> bool:
+    """Constant-time comparison of the interim shared-secret header.
+
+    Rejects duplicate/ambiguous auth headers, leading/trailing whitespace,
+    and empty values. Never logs or returns the secret or header value.
+    """
+    configured = settings.exotel_webhook_secret
+    if not configured:
+        return False
+    raw_values = request.headers.getlist(_AUTH_HEADER)
+    if len(raw_values) != 1:
+        return False
+    provided = raw_values[0]
+    if not provided or provided != provided.strip():
+        return False
+    return hmac.compare_digest(configured, provided)
 
 
 def _get_mapping(app: object) -> ExotelNumberMapping:
@@ -27,7 +60,34 @@ def _get_mapping(app: object) -> ExotelNumberMapping:
 @router.post("/call-status")
 async def call_status_webhook(request: Request) -> Response:
     """Handle Exotel call status events: ringing, answered, completed, failed."""
-    body: dict[str, Any] = await request.json()
+    if not _verify_webhook_auth(request):
+        return Response(status_code=401, content="unauthorized")
+
+    content_type = (request.headers.get("content-type") or "").lower().split(";")[0].strip()
+    if content_type != "application/json":
+        return Response(status_code=415, content="unsupported content type")
+
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            if int(content_length) > _MAX_BODY_BYTES:
+                return Response(status_code=413, content="request too large")
+        except ValueError:
+            return Response(status_code=400, content="invalid content-length")
+
+    raw = await request.body()
+    if len(raw) > _MAX_BODY_BYTES:
+        return Response(status_code=413, content="request too large")
+
+    import json as _json
+
+    try:
+        body: dict[str, Any] = _json.loads(raw)
+    except (ValueError, UnicodeDecodeError):
+        return Response(status_code=400, content="invalid json")
+
+    if not isinstance(body, dict):
+        return Response(status_code=400, content="expected json object")
     call_sid = str(body.get("CallSid", ""))
     status = str(body.get("Status", "")).lower()
     exotel_number = str(body.get("To", ""))

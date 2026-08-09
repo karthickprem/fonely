@@ -10,7 +10,12 @@ from fastapi.testclient import TestClient
 from httpx import ASGITransport, AsyncClient
 from starlette.requests import Request
 
-from fonely.api.channels.exotel import _read_bounded_body, call_status_webhook, router
+from fonely.api.channels.exotel import (
+    BodyReadOutcome,
+    _read_bounded_body,
+    call_status_webhook,
+    router,
+)
 from fonely.app import create_app
 from fonely.core.config import settings
 from fonely.services.exotel_config import ExotelNumberMapping
@@ -313,9 +318,9 @@ class TestWebhookAuth:
             ]
         )
         request = _request(_create_app()[0], receive, secret=_TEST_SECRET)
-        body = await _read_bounded_body(request)
-        assert body is not None
-        assert len(body) == 65_536
+        result = await _read_bounded_body(request)
+        assert result.outcome is BodyReadOutcome.OK
+        assert len(result.body) == 65_536
         assert receive.await_count == 1
 
     async def test_boundary_plus_one_is_rejected_after_one_receive(self) -> None:
@@ -335,12 +340,32 @@ class TestWebhookAuth:
         assert receive.await_count == 1
         mock_session.execute.assert_not_awaited()
 
-    async def test_client_disconnect_fails_safely_without_db(self) -> None:
+    async def test_client_disconnect_is_distinct_client_failure_without_db(self) -> None:
         app, mock_session = _create_app()
         receive = AsyncMock(side_effect=[{"type": "http.disconnect"}])
         request = _request(app, receive, secret=_TEST_SECRET)
         response = await call_status_webhook(request)
-        assert response.status_code == 413
+        assert response.status_code == 400
+        assert response.body == b"client disconnected"
+        mock_session.execute.assert_not_awaited()
+
+    async def test_malformed_stream_chunk_is_not_reported_as_oversize(self) -> None:
+        app, mock_session = _create_app()
+        receive = AsyncMock(
+            side_effect=[{"type": "http.request", "body": "not-bytes", "more_body": False}]
+        )
+        request = _request(app, receive, secret=_TEST_SECRET)
+        response = await call_status_webhook(request)
+        assert response.status_code == 400
+        assert response.body == b"malformed request body"
+        mock_session.execute.assert_not_awaited()
+
+    async def test_unexpected_stream_runtime_error_propagates(self) -> None:
+        app, mock_session = _create_app()
+        receive = AsyncMock(side_effect=RuntimeError("injected internal stream fault"))
+        request = _request(app, receive, secret=_TEST_SECRET)
+        with pytest.raises(RuntimeError, match="injected internal stream fault"):
+            await call_status_webhook(request)
         mock_session.execute.assert_not_awaited()
 
 

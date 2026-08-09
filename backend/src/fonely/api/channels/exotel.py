@@ -16,6 +16,8 @@ rotated on a documented schedule. See ops runbook for rotation.
 
 import hmac
 import logging
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any
 
 from fastapi import APIRouter, Request, Response, WebSocket, WebSocketDisconnect
@@ -76,17 +78,32 @@ def _verify_webhook_auth(request: Request) -> bool:
     return hmac.compare_digest(configured, provided_bytes)
 
 
-async def _read_bounded_body(request: Request) -> bytes | None:
-    """Stream at most 64 KiB without copying an oversized chunk."""
+class BodyReadOutcome(StrEnum):
+    OK = "ok"
+    OVERSIZE = "oversize"
+    DISCONNECTED = "disconnected"
+    MALFORMED = "malformed"
+
+
+@dataclass(frozen=True, slots=True)
+class BoundedBody:
+    outcome: BodyReadOutcome
+    body: bytes = b""
+
+
+async def _read_bounded_body(request: Request) -> BoundedBody:
+    """Bound application copying; upstream ASGI memory is outside this scope."""
     body = bytearray()
     try:
         async for chunk in request.stream():
+            if not isinstance(chunk, bytes):
+                return BoundedBody(BodyReadOutcome.MALFORMED)
             if len(chunk) > _MAX_BODY_BYTES - len(body):
-                return None
+                return BoundedBody(BodyReadOutcome.OVERSIZE)
             body.extend(chunk)
-    except (ClientDisconnect, RuntimeError, TypeError, ValueError):
-        return None
-    return bytes(body)
+    except ClientDisconnect:
+        return BoundedBody(BodyReadOutcome.DISCONNECTED)
+    return BoundedBody(BodyReadOutcome.OK, bytes(body))
 
 
 def _get_mapping(app: object) -> ExotelNumberMapping:
@@ -117,14 +134,18 @@ async def call_status_webhook(request: Request) -> Response:
         if declared_length > _MAX_BODY_BYTES:
             return Response(status_code=413, content="request too large")
 
-    raw = await _read_bounded_body(request)
-    if raw is None:
+    bounded = await _read_bounded_body(request)
+    if bounded.outcome is BodyReadOutcome.OVERSIZE:
         return Response(status_code=413, content="request too large")
+    if bounded.outcome is BodyReadOutcome.DISCONNECTED:
+        return Response(status_code=400, content="client disconnected")
+    if bounded.outcome is BodyReadOutcome.MALFORMED:
+        return Response(status_code=400, content="malformed request body")
 
     import json as _json
 
     try:
-        body: dict[str, Any] = _json.loads(raw)
+        body: dict[str, Any] = _json.loads(bounded.body)
     except (ValueError, UnicodeDecodeError):
         return Response(status_code=400, content="invalid json")
 

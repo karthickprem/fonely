@@ -1,6 +1,7 @@
 """Observed-lock PostgreSQL concurrency contracts for Phase C."""
 
 import asyncio
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
@@ -223,10 +224,14 @@ async def observed_blocker(
     blocked_pid: int,
     expected_blocker_pid: int,
 ) -> None:
+    last_observed: tuple[object, ...] | None = None
+    start = time.monotonic()
+
     async def observe() -> None:
-        async with factory() as observer:
-            await install_transaction_timeouts(observer)
-            while True:
+        nonlocal last_observed
+        while True:
+            async with factory() as observer:
+                await install_transaction_timeouts(observer)
                 row = (
                     await observer.execute(
                         text(
@@ -237,13 +242,27 @@ async def observed_blocker(
                         {"blocker": expected_blocker_pid, "blocked": blocked_pid},
                     )
                 ).one_or_none()
-                if row is not None and row[0] is True:
-                    assert row[1] == "Lock"
-                    assert row[2] is not None
-                    return
-                await asyncio.sleep(0.01)
+            last_observed = tuple(row) if row is not None else None
+            if row is not None and row[0] is True:
+                assert row[1] == "Lock", (
+                    f"blocker observed but wait_event_type={row[1]!r} "
+                    f"(expected 'Lock'), wait_event={row[2]!r}, "
+                    f"blocked_pid={blocked_pid}, blocker_pid={expected_blocker_pid}, "
+                    f"elapsed={time.monotonic() - start:.2f}s"
+                )
+                assert row[2] is not None
+                return
+            await asyncio.sleep(0.01)
 
-    await asyncio.wait_for(observe(), timeout=5)
+    try:
+        await asyncio.wait_for(observe(), timeout=5)
+    except TimeoutError:
+        elapsed = time.monotonic() - start
+        raise AssertionError(
+            f"observer timed out after {elapsed:.2f}s waiting for blocker: "
+            f"blocked_pid={blocked_pid}, expected_blocker_pid={expected_blocker_pid}, "
+            f"last_observed={last_observed!r}"
+        ) from None
 
 
 async def confirmation_worker(

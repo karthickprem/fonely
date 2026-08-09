@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time as _time
 from datetime import UTC, datetime, time, timedelta
 from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
@@ -66,10 +67,13 @@ async def _pid(session: AsyncSession) -> int:
 async def _observe_blocker(
     factory: async_sessionmaker[AsyncSession], blocked_pid: int, blocker_pid: int
 ) -> None:
-    async with factory() as observer:
+    last_observed: tuple[object, ...] | None = None
+    start = _time.monotonic()
 
-        async def observe() -> None:
-            while True:
+    async def observe() -> None:
+        nonlocal last_observed
+        while True:
+            async with factory() as observer:
                 row = (
                     await observer.execute(
                         text(
@@ -79,12 +83,26 @@ async def _observe_blocker(
                         {"blocker": blocker_pid, "blocked": blocked_pid},
                     )
                 ).one_or_none()
-                if row is not None and row[0] is True:
-                    assert row[1] == "Lock"
-                    return
-                await asyncio.sleep(0.01)
+            last_observed = tuple(row) if row is not None else None
+            if row is not None and row[0] is True:
+                assert row[1] == "Lock", (
+                    f"blocker observed but wait_event_type={row[1]!r} "
+                    f"(expected 'Lock'), blocked_pid={blocked_pid}, "
+                    f"blocker_pid={blocker_pid}, "
+                    f"elapsed={_time.monotonic() - start:.2f}s"
+                )
+                return
+            await asyncio.sleep(0.01)
 
+    try:
         await asyncio.wait_for(observe(), timeout=5)
+    except TimeoutError:
+        elapsed = _time.monotonic() - start
+        raise AssertionError(
+            f"observer timed out after {elapsed:.2f}s waiting for blocker: "
+            f"blocked_pid={blocked_pid}, blocker_pid={blocker_pid}, "
+            f"last_observed={last_observed!r}"
+        ) from None
 
 
 async def _seed(session: AsyncSession) -> None:

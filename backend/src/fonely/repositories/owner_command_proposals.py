@@ -19,7 +19,13 @@ class OwnerCommandProposalRepository:
         statement = (
             pg_insert(OwnerCommandProposal)
             .values(**values)
-            .on_conflict_do_nothing(constraint="uq_owner_proposal_idempotency")
+            .on_conflict_do_nothing(
+                index_elements=[
+                    OwnerCommandProposal.business_id,
+                    OwnerCommandProposal.owner_user_id,
+                ],
+                index_where=OwnerCommandProposal.status == "pending_confirmation",
+            )
             .returning(OwnerCommandProposal)
         )
         return (await self._session.execute(statement)).scalar_one_or_none()
@@ -44,9 +50,14 @@ class OwnerCommandProposalRepository:
         business_id: int,
         idempotency_key: str,
     ) -> OwnerCommandProposal | None:
-        statement = select(OwnerCommandProposal).where(
-            OwnerCommandProposal.business_id == business_id,
-            OwnerCommandProposal.idempotency_key == idempotency_key,
+        statement = (
+            select(OwnerCommandProposal)
+            .where(
+                OwnerCommandProposal.business_id == business_id,
+                OwnerCommandProposal.idempotency_key == idempotency_key,
+            )
+            .order_by(OwnerCommandProposal.created_at.desc())
+            .limit(1)
         )
         return (await self._session.scalars(statement)).one_or_none()
 
@@ -97,16 +108,21 @@ class OwnerCommandProposalRepository:
         expected_version: int,
         expected_status: str,
         new_status: str,
+        *,
+        require_unexpired_at: datetime | None = None,
         **updates: Any,
     ) -> OwnerCommandProposal | None:
+        conditions = [
+            OwnerCommandProposal.business_id == business_id,
+            OwnerCommandProposal.id == proposal_id,
+            OwnerCommandProposal.expected_version == expected_version,
+            OwnerCommandProposal.status == expected_status,
+        ]
+        if require_unexpired_at is not None:
+            conditions.append(OwnerCommandProposal.expires_at > require_unexpired_at)
         statement = (
             update(OwnerCommandProposal)
-            .where(
-                OwnerCommandProposal.business_id == business_id,
-                OwnerCommandProposal.id == proposal_id,
-                OwnerCommandProposal.expected_version == expected_version,
-                OwnerCommandProposal.status == expected_status,
-            )
+            .where(*conditions)
             .values(
                 status=new_status,
                 expected_version=OwnerCommandProposal.expected_version + 1,

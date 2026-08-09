@@ -68,6 +68,7 @@ class OperationRecorder:
         unique: bool = False,
         **kwargs: Any,
     ) -> None:
+        self.operations.append(("create_index", name))
         predicate = kwargs.get("postgresql_where")
         self.indexes.setdefault(table_name, set()).add(
             (
@@ -501,6 +502,21 @@ def test_migration_downgrade_drops_all_application_tables() -> None:
     assert recorder.dropped_tables[4] == "business_daily_context"
     assert recorder.dropped_tables[5] == "conversation_turns"
     assert recorder.dropped_tables[6] == "conversations"
+
+
+def test_owner_proposal_upgrade_preflights_before_unique_pending_index() -> None:
+    recorder = _capture_upgrade()
+    preflight_index = next(
+        index
+        for index, operation in enumerate(recorder.operations)
+        if operation[0] == "execute" and "duplicate pending proposals" in operation[1]
+    )
+    unique_index = next(
+        index
+        for index, operation in enumerate(recorder.operations)
+        if operation[0] == "create_index" and "uq_owner_proposal_owner_pending" in operation[1]
+    )
+    assert preflight_index < unique_index
 
 
 def test_owner_proposal_downgrade_locks_and_blocks_populated_loss() -> None:

@@ -291,7 +291,7 @@ async def test_idempotent_notification_creation(pg_session: AsyncSession) -> Non
         business_timezone="Asia/Kolkata",
     )
     assert len(ids1) == 2
-    assert len(ids2) == 0
+    assert ids2 == ids1
 
     total = await pg_session.scalar(
         text("SELECT count(*) FROM notification_outbox WHERE entity_id = 80")
@@ -329,3 +329,60 @@ async def test_tenant_isolation(pg_session: AsyncSession) -> None:
     events_b2 = await repo.get_events_for_entity(2, "appointment", 90)
     assert len(events_b1) == 1
     assert len(events_b2) == 0
+
+
+async def test_global_idempotency_collision_across_tenants_fails_closed(
+    pg_session: AsyncSession,
+) -> None:
+    await _seed_clinic(pg_session)
+    await pg_session.execute(
+        text(
+            "INSERT INTO businesses "
+            "(id, name, category, primary_contact_phone, timezone, subscription) "
+            "VALUES (2, 'Other Clinic', 'clinic', '+919999999999', "
+            "'Asia/Kolkata', 'trial')"
+        )
+    )
+    await pg_session.execute(
+        text(
+            "INSERT INTO business_users (business_id, phone, role, is_active) "
+            "VALUES (2, '+919999999998', 'owner', true)"
+        )
+    )
+    repo = NotificationRepository(pg_session)
+    await repo.insert_event(
+        {
+            "business_id": 1,
+            "event_type": "appointment_confirmed",
+            "entity_type": "appointment",
+            "entity_id": 99,
+            "recipient_type": "patient",
+            "recipient_phone": "+919000000003",
+            "channel": "whatsapp",
+            "payload": {"appointment_id": 99, "phone_number_id": "phone-1"},
+            "status": "pending",
+            "idempotency_key": "shared-semantic-key",
+        }
+    )
+    service = NotificationService(pg_session)
+    values = {
+        "business_id": 2,
+        "event_type": "appointment_confirmed",
+        "entity_type": "appointment",
+        "entity_id": 99,
+        "recipient_type": "patient",
+        "recipient_phone": "+919999999997",
+        "recipient_name": None,
+        "channel": "whatsapp",
+        "payload": {"appointment_id": 99, "phone_number_id": "phone-2"},
+        "status": "pending",
+        "idempotency_key": "shared-semantic-key",
+    }
+
+    from fonely.services.notifications import NotificationIdempotencyConflictError
+
+    with pytest.raises(NotificationIdempotencyConflictError, match="another business"):
+        await service._insert_or_verify(values)
+
+    assert await repo.get_event_by_idempotency_key(2, "shared-semantic-key") is None
+    assert (await repo.get_event_by_global_idempotency_key("shared-semantic-key")).business_id == 1

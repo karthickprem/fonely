@@ -162,7 +162,13 @@ class AppointmentService:
             command.pending_action_id,
         )
         if existing is not None:
-            return await self._replay_result(existing, action.version)
+            replay_envelope = PendingAppointmentEnvelope.model_validate(action.proposed_payload)
+            replay_data = replay_envelope.data
+            if not isinstance(replay_data, CreateAppointmentData):
+                raise PendingActionIdempotencyConflictError(
+                    "Committed appointment replay payload is not a create operation"
+                )
+            return await self._replay_result(existing, action.version, replay_data)
 
         context = CommitResultContext(
             business_id=command.actor.business_id,
@@ -674,6 +680,9 @@ class AppointmentService:
             return await self._replay_reschedule(existing_commit, data)
 
         now = datetime.now(tz=appointment.start_at.tzinfo)
+        old_start_at = appointment.start_at
+        old_customer_phone = appointment.customer_phone
+        old_customer_name = appointment.customer_name
         before_snapshot = await self._authoritative_snapshot(
             data.target_appointment_id, command.actor.business_id
         )
@@ -773,11 +782,11 @@ class AppointmentService:
                     business_id=command.actor.business_id,
                     appointment_id=data.target_appointment_id,
                     pending_action_id=command.pending_action_id,
-                    customer_phone=appointment.customer_phone,
-                    customer_name=appointment.customer_name,
+                    customer_phone=old_customer_phone,
+                    customer_name=old_customer_name,
                     service_name=new_facts.service_name,
                     resource_name=new_facts.resource_name,
-                    old_start_at=appointment.start_at,
+                    old_start_at=old_start_at,
                     new_start_at=new_facts.start_at,
                     business_timezone=new_facts.business_timezone,
                 )
@@ -1023,11 +1032,10 @@ class AppointmentService:
         after = commit.after_snapshot  # type: ignore[attr-defined]
         from fonely.services.notifications import NotificationService
 
-        await NotificationService(self._session).create_cancellation_notifications(
+        await NotificationService(self._session).verify_cancellation_notifications(
             business_id=commit.business_id,  # type: ignore[attr-defined]
             appointment_id=data.target_appointment_id,
             customer_phone=str(before.get("customer_phone", "")),
-            customer_name=before.get("customer_name"),
             service_name=str(before.get("service_name", "")),
             resource_name=str(before.get("resource_name", "")),
             start_at=datetime.fromisoformat(str(before["start_at"]).replace("Z", "+00:00")),
@@ -1055,12 +1063,11 @@ class AppointmentService:
         after = commit.after_snapshot  # type: ignore[attr-defined]
         from fonely.services.notifications import NotificationService
 
-        await NotificationService(self._session).create_reschedule_notifications(
+        await NotificationService(self._session).verify_reschedule_notifications(
             business_id=commit.business_id,  # type: ignore[attr-defined]
             appointment_id=data.target_appointment_id,
             pending_action_id=commit.pending_action_id,  # type: ignore[attr-defined]
             customer_phone=str(before.get("customer_phone", "")),
-            customer_name=before.get("customer_name"),
             service_name=str(after.get("service_name", "")),
             resource_name=str(after.get("resource_name", "")),
             old_start_at=datetime.fromisoformat(str(before["start_at"]).replace("Z", "+00:00")),
@@ -1145,33 +1152,33 @@ class AppointmentService:
         self,
         appointment: object,
         authoritative_version: int,
+        committed_data: CreateAppointmentData,
     ) -> PreCommitAppointmentSuccess:
         from fonely.services.notifications import NotificationService
 
         appt = appointment
-        await NotificationService(self._session).create_appointment_notifications(
+        facts = committed_data.facts
+        await NotificationService(self._session).verify_appointment_notifications(
             business_id=appt.business_id,  # type: ignore[attr-defined]
             appointment_id=appt.id,  # type: ignore[attr-defined]
-            customer_phone=appt.customer_phone,  # type: ignore[attr-defined]
-            customer_name=appt.customer_name,  # type: ignore[attr-defined]
-            service_name=appt.service_name_snapshot,  # type: ignore[attr-defined]
-            resource_name=appt.resource_name_snapshot,  # type: ignore[attr-defined]
-            start_at=appt.start_at,  # type: ignore[attr-defined]
-            price=appt.price_snapshot,  # type: ignore[attr-defined]
-            business_timezone=appt.business_timezone_snapshot,  # type: ignore[attr-defined]
+            customer_phone=committed_data.customer_phone,
+            service_name=facts.service_name,
+            resource_name=facts.resource_name,
+            start_at=facts.start_at,
+            business_timezone=facts.business_timezone,
         )
         return PreCommitAppointmentSuccess(
             appointment=AppointmentConfirmationResult(
                 appointment_id=appt.id,  # type: ignore[attr-defined]
                 pending_action_id=appt.pending_action_id,  # type: ignore[attr-defined]
-                service_id=appt.service_id,  # type: ignore[attr-defined]
-                service_name=appt.service_name_snapshot,  # type: ignore[attr-defined]
-                resource_id=appt.resource_id,  # type: ignore[attr-defined]
-                resource_name=appt.resource_name_snapshot,  # type: ignore[attr-defined]
-                start_at=appt.start_at,  # type: ignore[attr-defined]
-                end_at=appt.end_at,  # type: ignore[attr-defined]
-                price=appt.price_snapshot,  # type: ignore[attr-defined]
-                business_timezone=appt.business_timezone_snapshot,  # type: ignore[attr-defined]
+                service_id=facts.service_id,
+                service_name=facts.service_name,
+                resource_id=facts.resource_id,
+                resource_name=facts.resource_name,
+                start_at=facts.start_at,
+                end_at=facts.end_at,
+                price=facts.price,
+                business_timezone=facts.business_timezone,
             ),
             pending_action_version=authoritative_version,
         )

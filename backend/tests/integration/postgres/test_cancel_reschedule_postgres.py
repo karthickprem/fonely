@@ -458,6 +458,21 @@ async def test_full_rescheduling_lifecycle(
         ).one()
         assert commit[0] == "reschedule"
 
+        patient_payload = await session.scalar(
+            text(
+                "SELECT payload FROM notification_outbox "
+                "WHERE entity_id=:id AND event_type='appointment_rescheduled' "
+                "AND recipient_type='patient'"
+            ),
+            {"id": appt_id},
+        )
+        assert patient_payload["old_time"] == old_start.astimezone(
+            ZoneInfo("Asia/Kolkata")
+        ).strftime("%-I:%M %p")
+        assert patient_payload["new_time"] == new_start.astimezone(
+            ZoneInfo("Asia/Kolkata")
+        ).strftime("%-I:%M %p")
+
         await session.rollback()
 
 
@@ -514,6 +529,7 @@ async def test_reschedule_to_conflicting_time(
 
 async def test_cancellation_replays_from_fresh_session_without_duplicate_evidence(
     pg_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     shared_expiry = datetime.now(UTC) + timedelta(minutes=20)
     async with pg_session_factory() as session:
@@ -541,6 +557,12 @@ async def test_cancellation_replays_from_fresh_session_without_duplicate_evidenc
             )
         )
         await session.commit()
+
+    from fonely.services import notifications, whatsapp_config
+
+    monkeypatch.setattr(whatsapp_config.settings, "whatsapp_business_mappings", "")
+    monkeypatch.setattr(notifications.settings, "whatsapp_business_mappings", "")
+    monkeypatch.setattr(notifications.settings, "whatsapp_phone_number_id", "")
 
     async with pg_session_factory() as session:
         service = AppointmentService(session, validation=InternalValidationPort(session))
@@ -585,6 +607,7 @@ async def test_cancellation_replays_from_fresh_session_without_duplicate_evidenc
 
 async def test_reschedule_replays_from_fresh_session_without_second_mutation(
     pg_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     new_start = _future_start(hour=12)
     shared_expiry = datetime.now(UTC) + timedelta(minutes=20)
@@ -614,6 +637,12 @@ async def test_reschedule_replays_from_fresh_session_without_second_mutation(
             )
         )
         await session.commit()
+
+    from fonely.services import notifications, whatsapp_config
+
+    monkeypatch.setattr(whatsapp_config.settings, "whatsapp_business_mappings", "")
+    monkeypatch.setattr(notifications.settings, "whatsapp_business_mappings", "")
+    monkeypatch.setattr(notifications.settings, "whatsapp_phone_number_id", "")
 
     async with pg_session_factory() as session:
         service = AppointmentService(session, validation=InternalValidationPort(session))

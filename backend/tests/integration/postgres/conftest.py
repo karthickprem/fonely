@@ -51,6 +51,16 @@ def postgres_database_url() -> str:
     return _test_database_url()
 
 
+@pytest.fixture(autouse=True)
+def trusted_whatsapp_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fonely.services import notifications, whatsapp_config
+
+    mapping = '{"phone-1": 1}'
+    monkeypatch.setattr(whatsapp_config.settings, "whatsapp_business_mappings", mapping)
+    monkeypatch.setattr(notifications.settings, "whatsapp_business_mappings", mapping)
+    monkeypatch.setattr(notifications.settings, "whatsapp_phone_number_id", "phone-1")
+
+
 @pytest.fixture(scope="session", autouse=True)
 def migrated_postgres(postgres_database_url: str) -> Generator[None, None, None]:
     env = os.environ.copy()

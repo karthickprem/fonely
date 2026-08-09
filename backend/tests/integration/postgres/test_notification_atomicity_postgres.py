@@ -92,6 +92,12 @@ async def _seed_catalog(session: AsyncSession) -> None:
     )
     await session.execute(
         text(
+            "INSERT INTO business_users (business_id, phone, role, is_active) "
+            "VALUES (1, '+919000000001', 'owner', true)"
+        )
+    )
+    await session.execute(
+        text(
             "INSERT INTO services "
             "(id, business_id, name, duration_minutes, buffer_before_minutes, "
             "buffer_after_minutes, price, is_active) "
@@ -299,6 +305,7 @@ async def test_outer_commit_failed_then_fresh_retry_executes_once(
 
 async def test_lost_success_response_replay_repairs_without_duplicates(
     pg_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     start = utcnow().replace(minute=0, second=0, microsecond=0) + timedelta(hours=10)
     async with pg_session_factory() as session:
@@ -316,6 +323,12 @@ async def test_lost_success_response_replay_repairs_without_duplicates(
             )
         )
         await session.commit()
+
+    from fonely.services import notifications, whatsapp_config
+
+    monkeypatch.setattr(whatsapp_config.settings, "whatsapp_business_mappings", "")
+    monkeypatch.setattr(notifications.settings, "whatsapp_business_mappings", "")
+    monkeypatch.setattr(notifications.settings, "whatsapp_phone_number_id", "")
 
     async with pg_session_factory() as session:
         service = AppointmentService(session, validation=StubValidationPort(_facts(start)))

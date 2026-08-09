@@ -172,9 +172,9 @@ async def _owner_command(session: AsyncSession, command: str, target_date: str) 
         "close_early": "close early at 5 PM",
         "doctor_leave": "Dr. Priya leave",
     }[command]
-    return await OwnerCommandService(session, _gateway(command, target_date)).process_command(
-        1, "+919000000001", message
-    )
+    service = OwnerCommandService(session, _gateway(command, target_date))
+    await service.process_command(1, "+919000000001", message)
+    return await service.process_command(1, "+919000000001", "YES")
 
 
 @pytest.mark.parametrize("command", ["close_clinic", "close_early", "doctor_leave"])
@@ -303,3 +303,122 @@ async def test_confirmation_first_is_seen_and_cancelled_by_schedule_mutation(
             == 1
         )
         assert await verify.scalar(text("SELECT count(*) FROM schedule_exceptions")) == 1
+
+
+async def test_lock_wait_expiry_rechecked_before_execution(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with pg_session_factory() as setup:
+        await _seed(setup)
+        _, target_date = _target()
+        await OwnerCommandService(setup, _gateway("close_clinic", target_date)).process_command(
+            1, "+919000000001", "close clinic"
+        )
+        await setup.commit()
+
+    async with pg_session_factory() as blocker:
+        await _timeouts(blocker)
+        blocker_pid = await _pid(blocker)
+        await blocker.execute(text("SELECT id FROM resources WHERE id=1 FOR UPDATE"))
+        blocked_pid: asyncio.Future[int] = asyncio.get_running_loop().create_future()
+
+        async def confirm() -> object:
+            async with pg_session_factory() as session:
+                await _timeouts(session)
+                blocked_pid.set_result(await _pid(session))
+                result = await OwnerCommandService(session, AsyncMock()).process_command(
+                    1, "+919000000001", "YES"
+                )
+                await session.commit()
+                return result
+
+        task = asyncio.create_task(confirm())
+        await _observe_blocker(pg_session_factory, await blocked_pid, blocker_pid)
+        async with pg_session_factory() as expirer:
+            await expirer.execute(
+                text(
+                    "UPDATE owner_command_proposals SET expires_at=now()-interval '1 second' "
+                    "WHERE status='pending_confirmation'"
+                )
+            )
+            await expirer.commit()
+        await blocker.commit()
+        result = await task
+
+    assert result.success is False  # type: ignore[attr-defined]
+    assert "expired" in result.response_text.lower()  # type: ignore[attr-defined]
+    async with pg_session_factory() as observer:
+        assert (
+            await observer.scalar(text("SELECT status FROM owner_command_proposals")) == "expired"
+        )
+        assert await observer.scalar(text("SELECT count(*) FROM schedule_exceptions")) == 0
+
+
+async def test_yes_no_race_reports_actual_winner(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with pg_session_factory() as setup:
+        await _seed(setup)
+        _, target_date = _target()
+        await OwnerCommandService(setup, _gateway("close_clinic", target_date)).process_command(
+            1, "+919000000001", "close clinic"
+        )
+        await setup.commit()
+
+    async def respond(token: str) -> object:
+        async with pg_session_factory() as session:
+            result = await OwnerCommandService(session, AsyncMock()).process_command(
+                1, "+919000000001", token
+            )
+            await session.commit()
+            return result
+
+    yes_result, no_result = await asyncio.gather(respond("YES"), respond("NO"))
+    async with pg_session_factory() as observer:
+        status = await observer.scalar(text("SELECT status FROM owner_command_proposals"))
+        exception_count = await observer.scalar(text("SELECT count(*) FROM schedule_exceptions"))
+    assert status in {"completed", "rejected"}
+    assert exception_count == (1 if status == "completed" else 0)
+    combined = (yes_result.response_text + no_result.response_text).lower()  # type: ignore[attr-defined]
+    assert ("done" in combined) if status == "completed" else ("cancelled" in combined)
+
+
+async def test_yes_expiry_race_reports_terminal_state(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with pg_session_factory() as setup:
+        await _seed(setup)
+        _, target_date = _target()
+        await OwnerCommandService(setup, _gateway("close_clinic", target_date)).process_command(
+            1, "+919000000001", "close clinic"
+        )
+        await setup.commit()
+
+    async def confirm() -> object:
+        async with pg_session_factory() as session:
+            result = await OwnerCommandService(session, AsyncMock()).process_command(
+                1, "+919000000001", "YES"
+            )
+            await session.commit()
+            return result
+
+    async def expire() -> None:
+        async with pg_session_factory() as session:
+            await session.execute(
+                text(
+                    "UPDATE owner_command_proposals SET status='expired', "
+                    "expected_version=expected_version+1 "
+                    "WHERE status='pending_confirmation'"
+                )
+            )
+            await session.commit()
+
+    result, _ = await asyncio.gather(confirm(), expire())
+    async with pg_session_factory() as observer:
+        status = await observer.scalar(text("SELECT status FROM owner_command_proposals"))
+    assert status in {"completed", "expired"}
+    if status == "completed":
+        assert result.success is True  # type: ignore[attr-defined]
+    else:
+        assert result.success is False  # type: ignore[attr-defined]
+        assert "expired" in result.response_text.lower()  # type: ignore[attr-defined]

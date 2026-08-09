@@ -204,6 +204,7 @@ async def test_confirm_replay_returns_authoritative_version(
     action.version = 5
     action.initiated_by = "+919123456789"
     action.action_type = "appointment"
+    action.proposed_payload = canonical_payload_dict(_resolved_envelope())
 
     service._repo = AsyncMock()
     service._repo.get_by_business_and_pending_action.return_value = existing
@@ -213,7 +214,7 @@ async def test_confirm_replay_returns_authoritative_version(
     from fonely.services.notifications import NotificationService
 
     notifications = AsyncMock(return_value=[])
-    monkeypatch.setattr(NotificationService, "create_appointment_notifications", notifications)
+    monkeypatch.setattr(NotificationService, "verify_appointment_notifications", notifications)
 
     result = await service.confirm_and_commit(
         ConfirmPendingAppointmentCommand(

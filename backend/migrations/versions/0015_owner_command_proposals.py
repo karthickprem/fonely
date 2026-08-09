@@ -95,11 +95,6 @@ def upgrade() -> None:
             ["business_users.business_id", "business_users.id"],
             name="fk_owner_proposal_business_user",
         ),
-        sa.UniqueConstraint(
-            "business_id",
-            "idempotency_key",
-            name="uq_owner_proposal_idempotency",
-        ),
         sa.CheckConstraint(
             "expected_version > 0",
             name="ck_owner_proposal_version_positive",
@@ -146,11 +141,30 @@ def upgrade() -> None:
         ),
     )
 
+    op.execute(
+        "DO $$ BEGIN "
+        "IF EXISTS ("
+        "SELECT 1 FROM owner_command_proposals "
+        "WHERE status = 'pending_confirmation' "
+        "GROUP BY business_id, owner_user_id HAVING count(*) > 1"
+        ") THEN "
+        "RAISE EXCEPTION USING "
+        "MESSAGE = 'Cannot enforce owner proposal invariant: duplicate pending proposals', "
+        "ERRCODE = 'unique_violation'; "
+        "END IF; "
+        "END $$"
+    )
     op.create_index(
-        "ix_owner_proposal_owner_pending",
+        "uq_owner_proposal_owner_pending",
         "owner_command_proposals",
-        ["business_id", "owner_user_id", "status"],
+        ["business_id", "owner_user_id"],
+        unique=True,
         postgresql_where="status = 'pending_confirmation'",
+    )
+    op.create_index(
+        "ix_owner_proposal_semantic_key",
+        "owner_command_proposals",
+        ["business_id", "owner_user_id", "idempotency_key", "created_at"],
     )
 
     op.create_index(
@@ -173,6 +187,7 @@ def downgrade() -> None:
         "END $$"
     )
     op.drop_index("ix_owner_proposal_expiry", table_name="owner_command_proposals")
-    op.drop_index("ix_owner_proposal_owner_pending", table_name="owner_command_proposals")
+    op.drop_index("ix_owner_proposal_semantic_key", table_name="owner_command_proposals")
+    op.drop_index("uq_owner_proposal_owner_pending", table_name="owner_command_proposals")
     op.drop_table("owner_command_proposals")
     op.drop_constraint("uq_business_users_business_id_id", "business_users", type_="unique")

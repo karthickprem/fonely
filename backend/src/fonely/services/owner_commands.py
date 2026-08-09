@@ -84,8 +84,8 @@ class OwnerCommandOutcomeEvidence(BaseModel):
     def validate_counts(self) -> "OwnerCommandOutcomeEvidence":
         if self.affected_appointments != len(self.appointment_ids):
             raise ValueError("affected appointment count does not match IDs")
-        if self.affected_patients != self.affected_appointments:
-            raise ValueError("affected patient count does not match appointments")
+        if self.affected_patients > self.affected_appointments:
+            raise ValueError("affected patient count exceeds appointments")
         if self.queued_outbox_count != len(self.queued_outbox_ids):
             raise ValueError("queued outbox count does not match IDs")
         return self
@@ -114,59 +114,62 @@ class OwnerCommandService:
         business_id: int,
         owner_phone: str,
         message: str,
-        *,
-        owner_user_id: int | None = None,
     ) -> OwnerCommandResult:
         owner = await self._require_active_owner(business_id, owner_phone)
-        uid = owner_user_id or owner.id
+        uid = owner.id
 
         token = message.strip().lower()
         if token in _CONFIRM_TOKENS:
-            proposal = await self._proposals.get_latest_for_owner(
-                business_id,
-                uid,
-                owner_phone,
-                statuses=("pending_confirmation", "completed"),
-                for_update=False,
+            proposal = await self._proposals.get_latest_pending_for_owner(
+                business_id, uid, owner_phone, for_update=False
             )
             if proposal is not None:
-                if proposal.status == "completed":
-                    return self._result_from_completed_proposal(proposal)
                 if proposal.expires_at <= datetime.now(UTC):
-                    await self._proposals.transition_status(
+                    expired = await self._proposals.transition_status(
                         business_id,
                         proposal.id,
                         proposal.expected_version,
                         "pending_confirmation",
                         "expired",
                     )
+                    if expired is None:
+                        return await self._proposal_transition_winner(business_id, proposal.id)
                     return OwnerCommandResult(
                         command_type=proposal.command_type,
                         success=False,
                         response_text="That command expired. Please send it again.",
                     )
                 return await self._confirm_proposal(business_id, owner, proposal)
+            return OwnerCommandResult(
+                command_type="confirmation",
+                success=False,
+                response_text="There is no current command waiting for confirmation.",
+            )
 
         pending = await self._proposals.get_latest_pending_for_owner(
             business_id, uid, owner_phone, for_update=False
         )
         if pending is not None:
             if pending.expires_at <= datetime.now(UTC):
-                await self._proposals.transition_status(
+                expired = await self._proposals.transition_status(
                     business_id,
                     pending.id,
                     pending.expected_version,
                     "pending_confirmation",
                     "expired",
                 )
+                if expired is None:
+                    return await self._proposal_transition_winner(business_id, pending.id)
             elif token in _REJECT_TOKENS:
-                await self._proposals.transition_status(
+                rejected = await self._proposals.transition_status(
                     business_id,
                     pending.id,
                     pending.expected_version,
                     "pending_confirmation",
                     "rejected",
                 )
+                if rejected is None:
+                    return await self._proposal_transition_winner(business_id, pending.id)
                 return OwnerCommandResult(
                     command_type=pending.command_type,
                     success=True,
@@ -205,6 +208,29 @@ class OwnerCommandService:
             response_text=_UNKNOWN_RESPONSE,
         )
 
+    async def _proposal_transition_winner(
+        self, business_id: int, proposal_id: str
+    ) -> OwnerCommandResult:
+        winner = await self._proposals.get_by_id(business_id, proposal_id, for_update=True)
+        if winner is None:
+            raise RuntimeError("owner_proposal_not_found_after_transition")
+        if winner.status == "completed":
+            return self._result_from_completed_proposal(winner)
+        messages = {
+            "rejected": "Cancelled. No changes made.",
+            "expired": "That command expired. Please send it again.",
+            "failed": "Schedule changed since preview. Please send the command again.",
+            "executing": "That command is already being processed.",
+        }
+        return OwnerCommandResult(
+            command_type=winner.command_type,
+            success=False,
+            response_text=messages.get(
+                winner.status, "Command state changed. Please send the command again."
+            ),
+            proposal_id=winner.id,
+        )
+
     async def _require_active_owner(self, business_id: int, owner_phone: str) -> BusinessUser:
         user = (
             await self._session.execute(
@@ -226,7 +252,21 @@ class OwnerCommandService:
         owner: BusinessUser,
         parsed: ParsedOwnerCommand,
     ) -> OwnerCommandResult:
+        if not parsed.date:
+            return OwnerCommandResult(
+                command_type=parsed.command,
+                success=False,
+                response_text="Please provide a date for this command.",
+            )
         target_date = await self._resolve_date(business_id, parsed.date)
+        if target_date is None:
+            return OwnerCommandResult(
+                command_type=parsed.command,
+                success=False,
+                response_text=(
+                    "Please provide a supported date, such as today, tomorrow, or YYYY-MM-DD."
+                ),
+            )
         tz_name = await self._get_business_timezone(business_id)
         tz = ZoneInfo(tz_name)
 
@@ -308,48 +348,77 @@ class OwnerCommandService:
         digest = hashlib.sha256(
             json.dumps(snapshot, sort_keys=True, default=str).encode()
         ).hexdigest()
-        idem_key = (
-            f"owner-{parsed.command}-{business_id}-"
-            f"{snapshot.get('resource_id', 'all')}-{target_date.isoformat()}"
-        )
+        mutation = snapshot.get("schedule_mutation", {})
+        assert isinstance(mutation, dict)
+        semantic_payload = {
+            "schema_version": 1,
+            "command_type": parsed.command,
+            "business_id": business_id,
+            "owner_user_id": owner.id,
+            "resolved_date": target_date.isoformat(),
+            "resource_id": snapshot.get("resource_id"),
+            "close_time": snapshot.get("close_time"),
+            "reason": mutation.get("reason"),
+        }
+        semantic_digest = hashlib.sha256(
+            json.dumps(semantic_payload, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        idem_key = f"owner-v1-{business_id}-{owner.id}-{semantic_digest[:40]}"
 
-        proposal = await self._proposals.create_idempotent(
-            {
-                "id": uuid.uuid4().hex[:36],
-                "business_id": business_id,
-                "owner_user_id": owner.id,
-                "owner_phone_snapshot": owner.phone,
-                "command_type": parsed.command,
-                "command_payload": {
-                    "date": target_date.isoformat(),
-                    "doctor_name": parsed.doctor_name,
-                    "close_time": parsed.close_time,
-                    "reason": parsed.reason,
-                },
-                "preview_snapshot": snapshot,
-                "payload_digest": digest,
-                "idempotency_key": idem_key,
-                "expires_at": datetime.now(UTC) + _PROPOSAL_TTL,
-            }
-        )
-        if proposal is None:
-            existing = await self._proposals.get_by_idempotency_key(business_id, idem_key)
-            if existing and existing.status == "completed":
-                return OwnerCommandResult(
-                    command_type=parsed.command,
-                    success=True,
-                    response_text="This command was already completed.",
-                    proposal_id=existing.id,
-                )
-            if existing and existing.status == "pending_confirmation":
-                proposal = existing
+        existing_semantic = await self._proposals.get_by_idempotency_key(business_id, idem_key)
+        if existing_semantic is not None:
+            if existing_semantic.status == "completed":
+                return self._result_from_completed_proposal(existing_semantic)
+            if (
+                existing_semantic.status == "pending_confirmation"
+                and existing_semantic.payload_digest == digest
+            ):
+                proposal = existing_semantic
             else:
+                proposal = None
+        else:
+            proposal = None
+
+        if proposal is None:
+            proposal = await self._proposals.create_idempotent(
+                {
+                    "id": uuid.uuid4().hex[:36],
+                    "business_id": business_id,
+                    "owner_user_id": owner.id,
+                    "owner_phone_snapshot": owner.phone,
+                    "command_type": parsed.command,
+                    "command_payload": {
+                        **semantic_payload,
+                        "semantic_digest": semantic_digest,
+                        "target_digest": digest,
+                    },
+                    "preview_snapshot": snapshot,
+                    "payload_digest": digest,
+                    "idempotency_key": idem_key,
+                    "expires_at": datetime.now(UTC) + _PROPOSAL_TTL,
+                }
+            )
+        if proposal is None:
+            pending = await self._proposals.get_latest_pending_for_owner(
+                business_id, owner.id, owner.phone, for_update=False
+            )
+            if (
+                pending is None
+                or pending.idempotency_key != idem_key
+                or pending.payload_digest != digest
+            ):
                 return OwnerCommandResult(
                     command_type=parsed.command,
                     success=False,
-                    response_text=("A conflicting command exists. Please wait and try again."),
+                    response_text="A different command is pending. Reply YES or NO first.",
+                    proposal_id=pending.id if pending else None,
                 )
+            proposal = pending
 
+        snapshot = proposal.preview_snapshot
+        if not isinstance(snapshot, dict):
+            raise RuntimeError("owner_proposal_snapshot_invalid")
+        target_date = date.fromisoformat(str(snapshot["resolved_date"]))
         raw_appointments = snapshot.get("appointments", [])
         appt_list = raw_appointments if isinstance(raw_appointments, list) else []
         date_str = target_date.strftime("%b %d")
@@ -463,17 +532,33 @@ class OwnerCommandService:
         else:
             await self._appointments.lock_resource_schedule(business_id, resource_id)
 
+        target_date = date.fromisoformat(str(snapshot["resolved_date"]))
+        timezone = ZoneInfo(str(snapshot["clinic_timezone"]))
+        current_targets = await self._targets_at_confirmation(
+            business_id, proposal.command_type, resource_id, target_date, timezone, mutation
+        )
+        current_by_id = {int(str(target["appointment_id"])): target for target in current_targets}
+        for preview_target in targets:
+            appointment_id = int(str(preview_target["appointment_id"]))
+            current = current_by_id.get(appointment_id)
+            if current is None or (
+                int(str(current["expected_version"]))
+                != int(str(preview_target["expected_version"]))
+                or int(str(current["resource_id"])) != int(str(preview_target["resource_id"]))
+                or str(current["start_at_utc"]) != str(preview_target["start_at_utc"])
+            ):
+                return await self._fail_proposal(
+                    proposal,
+                    "target_drift",
+                    f"Appointment {appointment_id} changed after preview",
+                )
+        targets = current_targets
+
         locked_appointments: list[Appointment] = []
         for target in sorted(targets, key=lambda item: int(str(item["appointment_id"]))):
             appointment_id = int(str(target["appointment_id"]))
             appt = await self._appointments.lock_appointment(business_id, appointment_id)
-            if appt is None:
-                return await self._fail_proposal(
-                    proposal,
-                    "target_not_found",
-                    f"Appointment {appointment_id} not found",
-                )
-            if (
+            if appt is None or (
                 appt.status != "confirmed"
                 or appt.version != int(str(target["expected_version"]))
                 or appt.resource_id != int(str(target["resource_id"]))
@@ -482,18 +567,28 @@ class OwnerCommandService:
                 return await self._fail_proposal(
                     proposal,
                     "target_drift",
-                    f"Appointment {appointment_id} changed after preview",
+                    f"Appointment {appointment_id} changed during confirmation",
                 )
             locked_appointments.append(appt)
+
+        if not await self._schedule_exception_is_compatible(
+            business_id, resource_id, target_date, mutation
+        ):
+            return await self._fail_proposal(
+                proposal,
+                "schedule_exception_drift",
+                "Schedule exception changed after preview",
+            )
 
         locked_proposal = await self._proposals.get_by_id(business_id, proposal.id, for_update=True)
         if locked_proposal is None:
             raise RuntimeError("owner_proposal_not_found")
         if locked_proposal.status == "completed":
             return self._result_from_completed_proposal(locked_proposal)
+        if locked_proposal.status != "pending_confirmation":
+            return await self._proposal_transition_winner(business_id, locked_proposal.id)
         if (
-            locked_proposal.status != "pending_confirmation"
-            or locked_proposal.expected_version != proposal.expected_version
+            locked_proposal.expected_version != proposal.expected_version
             or locked_proposal.owner_user_id != owner.id
             or locked_proposal.owner_phone_snapshot != owner.phone
             or locked_proposal.payload_digest != digest
@@ -503,19 +598,37 @@ class OwnerCommandService:
                 success=False,
                 response_text="Command state changed. Please send the command again.",
             )
+        if locked_proposal.expires_at <= datetime.now(UTC):
+            expired = await self._proposals.transition_status(
+                business_id,
+                locked_proposal.id,
+                locked_proposal.expected_version,
+                "pending_confirmation",
+                "expired",
+            )
+            if expired is None:
+                return await self._proposal_transition_winner(business_id, locked_proposal.id)
+            return OwnerCommandResult(
+                command_type=locked_proposal.command_type,
+                success=False,
+                response_text="That command expired. Please send it again.",
+                proposal_id=locked_proposal.id,
+            )
 
         result: OwnerCommandResult
         async with self._session.begin_nested():
+            transition_time = datetime.now(UTC)
             transitioned = await self._proposals.transition_status(
                 business_id,
                 locked_proposal.id,
                 locked_proposal.expected_version,
                 "pending_confirmation",
                 "executing",
-                confirmed_at=datetime.now(UTC),
+                require_unexpired_at=transition_time,
+                confirmed_at=transition_time,
             )
             if transitioned is None:
-                raise RuntimeError("owner_proposal_transition_conflict")
+                return await self._proposal_transition_winner(business_id, locked_proposal.id)
 
             schedule_exception = await self._ensure_schedule_exception(
                 business_id,
@@ -539,6 +652,9 @@ class OwnerCommandService:
                 )
 
             cancelled_count = len(locked_appointments)
+            affected_patient_count = len(
+                {appointment.customer_phone for appointment in locked_appointments}
+            )
             date_str = str(snapshot.get("resolved_date", ""))
             if cancelled_count:
                 response_text = (
@@ -562,10 +678,11 @@ class OwnerCommandService:
             self._session.add(audit)
             await self._session.flush()
 
-            outbox_ids = list(
+            outbox_events = list(
                 (
                     await self._session.scalars(
-                        select(NotificationOutboxEvent.id).where(
+                        select(NotificationOutboxEvent)
+                        .where(
                             NotificationOutboxEvent.business_id == business_id,
                             NotificationOutboxEvent.entity_type == "appointment",
                             NotificationOutboxEvent.entity_id.in_(
@@ -573,9 +690,21 @@ class OwnerCommandService:
                             ),
                             NotificationOutboxEvent.event_type == "appointment_cancelled",
                         )
+                        .order_by(NotificationOutboxEvent.id)
                     )
                 ).all()
             )
+            expected_outbox_pairs = {
+                (appt.id, recipient)
+                for appt in locked_appointments
+                for recipient in ("patient", "owner")
+            }
+            actual_outbox_pairs = {
+                (event.entity_id, event.recipient_type) for event in outbox_events
+            }
+            if actual_outbox_pairs != expected_outbox_pairs:
+                raise RuntimeError("owner_command_required_outbox_incomplete")
+            outbox_ids = [event.id for event in outbox_events]
             completed_at = datetime.now(UTC)
             outcome = OwnerCommandOutcomeEvidence(
                 schema_version=1,
@@ -591,7 +720,7 @@ class OwnerCommandService:
                 clinic_timezone=str(snapshot["clinic_timezone"]),
                 appointment_ids=[appt.id for appt in locked_appointments],
                 affected_appointments=cancelled_count,
-                affected_patients=cancelled_count,
+                affected_patients=affected_patient_count,
                 schedule_exception={
                     "id": schedule_exception.id,
                     "resource_id": schedule_exception.resource_id,
@@ -631,6 +760,82 @@ class OwnerCommandService:
             result = self._result_from_completed_proposal(completed)
 
         return result
+
+    async def _targets_at_confirmation(
+        self,
+        business_id: int,
+        command_type: str,
+        resource_id: int | None,
+        target_date: date,
+        timezone: ZoneInfo,
+        mutation: dict[str, object],
+    ) -> list[dict[str, object]]:
+        if command_type == "doctor_leave":
+            if resource_id is None:
+                raise RuntimeError("doctor_leave_resource_missing")
+            return await self._appointments_for_resource(
+                business_id, resource_id, target_date, timezone
+            )
+        if command_type == "close_clinic":
+            return await self._all_appointments_on_date(business_id, target_date, timezone)
+        if command_type == "close_early":
+            allowed: tuple[LocalShift, ...] = ()
+            if not mutation.get("is_closed"):
+                open_time = mutation.get("open_time")
+                close_time = mutation.get("close_time")
+                if not open_time or not close_time:
+                    raise RuntimeError("close_early_window_missing")
+                allowed = (
+                    LocalShift(
+                        dt_time.fromisoformat(str(open_time)),
+                        dt_time.fromisoformat(str(close_time)),
+                    ),
+                )
+            return await self._appointments_outside_schedule(
+                business_id,
+                target_date,
+                timezone.key,
+                allowed,
+            )
+        raise RuntimeError("owner_command_type_invalid")
+
+    async def _schedule_exception_is_compatible(
+        self,
+        business_id: int,
+        resource_id: int | None,
+        exception_date: date,
+        mutation: dict[str, object],
+    ) -> bool:
+        conditions = [
+            ScheduleException.business_id == business_id,
+            ScheduleException.exception_date == exception_date,
+        ]
+        conditions.append(
+            ScheduleException.resource_id.is_(None)
+            if resource_id is None
+            else ScheduleException.resource_id == resource_id
+        )
+        existing = (
+            await self._session.execute(select(ScheduleException).where(*conditions))
+        ).scalar_one_or_none()
+        if existing is None:
+            return True
+        return (
+            existing.is_closed == bool(mutation.get("is_closed"))
+            and existing.open_time
+            == (
+                dt_time.fromisoformat(str(mutation["open_time"]))
+                if mutation.get("open_time")
+                else None
+            )
+            and existing.close_time
+            == (
+                dt_time.fromisoformat(str(mutation["close_time"]))
+                if mutation.get("close_time")
+                else None
+            )
+            and existing.reason == str(mutation.get("reason", "Owner command"))
+        )
 
     async def _fail_proposal(
         self,
@@ -823,8 +1028,6 @@ class OwnerCommandService:
     ) -> OwnerCommandResult | tuple[dt_time, list[LocalShift], list[dict[str, object]]]:
         from fonely.models.schema import OperatingSchedule
 
-        target_date = await self._resolve_date(business_id, parsed.date)
-
         if not parsed.close_time:
             return OwnerCommandResult(
                 command_type="close_early",
@@ -910,10 +1113,7 @@ class OwnerCommandService:
         tz_name: str,
         allowed_shifts: tuple[LocalShift, ...] | list[LocalShift],
     ) -> list[dict[str, object]]:
-        from fonely.services.availability import AvailabilityService
-
         zone = ZoneInfo(tz_name)
-        svc = AvailabilityService(self._session)
         shift_windows = [
             TimeWindow(
                 datetime.combine(target_date, s.open_time, zone),
@@ -921,12 +1121,6 @@ class OwnerCommandService:
             )
             for s in allowed_shifts
         ]
-        all_resource_ids = await self._appointments.list_active_resource_ids(business_id)
-        resource_shift_cache: dict[int, list[TimeWindow]] = {}
-        for rid in all_resource_ids:
-            resource_shift_cache[rid] = await svc._get_shift_windows(
-                business_id, rid, target_date, tz_name
-            )
 
         appointments = (
             (
@@ -950,8 +1144,7 @@ class OwnerCommandService:
                 appt.effective_start_at or appt.start_at,
                 appt.effective_end_at or appt.end_at,
             )
-            resource_windows = resource_shift_cache.get(appt.resource_id, shift_windows)
-            if fits_one_shift(effective, tuple(resource_windows)):
+            if fits_one_shift(effective, tuple(shift_windows)):
                 continue
             result.append(self._appointment_target(appt, zone, "owner_close_early"))
         return result
@@ -960,6 +1153,12 @@ class OwnerCommandService:
         self, business_id: int, parsed: ParsedOwnerCommand
     ) -> OwnerCommandResult:
         target_date = await self._resolve_date(business_id, parsed.date)
+        if target_date is None:
+            return OwnerCommandResult(
+                command_type="get_summary",
+                success=False,
+                response_text="Please provide a supported date.",
+            )
         date_str = target_date.strftime("%A, %b %d")
 
         appointments = (
@@ -1019,7 +1218,17 @@ class OwnerCommandService:
                 response_text="Please provide the content for the note/offer.",
             )
 
-        target_date = await self._resolve_date(business_id, parsed.for_date or parsed.valid_until)
+        date_expression = parsed.for_date or parsed.valid_until
+        target_date = await self._resolve_date(business_id, date_expression)
+        if target_date is None and date_expression is None:
+            timezone = await self._get_business_timezone(business_id)
+            target_date = datetime.now(ZoneInfo(timezone)).date()
+        if target_date is None:
+            return OwnerCommandResult(
+                command_type=parsed.command,
+                success=False,
+                response_text="Please provide a supported date.",
+            )
         ctx = BusinessDailyContext(
             business_id=business_id,
             context_date=target_date,
@@ -1068,21 +1277,22 @@ class OwnerCommandService:
             .scalars()
             .all()
         )
-        for r in resources:
-            if r.name.lower() == name_lower or name_lower in r.name.lower():
-                return r
-        return None
+        exact = [resource for resource in resources if resource.name.lower() == name_lower]
+        if len(exact) == 1:
+            return exact[0]
+        partial = [resource for resource in resources if name_lower in resource.name.lower()]
+        return partial[0] if len(partial) == 1 else None
 
     async def _lock_business_resources(self, business_id: int) -> None:
         await self._appointments.lock_business_schedule(business_id)
         resource_ids = await self._appointments.list_active_resource_ids(business_id)
         await self._appointments.lock_resource_schedules(business_id, resource_ids)
 
-    async def _resolve_date(self, business_id: int, expr: str | None) -> date:
+    async def _resolve_date(self, business_id: int, expr: str | None) -> date | None:
         timezone = await self._get_business_timezone(business_id)
         today = datetime.now(ZoneInfo(timezone)).date()
         if not expr:
-            return today
+            return None
         expr_lower = expr.lower().strip()
         if expr_lower in ("today", "innikku", "இன்று"):
             return today
@@ -1091,7 +1301,7 @@ class OwnerCommandService:
         try:
             return date.fromisoformat(expr_lower)
         except ValueError:
-            return today
+            return None
 
     async def _get_business_timezone(self, business_id: int) -> str:
         biz = await self._session.scalar(select(Business).where(Business.id == business_id))

@@ -361,8 +361,11 @@ async def test_owner_lost_response_replays_exact_completed_evidence(
         await session.commit()
 
     async with pg_session_factory() as session:
-        replay = await OwnerCommandService(session, AsyncMock()).process_command(
-            1, "+914428350001", "YES"
+        gateway = _mock_gateway(
+            {"command": "doctor_leave", "doctor_name": "Dr. Priya", "date": "tomorrow"}
+        )
+        replay = await OwnerCommandService(session, gateway).process_command(
+            1, "+914428350001", "Dr. Priya leave tomorrow"
         )
         await session.commit()
 
@@ -460,3 +463,287 @@ async def test_concurrent_owner_confirmations_execute_once(
             )
             == 2
         )
+
+
+async def _insert_second_owner_target(session: AsyncSession, start: datetime) -> None:
+    await session.execute(
+        text(
+            "INSERT INTO pending_actions "
+            "(id, business_id, action_type, payload_schema_version, proposed_payload, "
+            "status, expires_at, idempotency_key, version, payload_digest) VALUES "
+            "(1001, 1, 'appointment', 1, '{}', 'confirmed', :exp, 'owner-target-2', 3, "
+            "'bbbb1111cccc2222dddd3333eeee4444ffff5555aaaa6666bbbb7777cccc8888')"
+        ),
+        {"exp": datetime.now(UTC) + timedelta(hours=24)},
+    )
+    await session.execute(
+        text(
+            "INSERT INTO appointments "
+            "(id, business_id, resource_id, service_id, customer_name, customer_phone, "
+            "start_at, end_at, effective_start_at, effective_end_at, "
+            "service_name_snapshot, resource_name_snapshot, duration_minutes_snapshot, "
+            "buffer_before_minutes_snapshot, buffer_after_minutes_snapshot, "
+            "business_timezone_snapshot, status, source, idempotency_key, "
+            "pending_action_id, version) VALUES "
+            "(1001, 1, 1, 1, 'Later Patient', '+919123456789', :start, :end, :start, :end, "
+            "'Consultation', 'Dr. Priya Krishnan', 20, 0, 0, 'Asia/Kolkata', "
+            "'confirmed', 'customer_conversation', 'owner-target-2', 1001, 1)"
+        ),
+        {"start": start, "end": start + timedelta(minutes=20)},
+    )
+
+
+async def test_booking_between_preview_and_yes_is_included_under_lock(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with pg_session_factory() as session:
+        await _seed_clinic(session)
+        start = await _seed_owner_target(session)
+        gateway = _mock_gateway(
+            {"command": "close_clinic", "date": "tomorrow", "reason": "Emergency"}
+        )
+        preview = await OwnerCommandService(session, gateway).process_command(
+            1, "+914428350001", "close clinic tomorrow"
+        )
+        await session.commit()
+
+    async with pg_session_factory() as session:
+        await _insert_second_owner_target(session, start + timedelta(hours=1))
+        await session.commit()
+
+    async with pg_session_factory() as session:
+        result = await OwnerCommandService(session, AsyncMock()).process_command(
+            1, "+914428350001", "YES"
+        )
+        await session.commit()
+
+    assert result.success is True
+    assert result.affected_appointments == 2
+    assert result.affected_patients == 1
+    assert result.proposal_id == preview.proposal_id
+    async with pg_session_factory() as observer:
+        statuses = (
+            await observer.execute(
+                text("SELECT id, status FROM appointments WHERE id IN (1000,1001) ORDER BY id")
+            )
+        ).all()
+        assert statuses == [(1000, "cancelled"), (1001, "cancelled")]
+        assert (
+            await observer.scalar(
+                text("SELECT count(*) FROM appointment_commits WHERE appointment_id IN (1000,1001)")
+            )
+            == 2
+        )
+        assert (
+            await observer.scalar(
+                text(
+                    "SELECT count(*) FROM notification_outbox "
+                    "WHERE event_type='appointment_cancelled'"
+                )
+            )
+            == 4
+        )
+
+
+async def test_concurrent_duplicate_proposal_creation_has_one_pending(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with pg_session_factory() as session:
+        await _seed_clinic(session)
+        await _seed_owner_target(session)
+        await session.commit()
+
+    async def preview() -> object:
+        async with pg_session_factory() as session:
+            gateway = _mock_gateway(
+                {"command": "doctor_leave", "doctor_name": "Dr. Priya", "date": "tomorrow"}
+            )
+            result = await OwnerCommandService(session, gateway).process_command(
+                1, "+914428350001", "Dr. Priya leave tomorrow"
+            )
+            await session.commit()
+            return result
+
+    first, second = await asyncio.gather(preview(), preview())
+    assert first.proposal_id == second.proposal_id
+    async with pg_session_factory() as observer:
+        assert (
+            await observer.scalar(
+                text(
+                    "SELECT count(*) FROM owner_command_proposals "
+                    "WHERE status='pending_confirmation'"
+                )
+            )
+            == 1
+        )
+
+
+async def test_bare_yes_does_not_skip_newer_terminal_intent(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with pg_session_factory() as session:
+        await _seed_clinic(session)
+        await _seed_owner_target(session)
+        gateway = _mock_gateway(
+            {"command": "doctor_leave", "doctor_name": "Dr. Priya", "date": "tomorrow"}
+        )
+        service = OwnerCommandService(session, gateway)
+        await service.process_command(1, "+914428350001", "Dr. Priya leave tomorrow")
+        await session.execute(
+            text(
+                "UPDATE owner_command_proposals SET status='rejected', "
+                "expected_version=expected_version+1"
+            )
+        )
+        await session.commit()
+
+    async with pg_session_factory() as session:
+        result = await OwnerCommandService(session, AsyncMock()).process_command(
+            1, "+914428350001", "YES"
+        )
+        await session.rollback()
+
+    assert result.success is False
+    assert "no current command" in result.response_text.lower()
+    async with pg_session_factory() as observer:
+        assert (
+            await observer.scalar(text("SELECT status FROM appointments WHERE id=1000"))
+            == "confirmed"
+        )
+
+
+async def test_revised_close_early_intent_never_reuses_old_preview(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from zoneinfo import ZoneInfo
+
+    target_date = (datetime.now(ZoneInfo("Asia/Kolkata")).date() + timedelta(days=1)).isoformat()
+    async with pg_session_factory() as session:
+        await _seed_clinic(session)
+        first_gateway = _mock_gateway(
+            {
+                "command": "close_early",
+                "date": target_date,
+                "close_time": "17:00",
+                "reason": "Original",
+            }
+        )
+        first = await OwnerCommandService(session, first_gateway).process_command(
+            1, "+914428350001", "close at 5"
+        )
+        first_row = (
+            await session.execute(
+                text(
+                    "SELECT payload_digest,preview_snapshot FROM owner_command_proposals "
+                    "WHERE id=:id"
+                ),
+                {"id": first.proposal_id},
+            )
+        ).one()
+        revised_gateway = _mock_gateway(
+            {
+                "command": "close_early",
+                "date": target_date,
+                "close_time": "15:00",
+                "reason": "Emergency",
+            }
+        )
+        blocked = await OwnerCommandService(session, revised_gateway).process_command(
+            1, "+914428350001", "close at 3"
+        )
+        assert blocked.proposal_id == first.proposal_id
+        assert "15:00" not in blocked.response_text
+        assert await session.scalar(text("SELECT count(*) FROM owner_command_proposals")) == 1
+        persisted = (
+            await session.execute(
+                text(
+                    "SELECT payload_digest,preview_snapshot FROM owner_command_proposals "
+                    "WHERE id=:id"
+                ),
+                {"id": first.proposal_id},
+            )
+        ).one()
+        assert persisted == first_row
+        await session.rollback()
+
+
+async def test_newer_rejected_intent_blocks_bare_yes_old_completed_replay(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from zoneinfo import ZoneInfo
+
+    day1 = (datetime.now(ZoneInfo("Asia/Kolkata")).date() + timedelta(days=1)).isoformat()
+    day2 = (datetime.now(ZoneInfo("Asia/Kolkata")).date() + timedelta(days=2)).isoformat()
+    async with pg_session_factory() as session:
+        await _seed_clinic(session)
+        first_gateway = _mock_gateway({"command": "close_clinic", "date": day1})
+        service = OwnerCommandService(session, first_gateway)
+        await service.process_command(1, "+914428350001", "close day one")
+        await service.process_command(1, "+914428350001", "YES")
+        second_gateway = _mock_gateway({"command": "close_clinic", "date": day2})
+        second_service = OwnerCommandService(session, second_gateway)
+        second = await second_service.process_command(1, "+914428350001", "close day two")
+        await second_service.process_command(1, "+914428350001", "NO")
+        await session.commit()
+
+    async with pg_session_factory() as session:
+        result = await OwnerCommandService(session, AsyncMock()).process_command(
+            1, "+914428350001", "YES"
+        )
+        await session.rollback()
+    assert result.success is False
+    assert "no current command" in result.response_text.lower()
+    async with pg_session_factory() as observer:
+        assert (
+            await observer.scalar(
+                text("SELECT status FROM owner_command_proposals WHERE id=:id"),
+                {"id": second.proposal_id},
+            )
+            == "rejected"
+        )
+        assert await observer.scalar(text("SELECT count(*) FROM schedule_exceptions")) == 1
+
+
+async def test_schedule_exception_drift_marks_proposal_failed(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from zoneinfo import ZoneInfo
+
+    target_day = datetime.now(ZoneInfo("Asia/Kolkata")).date() + timedelta(days=1)
+    async with pg_session_factory() as session:
+        await _seed_clinic(session)
+        gateway = _mock_gateway(
+            {"command": "close_clinic", "date": target_day.isoformat(), "reason": "Owner"}
+        )
+        preview = await OwnerCommandService(session, gateway).process_command(
+            1, "+914428350001", "close clinic"
+        )
+        await session.commit()
+
+    async with pg_session_factory() as session:
+        await session.execute(
+            text(
+                "INSERT INTO schedule_exceptions "
+                "(business_id,resource_id,exception_date,is_closed,reason) "
+                "VALUES (1,NULL,:day,true,'Different reason')"
+            ),
+            {"day": target_day},
+        )
+        await session.commit()
+
+    async with pg_session_factory() as session:
+        result = await OwnerCommandService(session, AsyncMock()).process_command(
+            1, "+914428350001", "YES"
+        )
+        await session.commit()
+    assert result.success is False
+
+    async with pg_session_factory() as observer:
+        assert (
+            await observer.scalar(
+                text("SELECT status FROM owner_command_proposals WHERE id=:id"),
+                {"id": preview.proposal_id},
+            )
+            == "failed"
+        )
+        assert await observer.scalar(text("SELECT count(*) FROM schedule_exceptions")) == 1

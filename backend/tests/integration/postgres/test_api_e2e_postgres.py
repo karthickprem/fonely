@@ -50,6 +50,12 @@ async def _seed_dental_clinic(session: AsyncSession) -> None:
     )
     await session.execute(
         text(
+            "INSERT INTO business_users (business_id, phone, role, is_active) "
+            "VALUES (1, '+919000000001', 'owner', true)"
+        )
+    )
+    await session.execute(
+        text(
             "INSERT INTO services "
             "(id, business_id, name, duration_minutes, buffer_before_minutes, "
             "buffer_after_minutes, price, is_active) "

@@ -1085,7 +1085,6 @@ class OwnerAuditLog(Base):
 class OwnerCommandProposal(Base):
     __tablename__ = "owner_command_proposals"
     __table_args__ = (
-        UniqueConstraint("business_id", "idempotency_key", name="uq_owner_proposal_idempotency"),
         CheckConstraint("expected_version > 0", name="ck_owner_proposal_version_positive"),
         CheckConstraint(
             "status IN ('pending_confirmation', 'confirmed', 'executing', "
@@ -1131,11 +1130,18 @@ class OwnerCommandProposal(Base):
             name="fk_owner_proposal_business_user",
         ),
         Index(
-            "ix_owner_proposal_owner_pending",
+            "uq_owner_proposal_owner_pending",
             "business_id",
             "owner_user_id",
-            "status",
+            unique=True,
             postgresql_where="status = 'pending_confirmation'",
+        ),
+        Index(
+            "ix_owner_proposal_semantic_key",
+            "business_id",
+            "owner_user_id",
+            "idempotency_key",
+            "created_at",
         ),
         Index(
             "ix_owner_proposal_expiry",

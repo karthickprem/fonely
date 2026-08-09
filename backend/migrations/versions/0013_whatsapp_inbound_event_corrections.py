@@ -90,6 +90,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.execute(
+        "DO $$ BEGIN "
+        "IF EXISTS (SELECT 1 FROM notification_outbox "
+        "WHERE event_type = 'whatsapp_inbound_response') THEN "
+        "RAISE EXCEPTION '0013 downgrade blocked: whatsapp_inbound_response "
+        "notifications exist and cannot be represented in the 0012 schema'; "
+        "END IF; END $$"
+    )
+
     op.drop_constraint(
         "ck_whatsapp_inbound_dead_letter_requires_timestamp",
         "whatsapp_inbound_events",

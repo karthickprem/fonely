@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import AsyncGenerator
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
-from sqlalchemy import func, select, text
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
+import pytest_asyncio
 from fonely.api.channels.whatsapp import (
     _persist_delivery_status,
     _persist_inbound_event,
@@ -34,8 +32,54 @@ from fonely.workers.notification_worker import (
     _deliver_claimed,
     _record_accepted,
 )
+from sqlalchemy import func, select, text
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 pytestmark = pytest.mark.postgres
+
+
+@pytest_asyncio.fixture(scope="module", loop_scope="session", autouse=True)
+async def _cleanup_non_downgradable_rows(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> AsyncGenerator[None, None]:
+    yield
+    async with pg_session_factory() as session:
+        await session.execute(
+            text(
+                "DELETE FROM whatsapp_delivery_attempts "
+                "WHERE notification_event_id IN "
+                "(SELECT id FROM notification_outbox "
+                "WHERE event_type = 'whatsapp_inbound_response')"
+            )
+        )
+        await session.execute(
+            text("DELETE FROM notification_outbox WHERE event_type = 'whatsapp_inbound_response'")
+        )
+        await session.execute(
+            text(
+                "UPDATE whatsapp_inbound_events SET status='completed', "
+                "completed_at=NOW(), message_body=NULL, claim_token=NULL, "
+                "claimed_at=NULL, lease_expires_at=NULL "
+                "WHERE status IN ('received', 'processing', 'domain_processed')"
+            )
+        )
+        await session.execute(
+            text(
+                "UPDATE whatsapp_inbound_events SET status='dead_letter', "
+                "dead_lettered_at=NOW(), claim_token=NULL, claimed_at=NULL, "
+                "lease_expires_at=NULL "
+                "WHERE status = 'response_failed'"
+            )
+        )
+        await session.execute(
+            text(
+                "UPDATE notification_outbox SET status='failed', "
+                "claim_token=NULL, lease_expires_at=NULL "
+                "WHERE status = 'unknown'"
+            )
+        )
+        await session.commit()
 
 
 async def seed_business(session: AsyncSession, business_id: int = 1) -> None:

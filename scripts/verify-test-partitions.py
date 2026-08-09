@@ -52,7 +52,7 @@ def _parse_collection(path: Path, label: str) -> tuple[list[str], int, int, bool
     _safe_path(path, label)
     text = path.read_text(encoding="utf-8", errors="replace")
     nodes: list[str] = []
-    collected = 0
+    collected = -1
     deselected = 0
     has_footer = False
     has_error = False
@@ -95,8 +95,12 @@ def main() -> None:
     parser.add_argument("--report", required=True, type=Path)
     args = parser.parse_args()
 
-    all_nodes, all_collected, all_desel, all_ok = _parse_collection(args.all_file, "all")
-    non_pg_nodes, npg_collected, npg_desel, npg_ok = _parse_collection(args.non_pg_file, "non-pg")
+    all_nodes, all_collected, all_desel, all_ok = _parse_collection(
+        args.all_file, "all"
+    )
+    non_pg_nodes, npg_collected, npg_desel, npg_ok = _parse_collection(
+        args.non_pg_file, "non-pg"
+    )
     pg_nodes, pg_collected, pg_desel, pg_ok = _parse_collection(args.pg_file, "pg")
 
     errors: list[str] = []
@@ -126,7 +130,9 @@ def main() -> None:
 
     overlap = non_pg_set & pg_set
     if overlap:
-        errors.append(f"partitions overlap on {len(overlap)} nodes; first: {sorted(overlap)[0]}")
+        errors.append(
+            f"partitions overlap on {len(overlap)} nodes; first: {min(overlap)}"
+        )
 
     union = non_pg_set | pg_set
     missing = all_set - union
@@ -134,11 +140,13 @@ def main() -> None:
 
     if missing:
         errors.append(
-            f"{len(missing)} nodes in all but missing from partitions; first: {sorted(missing)[0]}"
+            f"{len(missing)} nodes in all but missing from partitions; first: {min(missing)}"
         )
 
     if extra:
-        errors.append(f"{len(extra)} nodes in partitions but not in all; first: {sorted(extra)[0]}")
+        errors.append(
+            f"{len(extra)} nodes in partitions but not in all; first: {min(extra)}"
+        )
 
     if not pg_set:
         errors.append("pg partition is empty")
@@ -151,8 +159,10 @@ def main() -> None:
         ("non-pg", non_pg_nodes, npg_collected, npg_desel),
         ("pg", pg_nodes, pg_collected, pg_desel),
     ):
-        if footer_count and len(nodes) != footer_count:
-            errors.append(f"{label}: parsed {len(nodes)} node IDs but footer says {footer_count}")
+        if footer_count >= 0 and len(nodes) != footer_count:
+            errors.append(
+                f"{label}: parsed {len(nodes)} node IDs but footer says {footer_count}"
+            )
         if label == "all" and footer_deselected:
             errors.append("all collection footer must not report deselected tests")
         if label != "all" and footer_count + footer_deselected != len(all_nodes):
@@ -199,7 +209,9 @@ def main() -> None:
             print(f"PARTITION ERROR: {err}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Partition valid: {len(all_set)} total = {len(non_pg_set)} non-pg + {len(pg_set)} pg")
+    print(
+        f"Partition valid: {len(all_set)} total = {len(non_pg_set)} non-pg + {len(pg_set)} pg"
+    )
 
 
 if __name__ == "__main__":

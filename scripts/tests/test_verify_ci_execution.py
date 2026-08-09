@@ -20,6 +20,7 @@ def run(script: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         text=True,
         timeout=30,
+        check=False,
     )
 
 
@@ -86,7 +87,9 @@ def inventory(tmp: Path, npg: list[str], pg: list[str]) -> Path:
 
 
 def allowlist(tmp: Path, entries: list[dict] | None = None) -> Path:
-    return write(tmp, "skips.json", json.dumps({"schema_version": 1, "entries": entries or []}))
+    return write(
+        tmp, "skips.json", json.dumps({"schema_version": 1, "entries": entries or []})
+    )
 
 
 def entry(pattern: str = "tests/test_a.py::test_a") -> dict:
@@ -145,7 +148,11 @@ def test_partition_valid_cases(tmp_path: Path, case: str) -> None:
     ]
     pg = [PG]
     paths = {
-        k: write(tmp_path, f"{k}.txt", collect(v, total=len(npg) + len(pg) if k != "all" else None))
+        k: write(
+            tmp_path,
+            f"{k}.txt",
+            collect(v, total=len(npg) + len(pg) if k != "all" else None),
+        )
         for k, v in {"all": npg + pg, "npg": npg, "pg": pg}.items()
     }
     r = tmp_path / "r.json"
@@ -226,7 +233,14 @@ def test_partition_invalid_cases(tmp_path: Path, mode: str) -> None:
 # 13-27 execution outcome/membership tests
 @pytest.mark.parametrize(
     "outcome,expected",
-    [("passed", 0), ("failed", 1), ("error", 1), ("xfail", 0), ("xpass", 1), ("skipped", 1)],
+    [
+        ("passed", 0),
+        ("failed", 1),
+        ("error", 1),
+        ("xfail", 0),
+        ("xpass", 1),
+        ("skipped", 1),
+    ],
 )
 def test_execution_outcomes(tmp_path: Path, outcome: str, expected: int) -> None:
     inv = inventory(tmp_path, [NPG], [PG])
@@ -312,7 +326,9 @@ def test_allowlist_cases(tmp_path: Path, mode: str) -> None:
         e["node_id_pattern"] = "tests/gone.py::x"
     inv = inventory(tmp_path, [NPG], [PG])
     outcome = "skipped" if mode == "allowed" else "passed"
-    args, _ = exec_args(tmp_path, inv, [(NPG, outcome)], [(PG, "passed")], allowlist(tmp_path, [e]))
+    args, _ = exec_args(
+        tmp_path, inv, [(NPG, outcome)], [(PG, "passed")], allowlist(tmp_path, [e])
+    )
     rc = run(EXEC, args).returncode
     assert rc == 0 if mode == "allowed" else rc != 0
 
@@ -376,7 +392,9 @@ def test_invalid_root_xml(tmp_path: Path) -> None:
 
 def test_suite_level_error_rejected(tmp_path: Path) -> None:
     inv = inventory(tmp_path, [NPG], [PG])
-    bad = write(tmp_path, "npg.xml", '<testsuite tests="1" errors="1" failures="0"></testsuite>')
+    bad = write(
+        tmp_path, "npg.xml", '<testsuite tests="1" errors="1" failures="0"></testsuite>'
+    )
     pg = write(tmp_path, "pg.xml", junit([(PG, "passed")]))
     r = tmp_path / "r.json"
     assert (

@@ -28,6 +28,8 @@ BACKEND_ROOT = Path(__file__).parents[3]
 def _test_database_url() -> str:
     url = os.environ.get("FONELY_TEST_DATABASE_URL", "")
     if not url:
+        if os.environ.get("FONELY_REQUIRE_POSTGRES_EXECUTION") == "1":
+            pytest.fail("PostgreSQL execution was required but test database URL is missing")
         pytest.skip("FONELY_TEST_DATABASE_URL not set — PostgreSQL tests skipped")
     if os.environ.get("FONELY_ALLOW_DESTRUCTIVE_TEST_DB") != "1":
         pytest.fail("FONELY_ALLOW_DESTRUCTIVE_TEST_DB=1 is required")

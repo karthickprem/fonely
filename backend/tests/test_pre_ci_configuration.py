@@ -34,6 +34,15 @@ def test_ci_uses_frozen_sync_and_required_root_qa_gates() -> None:
     assert "backend/.venv/bin/python scripts/report-eval-coverage.py" in workflow
     assert "--profile chennai-pilot" in workflow
     assert ".venv/bin/pytest -m postgres -q" in workflow
+    assert "scripts/verify-test-partitions.py" in workflow
+    assert "scripts/verify-test-execution.py" in workflow
+    assert "--collect-only -q -m postgres" in workflow
+    assert "--non-pg-junit" in workflow
+    assert "--pg-junit" in workflow
+    assert "qa/allowed-skips.json" in workflow
+    assert "test-terminal-state.json" in workflow
+    assert "actions/upload-artifact@65462800fd760af5291623115de2585dae65720b" in workflow
+    assert "scripts/tests/test_verify_ci_execution.py" in workflow
     assert workflow.count("working-directory: .") >= 2
 
 

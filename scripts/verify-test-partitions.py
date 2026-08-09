@@ -19,7 +19,11 @@ import sys
 from pathlib import Path
 
 _NODE_RE = re.compile(r"^tests/\S+\.py::.+$")
-_FOOTER_RE = re.compile(r"^\d+(?:/\d+)?\s+tests?\s+collected")
+_FOOTER_RE = re.compile(
+    r"^(?:(?P<selected>\d+)/(?P<total>\d+)|(?P<all>\d+)) "
+    r"tests? collected(?: \((?P<deselected>\d+) deselected\))? in "
+    r"[0-9.]+s$"
+)
 _ERROR_RE = re.compile(r"^={3,}\s*(ERRORS|ERROR collecting)", re.IGNORECASE)
 _MAX_FILE_BYTES = 50 * 1024 * 1024
 _MAX_NODES = 100_000
@@ -72,11 +76,8 @@ def _parse_collection(path: Path, label: str) -> tuple[list[str], int, int, bool
         m = _FOOTER_RE.match(stripped)
         if m:
             has_footer = True
-            nums = re.findall(r"\d+", stripped)
-            if nums:
-                collected = int(nums[0])
-            if "deselected" in stripped and len(nums) >= 2:
-                deselected = int(nums[-1])
+            collected = int(m.group("selected") or m.group("all") or 0)
+            deselected = int(m.group("deselected") or 0)
 
     return nodes, collected, deselected, has_footer and not has_error
 
@@ -94,7 +95,7 @@ def main() -> None:
     parser.add_argument("--report", required=True, type=Path)
     args = parser.parse_args()
 
-    all_nodes, all_collected, _, all_ok = _parse_collection(args.all_file, "all")
+    all_nodes, all_collected, all_desel, all_ok = _parse_collection(args.all_file, "all")
     non_pg_nodes, npg_collected, npg_desel, npg_ok = _parse_collection(args.non_pg_file, "non-pg")
     pg_nodes, pg_collected, pg_desel, pg_ok = _parse_collection(args.pg_file, "pg")
 
@@ -145,8 +146,20 @@ def main() -> None:
     if not non_pg_set:
         errors.append("non-pg partition is empty")
 
-    if all_collected and len(all_nodes) != all_collected:
-        errors.append(f"parsed {len(all_nodes)} node IDs but footer says {all_collected}")
+    for label, nodes, footer_count, footer_deselected in (
+        ("all", all_nodes, all_collected, all_desel),
+        ("non-pg", non_pg_nodes, npg_collected, npg_desel),
+        ("pg", pg_nodes, pg_collected, pg_desel),
+    ):
+        if footer_count and len(nodes) != footer_count:
+            errors.append(f"{label}: parsed {len(nodes)} node IDs but footer says {footer_count}")
+        if label == "all" and footer_deselected:
+            errors.append("all collection footer must not report deselected tests")
+        if label != "all" and footer_count + footer_deselected != len(all_nodes):
+            errors.append(
+                f"{label}: selected ({footer_count}) + deselected "
+                f"({footer_deselected}) != all collection ({len(all_nodes)})"
+            )
 
     report = {
         "schema_version": 2,

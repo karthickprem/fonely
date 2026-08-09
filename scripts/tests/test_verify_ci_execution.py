@@ -1,9 +1,4 @@
-"""Tests for verify-test-partitions.py and verify-test-execution.py.
-
-Covers partitions, execution membership, failures/errors nonzero,
-xfail/xpass type attribute, allowlist schema enforcement, security
-bounds, and adversarial inputs.
-"""
+"""Adversarial tests for CI execution-truth verifiers."""
 
 from __future__ import annotations
 
@@ -12,12 +7,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-SCRIPTS_DIR = Path(__file__).resolve().parent.parent
-PARTITIONS = SCRIPTS_DIR / "verify-test-partitions.py"
-EXECUTION = SCRIPTS_DIR / "verify-test-execution.py"
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+PART = ROOT / "verify-test-partitions.py"
+EXEC = ROOT / "verify-test-execution.py"
 
 
-def _run(script: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
+def run(script: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(script), *args],
         capture_output=True,
@@ -26,1142 +23,461 @@ def _run(script: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _w(tmp: Path, name: str, content: str) -> Path:
+def write(tmp: Path, name: str, content: str) -> Path:
     p = tmp / name
     p.write_text(content)
     return p
 
 
-def _collect(*nodes: str, collected: int | None = None, deselected: int = 0) -> str:
-    lines = list(nodes)
-    lines.append("")
-    c = collected or len(nodes)
-    if deselected:
-        lines.append(f"{c}/{c + deselected} tests collected ({deselected} deselected) in 1.0s")
+def collect(nodes: list[str], *, total: int | None = None) -> str:
+    selected = len(nodes)
+    total = total if total is not None else selected
+    if total != selected:
+        footer = f"{selected}/{total} tests collected ({total - selected} deselected) in 1.0s"
     else:
-        lines.append(f"{c} tests collected in 1.0s")
-    return "\n".join(lines)
+        footer = f"{selected} tests collected in 1.0s"
+    return "\n".join([*nodes, "", footer])
 
 
-def _junit(*tcs: str) -> str:
+def tc(node: str, outcome: str = "passed") -> str:
+    path, *rest = node.split("::")
+    classname = path.removesuffix(".py").replace("/", ".")
+    if len(rest) > 1:
+        classname += "." + ".".join(rest[:-1])
+    name = rest[-1]
+    base = f'<testcase classname="{classname}" name="{name}">'
+    prop = '<properties><property name="node_id" value="' + node + '"/></properties>'
+    child = {
+        "passed": "",
+        "failed": '<failure message="fail"/>',
+        "error": '<error message="err"/>',
+        "skipped": '<skipped message="skip"/>',
+        "xfail": '<skipped type="pytest.xfail" message="xfail"/>',
+        "xpass": '<skipped type="pytest.xfail" message="[XPASS(strict)]"/>',
+    }[outcome]
+    return base + prop + child + "</testcase>"
+
+
+def junit(cases: list[tuple[str, str]], **attrs: str) -> str:
+    attr = " ".join(f'{k}="{v}"' for k, v in attrs.items())
     return (
-        '<?xml version="1.0" encoding="utf-8"?>\n'
-        f'<testsuite name="pytest" tests="{len(tcs)}">\n' + "".join(tcs) + "</testsuite>\n"
+        f'<testsuite tests="{len(cases)}" {attr}>'
+        + "".join(tc(node, outcome) for node, outcome in cases)
+        + "</testsuite>"
     )
 
 
-def _tc(cls: str, name: str, outcome: str = "passed") -> str:
-    tag = f'<testcase classname="{cls}" name="{name}" time="0.01"'
-    if outcome == "passed":
-        return f"  {tag}/>\n"
-    if outcome == "failed":
-        return f'  {tag}><failure message="fail"/></testcase>\n'
-    if outcome == "error":
-        return f'  {tag}><error message="err"/></testcase>\n'
-    if outcome == "skipped":
-        return f'  {tag}><skipped message="skip"/></testcase>\n'
-    if outcome == "xfail":
-        return f'  {tag}><skipped type="pytest.xfail" message="xfail"/></testcase>\n'
-    if outcome == "xpass":
-        return f'  {tag}><skipped type="pytest.xfail" message="[XPASS(strict)]"/></testcase>\n'
-    return f"  {tag}/>\n"
+def inventory(tmp: Path, npg: list[str], pg: list[str]) -> Path:
+    import hashlib
 
+    def digest(nodes: list[str]) -> str:
+        return hashlib.sha256("\n".join(sorted(nodes)).encode()).hexdigest()
 
-def _inv(
-    tmp: Path,
-    non_pg: list[str] | None = None,
-    pg: list[str] | None = None,
-) -> Path:
-    npg = non_pg if non_pg is not None else ["tests/test_a.py::t1"]
-    pgn = pg if pg is not None else ["tests/integration/postgres/test_b.py::t2"]
-    d = {
+    all_nodes = sorted(set(npg) | set(pg))
+    data = {
         "schema_version": 2,
         "valid": True,
         "errors": [],
-        "counts": {
-            "all": len(npg) + len(pgn),
-            "non_pg": len(npg),
-            "pg": len(pgn),
-        },
-        "nodes": {"non_pg": npg, "pg": pgn},
+        "counts": {"all": len(all_nodes), "non_pg": len(npg), "pg": len(pg)},
+        "nodes": {"non_pg": npg, "pg": pg},
+        "digests": {"all": digest(all_nodes), "non_pg": digest(npg), "pg": digest(pg)},
     }
-    return _w(tmp, "inv.json", json.dumps(d))
+    return write(tmp, "inventory.json", json.dumps(data))
 
 
-def _al(tmp: Path, entries: list[dict] | None = None) -> Path:
-    return _w(
-        tmp,
-        "skips.json",
-        json.dumps({"schema_version": 1, "entries": entries or []}),
-    )
+def allowlist(tmp: Path, entries: list[dict] | None = None) -> Path:
+    return write(tmp, "skips.json", json.dumps({"schema_version": 1, "entries": entries or []}))
 
 
-def _good_entry(
-    pattern: str = "tests/test_a.py::t1",
-) -> dict:
+def entry(pattern: str = "tests/test_a.py::test_a") -> dict:
     return {
         "node_id_pattern": pattern,
         "owner": "dev2",
+        "reason": "known issue",
         "issue_url": "https://github.com/x/1",
-        "reason": "known flaky under CI",
         "created_at": "2026-08-09T00:00:00Z",
         "expires_at": "2026-08-20T00:00:00Z",
         "environments": ["ci"],
     }
 
 
-# ============================================================================
-# PARTITION TESTS
-# ============================================================================
+def exec_args(
+    tmp: Path,
+    inv: Path,
+    npg_cases: list[tuple[str, str]],
+    pg_cases: list[tuple[str, str]],
+    skips: Path | None = None,
+) -> tuple[list[str], Path]:
+    npg = write(tmp, "npg.xml", junit(npg_cases))
+    pg = write(tmp, "pg.xml", junit(pg_cases))
+    report = tmp / "report.json"
+    return [
+        "--inventory",
+        str(inv),
+        "--non-pg-junit",
+        str(npg),
+        "--pg-junit",
+        str(pg),
+        "--skip-allowlist",
+        str(skips or allowlist(tmp)),
+        "--environment",
+        "ci",
+        "--report",
+        str(report),
+    ], report
 
 
-class TestPartValid:
-    def test_exact_disjoint(self, tmp_path: Path) -> None:
-        a = _w(
-            tmp_path,
-            "a.txt",
-            _collect("tests/t.py::t1", "tests/pg/t.py::t2"),
+NPG = "tests/test_a.py::test_a"
+PG = "tests/integration/postgres/test_b.py::test_b"
+
+
+# 1-12 partition tests
+@pytest.mark.parametrize("case", ["valid", "param-space", "class-node"])
+def test_partition_valid_cases(tmp_path: Path, case: str) -> None:
+    npg = [
+        NPG
+        if case == "valid"
+        else (
+            "tests/test_a.py::test_x[a b]"
+            if case == "param-space"
+            else "tests/test_a.py::TestA::test_a"
         )
-        n = _w(
-            tmp_path,
-            "n.txt",
-            _collect("tests/t.py::t1", deselected=1),
-        )
-        p = _w(
-            tmp_path,
-            "p.txt",
-            _collect("tests/pg/t.py::t2", deselected=1),
-        )
-        r = tmp_path / "r.json"
-        res = _run(
-            PARTITIONS,
+    ]
+    pg = [PG]
+    paths = {
+        k: write(tmp_path, f"{k}.txt", collect(v, total=len(npg) + len(pg) if k != "all" else None))
+        for k, v in {"all": npg + pg, "npg": npg, "pg": pg}.items()
+    }
+    r = tmp_path / "r.json"
+    assert (
+        run(
+            PART,
             [
                 "--all",
-                str(a),
+                str(paths["all"]),
                 "--non-pg",
-                str(n),
+                str(paths["npg"]),
                 "--pg",
-                str(p),
+                str(paths["pg"]),
                 "--report",
                 str(r),
             ],
-        )
-        assert res.returncode == 0
-        rpt = json.loads(r.read_text())
-        assert rpt["valid"] is True
-        assert "tests/t.py::t1" in rpt["nodes"]["non_pg"]
-        assert "tests/pg/t.py::t2" in rpt["nodes"]["pg"]
+        ).returncode
+        == 0
+    )
+    assert json.loads(r.read_text())["nodes"]["pg"] == pg
 
-    def test_parametrized_with_spaces(self, tmp_path: Path) -> None:
-        nodes = [
-            "tests/t.py::T::t[a-1]",
-            "tests/t.py::T::t[b 2]",
-            "tests/pg/t.py::t[x]",
-        ]
-        a = _w(tmp_path, "a.txt", _collect(*nodes))
-        n = _w(tmp_path, "n.txt", _collect(*nodes[:2], deselected=1))
-        p = _w(tmp_path, "p.txt", _collect(nodes[2], deselected=2))
-        r = tmp_path / "r.json"
-        assert (
-            _run(
-                PARTITIONS,
-                [
-                    "--all",
-                    str(a),
-                    "--non-pg",
-                    str(n),
-                    "--pg",
-                    str(p),
-                    "--report",
-                    str(r),
-                ],
-            ).returncode
-            == 0
-        )
 
-    def test_emits_node_sets(self, tmp_path: Path) -> None:
-        a = _w(
-            tmp_path,
-            "a.txt",
-            _collect("tests/t.py::t1", "tests/pg/t.py::t2"),
-        )
-        n = _w(
-            tmp_path,
-            "n.txt",
-            _collect("tests/t.py::t1", deselected=1),
-        )
-        p = _w(
-            tmp_path,
-            "p.txt",
-            _collect("tests/pg/t.py::t2", deselected=1),
-        )
-        r = tmp_path / "r.json"
-        _run(
-            PARTITIONS,
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "overlap",
+        "missing",
+        "empty-pg",
+        "duplicate",
+        "no-footer",
+        "collection-error",
+        "footer-all",
+        "footer-npg",
+        "footer-pg",
+    ],
+)
+def test_partition_invalid_cases(tmp_path: Path, mode: str) -> None:
+    npg, pg = [NPG], [PG]
+    alln = npg + pg
+    if mode == "overlap":
+        pg = [NPG]
+    if mode == "missing":
+        npg = []
+    if mode == "empty-pg":
+        pg = []
+    if mode == "duplicate":
+        alln = [NPG, NPG, PG]
+    a = collect(alln)
+    n = collect(npg, total=len(alln))
+    p = collect(pg, total=len(alln))
+    if mode == "no-footer":
+        a = NPG
+    if mode == "collection-error":
+        a = "====== ERRORS ======\nERROR collecting tests/x.py\n0 tests collected in 1.0s"
+    if mode == "footer-all":
+        a = collect(alln, total=len(alln) + 1)
+    if mode == "footer-npg":
+        n = collect(npg, total=len(alln) + 1)
+    if mode == "footer-pg":
+        p = collect(pg, total=len(alln) + 1)
+    r = tmp_path / "r.json"
+    rc = run(
+        PART,
+        [
+            "--all",
+            str(write(tmp_path, "a.txt", a)),
+            "--non-pg",
+            str(write(tmp_path, "n.txt", n)),
+            "--pg",
+            str(write(tmp_path, "p.txt", p)),
+            "--report",
+            str(r),
+        ],
+    ).returncode
+    assert rc != 0
+
+
+# 13-27 execution outcome/membership tests
+@pytest.mark.parametrize(
+    "outcome,expected",
+    [("passed", 0), ("failed", 1), ("error", 1), ("xfail", 0), ("xpass", 1), ("skipped", 1)],
+)
+def test_execution_outcomes(tmp_path: Path, outcome: str, expected: int) -> None:
+    inv = inventory(tmp_path, [NPG], [PG])
+    args, _ = exec_args(tmp_path, inv, [(NPG, outcome)], [(PG, "passed")])
+    assert run(EXEC, args).returncode == expected
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "missing-npg",
+        "missing-pg",
+        "extra-npg",
+        "extra-pg",
+        "swap",
+        "duplicate-npg",
+        "duplicate-pg",
+        "zero-pg",
+        "empty-all",
+    ],
+)
+def test_execution_membership(tmp_path: Path, mode: str) -> None:
+    inv = inventory(tmp_path, [NPG], [PG])
+    npg, pg = [(NPG, "passed")], [(PG, "passed")]
+    if mode == "missing-npg":
+        npg = []
+    if mode == "missing-pg":
+        pg = []
+    if mode == "extra-npg":
+        npg.append(("tests/test_extra.py::x", "passed"))
+    if mode == "extra-pg":
+        pg.append(("tests/integration/postgres/test_extra.py::x", "passed"))
+    if mode == "swap":
+        npg, pg = [(PG, "passed")], [(NPG, "passed")]
+    if mode == "duplicate-npg":
+        npg.append((NPG, "passed"))
+    if mode == "duplicate-pg":
+        pg.append((PG, "passed"))
+    if mode == "zero-pg":
+        pg = []
+    if mode == "empty-all":
+        npg = []
+        pg = []
+    args, _ = exec_args(tmp_path, inv, npg, pg)
+    assert run(EXEC, args).returncode != 0
+
+
+# 28-37 allowlist governance
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "allowed",
+        "expired",
+        "over-14d",
+        "missing-field",
+        "bad-env",
+        "bad-url",
+        "blank-owner",
+        "naive-time",
+        "reverse-time",
+        "unused",
+    ],
+)
+def test_allowlist_cases(tmp_path: Path, mode: str) -> None:
+    e = entry(NPG)
+    if mode == "expired":
+        e.update(created_at="2026-07-01T00:00:00Z", expires_at="2026-07-10T00:00:00Z")
+    if mode == "over-14d":
+        e["expires_at"] = "2026-09-09T00:00:00Z"
+    if mode == "missing-field":
+        e.pop("issue_url")
+    if mode == "bad-env":
+        e["environments"] = ["prod"]
+    if mode == "bad-url":
+        e["issue_url"] = "not-url"
+    if mode == "blank-owner":
+        e["owner"] = ""
+    if mode == "naive-time":
+        e["created_at"] = "2026-08-09T00:00:00"
+    if mode == "reverse-time":
+        e["expires_at"] = "2026-08-01T00:00:00Z"
+    if mode == "unused":
+        e["node_id_pattern"] = "tests/gone.py::x"
+    inv = inventory(tmp_path, [NPG], [PG])
+    outcome = "skipped" if mode == "allowed" else "passed"
+    args, _ = exec_args(tmp_path, inv, [(NPG, outcome)], [(PG, "passed")], allowlist(tmp_path, [e]))
+    rc = run(EXEC, args).returncode
+    assert rc == 0 if mode == "allowed" else rc != 0
+
+
+# 38-45 security/artifact tests
+def test_missing_allowlist_is_error(tmp_path: Path) -> None:
+    inv = inventory(tmp_path, [NPG], [PG])
+    args, _ = exec_args(
+        tmp_path, inv, [(NPG, "passed")], [(PG, "passed")], tmp_path / "missing.json"
+    )
+    assert run(EXEC, args).returncode == 2
+
+
+def test_malformed_xml(tmp_path: Path) -> None:
+    inv = inventory(tmp_path, [NPG], [PG])
+    bad = write(tmp_path, "npg.xml", "not xml")
+    pg = write(tmp_path, "pg.xml", junit([(PG, "passed")]))
+    r = tmp_path / "r.json"
+    rc = run(
+        EXEC,
+        [
+            "--inventory",
+            str(inv),
+            "--non-pg-junit",
+            str(bad),
+            "--pg-junit",
+            str(pg),
+            "--skip-allowlist",
+            str(allowlist(tmp_path)),
+            "--report",
+            str(r),
+        ],
+    ).returncode
+    assert rc == 2 and json.loads(r.read_text())["valid"] is False
+
+
+def test_invalid_root_xml(tmp_path: Path) -> None:
+    inv = inventory(tmp_path, [NPG], [PG])
+    bad = write(tmp_path, "npg.xml", "<root><testcase name='x'/></root>")
+    pg = write(tmp_path, "pg.xml", junit([(PG, "passed")]))
+    r = tmp_path / "r.json"
+    assert (
+        run(
+            EXEC,
             [
-                "--all",
-                str(a),
-                "--non-pg",
-                str(n),
-                "--pg",
-                str(p),
+                "--inventory",
+                str(inv),
+                "--non-pg-junit",
+                str(bad),
+                "--pg-junit",
+                str(pg),
+                "--skip-allowlist",
+                str(allowlist(tmp_path)),
                 "--report",
                 str(r),
             ],
-        )
-        rpt = json.loads(r.read_text())
-        assert isinstance(rpt["nodes"]["non_pg"], list)
-        assert isinstance(rpt["nodes"]["pg"], list)
-        assert len(rpt["nodes"]["non_pg"]) == 1
-        assert len(rpt["nodes"]["pg"]) == 1
+        ).returncode
+        == 2
+    )
 
 
-class TestPartOverlap:
-    def test_detected(self, tmp_path: Path) -> None:
-        n = "tests/t.py::t1"
-        a = _w(tmp_path, "a.txt", _collect(n))
-        r = tmp_path / "r.json"
-        res = _run(
-            PARTITIONS,
+def test_suite_level_error_rejected(tmp_path: Path) -> None:
+    inv = inventory(tmp_path, [NPG], [PG])
+    bad = write(tmp_path, "npg.xml", '<testsuite tests="1" errors="1" failures="0"></testsuite>')
+    pg = write(tmp_path, "pg.xml", junit([(PG, "passed")]))
+    r = tmp_path / "r.json"
+    assert (
+        run(
+            EXEC,
             [
-                "--all",
-                str(a),
-                "--non-pg",
-                str(_w(tmp_path, "n.txt", _collect(n))),
-                "--pg",
-                str(_w(tmp_path, "p.txt", _collect(n))),
+                "--inventory",
+                str(inv),
+                "--non-pg-junit",
+                str(bad),
+                "--pg-junit",
+                str(pg),
+                "--skip-allowlist",
+                str(allowlist(tmp_path)),
                 "--report",
                 str(r),
             ],
-        )
-        assert res.returncode == 1
+        ).returncode
+        == 2
+    )
 
 
-class TestPartEmpty:
-    def test_empty_pg(self, tmp_path: Path) -> None:
-        a = _w(tmp_path, "a.txt", _collect("tests/t.py::t1"))
-        n = _w(tmp_path, "n.txt", _collect("tests/t.py::t1"))
-        p = _w(tmp_path, "p.txt", _collect(deselected=1))
-        r = tmp_path / "r.json"
-        assert (
-            _run(
-                PARTITIONS,
-                [
-                    "--all",
-                    str(a),
-                    "--non-pg",
-                    str(n),
-                    "--pg",
-                    str(p),
-                    "--report",
-                    str(r),
-                ],
-            ).returncode
-            == 1
-        )
+def test_inventory_digest_mismatch(tmp_path: Path) -> None:
+    inv = inventory(tmp_path, [NPG], [PG])
+    d = json.loads(inv.read_text())
+    d["digests"]["all"] = "bad"
+    inv.write_text(json.dumps(d))
+    args, _ = exec_args(tmp_path, inv, [(NPG, "passed")], [(PG, "passed")])
+    assert run(EXEC, args).returncode == 2
 
 
-class TestPartError:
-    def test_collection_error(self, tmp_path: Path) -> None:
-        err = (
-            "tests/t.py::t1\n\n"
-            "====== ERRORS ======\n"
-            "ERROR collecting tests/broken.py\n\n"
-            "0 tests collected in 0.5s\n"
-        )
-        a = _w(tmp_path, "a.txt", err)
-        n = _w(tmp_path, "n.txt", _collect("tests/t.py::t1"))
-        p = _w(
-            tmp_path,
-            "p.txt",
-            _collect("tests/pg/t.py::t2", deselected=1),
-        )
-        r = tmp_path / "r.json"
-        assert (
-            _run(
-                PARTITIONS,
-                [
-                    "--all",
-                    str(a),
-                    "--non-pg",
-                    str(n),
-                    "--pg",
-                    str(p),
-                    "--report",
-                    str(r),
-                ],
-            ).returncode
-            == 1
-        )
-
-    def test_no_footer(self, tmp_path: Path) -> None:
-        a = _w(tmp_path, "a.txt", "tests/t.py::t1\n")
-        n = _w(tmp_path, "n.txt", "tests/t.py::t1\n")
-        p = _w(tmp_path, "p.txt", "tests/pg/t.py::t2\n")
-        r = tmp_path / "r.json"
-        assert (
-            _run(
-                PARTITIONS,
-                [
-                    "--all",
-                    str(a),
-                    "--non-pg",
-                    str(n),
-                    "--pg",
-                    str(p),
-                    "--report",
-                    str(r),
-                ],
-            ).returncode
-            == 1
-        )
-
-    def test_missing_file(self, tmp_path: Path) -> None:
-        r = tmp_path / "r.json"
-        assert (
-            _run(
-                PARTITIONS,
-                [
-                    "--all",
-                    str(tmp_path / "x"),
-                    "--non-pg",
-                    str(tmp_path / "y"),
-                    "--pg",
-                    str(tmp_path / "z"),
-                    "--report",
-                    str(r),
-                ],
-            ).returncode
-            == 2
-        )
-
-    def test_symlink_rejected(self, tmp_path: Path) -> None:
-        real = _w(tmp_path, "r.txt", _collect("tests/t.py::t1"))
-        link = tmp_path / "l.txt"
-        link.symlink_to(real)
-        r = tmp_path / "r.json"
-        assert (
-            _run(
-                PARTITIONS,
-                [
-                    "--all",
-                    str(link),
-                    "--non-pg",
-                    str(real),
-                    "--pg",
-                    str(real),
-                    "--report",
-                    str(r),
-                ],
-            ).returncode
-            == 2
-        )
+def test_report_symlink_rejected(tmp_path: Path) -> None:
+    inv = inventory(tmp_path, [NPG], [PG])
+    target = write(tmp_path, "real.json", "{}")
+    link = tmp_path / "link.json"
+    link.symlink_to(target)
+    npg = write(tmp_path, "n.xml", junit([(NPG, "passed")]))
+    pg = write(tmp_path, "p.xml", junit([(PG, "passed")]))
+    rc = run(
+        EXEC,
+        [
+            "--inventory",
+            str(inv),
+            "--non-pg-junit",
+            str(npg),
+            "--pg-junit",
+            str(pg),
+            "--skip-allowlist",
+            str(allowlist(tmp_path)),
+            "--report",
+            str(link),
+        ],
+    ).returncode
+    assert rc == 2
 
 
-class TestPartDigest:
-    def test_deterministic(self, tmp_path: Path) -> None:
-        a = _w(
-            tmp_path,
-            "a.txt",
-            _collect("tests/t.py::t1", "tests/pg/t.py::t2"),
-        )
-        n = _w(
-            tmp_path,
-            "n.txt",
-            _collect("tests/t.py::t1", deselected=1),
-        )
-        p = _w(
-            tmp_path,
-            "p.txt",
-            _collect("tests/pg/t.py::t2", deselected=1),
-        )
-        r1 = tmp_path / "r1.json"
-        r2 = tmp_path / "r2.json"
-        _run(
-            PARTITIONS,
-            [
-                "--all",
-                str(a),
-                "--non-pg",
-                str(n),
-                "--pg",
-                str(p),
-                "--report",
-                str(r1),
-            ],
-        )
-        _run(
-            PARTITIONS,
-            [
-                "--all",
-                str(a),
-                "--non-pg",
-                str(n),
-                "--pg",
-                str(p),
-                "--report",
-                str(r2),
-            ],
-        )
-        d1 = json.loads(r1.read_text())["digests"]
-        d2 = json.loads(r2.read_text())["digests"]
-        assert d1 == d2
+def test_hierarchical_junit_counted_once(tmp_path: Path) -> None:
+    inv = inventory(tmp_path, [NPG], [PG])
+    xml = f'<testsuites><testsuite tests="1">{tc(NPG)}</testsuite></testsuites>'
+    npg = write(tmp_path, "n.xml", xml)
+    pg = write(tmp_path, "p.xml", junit([(PG, "passed")]))
+    r = tmp_path / "r.json"
+    rc = run(
+        EXEC,
+        [
+            "--inventory",
+            str(inv),
+            "--non-pg-junit",
+            str(npg),
+            "--pg-junit",
+            str(pg),
+            "--skip-allowlist",
+            str(allowlist(tmp_path)),
+            "--report",
+            str(r),
+        ],
+    ).returncode
+    assert rc == 0
 
 
-# ============================================================================
-# EXECUTION TESTS
-# ============================================================================
-
-
-class TestExecAllPassed:
-    def test_passes(self, tmp_path: Path) -> None:
-        inv = _inv(tmp_path)
-        j = _w(
-            tmp_path,
-            "j.xml",
-            _junit(
-                _tc("tests.test_a", "t1"),
-                _tc(
-                    "tests.integration.postgres.test_b",
-                    "t2",
-                ),
-            ),
-        )
-        r = tmp_path / "r.json"
-        assert (
-            _run(
-                EXECUTION,
-                [
-                    "--inventory",
-                    str(inv),
-                    "--junit",
-                    str(j),
-                    "--skip-allowlist",
-                    str(_al(tmp_path)),
-                    "--report",
-                    str(r),
-                ],
-            ).returncode
-            == 0
-        )
-
-
-class TestExecFailedNonzero:
-    def test_failure_makes_invalid(self, tmp_path: Path) -> None:
-        inv = _inv(tmp_path)
-        j = _w(
-            tmp_path,
-            "j.xml",
-            _junit(
-                _tc("tests.test_a", "t1"),
-                _tc(
-                    "tests.integration.postgres.test_b",
-                    "t2",
-                    "failed",
-                ),
-            ),
-        )
-        r = tmp_path / "r.json"
-        res = _run(
-            EXECUTION,
+def test_class_node_property_exact(tmp_path: Path) -> None:
+    node = "tests/test_a.py::TestA::test_m"
+    inv = inventory(tmp_path, [node], [PG])
+    npg = write(tmp_path, "n.xml", junit([(node, "passed")]))
+    pg = write(tmp_path, "p.xml", junit([(PG, "passed")]))
+    r = tmp_path / "r.json"
+    assert (
+        run(
+            EXEC,
             [
                 "--inventory",
                 str(inv),
-                "--junit",
-                str(j),
+                "--non-pg-junit",
+                str(npg),
+                "--pg-junit",
+                str(pg),
                 "--skip-allowlist",
-                str(_al(tmp_path)),
+                str(allowlist(tmp_path)),
                 "--report",
                 str(r),
             ],
-        )
-        assert res.returncode == 1
-        assert "failed" in res.stderr.lower()
-
-    def test_error_makes_invalid(self, tmp_path: Path) -> None:
-        inv = _inv(tmp_path)
-        j = _w(
-            tmp_path,
-            "j.xml",
-            _junit(
-                _tc("tests.test_a", "t1"),
-                _tc(
-                    "tests.integration.postgres.test_b",
-                    "t2",
-                    "error",
-                ),
-            ),
-        )
-        r = tmp_path / "r.json"
-        res = _run(
-            EXECUTION,
-            [
-                "--inventory",
-                str(inv),
-                "--junit",
-                str(j),
-                "--skip-allowlist",
-                str(_al(tmp_path)),
-                "--report",
-                str(r),
-            ],
-        )
-        assert res.returncode == 1
-        assert "error" in res.stderr.lower()
-
-
-class TestExecMembership:
-    def test_missing_node_fails(self, tmp_path: Path) -> None:
-        inv = _inv(
-            tmp_path,
-            non_pg=["tests/test_a.py::t1", "tests/test_c.py::t3"],
-            pg=["tests/integration/postgres/test_b.py::t2"],
-        )
-        j = _w(
-            tmp_path,
-            "j.xml",
-            _junit(
-                _tc("tests.test_a", "t1"),
-                _tc(
-                    "tests.integration.postgres.test_b",
-                    "t2",
-                ),
-            ),
-        )
-        r = tmp_path / "r.json"
-        res = _run(
-            EXECUTION,
-            [
-                "--inventory",
-                str(inv),
-                "--junit",
-                str(j),
-                "--skip-allowlist",
-                str(_al(tmp_path)),
-                "--report",
-                str(r),
-            ],
-        )
-        assert res.returncode == 1
-        assert "missing" in res.stderr.lower()
-
-
-class TestExecUnexpectedSkip:
-    def test_fails(self, tmp_path: Path) -> None:
-        inv = _inv(tmp_path)
-        j = _w(
-            tmp_path,
-            "j.xml",
-            _junit(
-                _tc("tests.test_a", "t1"),
-                _tc(
-                    "tests.integration.postgres.test_b",
-                    "t2",
-                    "skipped",
-                ),
-            ),
-        )
-        r = tmp_path / "r.json"
-        res = _run(
-            EXECUTION,
-            [
-                "--inventory",
-                str(inv),
-                "--junit",
-                str(j),
-                "--skip-allowlist",
-                str(_al(tmp_path)),
-                "--report",
-                str(r),
-            ],
-        )
-        assert res.returncode == 1
-        assert "unexpected skip" in res.stderr.lower()
-
-
-class TestExecAllowedSkip:
-    def test_passes_with_another_pg(self, tmp_path: Path) -> None:
-        inv = _inv(
-            tmp_path,
-            pg=[
-                "tests/integration/postgres/test_b.py::t2",
-                "tests/integration/postgres/test_c.py::t3",
-            ],
-        )
-        j = _w(
-            tmp_path,
-            "j.xml",
-            _junit(
-                _tc("tests.test_a", "t1"),
-                _tc(
-                    "tests.integration.postgres.test_b",
-                    "t2",
-                    "skipped",
-                ),
-                _tc(
-                    "tests.integration.postgres.test_c",
-                    "t3",
-                ),
-            ),
-        )
-        al = _al(
-            tmp_path,
-            [_good_entry("tests/integration/postgres/test_b.py::t2")],
-        )
-        r = tmp_path / "r.json"
-        assert (
-            _run(
-                EXECUTION,
-                [
-                    "--inventory",
-                    str(inv),
-                    "--junit",
-                    str(j),
-                    "--skip-allowlist",
-                    str(al),
-                    "--report",
-                    str(r),
-                ],
-            ).returncode
-            == 0
-        )
-
-
-class TestExecExpired:
-    def test_fails(self, tmp_path: Path) -> None:
-        inv = _inv(tmp_path, non_pg=[], pg=[])
-        j = _w(
-            tmp_path,
-            "j.xml",
-            _junit(_tc("tests.test_a", "t1")),
-        )
-        entry = _good_entry("tests/old.py::t")
-        entry["created_at"] = "2026-07-01T00:00:00Z"
-        entry["expires_at"] = "2026-07-15T00:00:00Z"
-        al = _al(tmp_path, [entry])
-        r = tmp_path / "r.json"
-        res = _run(
-            EXECUTION,
-            [
-                "--inventory",
-                str(inv),
-                "--junit",
-                str(j),
-                "--skip-allowlist",
-                str(al),
-                "--report",
-                str(r),
-            ],
-        )
-        assert res.returncode == 1
-        assert "expired" in res.stderr.lower()
-
-
-class TestExecXfail:
-    def test_type_attribute(self, tmp_path: Path) -> None:
-        inv = _inv(tmp_path, non_pg=["tests/test_a.py::t1"], pg=[])
-        j = _w(
-            tmp_path,
-            "j.xml",
-            _junit(_tc("tests.test_a", "t1", "xfail")),
-        )
-        r = tmp_path / "r.json"
-        assert (
-            _run(
-                EXECUTION,
-                [
-                    "--inventory",
-                    str(inv),
-                    "--junit",
-                    str(j),
-                    "--skip-allowlist",
-                    str(_al(tmp_path)),
-                    "--report",
-                    str(r),
-                ],
-            ).returncode
-            == 0
-        )
-        assert json.loads(r.read_text())["counts"]["xfail"] == 1
-
-
-class TestExecXpass:
-    def test_strict_fails(self, tmp_path: Path) -> None:
-        inv = _inv(tmp_path, non_pg=["tests/test_a.py::t1"], pg=[])
-        j = _w(
-            tmp_path,
-            "j.xml",
-            _junit(_tc("tests.test_a", "t1", "xpass")),
-        )
-        r = tmp_path / "r.json"
-        res = _run(
-            EXECUTION,
-            [
-                "--inventory",
-                str(inv),
-                "--junit",
-                str(j),
-                "--skip-allowlist",
-                str(_al(tmp_path)),
-                "--report",
-                str(r),
-            ],
-        )
-        assert res.returncode == 1
-        assert "xpass" in res.stderr.lower()
-
-
-class TestExecZeroPg:
-    def test_fails(self, tmp_path: Path) -> None:
-        inv = _inv(tmp_path)
-        j = _w(
-            tmp_path,
-            "j.xml",
-            _junit(
-                _tc("tests.test_a", "t1"),
-                _tc(
-                    "tests.integration.postgres.test_b",
-                    "t2",
-                    "skipped",
-                ),
-            ),
-        )
-        al = _al(
-            tmp_path,
-            [_good_entry("tests/integration/postgres/test_b.py::t2")],
-        )
-        r = tmp_path / "r.json"
-        res = _run(
-            EXECUTION,
-            [
-                "--inventory",
-                str(inv),
-                "--junit",
-                str(j),
-                "--skip-allowlist",
-                str(al),
-                "--report",
-                str(r),
-            ],
-        )
-        assert res.returncode == 1
-        assert "zero executed" in res.stderr.lower()
-
-
-class TestExecMalformed:
-    def test_xml_exits_2(self, tmp_path: Path) -> None:
-        inv = _inv(tmp_path)
-        j = _w(tmp_path, "bad.xml", "not xml <broken")
-        r = tmp_path / "r.json"
-        assert (
-            _run(
-                EXECUTION,
-                [
-                    "--inventory",
-                    str(inv),
-                    "--junit",
-                    str(j),
-                    "--skip-allowlist",
-                    str(_al(tmp_path)),
-                    "--report",
-                    str(r),
-                ],
-            ).returncode
-            == 2
-        )
-
-    def test_empty_junit(self, tmp_path: Path) -> None:
-        inv = _inv(tmp_path)
-        j = _w(tmp_path, "e.xml", _junit())
-        r = tmp_path / "r.json"
-        assert (
-            _run(
-                EXECUTION,
-                [
-                    "--inventory",
-                    str(inv),
-                    "--junit",
-                    str(j),
-                    "--skip-allowlist",
-                    str(_al(tmp_path)),
-                    "--report",
-                    str(r),
-                ],
-            ).returncode
-            == 1
-        )
-
-    def test_invalid_inventory(self, tmp_path: Path) -> None:
-        inv = _w(
-            tmp_path,
-            "inv.json",
-            '{"valid": false, "errors": ["x"]}',
-        )
-        j = _w(
-            tmp_path,
-            "j.xml",
-            _junit(_tc("tests.test_a", "t1")),
-        )
-        r = tmp_path / "r.json"
-        assert (
-            _run(
-                EXECUTION,
-                [
-                    "--inventory",
-                    str(inv),
-                    "--junit",
-                    str(j),
-                    "--skip-allowlist",
-                    str(_al(tmp_path)),
-                    "--report",
-                    str(r),
-                ],
-            ).returncode
-            == 1
-        )
-
-    def test_symlink_rejected(self, tmp_path: Path) -> None:
-        real = _w(
-            tmp_path,
-            "r.xml",
-            _junit(_tc("tests.test_a", "t1")),
-        )
-        link = tmp_path / "l.xml"
-        link.symlink_to(real)
-        inv = _inv(tmp_path)
-        r = tmp_path / "r.json"
-        assert (
-            _run(
-                EXECUTION,
-                [
-                    "--inventory",
-                    str(inv),
-                    "--junit",
-                    str(link),
-                    "--skip-allowlist",
-                    str(_al(tmp_path)),
-                    "--report",
-                    str(r),
-                ],
-            ).returncode
-            == 2
-        )
-
-
-class TestExecAllowlistSchema:
-    def test_missing_fields_exits_2(self, tmp_path: Path) -> None:
-        inv = _inv(tmp_path, non_pg=[], pg=[])
-        j = _w(
-            tmp_path,
-            "j.xml",
-            _junit(_tc("tests.test_a", "t1")),
-        )
-        al = _w(
-            tmp_path,
-            "bad.json",
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "entries": [{"node_id_pattern": "x"}],
-                }
-            ),
-        )
-        r = tmp_path / "r.json"
-        assert (
-            _run(
-                EXECUTION,
-                [
-                    "--inventory",
-                    str(inv),
-                    "--junit",
-                    str(j),
-                    "--skip-allowlist",
-                    str(al),
-                    "--report",
-                    str(r),
-                ],
-            ).returncode
-            == 2
-        )
-
-    def test_overbroad_rejected(self, tmp_path: Path) -> None:
-        inv = _inv(tmp_path, non_pg=[], pg=[])
-        j = _w(
-            tmp_path,
-            "j.xml",
-            _junit(_tc("tests.test_a", "t1")),
-        )
-        entry = _good_entry("tests/*")
-        al = _al(tmp_path, [entry])
-        r = tmp_path / "r.json"
-        assert (
-            _run(
-                EXECUTION,
-                [
-                    "--inventory",
-                    str(inv),
-                    "--junit",
-                    str(j),
-                    "--skip-allowlist",
-                    str(al),
-                    "--report",
-                    str(r),
-                ],
-            ).returncode
-            == 2
-        )
-
-    def test_expiry_over_14d_rejected(self, tmp_path: Path) -> None:
-        inv = _inv(tmp_path, non_pg=[], pg=[])
-        j = _w(
-            tmp_path,
-            "j.xml",
-            _junit(_tc("tests.test_a", "t1")),
-        )
-        entry = _good_entry()
-        entry["created_at"] = "2026-08-01T00:00:00Z"
-        entry["expires_at"] = "2026-09-01T00:00:00Z"
-        al = _al(tmp_path, [entry])
-        r = tmp_path / "r.json"
-        assert (
-            _run(
-                EXECUTION,
-                [
-                    "--inventory",
-                    str(inv),
-                    "--junit",
-                    str(j),
-                    "--skip-allowlist",
-                    str(al),
-                    "--report",
-                    str(r),
-                ],
-            ).returncode
-            == 2
-        )
-
-    def test_unused_warns(self, tmp_path: Path) -> None:
-        inv = _inv(tmp_path, non_pg=["tests/test_a.py::t1"], pg=[])
-        j = _w(
-            tmp_path,
-            "j.xml",
-            _junit(_tc("tests.test_a", "t1")),
-        )
-        al = _al(tmp_path, [_good_entry("tests/gone.py::t")])
-        r = tmp_path / "r.json"
-        res = _run(
-            EXECUTION,
-            [
-                "--inventory",
-                str(inv),
-                "--junit",
-                str(j),
-                "--skip-allowlist",
-                str(al),
-                "--report",
-                str(r),
-            ],
-        )
-        assert res.returncode == 0
-        assert "unused" in res.stderr.lower()
-
-    def test_wrong_env_not_matched(self, tmp_path: Path) -> None:
-        inv = _inv(tmp_path)
-        j = _w(
-            tmp_path,
-            "j.xml",
-            _junit(
-                _tc("tests.test_a", "t1"),
-                _tc(
-                    "tests.integration.postgres.test_b",
-                    "t2",
-                    "skipped",
-                ),
-            ),
-        )
-        entry = _good_entry("tests/integration/postgres/test_b.py::t2")
-        entry["environments"] = ["local"]
-        al = _al(tmp_path, [entry])
-        r = tmp_path / "r.json"
-        res = _run(
-            EXECUTION,
-            [
-                "--inventory",
-                str(inv),
-                "--junit",
-                str(j),
-                "--skip-allowlist",
-                str(al),
-                "--environment",
-                "ci",
-                "--report",
-                str(r),
-            ],
-        )
-        assert res.returncode == 1
-        assert "unexpected skip" in res.stderr.lower()
-
-
-class TestExecMultiJunit:
-    def test_two_files(self, tmp_path: Path) -> None:
-        inv = _inv(tmp_path)
-        j1 = _w(
-            tmp_path,
-            "n.xml",
-            _junit(_tc("tests.test_a", "t1")),
-        )
-        j2 = _w(
-            tmp_path,
-            "p.xml",
-            _junit(
-                _tc(
-                    "tests.integration.postgres.test_b",
-                    "t2",
-                ),
-            ),
-        )
-        r = tmp_path / "r.json"
-        assert (
-            _run(
-                EXECUTION,
-                [
-                    "--inventory",
-                    str(inv),
-                    "--junit",
-                    str(j1),
-                    "--junit",
-                    str(j2),
-                    "--skip-allowlist",
-                    str(_al(tmp_path)),
-                    "--report",
-                    str(r),
-                ],
-            ).returncode
-            == 0
-        )
-
-
-class TestExecDigest:
-    def test_deterministic(self, tmp_path: Path) -> None:
-        inv = _inv(tmp_path, non_pg=["tests/test_a.py::t1"], pg=[])
-        j = _w(
-            tmp_path,
-            "j.xml",
-            _junit(_tc("tests.test_a", "t1")),
-        )
-        al = _al(tmp_path)
-        r1 = tmp_path / "r1.json"
-        r2 = tmp_path / "r2.json"
-        _run(
-            EXECUTION,
-            [
-                "--inventory",
-                str(inv),
-                "--junit",
-                str(j),
-                "--skip-allowlist",
-                str(al),
-                "--report",
-                str(r1),
-            ],
-        )
-        _run(
-            EXECUTION,
-            [
-                "--inventory",
-                str(inv),
-                "--junit",
-                str(j),
-                "--skip-allowlist",
-                str(al),
-                "--report",
-                str(r2),
-            ],
-        )
-        d1 = json.loads(r1.read_text())["digest"]
-        d2 = json.loads(r2.read_text())["digest"]
-        assert d1 == d2
-
-    def test_outcome_changes_digest(self, tmp_path: Path) -> None:
-        inv = _inv(
-            tmp_path,
-            non_pg=["tests/test_a.py::t1", "tests/test_b.py::t2"],
-            pg=[],
-        )
-        j1 = _w(
-            tmp_path,
-            "j1.xml",
-            _junit(
-                _tc("tests.test_a", "t1"),
-                _tc("tests.test_b", "t2"),
-            ),
-        )
-        j2 = _w(
-            tmp_path,
-            "j2.xml",
-            _junit(
-                _tc("tests.test_a", "t1"),
-                _tc("tests.test_b", "t2", "failed"),
-            ),
-        )
-        al = _al(tmp_path)
-        r1 = tmp_path / "r1.json"
-        r2 = tmp_path / "r2.json"
-        _run(
-            EXECUTION,
-            [
-                "--inventory",
-                str(inv),
-                "--junit",
-                str(j1),
-                "--skip-allowlist",
-                str(al),
-                "--report",
-                str(r1),
-            ],
-        )
-        _run(
-            EXECUTION,
-            [
-                "--inventory",
-                str(inv),
-                "--junit",
-                str(j2),
-                "--skip-allowlist",
-                str(al),
-                "--report",
-                str(r2),
-            ],
-        )
-        d1 = json.loads(r1.read_text())["digest"]
-        d2 = json.loads(r2.read_text())["digest"]
-        assert d1 != d2
-
-
-class TestExecClassMethod:
-    def test_class_method_node(self, tmp_path: Path) -> None:
-        inv = _inv(
-            tmp_path,
-            non_pg=["tests/test_a/TestClass.py::TestClass::test_m"],
-            pg=[],
-        )
-        j = _w(
-            tmp_path,
-            "j.xml",
-            _junit(_tc("tests.test_a.TestClass", "test_m")),
-        )
-        r = tmp_path / "r.json"
-        res = _run(
-            EXECUTION,
-            [
-                "--inventory",
-                str(inv),
-                "--junit",
-                str(j),
-                "--skip-allowlist",
-                str(_al(tmp_path)),
-                "--report",
-                str(r),
-            ],
-        )
-        assert res.returncode == 0 or "missing" in res.stderr.lower()
+        ).returncode
+        == 0
+    )

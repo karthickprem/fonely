@@ -14,6 +14,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
 
     services:
       postgres:
@@ -117,11 +118,97 @@ jobs:
           set -euo pipefail
           backend/.venv/bin/python scripts/check-deployment-readiness.py | tee /dev/stderr | python3 -c "import json,sys; d=json.load(sys.stdin); assert d['overall_status']=='passed', 'readiness check failed'"
 
-      - name: Unit and non-PostgreSQL tests
-        run: .venv/bin/pytest -m "not postgres" -q
+      - name: Verify execution-verifier unit tests
+        working-directory: .
+        run: backend/.venv/bin/python -m pytest scripts/tests/test_verify_ci_execution.py -q
 
-      - name: PostgreSQL integration tests
-        run: .venv/bin/pytest -m postgres -q
+      - name: Initialize execution evidence state
+        working-directory: .
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          Path("${{ runner.temp }}/test-terminal-state.json").write_text(
+              json.dumps({"terminal_state": "verifier_not_run"}, indent=2) + "\n"
+          )
+          PY
+
+      - name: Collect exact test partitions
+        working-directory: .
+        run: |
+          set -euo pipefail
+          cd backend
+          .venv/bin/pytest --collect-only -q > "${{ runner.temp }}/all-tests.txt"
+          .venv/bin/pytest --collect-only -q -m "not postgres" > "${{ runner.temp }}/non-pg-tests.txt"
+          .venv/bin/pytest --collect-only -q -m postgres > "${{ runner.temp }}/pg-tests.txt"
+          cd ..
+          backend/.venv/bin/python scripts/verify-test-partitions.py \
+            --all "${{ runner.temp }}/all-tests.txt" \
+            --non-pg "${{ runner.temp }}/non-pg-tests.txt" \
+            --pg "${{ runner.temp }}/pg-tests.txt" \
+            --report "${{ runner.temp }}/test-partitions.json"
+
+      - name: Execute and verify all test partitions
+        working-directory: .
+        env:
+          FONELY_REQUIRE_POSTGRES_EXECUTION: "1"
+        run: |
+          set +e
+          cd backend
+          .venv/bin/pytest -m "not postgres" -q \
+            --junitxml "${{ runner.temp }}/non-pg-junit.xml"
+          NON_PG_STATUS=$?
+          .venv/bin/pytest -m postgres -q \
+            --junitxml "${{ runner.temp }}/pg-junit.xml"
+          PG_STATUS=$?
+          cd ..
+          backend/.venv/bin/python scripts/verify-test-execution.py \
+            --inventory "${{ runner.temp }}/test-partitions.json" \
+            --non-pg-junit "${{ runner.temp }}/non-pg-junit.xml" \
+            --pg-junit "${{ runner.temp }}/pg-junit.xml" \
+            --skip-allowlist qa/allowed-skips.json \
+            --environment ci \
+            --report "${{ runner.temp }}/test-execution.json"
+          VERIFIER_STATUS=$?
+          python3 - <<PY
+          import json
+          from pathlib import Path
+          states = {
+              "non_pg_pytest_exit": int("$NON_PG_STATUS"),
+              "pg_pytest_exit": int("$PG_STATUS"),
+              "verifier_exit": int("$VERIFIER_STATUS"),
+          }
+          if states["non_pg_pytest_exit"] or states["pg_pytest_exit"]:
+              terminal = "pytest_failed"
+          elif states["verifier_exit"]:
+              terminal = "verifier_failed"
+          else:
+              terminal = "success"
+          states["terminal_state"] = terminal
+          Path("${{ runner.temp }}/test-terminal-state.json").write_text(
+              json.dumps(states, indent=2) + "\\n"
+          )
+          PY
+          if [ "$NON_PG_STATUS" -ne 0 ] || [ "$PG_STATUS" -ne 0 ] || [ "$VERIFIER_STATUS" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Upload exact-SHA test evidence
+        if: always()
+        uses: actions/upload-artifact@65462800fd760af5291623115de2585dae65720b
+        with:
+          name: test-execution-evidence-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/all-tests.txt
+            ${{ runner.temp }}/non-pg-tests.txt
+            ${{ runner.temp }}/pg-tests.txt
+            ${{ runner.temp }}/test-partitions.json
+            ${{ runner.temp }}/non-pg-junit.xml
+            ${{ runner.temp }}/pg-junit.xml
+            ${{ runner.temp }}/test-execution.json
+            ${{ runner.temp }}/test-terminal-state.json
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Migration downgrade to base
         run: .venv/bin/alembic downgrade base

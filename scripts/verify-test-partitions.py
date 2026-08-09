@@ -4,6 +4,8 @@
 Parses pytest ``--collect-only -q`` output to extract node IDs and proves
 the marker-partitioned runs cover every collected test exactly once.
 
+Emits canonical node-set sidecars for execution verification.
+
 Exit 0 on valid partition, 1 on violation, 2 on input/safety error.
 """
 
@@ -60,7 +62,10 @@ def _parse_collection(path: Path, label: str) -> tuple[list[str], int, int, bool
             continue
         if _NODE_RE.match(stripped):
             if len(nodes) >= _MAX_NODES:
-                print(f"ERROR: {label} exceeds {_MAX_NODES} node limit", file=sys.stderr)
+                print(
+                    f"ERROR: {label} exceeds {_MAX_NODES} node limit",
+                    file=sys.stderr,
+                )
                 sys.exit(2)
             nodes.append(stripped)
             continue
@@ -144,7 +149,7 @@ def main() -> None:
         errors.append(f"parsed {len(all_nodes)} node IDs but footer says {all_collected}")
 
     report = {
-        "schema_version": 1,
+        "schema_version": 2,
         "valid": len(errors) == 0,
         "errors": errors,
         "counts": {
@@ -154,6 +159,10 @@ def main() -> None:
             "overlap": len(overlap),
             "missing": len(missing),
             "extra": len(extra),
+        },
+        "nodes": {
+            "non_pg": sorted(non_pg_set),
+            "pg": sorted(pg_set),
         },
         "footer": {
             "all_collected": all_collected,

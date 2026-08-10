@@ -92,9 +92,7 @@ def _mount_exotel_routes(app: FastAPI) -> None:
     app.state.exotel_gateway_secret = secret
     app.state.exotel_mapping = mapping
     app.state.exotel_correlation = InMemoryCorrelationStore()
-    app.state.exotel_admission = StreamAdmissionController(
-        max_per_business=10, max_global=100
-    )
+    app.state.exotel_admission = StreamAdmissionController(max_per_business=10, max_global=100)
     app.state.exotel_account_id = account_id
     app.state.exotel_environment = "production" if not settings.debug else "sandbox"
     app.state.exotel_expected_sample_rate = 16000

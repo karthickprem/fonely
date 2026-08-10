@@ -276,7 +276,7 @@ async def exotel_media_websocket(websocket: WebSocket) -> None:
     finally:
         if admitted_business_id is not None:
             admission.release(str(admitted_business_id))
-        try:
+        import contextlib
+
+        with contextlib.suppress(Exception):
             await websocket.close(code=1000)
-        except Exception:
-            pass

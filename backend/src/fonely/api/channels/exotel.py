@@ -21,7 +21,6 @@ from fonely.api.channels.exotel_admission import (
     resolve_business_id,
     verify_gateway_secret,
 )
-from fonely.core.config import settings
 from fonely.domain.calls.correlation import (
     CallCorrelationStore,
     CorrelationOutcome,
@@ -190,7 +189,9 @@ async def call_status_webhook(request: Request) -> Response:
 
     mapping = _get_mapping(request.app)
     direction_raw = str(data.get("Direction") or "").strip().lower() or None
-    business_id = resolve_business_id(mapping, event.called_number, event.caller_phone, direction_raw)
+    business_id = resolve_business_id(
+        mapping, event.called_number, event.caller_phone, direction_raw
+    )
     if business_id is None:
         logger.warning("exotel_unknown_number")
         return Response(status_code=404, content="unknown number")

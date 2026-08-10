@@ -14,7 +14,6 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from fonely.app import create_app
-from fonely.core.config import settings
 
 
 def _exotel_settings(**overrides):
@@ -59,9 +58,7 @@ class TestExotelAppComposition:
                     "To": "08012345678",
                     "Duration": "60",
                 },
-                headers={
-                    "X-Exotel-Webhook-Secret": "strong-production-secret-at-least-32-chars"
-                },
+                headers={"X-Exotel-Webhook-Secret": "strong-production-secret-at-least-32-chars"},
             )
         assert response.status_code in (200, 503)
 

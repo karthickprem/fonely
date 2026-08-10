@@ -1,5 +1,7 @@
 """PostgreSQL evidence for durable availability-offer conversation state."""
 
+import asyncio
+import time as monotonic_time
 from datetime import UTC, datetime, time, timedelta
 from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
@@ -275,6 +277,138 @@ async def test_stale_offer_slot_rechecks_and_creates_no_proposal(
         assert await verify.scalar(select(func.count(PendingAction.id))) == 0
         assert await verify.scalar(select(func.count(Appointment.id))) == 1
         assert await verify.scalar(select(func.count(ResourceAllocation.id))) == 1
+
+
+async def _pid(session: AsyncSession) -> int:
+    value = await session.scalar(text("SELECT pg_backend_pid()"))
+    assert isinstance(value, int)
+    return value
+
+
+async def _observe_blocker(
+    factory: async_sessionmaker[AsyncSession], blocked_pid: int, blocker_pid: int
+) -> None:
+    start = monotonic_time.monotonic()
+    while monotonic_time.monotonic() - start < 5:
+        async with factory() as observer:
+            row = (
+                await observer.execute(
+                    text(
+                        "SELECT :blocker = ANY(pg_blocking_pids(:blocked)), wait_event_type "
+                        "FROM pg_stat_activity WHERE pid = :blocked"
+                    ),
+                    {"blocker": blocker_pid, "blocked": blocked_pid},
+                )
+            ).one_or_none()
+        if row is not None and row[0] is True:
+            assert row[1] == "Lock"
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("Timed out waiting for resource-lock contention")
+
+
+async def test_selection_blocks_then_rejects_competing_schedule_mutation(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    kolkata = ZoneInfo("Asia/Kolkata")
+    day = datetime.now(kolkata).date() + timedelta(days=3)
+    offered_start = datetime.combine(day, time(17, 0), tzinfo=kolkata).astimezone(UTC)
+
+    async with pg_session_factory() as setup:
+        await _seed_scheduling(setup)
+        persistence = ConversationPersistenceService(setup)
+        ctx = await persistence.load_or_create(1, _actor().normalized_phone)
+        ctx.state = ConversationState.FACT_COLLECTION
+        ctx.collected_facts = {
+            "_operation": "book",
+            "service_id": 1,
+            "service_name": "Consultation",
+            "resource_id": 1,
+            "resource_name": "Dr. Priya",
+            "customer_phone": _actor().normalized_phone,
+            "start_at": offered_start - timedelta(minutes=30),
+        }
+        ctx.availability_offer = create_availability_offer(
+            business_id=1,
+            conversation_id=ctx.conversation_id,
+            service_id=1,
+            business_timezone="Asia/Kolkata",
+            alternatives=(
+                AvailableSlot(
+                    offered_start,
+                    offered_start + timedelta(minutes=30),
+                    1,
+                    "Dr. Priya",
+                ),
+            ),
+            now=datetime.now(UTC),
+        )
+        turn = ConversationTurn(
+            turn_id="turn-lock-offer",
+            conversation_id=ctx.conversation_id,
+            business_id=1,
+            state=ctx.state,
+            user_message="offer",
+            assistant_response="5 PM",
+            collected_facts=dict(ctx.collected_facts),
+            missing_facts=["start_at"],
+        )
+        ctx.turns.append(turn)
+        await persistence.save_turn(ctx, turn)
+        await setup.commit()
+        conversation_id = ctx.conversation_id
+
+    monkeypatch.setattr(
+        "fonely.services.conversation_tools.get_business_context",
+        AsyncMock(return_value=_business_context()),
+    )
+    gateway = AsyncMock()
+    gateway.complete.return_value = ModelResponse(text="unused")
+
+    async with pg_session_factory() as holder:
+        await holder.execute(text("SET LOCAL lock_timeout = '8s'"))
+        await holder.execute(
+            text("SELECT 1 FROM resources WHERE business_id=1 AND id=1 FOR UPDATE")
+        )
+        holder_pid = await _pid(holder)
+        blocked_pid: asyncio.Future[int] = asyncio.get_running_loop().create_future()
+
+        async def select_offer() -> object:
+            async with pg_session_factory() as selection_session:
+                await selection_session.execute(text("SET LOCAL lock_timeout = '8s'"))
+                blocked_pid.set_result(await _pid(selection_session))
+                service = ConversationService(
+                    selection_session,
+                    gateway,
+                    appointment_service=AppointmentService(
+                        selection_session,
+                        validation=InternalValidationPort(selection_session),
+                    ),
+                )
+                result = await service.process_message(conversation_id, 1, _actor(), "5:00 PM")
+                await selection_session.commit()
+                return result
+
+        task = asyncio.create_task(select_offer())
+        await _observe_blocker(pg_session_factory, await blocked_pid, holder_pid)
+        assert not task.done(), "selection must remain blocked before schedule mutation commits"
+        await holder.execute(
+            text(
+                "INSERT INTO schedule_exceptions "
+                "(business_id,resource_id,exception_date,is_closed,reason) "
+                "VALUES (1,1,:day,true,'provider unavailable')"
+            ),
+            {"day": day},
+        )
+        await holder.commit()
+        result = await asyncio.wait_for(task, timeout=10)
+
+    assert "isn't available" in result.assistant_response  # type: ignore[attr-defined]
+    async with pg_session_factory() as verify:
+        assert await verify.scalar(select(func.count(PendingAction.id))) == 0
+        assert await verify.scalar(select(func.count(Appointment.id))) == 0
+        assert await verify.scalar(select(func.count(ResourceAllocation.id))) == 0
 
 
 async def test_tampered_persisted_offer_is_not_restored(

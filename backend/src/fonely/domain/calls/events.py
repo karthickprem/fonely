@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+import re
 from enum import StrEnum
 from typing import Any
 
@@ -29,9 +32,13 @@ _TERMINAL_STATUSES = frozenset(
     }
 )
 
+_ANSWERED_STATUSES = frozenset({ExotelCallStatus.IN_PROGRESS})
+
 _VALID_STATUSES = frozenset(ExotelCallStatus)
 _VALID_EVENT_TYPES = frozenset(ExotelEventType)
 _VALID_DIRECTIONS = frozenset({"inbound", "outbound-dial", "outbound-api"})
+
+_CALL_SID_RE = re.compile(r"^[a-zA-Z0-9]{16,128}$")
 
 
 class ExotelCallbackParseError(ValueError):
@@ -39,12 +46,7 @@ class ExotelCallbackParseError(ValueError):
 
 
 class ExotelCallbackEvent:
-    """Canonical typed representation of an Exotel status callback.
-
-    All field names match the Exotel API response documentation.
-    Open question OQ-1: exact callback field names require sandbox
-    verification.
-    """
+    """Canonical typed representation of an Exotel status callback."""
 
     __slots__ = (
         "call_sid",
@@ -82,10 +84,34 @@ class ExotelCallbackEvent:
         self.custom_field = custom_field
 
 
+def canonical_payload_digest(event: ExotelCallbackEvent) -> str:
+    """Canonical SHA-256 digest of the immutable event payload.
+
+    Shared between test double and production repository.
+    """
+    payload = json.dumps(
+        {
+            "call_sid": event.call_sid,
+            "conversation_duration": event.conversation_duration,
+            "custom_field": event.custom_field,
+            "direction": event.direction,
+            "duration": event.duration,
+            "event_type": event.event_type,
+            "status": event.status,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()[:32]
+
+
 def _strict_nonneg_int(value: Any, field: str) -> int | None:
-    """Parse a non-negative integer or None. Reject negatives and non-numeric."""
     if value is None or value == "":
         return None
+    if isinstance(value, bool):
+        raise ExotelCallbackParseError(f"invalid {field}: boolean not accepted")
+    if isinstance(value, float):
+        raise ExotelCallbackParseError(f"invalid {field}: float not accepted")
     try:
         parsed = int(value)
     except (ValueError, TypeError) as exc:
@@ -95,15 +121,31 @@ def _strict_nonneg_int(value: Any, field: str) -> int | None:
     return parsed
 
 
+def _validate_event_type_status_consistency(event_type: str, status: str) -> None:
+    """Validate EventType matches Status semantics."""
+    if event_type == "terminal" and status in _ANSWERED_STATUSES:
+        raise ExotelCallbackParseError(
+            f"EventType 'terminal' inconsistent with non-terminal status '{status}'"
+        )
+    if event_type == "answered" and status in _TERMINAL_STATUSES:
+        raise ExotelCallbackParseError(
+            f"EventType 'answered' inconsistent with terminal status '{status}'"
+        )
+
+
 def parse_exotel_callback(data: dict[str, Any]) -> ExotelCallbackEvent:
     """Parse a flat dict into a typed event with strict validation.
 
-    Rejects (not coerces) invalid Duration, EventType, Direction, and
-    identity fields. Every rejection raises ExotelCallbackParseError.
+    Rejects (not coerces) invalid types, values, and inconsistencies.
     """
-    call_sid = str(data.get("CallSid") or "").strip()
+    raw_sid = data.get("CallSid")
+    if raw_sid is not None and not isinstance(raw_sid, str):
+        raise ExotelCallbackParseError(f"CallSid must be string, got {type(raw_sid).__name__}")
+    call_sid = (raw_sid or "").strip()
     if not call_sid:
         raise ExotelCallbackParseError("missing CallSid")
+    if not _CALL_SID_RE.match(call_sid):
+        raise ExotelCallbackParseError(f"invalid CallSid format: {call_sid!r}")
 
     raw_status = str(data.get("Status") or "").strip().lower()
     if raw_status not in _VALID_STATUSES:
@@ -114,6 +156,8 @@ def parse_exotel_callback(data: dict[str, Any]) -> ExotelCallbackEvent:
         raise ExotelCallbackParseError(f"invalid EventType: {event_type_raw!r}")
     if not event_type_raw:
         event_type_raw = "terminal" if raw_status in _TERMINAL_STATUSES else "answered"
+
+    _validate_event_type_status_consistency(event_type_raw, raw_status)
 
     caller_phone = str(data.get("From") or "").strip()
     called_number = str(data.get("To") or "").strip()

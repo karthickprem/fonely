@@ -1,11 +1,12 @@
 """Exotel telephony webhook adapter — thin ingress to typed intake.
 
 Authenticates, parses, validates, and delegates to InboundCallEventIntake.
-Does NOT mutate domain state (calls, conversations, owner commands).
-Does NOT import sqlalchemy or execute SQL.
+Does NOT mutate domain state. Does NOT import sqlalchemy.
 
 INTERIM AUTH: shared-secret possession check. Exotel documents NO native
 callback authentication. See docs/EXOTEL_PROVIDER_CONTRACT.md §4.
+
+Audio WebSocket is NOT exposed — it requires a separate auth contract.
 """
 
 import hmac
@@ -15,7 +16,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 
-from fastapi import APIRouter, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Request, Response
 from starlette.requests import ClientDisconnect
 
 from fonely.core.config import settings
@@ -23,7 +24,11 @@ from fonely.domain.calls.events import (
     ExotelCallbackParseError,
     parse_exotel_callback,
 )
-from fonely.domain.calls.intake import DuplicateCallEventError, InboundCallEventIntake
+from fonely.domain.calls.intake import (
+    ConflictingCallEventError,
+    DuplicateCallEventError,
+    InboundCallEventIntake,
+)
 from fonely.services.exotel_config import ExotelNumberMapping
 
 logger = logging.getLogger("fonely.api.channels.exotel")
@@ -120,34 +125,51 @@ def _get_intake(app: object) -> InboundCallEventIntake | None:
 
 
 def _parse_multipart_fields(raw: bytes, content_type: str) -> dict[str, str]:
-    """Extract flat field values from multipart/form-data."""
-    boundary = None
-    for part in content_type.split(";"):
-        part = part.strip()
-        if part.lower().startswith("boundary="):
-            boundary = part.split("=", 1)[1].strip().strip('"')
-            break
-    if not boundary:
+    """Extract flat scalar field values from multipart/form-data.
+
+    Uses Python email.parser for standards-compliant Content-Disposition
+    parsing. Rejects file uploads (parts with filename). Preserves exact
+    field values including CR/LF in text.
+    """
+    from email.parser import BytesParser
+    from email.policy import HTTP
+
+    full_headers = f"Content-Type: {content_type}\r\n\r\n".encode() + raw
+    msg = BytesParser(policy=HTTP).parsebytes(full_headers)
+
+    if not msg.is_multipart():
         return {}
 
     fields: dict[str, str] = {}
-    boundary_bytes = f"--{boundary}".encode()
-    parts = raw.split(boundary_bytes)
-    for part_data in parts:
-        if not part_data or part_data.strip() == b"--":
+    for part in msg.iter_parts():
+        cd = part.get("Content-Disposition", "")
+        if "filename" in cd.lower():
             continue
-        header_end = part_data.find(b"\r\n\r\n")
-        if header_end < 0:
+        name = part.get_param("name", header="Content-Disposition")
+        if name is None:
             continue
-        headers_raw = part_data[:header_end].decode("utf-8", errors="replace")
-        body_raw = part_data[header_end + 4 :].rstrip(b"\r\n")
-        for line in headers_raw.split("\r\n"):
-            if "name=" in line.lower():
-                name_start = line.lower().index("name=") + 5
-                name = line[name_start:].strip().strip('"').strip("'")
-                fields[name] = body_raw.decode("utf-8", errors="replace")
-                break
+        if name in fields:
+            continue
+        payload = part.get_payload(decode=True)
+        if payload is None:
+            continue
+        fields[str(name)] = payload.decode("utf-8", errors="replace")
     return fields
+
+
+def _resolve_business_id(mapping: ExotelNumberMapping, called: str, caller: str) -> int | None:
+    """Tenant routing — direction-neutral, ambiguity-rejecting.
+
+    Exact callback field semantics for From/To are sandbox-unverified
+    (OQ-1). Try both numbers against the mapping. If both map to the
+    same business, accept. If both map to different businesses, reject
+    as ambiguous. If exactly one maps, accept that one.
+    """
+    to_bid = mapping.get_business_id(called)
+    from_bid = mapping.get_business_id(caller)
+    if to_bid is not None and from_bid is not None and to_bid != from_bid:
+        return None
+    return to_bid or from_bid
 
 
 # ---------------------------------------------------------------------------
@@ -204,13 +226,8 @@ async def call_status_webhook(request: Request) -> Response:
     except ExotelCallbackParseError:
         return Response(status_code=400, content="invalid callback payload")
 
-    # Tenant routing: for inbound calls, To is the Exotel virtual number
-    # (maps to business). For outbound, From is the virtual number.
-    # Try called_number (To) first; fall back to caller_phone (From).
     mapping = _get_mapping(request.app)
-    business_id = mapping.get_business_id(event.called_number)
-    if business_id is None:
-        business_id = mapping.get_business_id(event.caller_phone)
+    business_id = _resolve_business_id(mapping, event.called_number, event.caller_phone)
     if business_id is None:
         logger.warning("exotel_unknown_number")
         return Response(status_code=404, content="unknown number")
@@ -232,6 +249,16 @@ async def call_status_webhook(request: Request) -> Response:
             },
         )
         return Response(status_code=200, content="ok")
+    except ConflictingCallEventError:
+        logger.warning(
+            "exotel_callback_conflict",
+            extra={
+                "business_id": business_id,
+                "call_sid": event.call_sid,
+                "event_type": event.event_type,
+            },
+        )
+        return Response(status_code=409, content="conflicting event")
     except Exception:
         logger.warning(
             "exotel_callback_persistence_failed",
@@ -251,18 +278,5 @@ async def call_status_webhook(request: Request) -> Response:
     return Response(status_code=200, content="ok")
 
 
-# ---------------------------------------------------------------------------
-# Audio stream (placeholder — separate auth contract required)
-# ---------------------------------------------------------------------------
-
-
-@router.websocket("/audio-stream")
-async def audio_stream(websocket: WebSocket) -> None:
-    """Placeholder for Exotel audio stream. Dev4 scope."""
-    await websocket.accept()
-    logger.info("exotel_audio_stream_connected")
-    try:
-        while True:
-            await websocket.receive_bytes()
-    except WebSocketDisconnect:
-        logger.info("exotel_audio_stream_disconnected")
+# Audio WebSocket is NOT exposed — requires separate auth contract.
+# See docs/EXOTEL_PROVIDER_CONTRACT.md §4.

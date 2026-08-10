@@ -63,7 +63,7 @@ class TestClaimLifecycle:
         await intake.persist(1, event)
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
-        assert claimed["call_sid"] == event.call_sid
+        assert claimed.call_sid == event.call_sid
         assert intake.get_intake_status(1) == "processing"
 
     async def test_claim_empty_queue_returns_none(self) -> None:
@@ -83,9 +83,7 @@ class TestClaimLifecycle:
         await intake.persist(1, event)
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
-        ok = await intake.mark_completed(
-            claimed["id"], claimed["claim_token"], claimed["claim_version"]
-        )
+        ok = await intake.mark_completed(claimed.id, claimed.claim_token, claimed.claim_version)
         assert ok
         assert intake.get_intake_status(1) == "completed"
 
@@ -95,9 +93,7 @@ class TestClaimLifecycle:
         await intake.persist(1, event)
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
-        ok = await intake.mark_failed(
-            claimed["id"], claimed["claim_token"], claimed["claim_version"]
-        )
+        ok = await intake.mark_failed(claimed.id, claimed.claim_token, claimed.claim_version)
         assert ok
         assert intake.get_intake_status(1) == "failed"
 
@@ -107,10 +103,10 @@ class TestClaimLifecycle:
         await intake.persist(1, event)
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
-        await intake.mark_failed(claimed["id"], claimed["claim_token"], claimed["claim_version"])
+        await intake.mark_failed(claimed.id, claimed.claim_token, claimed.claim_version)
         reclaimed = await intake.claim_next_eligible()
         assert reclaimed is not None
-        assert reclaimed["id"] == claimed["id"]
+        assert reclaimed.id == claimed.id
 
     async def test_stale_claim_token_rejected(self) -> None:
         intake = InMemoryCallEventIntake()
@@ -118,7 +114,7 @@ class TestClaimLifecycle:
         await intake.persist(1, event)
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
-        ok = await intake.mark_completed(claimed["id"], "wrong-token", claimed["claim_version"])
+        ok = await intake.mark_completed(claimed.id, "wrong-token", claimed.claim_version)
         assert not ok
         assert intake.get_intake_status(1) == "processing"
 
@@ -128,7 +124,7 @@ class TestClaimLifecycle:
         await intake.persist(1, event)
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
-        ok = await intake.mark_completed(claimed["id"], claimed["claim_token"], 999)
+        ok = await intake.mark_completed(claimed.id, claimed.claim_token, 999)
         assert not ok
 
     async def test_dead_letter_after_max_attempts(self) -> None:
@@ -139,9 +135,7 @@ class TestClaimLifecycle:
             claimed = await intake.claim_next_eligible()
             if claimed is None:
                 break
-            await intake.mark_failed(
-                claimed["id"], claimed["claim_token"], claimed["claim_version"]
-            )
+            await intake.mark_failed(claimed.id, claimed.claim_token, claimed.claim_version)
         assert intake.get_intake_status(record.id) == "dead_letter"
 
     async def test_dead_letter_not_reclaimable(self) -> None:
@@ -152,9 +146,7 @@ class TestClaimLifecycle:
             claimed = await intake.claim_next_eligible()
             if claimed is None:
                 break
-            await intake.mark_failed(
-                claimed["id"], claimed["claim_token"], claimed["claim_version"]
-            )
+            await intake.mark_failed(claimed.id, claimed.claim_token, claimed.claim_version)
         assert await intake.claim_next_eligible() is None
 
 
@@ -178,17 +170,13 @@ class TestAdapterIntakeWorkerProof:
 
         claimed1 = await intake.claim_next_eligible()
         assert claimed1 is not None
-        assert claimed1["status"] == "in-progress"
-        await intake.mark_completed(
-            claimed1["id"], claimed1["claim_token"], claimed1["claim_version"]
-        )
+        assert claimed1.status == "in-progress"
+        await intake.mark_completed(claimed1.id, claimed1.claim_token, claimed1.claim_version)
 
         claimed2 = await intake.claim_next_eligible()
         assert claimed2 is not None
-        assert claimed2["status"] == "completed"
-        await intake.mark_completed(
-            claimed2["id"], claimed2["claim_token"], claimed2["claim_version"]
-        )
+        assert claimed2.status == "completed"
+        await intake.mark_completed(claimed2.id, claimed2.claim_token, claimed2.claim_version)
 
         assert await intake.claim_next_eligible() is None
         assert intake.get_intake_status(1) == "completed"
@@ -203,8 +191,8 @@ class TestAdapterIntakeWorkerProof:
 
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
-        assert claimed["status"] == "failed"
-        await intake.mark_completed(claimed["id"], claimed["claim_token"], claimed["claim_version"])
+        assert claimed.status == "failed"
+        await intake.mark_completed(claimed.id, claimed.claim_token, claimed.claim_version)
         assert intake.get_intake_status(1) == "completed"
 
     async def test_full_vertical_worker_failure_retries(self) -> None:
@@ -216,16 +204,14 @@ class TestAdapterIntakeWorkerProof:
 
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
-        await intake.mark_failed(claimed["id"], claimed["claim_token"], claimed["claim_version"])
+        await intake.mark_failed(claimed.id, claimed.claim_token, claimed.claim_version)
         assert intake.get_intake_status(1) == "failed"
         assert intake.get_attempts(1) == 1
 
         reclaimed = await intake.claim_next_eligible()
         assert reclaimed is not None
-        assert reclaimed["id"] == claimed["id"]
-        await intake.mark_completed(
-            reclaimed["id"], reclaimed["claim_token"], reclaimed["claim_version"]
-        )
+        assert reclaimed.id == claimed.id
+        await intake.mark_completed(reclaimed.id, reclaimed.claim_token, reclaimed.claim_version)
         assert intake.get_intake_status(1) == "completed"
 
     async def test_full_vertical_duplicate_callbacks_single_event(self) -> None:
@@ -246,5 +232,5 @@ class TestAdapterIntakeWorkerProof:
 
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
-        await intake.mark_completed(claimed["id"], claimed["claim_token"], claimed["claim_version"])
+        await intake.mark_completed(claimed.id, claimed.claim_token, claimed.claim_version)
         assert await intake.claim_next_eligible() is None

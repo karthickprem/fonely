@@ -122,16 +122,19 @@ class TestStrictEventParsing:
             parse_exotel_callback({"Status": "completed", "From": "x", "To": "y"})
 
     def test_unrecognized_status_rejected(self) -> None:
+        sid = "a" * 32
         with pytest.raises(ExotelCallbackParseError, match="unrecognized"):
-            parse_exotel_callback({"CallSid": "abc", "Status": "unknown", "From": "x", "To": "y"})
+            parse_exotel_callback({"CallSid": sid, "Status": "unknown", "From": "x", "To": "y"})
 
     def test_missing_from_rejected(self) -> None:
+        sid = "a" * 32
         with pytest.raises(ExotelCallbackParseError, match="From or To"):
-            parse_exotel_callback({"CallSid": "abc", "Status": "completed", "To": "y"})
+            parse_exotel_callback({"CallSid": sid, "Status": "completed", "To": "y"})
 
     def test_missing_to_rejected(self) -> None:
+        sid = "a" * 32
         with pytest.raises(ExotelCallbackParseError, match="From or To"):
-            parse_exotel_callback({"CallSid": "abc", "Status": "completed", "From": "x"})
+            parse_exotel_callback({"CallSid": sid, "Status": "completed", "From": "x"})
 
 
 # ============================================================================
@@ -490,10 +493,9 @@ class TestSemanticIdempotency:
         assert len(intake.events) == 1
         assert intake.events[0].status == "completed"
 
-    def test_second_terminal_for_same_call_is_duplicate_200(self) -> None:
-        """Second terminal callback (different status) for same CallSid is a
-        semantic duplicate on (business_id, call_sid, event_type=terminal)
-        and returns 200 with no second store."""
+    def test_second_terminal_different_status_is_conflict_409(self) -> None:
+        """Second terminal callback with different status for same CallSid
+        has a different digest — ConflictingCallEventError → 409."""
         app, intake = _create_app()
         client = TestClient(app)
         client.post(
@@ -503,7 +505,7 @@ class TestSemanticIdempotency:
         response = client.post(
             "/webhooks/exotel/call-status", json=failed_same_sid, headers=_auth_headers()
         )
-        assert response.status_code == 200
+        assert response.status_code == 409
         assert len(intake.events) == 1
         assert intake.events[0].status == "completed"
 
@@ -598,10 +600,103 @@ class TestTransitionMatrixExhaustive:
             assert validate_transition(status, status) == status
 
 
-class TestAudioStreamWebSocket:
-    def test_connects_and_closes(self) -> None:
-        app, _ = _create_app()
+class TestStrictIdValidation:
+    def test_boolean_call_sid_rejected(self) -> None:
+        with pytest.raises(ExotelCallbackParseError, match="CallSid must be string"):
+            parse_exotel_callback({"CallSid": True, "Status": "completed", "From": "x", "To": "y"})
+
+    def test_structured_call_sid_rejected(self) -> None:
+        with pytest.raises(ExotelCallbackParseError, match="CallSid must be string"):
+            parse_exotel_callback(
+                {"CallSid": {"nested": "obj"}, "Status": "completed", "From": "x", "To": "y"}
+            )
+
+    def test_short_call_sid_rejected(self) -> None:
+        with pytest.raises(ExotelCallbackParseError, match="invalid CallSid format"):
+            parse_exotel_callback(
+                {"CallSid": "short", "Status": "completed", "From": "x", "To": "y"}
+            )
+
+    def test_boolean_duration_rejected(self) -> None:
+        with pytest.raises(ExotelCallbackParseError, match="boolean"):
+            parse_exotel_callback({**COMPLETED_OUTBOUND, "Duration": True})
+
+    def test_float_duration_rejected(self) -> None:
+        with pytest.raises(ExotelCallbackParseError, match="float"):
+            parse_exotel_callback({**COMPLETED_OUTBOUND, "Duration": 3.14})
+
+    def test_inf_duration_rejected(self) -> None:
+        with pytest.raises(ExotelCallbackParseError, match="float"):
+            parse_exotel_callback({**COMPLETED_OUTBOUND, "Duration": float("inf")})
+
+    def test_event_type_terminal_with_in_progress_rejected(self) -> None:
+        with pytest.raises(ExotelCallbackParseError, match="inconsistent"):
+            parse_exotel_callback({**ANSWERED_OUTBOUND, "EventType": "terminal"})
+
+    def test_event_type_answered_with_completed_rejected(self) -> None:
+        with pytest.raises(ExotelCallbackParseError, match="inconsistent"):
+            parse_exotel_callback({**COMPLETED_OUTBOUND, "EventType": "answered"})
+
+
+class TestConflictDetection:
+    def test_exact_duplicate_returns_200(self) -> None:
+        app, intake = _create_app()
         client = TestClient(app)
-        with client.websocket_connect("/webhooks/exotel/audio-stream") as ws:
-            ws.send_bytes(b"\x00" * 320)
-            ws.close()
+        client.post(
+            "/webhooks/exotel/call-status", json=COMPLETED_OUTBOUND, headers=_auth_headers()
+        )
+        response = client.post(
+            "/webhooks/exotel/call-status", json=COMPLETED_OUTBOUND, headers=_auth_headers()
+        )
+        assert response.status_code == 200
+        assert len(intake.events) == 1
+
+    def test_conflicting_terminal_returns_409(self) -> None:
+        app, intake = _create_app()
+        client = TestClient(app)
+        client.post(
+            "/webhooks/exotel/call-status", json=COMPLETED_OUTBOUND, headers=_auth_headers()
+        )
+        modified = {**COMPLETED_OUTBOUND, "Duration": "999"}
+        response = client.post(
+            "/webhooks/exotel/call-status", json=modified, headers=_auth_headers()
+        )
+        assert response.status_code == 409
+        assert len(intake.events) == 1
+
+
+class TestAmbiguityAwareRouting:
+    def test_to_mapped_routes_correctly(self) -> None:
+        app, intake = _create_app()
+        client = TestClient(app)
+        response = client.post(
+            "/webhooks/exotel/call-status", json=ANSWERED_INBOUND, headers=_auth_headers()
+        )
+        assert response.status_code == 200
+        assert intake.events[0].business_id == 1
+
+    def test_from_mapped_routes_correctly(self) -> None:
+        app, intake = _create_app({"08012345678": 1})
+        client = TestClient(app)
+        payload = {**ANSWERED_OUTBOUND, "From": "08012345678", "To": "+919876543210"}
+        response = client.post(
+            "/webhooks/exotel/call-status", json=payload, headers=_auth_headers()
+        )
+        assert response.status_code == 200
+        assert intake.events[0].business_id == 1
+
+    def test_both_mapped_same_business_accepted(self) -> None:
+        app, _intake = _create_app({"08012345678": 1, "+919876543210": 1})
+        client = TestClient(app)
+        response = client.post(
+            "/webhooks/exotel/call-status", json=ANSWERED_OUTBOUND, headers=_auth_headers()
+        )
+        assert response.status_code == 200
+
+    def test_both_mapped_different_business_rejected(self) -> None:
+        app, _ = _create_app({"08012345678": 1, "+919876543210": 2})
+        client = TestClient(app)
+        response = client.post(
+            "/webhooks/exotel/call-status", json=ANSWERED_OUTBOUND, headers=_auth_headers()
+        )
+        assert response.status_code == 404

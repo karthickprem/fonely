@@ -139,7 +139,7 @@ def cmd_phase(args: argparse.Namespace) -> None:
 
         append_jsonl(root, PHASE_RESULTS_FILE, phase_result)
 
-    raise SystemExit(exit_code)
+    raise SystemExit(max(exit_code, 1) if exit_code != 0 else 0)
 
 
 def main() -> None:

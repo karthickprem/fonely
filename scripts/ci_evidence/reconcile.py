@@ -256,6 +256,9 @@ def _validate_events(
         incomplete_errors.append(f"{partition} missing final record")
         return node_events, evidence_errors, incomplete_errors, None
 
+    if final.get("schema_version") != EXECUTION_EVENT_SCHEMA:
+        evidence_errors.append(f"{partition} final record bad schema_version")
+
     if final.get("source_sha") != manifest["source_sha"]:
         evidence_errors.append(f"{partition} final record SHA mismatch")
 
@@ -587,15 +590,35 @@ def reconcile(
             AttributeError,
         ) as exc:
             state = TERMINAL_EVIDENCE_FAILED
-            if isinstance(exc, EvidenceWriteError) and "not found" in str(exc):
+            exc_str = str(exc).lower()
+            if isinstance(exc, (EvidenceWriteError, ReconcileError)) and (
+                "not found" in exc_str or "missing" in exc_str
+            ):
                 state = TERMINAL_INCOMPLETE
+            error_msg = f"{type(exc).__name__}: {exc}"
+            terminal = {
+                "schema_version": TERMINAL_SCHEMA,
+                "state": state,
+                "source_sha": None,
+                "workflow_run_id": None,
+                "environment": environment,
+                "errors": [error_msg],
+                "counts": {},
+                "artifact_hashes": {},
+                "reconciled_at_utc": datetime.now(UTC).isoformat(),
+            }
             try:
-                return _write_terminal(
-                    root,
-                    {"state": state, "errors": [f"{type(exc).__name__}: {exc}"]},
-                )
+                manifest_raw = safe_read(root, RUN_MANIFEST_FILE)
+                manifest_data = json.loads(manifest_raw)
+                if isinstance(manifest_data, dict):
+                    terminal["source_sha"] = manifest_data.get("source_sha")
+                    terminal["workflow_run_id"] = manifest_data.get("workflow_run_id")
+            except Exception:
+                pass
+            try:
+                return _write_terminal(root, terminal)
             except EvidenceWriteError:
-                return {"state": state, "errors": [f"{type(exc).__name__}: {exc}"]}
+                return terminal
 
 
 def _reconcile_inner(

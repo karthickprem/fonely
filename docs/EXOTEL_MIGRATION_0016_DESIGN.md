@@ -1,125 +1,146 @@
-# Migration 0016 — Exotel Durable Intake, Correlation, and Call Identity
+# Migration 0016 — Exotel Durable Intake, Correlation, and Call Identity v2
 
-Status: DESIGN ONLY — no migration file, no schema change.
-Parent: 0015 (Dev3, pending integration).
-Owner: Dev1. Requires CEO authorization before implementation.
-
----
-
-## 1. Provider-Qualified Call Identity on `calls`
-
-### New columns on `calls`
-
-```sql
-ALTER TABLE calls ADD COLUMN provider VARCHAR(20);
-ALTER TABLE calls ADD COLUMN provider_call_id VARCHAR(128);
-ALTER TABLE calls ADD COLUMN call_status VARCHAR(20);
-```
-
-### Unique constraint
-
-```sql
-CREATE UNIQUE INDEX uq_calls_provider_identity
-    ON calls (business_id, provider, provider_call_id)
-    WHERE provider IS NOT NULL AND provider_call_id IS NOT NULL;
-```
-
-This is a partial unique index — existing rows with NULL provider/provider_call_id
-are unaffected. New Exotel-originated rows are guaranteed unique per
-(business, provider, call_id).
-
-### FK strategy
-
-`inbound_call_events.business_id` references `businesses(id)` directly.
-No FK from `inbound_call_events` to `calls` — the worker creates the
-call record during processing, so the FK target may not exist at intake
-persist time. The worker looks up by `(business_id, provider, provider_call_id)`
-using the unique index.
-
-### Why `provider` on `calls`
-
-Without `provider`, two providers with the same call_id collide. The
-advisory lock key, intake dedup key, and worker lookup must all include
-`provider`. Single-provider today (Exotel only), but the column prevents
-a structural defect that would surface as an inexplicable production
-incident when a second provider is added.
+Status: DESIGN ONLY — not approved for implementation.
+Parent: integrated 0015 (Dev3).
+Owner: Dev1. Requires CEO authorization.
 
 ---
 
-## 2. Provider Occurrence Facts
+## 1. Correlation Lifecycle
 
-### Columns on `inbound_call_events`
+### States
 
-```sql
-provider_started_at   TIMESTAMPTZ,
-provider_ended_at     TIMESTAMPTZ,
+```
+registering → active → closed_grace → expired
+                ↓                        ↓
+              failed                  (same terminal)
 ```
 
-- `provider_started_at`: derived from Exotel's callback if a start timestamp
-  is present (not currently documented; OQ-dependent). NULL if absent.
-- `provider_ended_at`: derived from terminal callback timestamp if present.
-- `received_at`: when Fonely received the callback (existing). This is
-  processing time, NOT occurrence time.
+| State | Meaning | Callback matching | Pending reconciliation |
+|-------|---------|-------------------|----------------------|
+| `registering` | Stream handler authenticated start, runtime not yet started | NO — too early | NO |
+| `active` | Runtime startup succeeded | YES — MATCHED | YES — reconcile pending→received |
+| `closed_grace` | Normal stream close, grace period for delayed callbacks | YES — MATCHED | YES |
+| `failed` | Runtime startup failed or immediate abort | NO — stale | NO — pending stays pending |
+| `expired` | Grace TTL elapsed after close | NO — stale | NO |
 
-### Duration semantics
+### Transitions
 
-- `duration`: total call time in seconds (Exotel's `Duration`). For terminal
-  callbacks, this may arrive stale (~2 min async update per Exotel docs).
-- `conversation_duration`: connected/conversation time (Exotel's
-  `ConversationDuration`). Present only in terminal callbacks.
+- `registering → active`: runtime factory returns successfully (not exception)
+- `registering → failed`: runtime factory raises or stream aborts before first frame
+- `active → closed_grace`: normal provider stop/disconnect, runtime completes
+- `active → failed`: runtime error during active call
+- `closed_grace → expired`: grace TTL elapses (configurable, default 5 minutes)
 
-Both are stored as received — no substitution of `NOW()` for delayed values.
-
-### On `calls` table
+### Implementation on `call_correlation_bindings`
 
 ```sql
-ALTER TABLE calls ADD COLUMN provider_started_at TIMESTAMPTZ;
-ALTER TABLE calls ADD COLUMN provider_ended_at TIMESTAMPTZ;
+correlation_status VARCHAR(20) NOT NULL DEFAULT 'registering'
+    CHECK (correlation_status IN (
+        'registering', 'active', 'closed_grace', 'failed', 'expired'
+    )),
+activated_at    TIMESTAMPTZ,
+closed_at       TIMESTAMPTZ,
+grace_expires_at TIMESTAMPTZ,
 ```
 
-The worker copies provider facts from the intake event to the call record
-during domain mutation. `started_at`/`ended_at` on `calls` remain
-Fonely-processing timestamps. Provider timestamps are separate columns.
+Stream handler:
+1. INSERT with `correlation_status = 'registering'`
+2. After `runtime_factory(transport, session)` returns normally:
+   `UPDATE SET correlation_status = 'active', activated_at = NOW()`
+3. On runtime exception:
+   `UPDATE SET correlation_status = 'failed', closed_at = NOW()`
+4. On normal close:
+   `UPDATE SET correlation_status = 'closed_grace', closed_at = NOW(), grace_expires_at = NOW() + interval`
+
+Grace expiry sweep:
+```sql
+UPDATE call_correlation_bindings
+SET correlation_status = 'expired'
+WHERE correlation_status = 'closed_grace'
+  AND grace_expires_at < NOW()
+```
+
+### Callback matching per state
+
+```sql
+SELECT ... FROM call_correlation_bindings
+WHERE provider = :p AND provider_call_id = :cid
+  AND correlation_status IN ('active', 'closed_grace')
+  AND (grace_expires_at IS NULL OR grace_expires_at > NOW())
+```
+
+- Match → MATCHED
+- No row or only `registering`/`failed`/`expired` → PENDING (quarantine)
+- Match with wrong business/number/direction → CONFLICT
+
+### No stale MATCHED after startup failure
+
+`failed` is never in the matching set. A callback arriving after startup failure quarantines normally.
+
+### Delayed terminal enrichment preserved
+
+`closed_grace` stays matchable — a late Duration update arriving within the grace period correlates correctly.
 
 ---
 
-## 3. Event Identity and Duration Enrichment
+## 2. E.164 Normalization
 
-### Dedup key
+### Policy
+
+All phone numbers in mapping configuration and provider callbacks are required to be canonical E.164 format: `+<country><number>` (e.g. `+919876543210`).
+
+Non-E.164 values (local format `08012345678`, missing `+`, etc.) are rejected at boundaries:
+
+| Boundary | Rejection |
+|----------|-----------|
+| `EXOTEL_NUMBER_MAPPINGS` startup | Keys must be E.164; non-E.164 key → `InvalidNumberMappingError`, route not mounted |
+| Callback `From`/`To` | Non-E.164 → parse error 400 |
+| Stream start `from`/`to` | Non-E.164 → `ExotelStartValidationError` |
+
+### Validation
+
+```python
+_E164_RE = re.compile(r"^\+[1-9]\d{6,14}$")
+
+def validate_e164(number: str, field: str) -> str:
+    number = number.strip()
+    if not _E164_RE.match(number):
+        raise ExotelCallbackParseError(f"{field} must be E.164: {number!r}")
+    return number
+```
+
+### Comparison
+
+Mapping lookup and correlation comparison use the validated canonical form.
+No country-code inference or local-number conversion — values must arrive
+in E.164 from the provider or configuration.
+
+### Sandbox dependency
+
+If Exotel sandbox delivers local-format numbers (OQ-1), the E.164 requirement
+must be relaxed or a trusted country context added. This is deferred to
+post-sandbox verification. The design enforces E.164 as the default; the
+adapter's normalize function is the single point of change.
+
+---
+
+## 3. Event Identity, Enrichment, and Conflict Storage
+
+### Event dedup key
 
 ```
 (business_id, provider, provider_call_id, event_type)
 ```
 
-### Same-terminal enrichment policy
-
-Exotel may re-deliver a terminal callback with updated Duration after
-~2 minutes. This produces the same dedup key with a different digest.
-
-**Policy**: if the re-delivery has the same `(call_sid, event_type, status)`
-but different Duration/ConversationDuration, it is a **monotonic fact
-enrichment**, not a conflict:
-
-| Existing | New | Action |
-|----------|-----|--------|
-| duration IS NULL | duration = 60 | UPDATE: accept enrichment |
-| duration = 0 | duration = 60 | UPDATE: accept enrichment |
-| duration = 60 | duration = 60 | Exact duplicate: DuplicateCallEventError → 200 |
-| duration = 60 | duration = 90 | Accept monotonic increase |
-| duration = 60 | duration = 30 | CONFLICT: reject, immutable fact would decrease |
-| status = completed | status = failed | CONFLICT: immutable status changed |
-
-**Immutable fields** (trigger conflict on change):
-call_sid, event_type, status, caller_phone, called_number, direction
-
-**Enrichable fields** (accept monotonic increase or NULL→value):
-duration, conversation_duration, provider_ended_at
-
-### Implementation
+### Enrichment UPSERT
 
 ```sql
--- On duplicate key:
-ON CONFLICT (business_id, provider, provider_call_id, event_type) DO UPDATE SET
+INSERT INTO inbound_call_events (...)
+VALUES (...)
+ON CONFLICT (business_id, provider, provider_call_id, event_type)
+DO UPDATE SET
+    -- Enrichable facts: accept NULL→value or monotonic increase
     duration = CASE
         WHEN EXCLUDED.duration IS NOT NULL
          AND (inbound_call_events.duration IS NULL
@@ -127,89 +148,283 @@ ON CONFLICT (business_id, provider, provider_call_id, event_type) DO UPDATE SET
         THEN EXCLUDED.duration
         ELSE inbound_call_events.duration
     END,
-    conversation_duration = CASE ... same pattern ...
-    provider_ended_at = CASE ... same pattern ...
-    payload_digest = EXCLUDED.payload_digest,
+    conversation_duration = CASE
+        WHEN EXCLUDED.conversation_duration IS NOT NULL
+         AND (inbound_call_events.conversation_duration IS NULL
+              OR EXCLUDED.conversation_duration >= inbound_call_events.conversation_duration)
+        THEN EXCLUDED.conversation_duration
+        ELSE inbound_call_events.conversation_duration
+    END,
+    provider_ended_at = CASE
+        WHEN EXCLUDED.provider_ended_at IS NOT NULL
+         AND inbound_call_events.provider_ended_at IS NULL
+        THEN EXCLUDED.provider_ended_at
+        ELSE inbound_call_events.provider_ended_at
+    END,
     enrichment_count = inbound_call_events.enrichment_count + 1
 WHERE
-    -- Immutable fields must match
+    -- Immutable fields must match for enrichment
     inbound_call_events.status = EXCLUDED.status
     AND inbound_call_events.caller_phone = EXCLUDED.caller_phone
     AND inbound_call_events.called_number = EXCLUDED.called_number
-RETURNING id, (xmax = 0) AS inserted, ...
+    AND inbound_call_events.direction IS NOT DISTINCT FROM EXCLUDED.direction
+RETURNING id, (xmax = 0) AS inserted,
+    (enrichment_count > 0 AND xmax != 0) AS enriched
 ```
 
-If immutable fields don't match → 0 rows updated → ConflictingCallEventError.
-New column `enrichment_count INTEGER NOT NULL DEFAULT 0` tracks re-deliveries.
+**Key**: `payload_digest` is NOT updated on enrichment. The original digest
+is preserved. `enrichment_count` tracks how many times facts were enriched.
+
+### Result interpretation
+
+| inserted | enriched | Meaning | Action |
+|----------|----------|---------|--------|
+| true | false | New event | Normal intake |
+| false | true | Enrichment accepted | Return 200, update worker if needed |
+| false | false | WHERE clause failed (immutable mismatch) | Conflict |
+| false | false + same digest | Exact duplicate | DuplicateCallEventError → 200 |
+
+When the WHERE clause fails (0 rows updated, not inserted), the handler
+must determine if it's an exact duplicate or a conflict by comparing digests:
+
+```sql
+SELECT payload_digest FROM inbound_call_events
+WHERE business_id = :bid AND provider = :p
+  AND provider_call_id = :cid AND event_type = :etype
+```
+
+Same digest → DuplicateCallEventError. Different digest with immutable
+field mismatch → conflict.
+
+### Conflict storage
+
+Conflicts are stored in a separate table — they cannot share the UNIQUE key:
+
+```sql
+CREATE TABLE inbound_call_event_conflicts (
+    id              SERIAL PRIMARY KEY,
+    original_event_id INTEGER NOT NULL REFERENCES inbound_call_events(id),
+    business_id     INTEGER NOT NULL REFERENCES businesses(id),
+    provider        VARCHAR(20) NOT NULL,
+    provider_call_id VARCHAR(128) NOT NULL,
+    event_type      VARCHAR(20) NOT NULL,
+    conflicting_status VARCHAR(20) NOT NULL,
+    conflicting_caller_phone VARCHAR(20) NOT NULL,
+    conflicting_called_number VARCHAR(20) NOT NULL,
+    conflicting_direction VARCHAR(20),
+    conflicting_duration INTEGER,
+    conflicting_payload_digest VARCHAR(64) NOT NULL,
+    conflict_reason VARCHAR(100) NOT NULL,
+    received_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    retained_until  TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX ix_conflicts_retention
+    ON inbound_call_event_conflicts (retained_until);
+```
+
+Retention: `retained_until = received_at + configured_retention` (default 30 days).
+Conflict rows are immutable evidence. Never worker-eligible, never auto-matched.
+FK to `original_event_id` links the conflict to the event it conflicted with.
 
 ---
 
-## 4. Durable PENDING Quarantine
+## 4. Global Head-of-Line Claim
 
-### State model
+### Global worker claim query
 
-`intake_status` adds a new value: `pending_correlation`.
+The worker does NOT know the call in advance. It claims the globally oldest
+eligible event, subject to head-of-line ordering per call:
 
 ```sql
-CHECK (intake_status IN (
-    'received', 'pending_correlation', 'processing',
-    'completed', 'failed', 'dead_letter'
-))
+SELECT e.id, e.provider, e.provider_call_id, e.business_id,
+       e.event_type, e.status, e.caller_phone, e.called_number,
+       e.duration, e.direction, e.claim_version
+FROM inbound_call_events e
+WHERE e.intake_status IN ('received', 'failed')
+  AND (e.next_attempt_at <= NOW() OR e.next_attempt_at IS NULL)
+  AND e.attempts < e.max_attempts
+  AND NOT EXISTS (
+      SELECT 1 FROM inbound_call_events older
+      WHERE older.business_id = e.business_id
+        AND older.provider = e.provider
+        AND older.provider_call_id = e.provider_call_id
+        AND older.intake_status IN ('received', 'failed', 'processing')
+        AND older.received_at < e.received_at
+        AND older.id != e.id
+  )
+ORDER BY e.received_at, e.id
+LIMIT 1
+FOR UPDATE OF e SKIP LOCKED
 ```
 
-### Lifecycle
+### Guarantees
 
-1. Status callback arrives BEFORE media/start for this CallSid.
-2. Adapter authenticates, validates, routes to tenant.
-3. No admitted correlation record exists for `(provider, call_id)`.
-4. Adapter persists to `inbound_call_events` with `intake_status = 'pending_correlation'`.
-5. Returns 200 to provider (persist-before-ACK).
+- `NOT EXISTS` ensures no later event for the same call is claimed while
+  an older one is unfinished (received/failed/processing)
+- `ORDER BY received_at, id` provides deterministic total order
+- `SKIP LOCKED` prevents worker contention
+- `FOR UPDATE OF e` locks only the claimed row
 
-### Non-worker-eligible
+### Two-worker proof
 
-Workers query:
-```sql
-WHERE intake_status IN ('received', 'failed')
-```
-`pending_correlation` is NOT in this set — workers never claim it.
+Worker A claims event 1 (answered, received_at=T1) for call X.
+Worker B tries to claim event 2 (terminal, received_at=T2>T1) for call X.
+`NOT EXISTS` finds event 1 in `processing` state → event 2 is excluded.
+Worker B skips call X and claims the next eligible event for a different call.
+After Worker A completes event 1, Worker B's next poll claims event 2.
 
-### Reconciliation
+### Late lower-state no-op
 
-When `exotel_media_websocket` receives a trusted start event and
-registers correlation via `register_admitted_call`:
+Worker claims a late `ringing` event after `in_progress` was processed.
+`validate_transition("in_progress", "ringing")` raises `LateCallEventError`.
+Worker catches it, marks intake event `completed` (no domain mutation).
+
+### Expired processing reclaim
+
+Events in `processing` with expired lease are reclaimable. The claim query's
+`IN ('received', 'failed')` does NOT include processing — a separate sweep
+handles expired leases:
 
 ```sql
 UPDATE inbound_call_events
-SET intake_status = 'received'
-WHERE provider = :provider
-  AND provider_call_id = :call_id
-  AND business_id = :bid
-  AND intake_status = 'pending_correlation'
+SET intake_status = CASE
+        WHEN attempts >= max_attempts THEN 'dead_letter'
+        ELSE 'failed'
+    END,
+    claim_token = NULL, claimed_at = NULL, lease_expires_at = NULL,
+    dead_lettered_at = CASE WHEN attempts >= max_attempts THEN NOW() END
+WHERE intake_status = 'processing'
+  AND lease_expires_at < NOW()
 ```
 
-This makes the event worker-eligible.
+---
 
-### Who writes
+## 5. Provider-Qualified Domain and Historical Facts
 
-- **Adapter** (callback handler) writes `pending_correlation` rows.
-- **Stream handler** reconciles them to `received` after correlation.
-- **Worker** only claims `received`/`failed`.
-
-### Lock order
-
-Reconciliation acquires the correlation registration first, then updates
-intake events. No cross-table FK, so no deadlock between correlation and
-intake.
-
-### Timeout/expiry
+### `calls` table changes
 
 ```sql
-ALTER TABLE inbound_call_events ADD COLUMN
-    pending_expires_at TIMESTAMPTZ;
+ALTER TABLE calls ADD COLUMN provider VARCHAR(20);
+ALTER TABLE calls ADD COLUMN provider_call_id VARCHAR(128);
+ALTER TABLE calls ADD COLUMN call_status VARCHAR(20);
+ALTER TABLE calls ADD COLUMN provider_started_at TIMESTAMPTZ;
+ALTER TABLE calls ADD COLUMN provider_ended_at TIMESTAMPTZ;
+
+CREATE UNIQUE INDEX uq_calls_provider_identity
+    ON calls (business_id, provider, provider_call_id)
+    WHERE provider IS NOT NULL AND provider_call_id IS NOT NULL;
 ```
 
-Set to `received_at + configured_pending_ttl` (default 5 minutes).
-A periodic sweep moves expired `pending_correlation` events to `dead_letter`:
+All new columns NULLABLE — existing rows unaffected.
+
+### Semantic distinction
+
+| Column | Meaning | Source |
+|--------|---------|--------|
+| `calls.started_at` | When Fonely created the call record | Processing time (NOW()) |
+| `calls.ended_at` | When Fonely processed the terminal event | Processing time (NOW()) |
+| `calls.duration_sec` | Provider-reported total duration | Provider callback |
+| `calls.provider_started_at` | Provider-reported call start | Provider callback (if available) |
+| `calls.provider_ended_at` | Provider-reported call end | Provider callback (if available) |
+| `calls.call_status` | Canonical terminal status (completed/failed/busy/no_answer) | Provider callback, mapped to canonical |
+
+### Worker mutation
+
+```python
+if is_terminal(claimed.status):
+    UPDATE calls SET
+        call_status = claimed.status,  # preserves failed/busy/no_answer
+        ended_at = NOW(),              # processing time
+        duration_sec = claimed.duration,
+        provider_ended_at = claimed.provider_ended_at
+    WHERE id = :id AND business_id = :bid
+```
+
+`NOW()` is never substituted for provider timestamps. They are separate columns.
+
+---
+
+## 6. Downgrade, Retention, and Evidence Safety
+
+### Retention policy
+
+| Row type | Retention | Rationale |
+|----------|-----------|-----------|
+| completed | 90 days (configurable) | Provider lifecycle evidence |
+| dead_letter | 90 days | Failed processing evidence |
+| conflict | 30 days | Security/anomaly evidence |
+| correlation (expired) | 30 days | Call lifecycle evidence |
+
+### Downgrade procedure
+
+```sql
+-- 1. Acquire exclusive lock on both tables
+LOCK TABLE inbound_call_events IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE call_correlation_bindings IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE inbound_call_event_conflicts IN ACCESS EXCLUSIVE MODE;
+
+-- 2. Check for non-expired evidence
+DO $$
+DECLARE
+    n_unprocessed INTEGER;
+    n_active_corr INTEGER;
+    n_unexpired_events INTEGER;
+    n_unexpired_conflicts INTEGER;
+BEGIN
+    SELECT COUNT(*) INTO n_unprocessed FROM inbound_call_events
+    WHERE intake_status NOT IN ('completed', 'dead_letter');
+
+    SELECT COUNT(*) INTO n_active_corr FROM call_correlation_bindings
+    WHERE correlation_status IN ('registering', 'active', 'closed_grace');
+
+    SELECT COUNT(*) INTO n_unexpired_events FROM inbound_call_events
+    WHERE received_at > NOW() - INTERVAL '90 days';
+
+    SELECT COUNT(*) INTO n_unexpired_conflicts FROM inbound_call_event_conflicts
+    WHERE retained_until > NOW();
+
+    IF n_unprocessed > 0 THEN
+        RAISE EXCEPTION 'Cannot downgrade: % unprocessed events', n_unprocessed;
+    END IF;
+    IF n_active_corr > 0 THEN
+        RAISE EXCEPTION 'Cannot downgrade: % active correlations', n_active_corr;
+    END IF;
+    IF n_unexpired_events > 0 THEN
+        RAISE EXCEPTION 'Cannot downgrade: % events within retention period', n_unexpired_events;
+    END IF;
+    IF n_unexpired_conflicts > 0 THEN
+        RAISE EXCEPTION 'Cannot downgrade: % conflicts within retention', n_unexpired_conflicts;
+    END IF;
+END $$;
+
+-- 3. Drop (tables locked, no concurrent insert possible)
+DROP TABLE inbound_call_event_conflicts;
+DROP TABLE call_correlation_bindings;
+DROP INDEX IF EXISTS uq_calls_provider_identity;
+ALTER TABLE calls DROP COLUMN IF EXISTS provider_ended_at;
+ALTER TABLE calls DROP COLUMN IF EXISTS provider_started_at;
+ALTER TABLE calls DROP COLUMN IF EXISTS call_status;
+ALTER TABLE calls DROP COLUMN IF EXISTS provider_call_id;
+ALTER TABLE calls DROP COLUMN IF EXISTS provider;
+DROP TABLE inbound_call_events;
+```
+
+### Lock ordering
+
+ACCESS EXCLUSIVE prevents concurrent INSERT between preflight check and DROP.
+Tables locked in dependency order (events → bindings → conflicts) to prevent deadlock.
+
+---
+
+## 7. Durable Quarantine and Conflict Evidence
+
+### Pending quarantine
+
+`intake_status = 'pending_correlation'` — non-worker-eligible. Worker claim
+query uses `IN ('received', 'failed')` which excludes it.
+
+### Pending sweep
 
 ```sql
 UPDATE inbound_call_events
@@ -218,352 +433,176 @@ WHERE intake_status = 'pending_correlation'
   AND pending_expires_at < NOW()
 ```
 
-### Restart behavior
+Idempotent: already-dead-lettered rows are excluded by the WHERE clause.
+Operator-visible: dead_lettered_at timestamp and intake_status are queryable.
+Retained under the 90-day retention policy.
 
-`pending_correlation` events survive restart (durable). The reconciliation
-query runs on every new stream start, catching any pending events that
-arrived before the restart.
-
-### Never-admitted CallSid
-
-If no media/start ever arrives, the pending TTL expires → dead_letter.
-Manual review can inspect dead-lettered events. Manual review cannot
-mutate domain state except through an audited operator command.
-
----
-
-### Expired processing at max_attempts
-
-If a worker crashes on the final attempt (attempts == max_attempts) and
-the lease expires, the event is stuck in `processing` with no live claimant.
-The claim query excludes `processing` events only when `lease_expires_at >= NOW()`.
-An expired `processing` at max_attempts must be deterministically dead-lettered:
+### Final-attempt dead-letter sweep
 
 ```sql
--- Periodic sweep (same as pending expiry):
 UPDATE inbound_call_events
-SET intake_status = 'dead_letter', dead_lettered_at = NOW()
+SET intake_status = 'dead_letter', dead_lettered_at = NOW(),
+    claim_token = NULL, claimed_at = NULL, lease_expires_at = NULL
 WHERE intake_status = 'processing'
   AND lease_expires_at < NOW()
   AND attempts >= max_attempts
 ```
 
-Events with `attempts < max_attempts` and expired lease are reclaimable
-by the normal claim query (already handled).
+Idempotent and fenced by intake_status + lease_expires_at.
+
+### Mandatory wiring
+
+When routes are enabled (mounted by `_mount_exotel_routes`), correlation
+and admission are wired as app.state dependencies. The handlers check:
+
+- Callback: `_get_intake(request.app) is None → 503`
+- Stream: `correlation is None or admission is None → websocket.close(1013)`
+
+Missing wiring = unready. Zero persistence occurs without these dependencies.
 
 ---
 
-## 5. Durable CONFLICT Evidence
+## 8. Schema / Rollout
 
-### Storage
+### Tables created
 
-Conflicting events are persisted with `intake_status = 'conflict'`:
+1. `inbound_call_events` (columns: id, provider, provider_call_id, business_id,
+   event_type, status, caller_phone, called_number, duration, conversation_duration,
+   direction, custom_field, payload_digest, enrichment_count, intake_status,
+   attempts, max_attempts, claim_token, claim_version, claimed_at,
+   lease_expires_at, next_attempt_at, completed_at, dead_lettered_at,
+   pending_expires_at, provider_started_at, provider_ended_at, received_at)
 
-```sql
-CHECK (intake_status IN (
-    'received', 'pending_correlation', 'processing',
-    'completed', 'failed', 'dead_letter', 'conflict'
-))
-```
+2. `call_correlation_bindings` (columns: id, provider, provider_account_id,
+   provider_call_id, provider_stream_id, business_id, called_number,
+   direction, sample_rate, correlation_status, created_at, activated_at,
+   closed_at, grace_expires_at, expires_at, terminal_at)
 
-### Lifecycle
+3. `inbound_call_event_conflicts` (columns: id, original_event_id,
+   business_id, provider, provider_call_id, event_type, conflicting_status,
+   conflicting_caller/called/direction/duration/digest, conflict_reason,
+   received_at, retained_until)
 
-1. Callback arrives with same dedup key but immutable field mismatch.
-2. Adapter persists a NEW row with `intake_status = 'conflict'` (not updating
-   the existing row). Original event is preserved.
-3. Returns 200 to provider.
-4. Security alert emitted.
+### `calls` alterations
 
-### Retention
+5 new nullable columns: provider, provider_call_id, call_status,
+provider_started_at, provider_ended_at. Partial unique index on
+(business_id, provider, provider_call_id).
 
-Conflict rows are retained for the configured retention period (default 30 days).
-They are never worker-eligible, never auto-matched, never reconciled.
+### CHECK constraints
 
-### Why 200 not 409
+- `intake_status IN ('received', 'pending_correlation', 'processing', 'completed', 'failed', 'dead_letter')`
+- `attempts >= 0 AND attempts <= max_attempts`
+- `intake_status != 'processing' OR claim_token IS NOT NULL`
+- `correlation_status IN ('registering', 'active', 'closed_grace', 'failed', 'expired')`
 
-The provider should stop retrying. 409 may cause infinite retries depending
-on provider behavior (OQ-3). Conflicts are logged and alerted, not exposed
-as HTTP errors to the provider.
+### UNIQUE constraints
 
----
+- `inbound_call_events`: (business_id, provider, provider_call_id, event_type)
+- `call_correlation_bindings`: (provider, provider_call_id)
 
-## 6. Head-of-Line Claiming and Event Ordering
+### FK / ON DELETE
 
-### Per-call claim query
+- `inbound_call_events.business_id → businesses(id)` — no cascade
+- `call_correlation_bindings.business_id → businesses(id)` — no cascade
+- `inbound_call_event_conflicts.original_event_id → inbound_call_events(id)` — no cascade
+- `inbound_call_event_conflicts.business_id → businesses(id)` — no cascade
+- No FK from events to calls (worker creates call row during processing)
 
-```sql
-SELECT id, provider, provider_call_id, ...
-FROM inbound_call_events
-WHERE business_id = :bid
-  AND provider = :provider
-  AND provider_call_id = :call_id
-  AND intake_status IN ('received', 'failed')
-  AND (next_attempt_at <= NOW() OR next_attempt_at IS NULL)
-  AND attempts < max_attempts
-ORDER BY received_at
-LIMIT 1 FOR UPDATE SKIP LOCKED
-```
+### Indexes
 
-This is per-call head-of-line: only the oldest unprocessed event for a
-given call is claimed. Later events for the same call wait until the
-head event is completed.
-
-### Advisory lock key
-
-```python
-blake2b(f"{business_id}:{provider}:{provider_call_id}", digest_size=8)
-```
-
-Includes `provider` — two providers with the same call_id get different locks.
-
-### Lease/fencing
-
-- Claim: sets `claim_token`, `claim_version`, `lease_expires_at`
-- mark_completed: requires `claim_token AND claim_version AND business_id AND
-  intake_status = 'processing' AND lease_expires_at >= NOW()`
-- mark_failed: same fencing as mark_completed (including lease check)
-
-### Stale mark_failed outcome
-
-If `mark_failed` returns False (0 rows updated), the worker logs
-`stale_claim_failure` with event_id and claim_token. This indicates the
-lease expired and another worker reclaimed the event. The worker does NOT
-retry — it returns False and the event will be re-processed by the new claimant.
-
-### Late nonterminal no-op
-
-A late lower-state event (e.g. `ringing` after `in_progress`) is persisted
-durably (different event_type key) and processed by the worker. The worker
-calls `validate_transition` which raises `LateCallEventError` — the worker
-catches it, marks the intake event `completed` (no domain mutation), and
-logs `worker_late_noop`.
-
-### Validation at parse
-
-- `answered` EventType requires status `in_progress` only
-- `terminal` EventType requires terminal status only
-- `queued`/`ringing` EventType requires matching status only
-- Contradictions rejected at parse (400)
-- Direction validated against supported set
-- Phone numbers validated for length (max 20 chars per schema)
-
----
-
-## 7. Durable Admitted Correlation Binding
-
-### Separate table: `call_correlation_bindings`
-
-```sql
-CREATE TABLE call_correlation_bindings (
-    id              SERIAL PRIMARY KEY,
-    provider        VARCHAR(20) NOT NULL,
-    provider_account_id VARCHAR(64) NOT NULL,
-    provider_call_id VARCHAR(128) NOT NULL,
-    provider_stream_id VARCHAR(128),
-    business_id     INTEGER NOT NULL REFERENCES businesses(id),
-    called_number   VARCHAR(20) NOT NULL,
-    direction       VARCHAR(20),
-    sample_rate     INTEGER,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    expires_at      TIMESTAMPTZ,
-    terminal_at     TIMESTAMPTZ,
-
-    UNIQUE (provider, provider_call_id)
-);
-```
-
-### Immutable binding
-
-Once created by the stream handler after gateway authentication, the
-binding is immutable. Fields cannot be overwritten.
-
-### Equivalent replay
-
-If `register_admitted_call` is called with the same `(provider, call_id)`
-and identical fields → idempotent no-op (INSERT ON CONFLICT DO NOTHING
-after field comparison).
-
-### Conflicting overwrite
-
-If `register_admitted_call` is called with the same `(provider, call_id)`
-but different `business_id`, `called_number`, `direction`, or
-`provider_account_id` → ConflictingCorrelationError. The stream handler
-rejects the connection. The original binding is preserved.
-
-### Activation after runtime success
-
-The correlation binding is created BEFORE the runtime factory is invoked.
-If runtime startup fails or the stream is immediately aborted:
-
-```sql
-UPDATE call_correlation_bindings
-SET terminal_at = NOW()
-WHERE provider = :provider AND provider_call_id = :call_id
-```
-
-This prevents a stale MATCHED binding from correlating callbacks to a
-runtime that never ran. The stream handler's `finally` block sets
-`terminal_at` on both normal completion and failure.
-
-### E.164 normalization
-
-Before mapping lookup and correlation comparison, normalize phone numbers:
-- Strip leading/trailing whitespace
-- If number starts with `0` (Indian local format), do NOT add country code
-  (this is configuration-dependent and sandbox-verifiable)
-- Mapping keys and callback values compared after normalization
-- Malformed numbers (empty, >20 chars) fail closed
-
-Full E.164 normalization (country code insertion) is deferred to post-sandbox
-(OQ-1 will reveal actual format).
-
-### Callback correlation
-
-When a status callback arrives, the handler queries:
-
-```sql
-SELECT business_id, direction, called_number
-FROM call_correlation_bindings
-WHERE provider = :provider AND provider_call_id = :call_id
-  AND (expires_at IS NULL OR expires_at > NOW())
-  AND terminal_at IS NULL
-```
-
-- Match → MATCHED: eligible for intake
-- No match → PENDING: quarantine (§4)
-- Match with different business/number/direction → CONFLICT: dead-letter (§5)
-
----
-
-## 8. Migration Guarantees
-
-### Parent
-
-Revision 0016, parent = 0015 (Dev3). Created only after 0015 is integrated
-into main.
+- `ix_inbound_call_events_poll`: (intake_status, next_attempt_at, received_at) WHERE intake_status IN ('received', 'failed')
+- `ix_inbound_call_events_lease`: (lease_expires_at) WHERE intake_status = 'processing'
+- `ix_inbound_call_events_pending`: (pending_expires_at) WHERE intake_status = 'pending_correlation'
+- `ix_conflicts_retention`: (retained_until)
+- `uq_calls_provider_identity`: (business_id, provider, provider_call_id) WHERE provider IS NOT NULL
 
 ### ORM parity
 
-All new columns/tables have corresponding SQLAlchemy model definitions.
-`alembic check` shows no drift after upgrade.
+All tables/columns have SQLAlchemy model definitions. `alembic check` shows
+no drift after upgrade.
 
-### Populated preflight
+### Parent
 
-Main has existing `calls` rows. New columns `provider`, `provider_call_id`,
-`call_status`, `provider_started_at`, `provider_ended_at` are all NULLABLE —
-no backfill required. Existing rows have NULL for all new columns.
+0016, parent = integrated 0015. Created only after 0015 is on main.
+
+### Populated calls preflight
+
+Existing `calls` rows have NULL for all new columns. No backfill. No UPDATE.
+All new columns are NULLABLE.
 
 ### Offline SQL
 
-The migration is pure DDL (CREATE TABLE, ALTER TABLE ADD COLUMN, CREATE INDEX).
-No data migration. No backfill. No long-running UPDATE.
+Pure DDL. No data migration or long-running statement.
 
-### Concurrent writers
+### Concurrent writers / rollout
 
-New columns are nullable, so existing writers (appointment service, WhatsApp
-worker) are unaffected — they don't set the new columns and NULL is valid.
+Existing writers (appointment service, WhatsApp) do not set new columns.
+NULL is valid. No rolling-deploy conflict.
 
-### Rollout
+### Routes disabled until ready
 
-No rolling-deploy issue — old code ignores new columns, new code populates them.
-
-### Downgrade
-
-```sql
-DO $$
-DECLARE n INTEGER;
-BEGIN
-    SELECT COUNT(*) INTO n FROM inbound_call_events
-    WHERE intake_status NOT IN ('completed', 'dead_letter', 'conflict');
-    IF n > 0 THEN
-        RAISE EXCEPTION 'Cannot downgrade: % unprocessed events', n;
-    END IF;
-    SELECT COUNT(*) INTO n FROM call_correlation_bindings
-    WHERE terminal_at IS NULL AND (expires_at IS NULL OR expires_at > NOW());
-    IF n > 0 THEN
-        RAISE EXCEPTION 'Cannot downgrade: % active correlations', n;
-    END IF;
-END $$;
-
-DROP TABLE IF EXISTS call_correlation_bindings;
-DROP INDEX IF EXISTS uq_calls_provider_identity;
-ALTER TABLE calls DROP COLUMN IF EXISTS provider_ended_at;
-ALTER TABLE calls DROP COLUMN IF EXISTS provider_started_at;
-ALTER TABLE calls DROP COLUMN IF EXISTS call_status;
-ALTER TABLE calls DROP COLUMN IF EXISTS provider_call_id;
-ALTER TABLE calls DROP COLUMN IF EXISTS provider;
-DROP TABLE IF EXISTS inbound_call_events;
-```
-
-Downgrade refuses if unprocessed events or active correlations exist.
-
-### Upgrade/downgrade/re-upgrade
-
-Re-upgrade recreates tables from scratch. No data recovery needed —
-downgrade already verified everything was completed/dead-lettered.
+Routes remain disabled until schema readiness (`_verify_schema`) and
+runtime factory wiring both pass. Readiness exposes blocked configuration
+truthfully.
 
 ---
 
-## 9. Production Composition Sequencing
+## 9. Acceptance Evidence (post-migration)
 
-### Route mounting gate (in `_mount_exotel_routes`)
+### Correlation lifecycle
 
-Routes are mounted when ALL of:
-1. `EXOTEL_WEBHOOK_SECRET` is strong (≥32 ASCII chars)
-2. `EXOTEL_NUMBER_MAPPINGS` is valid non-empty JSON
-3. `EXOTEL_SID` (account) is set
+| Test | Start state | Event | Expected end state |
+|------|-------------|-------|--------------------|
+| Callback before stream start | no binding | callback arrives | PENDING quarantine |
+| Callback during active call | active | callback arrives | MATCHED → intake |
+| Callback after normal close within grace | closed_grace | callback arrives | MATCHED → intake |
+| Callback after grace expiry | expired | callback arrives | PENDING quarantine |
+| Callback after startup failure | failed | callback arrives | PENDING quarantine |
 
-Routes are NOT mounted until schema readiness is verified at first request.
-The callback handler returns 503 when intake service is not wired.
-The media handler returns 1013 when runtime factory is not wired.
+### Event identity / enrichment
 
-### Callback route mandatory dependencies
+| Test | First event | Second event | Expected |
+|------|-------------|-------------|----------|
+| Exact duplicate | completed, dur=60 | identical | DuplicateCallEventError → 200 |
+| Duration enrichment NULL→value | completed, dur=NULL | dur=60 | Accept, enrichment_count=1 |
+| Duration enrichment increase | completed, dur=60 | dur=90 | Accept, enrichment_count=1 |
+| Duration decrease (conflict) | completed, dur=60 | dur=30 | Conflict row in conflicts table |
+| Immutable status change | completed | failed same key | Conflict row, original preserved |
+| Conflict digest integrity | completed | conflicting | Conflict row has conflicting_payload_digest |
 
-When the callback route is enabled (mounted), correlation and admission
-are MANDATORY — not optional. Missing wiring produces 503, never
-fail-open processing. The handler checks `_get_correlation(request.app)`
-and `_get_intake(request.app)` — both None → 503.
+### Global head-of-line ordering
 
-### Schema readiness gate (in worker)
+| Test | Setup | Expected |
+|------|-------|----------|
+| Two workers, same call | Event 1 (T1), Event 2 (T2) | Worker A claims 1; Worker B skips 2 (NOT EXISTS blocks) |
+| After Worker A completes | Event 1 completed | Worker B claims Event 2 |
+| Different calls independent | Call X event, Call Y event | Both claimed concurrently |
 
-Worker's `_verify_schema` checks `calls.provider_call_id` column exists
-via `information_schema` with `current_schema()` and `COUNT(*)`. Fails
-with `SchemaNotReadyError` before any processing.
+### E.164
 
-### Readiness truth
+| Test | Input | Expected |
+|------|-------|----------|
+| Valid E.164 | +919876543210 | Accepted |
+| Local format | 08012345678 | Rejected (not E.164) |
+| Missing + | 919876543210 | Rejected |
+| Equivalent formatted | +91 9876 543210 | Rejected (spaces) |
+| Empty | "" | Rejected |
 
-- Routes mounted + schema absent = callbacks return 503, media returns 1013
-- Routes mounted + schema present + no runtime = callbacks persist, media 1013
-- Routes mounted + schema present + runtime wired = fully operational
+### Downgrade safety
 
-Readiness endpoint does NOT claim Exotel readiness — it checks only DB
-connectivity. Exotel readiness is a configuration/deployment concern.
+| Test | State | Expected |
+|------|-------|----------|
+| Unprocessed events exist | received count > 0 | EXCEPTION, no drop |
+| Active correlations exist | active count > 0 | EXCEPTION, no drop |
+| Within retention period | events < 90 days | EXCEPTION, no drop |
+| All expired/completed | clean | Drop succeeds |
+| Concurrent late insert | locked tables | INSERT blocks until lock released |
 
----
+### Other
 
-## 10. Acceptance Evidence (post-migration)
-
-### Tests to add after 0016 is applied
-
-| Test | Table | Invariant |
-|------|-------|-----------|
-| Production `create_app` callback happy path | inbound_call_events | Event persisted via real app |
-| Production `create_app` media happy path | call_correlation_bindings | Correlation registered |
-| Pending → received reconciliation | inbound_call_events | Quarantine lifted on stream start |
-| Pending → dead_letter expiry | inbound_call_events | TTL enforced |
-| Conflict durable evidence | inbound_call_events | Conflict row survives 200 |
-| Duration enrichment (NULL→value) | inbound_call_events | Monotonic accept |
-| Duration enrichment (value→higher) | inbound_call_events | Monotonic accept |
-| Duration enrichment (value→lower) | inbound_call_events | Conflict reject |
-| Immutable status change → conflict | inbound_call_events | Status cannot change |
-| Provider timestamps preserved | inbound_call_events | provider_started/ended_at |
-| Two-worker head-of-line | inbound_call_events | Only oldest event claimed |
-| Worker restart re-claims | inbound_call_events | Lease-expired events reclaimable |
-| Tenant collision across providers | calls | Different lock keys |
-| Provider collision same call_id | calls | provider column distinguishes |
-| Schema-not-ready matrix | — | SchemaNotReadyError before processing |
-| Equivalent correlation replay | call_correlation_bindings | Idempotent |
-| Conflicting correlation overwrite | call_correlation_bindings | Rejected |
-| Stale mark_failed logged | inbound_call_events | 0-row result → log |
-| Late nonterminal no-op | inbound_call_events | LateCallEventError → completed |
-| E.164 normalization before mapping | — | Equivalent representations match |
+- Schema-not-ready matrix (all table/column checks)
+- Stale mark_failed → logged, not silently ignored
+- Pending TTL expiry → dead_letter
+- Max-attempt expired processing → dead_letter
+- Mandatory correlation/admission wiring → 503 when absent

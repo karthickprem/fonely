@@ -35,6 +35,7 @@ from fonely.voice.dialogue import BookingCollection, contains_medical_advice
 from fonely.voice.context import AvailableSlot, DayAvailability, TrustedClock, resolve_relative_date
 from fonely.voice.stt_normalizer import normalize
 from fonely.voice.response_scorer import check_false_confirmation
+from fonely.voice.dialogue import gate_response
 
 BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "")
 SUB_KEY = ""
@@ -164,15 +165,8 @@ async def run_model(model_name: str, model_id: str):
                     preconf_fc_turns += 1
                     conv_had_preconf_fc = True
 
-                    # Apply gate — what does the caller actually hear?
-                    if contains_medical_advice(raw_response):
-                        gated = MEDICAL_SAFE
-                    else:
-                        readback = bc.format_readback()
-                        if readback and "correct" not in raw_response.lower():
-                            gated = readback
-                        else:
-                            gated = raw_response  # gate did not suppress
+                    # Apply RECEIPT-KEYED gate (not confirmed-keyed)
+                    gated, was_suppressed = gate_response(raw_response, has_receipt=False)
 
                     fc_gated = check_false_confirmation(gated, has_receipt=False)
                     if fc_gated:
@@ -187,20 +181,14 @@ async def run_model(model_name: str, model_id: str):
                         "gated": gated[:150],
                         "raw_fc": bool(fc),
                         "gated_fc": bool(fc_gated),
-                        "gate_suppressed": bool(fc) and not bool(fc_gated),
+                        "gate_suppressed": was_suppressed,
                     })
 
-            # Use gated response for conversation history
-            if confirmed and not is_conf_turn:
-                gated = "Booking note பண்ணிட்டேன். வேற doubt இருக்கா?"
-            elif contains_medical_advice(raw_response):
-                gated = MEDICAL_SAFE
-            else:
-                readback = bc.format_readback()
-                if readback and "correct" not in raw_response.lower():
-                    gated = readback
-                else:
-                    gated = raw_response
+            # Use receipt-keyed gated response for conversation history
+            gated, _ = gate_response(raw_response, has_receipt=False)
+            readback = bc.format_readback()
+            if readback and "correct" not in gated.lower():
+                gated = readback
             messages.append({"role": "assistant", "content": gated})
 
         if conv_had_preconf_fc:

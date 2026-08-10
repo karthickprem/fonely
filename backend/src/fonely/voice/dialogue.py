@@ -152,8 +152,29 @@ class BookingCollection:
         )
 
 
+_TAMIL_NUMERALS = {
+    "ஒன்று": 1, "ரெண்டு": 2, "மூன்று": 3, "நான்கு": 4,
+    "ஐந்து": 5, "ஆறு": 6, "ஏழு": 7, "எட்டு": 8,
+    "ஒன்பது": 9, "பத்து": 10, "பதினொன்று": 11, "பன்னிரெண்டு": 12,
+}
+_TAMIL_NUMERAL_RE = re.compile(
+    r"(?:" + "|".join(re.escape(k) for k in sorted(_TAMIL_NUMERALS, key=len, reverse=True)) + r")"
+    r"\s*(?:[:.](?P<tmin>[0-5]\d))?\s*(?:மணி(?:க்கு)?)?",
+)
+
+
 def extract_booking_time(text: str) -> time | None:
     match = _TIME.search(text)
+    tamil_match = _TAMIL_NUMERAL_RE.search(text)
+
+    if tamil_match is not None:
+        matched_text = tamil_match.group(0)
+        for k, v in sorted(_TAMIL_NUMERALS.items(), key=lambda x: -len(x[0])):
+            if k in matched_text:
+                hour = v
+                minute = int(tamil_match.group("tmin") or 0)
+                return time(hour, minute)
+
     if match is None:
         return None
     hour = int(match.group("hour"))

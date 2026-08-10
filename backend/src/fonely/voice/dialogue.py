@@ -265,6 +265,12 @@ _BOOKING_SUCCESS = re.compile(
     re.IGNORECASE,
 )
 
+# BEHAVIOR-AFFECTING: this string changes the conversation history the
+# model sees on subsequent turns, measurably altering downstream eagerness
+# (raw false-confirmation rate narrowed from 30% to 15% when engaged).
+# Do NOT edit for tone without re-measuring downstream effects.
+# "சிறிது நேரம் காத்திருங்க" tells the caller to wait — verify what
+# actually follows a suppressed turn before shipping. Needs native review.
 SAFE_NO_RECEIPT = "Details collect பண்ணிட்டேன், verify பண்றேன். சிறிது நேரம் காத்திருங்க."
 
 

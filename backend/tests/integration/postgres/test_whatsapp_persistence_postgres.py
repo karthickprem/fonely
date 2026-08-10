@@ -31,6 +31,16 @@ from fonely.services.model_gateway import ModelResponse
 pytestmark = pytest.mark.postgres
 
 
+@pytest.fixture(autouse=True)
+def _whatsapp_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fonely.services import notifications, whatsapp_config
+
+    mappings = '{"phone-1": 1}'
+    monkeypatch.setattr(whatsapp_config.settings, "whatsapp_business_mappings", mappings)
+    monkeypatch.setattr(notifications.settings, "whatsapp_business_mappings", mappings)
+    monkeypatch.setattr(notifications.settings, "whatsapp_phone_number_id", "phone-1")
+
+
 def _actor() -> ActorContext:
     return ActorContext(
         business_id=1,
@@ -52,6 +62,12 @@ async def _seed_clinic(session: AsyncSession) -> None:
             "(id, name, category, primary_contact_phone, timezone, subscription) "
             "VALUES (1, 'Smile Dental', 'dental', '+919000000001', "
             "'Asia/Kolkata', 'trial')"
+        )
+    )
+    await session.execute(
+        text(
+            "INSERT INTO business_users (business_id, phone, role, is_active) "
+            "VALUES (1, '+919000000001', 'owner', true)"
         )
     )
     await session.execute(

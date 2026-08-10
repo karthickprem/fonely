@@ -286,3 +286,65 @@ async def test_inbound_worker_owner_journey_new_no_new_yes(
             )
             == 1
         )
+
+
+async def test_cross_owner_prefix_ids_do_not_collide(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Owner 1 and owner 12 in the same business must not prefix-collide."""
+    async with pg_session_factory() as setup:
+        await setup.execute(
+            text(
+                "INSERT INTO businesses "
+                "(id, name, category, primary_contact_phone, timezone, subscription) "
+                "VALUES (1, 'Clinic', 'clinic', '+919000000001', 'Asia/Kolkata', 'trial')"
+            )
+        )
+        await setup.execute(
+            text(
+                "INSERT INTO business_users (id, business_id, phone, role, is_active) VALUES "
+                "(1, 1, '+919000000001', 'owner', true), "
+                "(12, 1, '+919000000012', 'owner', true)"
+            )
+        )
+        await setup.execute(
+            text(
+                "INSERT INTO operating_schedules "
+                "(business_id, day_of_week, open_time, close_time, is_active) "
+                "SELECT 1, day, '09:00', '18:00', true FROM generate_series(0, 6) AS day"
+            )
+        )
+        await setup.flush()
+
+        svc12 = OwnerCommandService(setup)
+        r12 = await svc12.process_command(1, "+919000000012", "close tomorrow")
+        assert r12.success is True
+        id12 = r12.proposal_id
+
+        r12_yes = await svc12.process_command(1, "+919000000012", "YES")
+        assert r12_yes.success is True
+        await setup.commit()
+
+    async with pg_session_factory() as session:
+        svc1 = OwnerCommandService(session)
+        r1 = await svc1.process_command(1, "+919000000001", "close tomorrow")
+        assert r1.success is True
+        assert r1.proposal_id is not None
+        assert r1.proposal_id != id12
+
+        r1_yes = await svc1.process_command(1, "+919000000001", "YES")
+        assert r1_yes.success is True
+        await session.commit()
+
+    async with pg_session_factory() as verify:
+        completed = (
+            await verify.execute(
+                text(
+                    "SELECT id, owner_user_id, status FROM owner_command_proposals "
+                    "WHERE status = 'completed' ORDER BY owner_user_id"
+                )
+            )
+        ).all()
+        assert len(completed) == 2
+        assert completed[0][1] == 1
+        assert completed[1][1] == 12

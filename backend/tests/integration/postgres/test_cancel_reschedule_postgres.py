@@ -628,12 +628,8 @@ async def test_reschedule_replays_from_fresh_session_without_second_mutation(
         assert len(original_notifications) == 2
         for row in original_notifications:
             snapshot = row["payload"]["equivalence_snapshot"]
-            old_snapshot = datetime.fromisoformat(
-                snapshot["old_start_at"].replace("Z", "+00:00")
-            )
-            new_snapshot = datetime.fromisoformat(
-                snapshot["new_start_at"].replace("Z", "+00:00")
-            )
+            old_snapshot = datetime.fromisoformat(snapshot["old_start_at"].replace("Z", "+00:00"))
+            new_snapshot = datetime.fromisoformat(snapshot["new_start_at"].replace("Z", "+00:00"))
             assert old_snapshot == confirmed.appointment.start_at
             assert new_snapshot == new_start
             assert row["payload"]["old_time"] == "10:00 AM"

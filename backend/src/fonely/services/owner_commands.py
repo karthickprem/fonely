@@ -94,6 +94,10 @@ _DATE_PATTERNS: dict[str, str] = {
     "naalaikku": "tomorrow",
 }
 
+_CLOSE_EARLY_RE = re.compile(
+    r"(?:close)\s+early\s+(?:at\s+)?(\d{1,2}(?::\d{2})?\s*(?:AM|PM|am|pm)?)\s*(.*)?",
+    re.IGNORECASE,
+)
 _CLOSE_RE = re.compile(
     r"(?:close|shutdown|bandh)\s+(?:the\s+)?(?:clinic\s+)?(?:on\s+)?(.+)",
     re.IGNORECASE,
@@ -107,7 +111,11 @@ _DOCTOR_LEAVE_RE = re.compile(
     re.IGNORECASE,
 )
 _GET_SUMMARY_RE = re.compile(
-    r"(?:show|list|get|view)\s+(?:(?:tomorrow|today)\s+)?(?:appointments?|summary|schedule)",
+    r"(?:show|list|get|view)\s+(?:(tomorrow|today)\s+)?(?:appointments?|summary|schedule)",
+    re.IGNORECASE,
+)
+_ADD_OFFER_RE = re.compile(
+    r"(.+?)(?:\s+free|\s+offer|\s+discount|\s+promo)",
     re.IGNORECASE,
 )
 
@@ -162,12 +170,18 @@ class OwnerCommandService:
                         "Please choose the command explicitly."
                     ),
                 )
-            result = await self.confirm_command(business_id, pending[0].id)
+            proposal = pending[0]
+            result = await self.confirm_command(business_id, proposal.id)
+            summary = result.get("result_summary") or {}
+            affected = (proposal.command_payload or {}).get("affected_summary", {})
+            msg = self._format_confirm_message(
+                proposal.command_type, summary, affected, result.get("status") == "completed"
+            )
             return OwnerCommandResult(
-                command_type=result.get("command_type", "confirm"),
+                command_type=summary.get("action", proposal.command_type),
                 success=result.get("status") == "completed",
-                response_text=result.get("message", str(result)),
-                affected_appointments=result.get("cancelled_count", 0),
+                response_text=msg,
+                affected_appointments=summary.get("cancelled_count", 0),
                 proposal_id=result.get("proposal_id"),
             )
 
@@ -195,6 +209,20 @@ class OwnerCommandService:
                 response_text=result.get("message", "Command cancelled."),
                 proposal_id=result.get("proposal_id"),
             )
+
+        parsed = self._parse_command(message, business_id)
+        if parsed is None:
+            return OwnerCommandResult(
+                command_type="unknown",
+                success=False,
+                response_text=_UNKNOWN_RESPONSE,
+            )
+
+        if parsed["command_type"] == "get_summary":
+            return await self._handle_get_summary(business_id, parsed)
+
+        if parsed["command_type"] == "add_offer":
+            return await self._handle_add_offer(business_id, parsed)
 
         result = await self.preview_command(business_id, owner_phone, message)
         if "error" in result:
@@ -237,7 +265,7 @@ class OwnerCommandService:
 
         # 5. Build idempotency key
         resolved_date = await self._resolve_target_date(business_id, parsed.get("target_date"))
-        idem_key = f"owner-cmd-{parsed['command_type']}-{resolved_date.isoformat()}-{owner.id}"
+        idem_key = f"owner-cmd-{parsed['command_type']}-{resolved_date.isoformat()}-o{owner.id}-"
 
         # Check for completed replay
         completed = await self._repo.find_completed_by_key_prefix(business_id, idem_key)
@@ -272,7 +300,7 @@ class OwnerCommandService:
                 "expired",
             ):
                 # Prior attempt was non-mutating terminal; create with suffixed key
-                retry_key = f"{idem_key}-r{uuid.uuid4().hex[:8]}"
+                retry_key = f"{idem_key}after-{existing_by_key.id}"
                 proposal = await self._repo.create_idempotent(
                     {
                         "id": str(uuid.uuid4()),
@@ -379,6 +407,39 @@ class OwnerCommandService:
 
         return {"status": "rejected", "proposal_id": proposal.id}
 
+    @staticmethod
+    def _format_confirm_message(
+        command_type: str,
+        summary: dict[str, Any],
+        affected: dict[str, Any],
+        success: bool,
+    ) -> str:
+        if not success:
+            return "Command execution failed, please retry."
+        count = summary.get("cancelled_count", 0)
+        names = [a.get("customer_name", "Patient") for a in affected.get("appointments", [])]
+        if command_type == "doctor_leave":
+            resource = summary.get("resource_name", "Doctor")
+            parts = [f"{resource} leave confirmed."]
+            if count:
+                parts.append(f"{count} appointment(s) cancelled")
+                if names:
+                    parts.append(f"({', '.join(names)})")
+            return " ".join(parts)
+        if command_type in ("close_day", "close_early", "cancel_appointments"):
+            target = summary.get("target_date", "")
+            close_time = summary.get("close_time")
+            if close_time:
+                parts = [f"Clinic closing early at {close_time} on {target}."]
+            else:
+                parts = [f"Clinic closed on {target}."]
+            if count:
+                parts.append(f"{count} appointment(s) cancelled")
+                if names:
+                    parts.append(f"({', '.join(names)})")
+            return " ".join(parts)
+        return f"Command completed: {command_type}"
+
     # ===================================================================
     # Internal — owner resolution
     # ===================================================================
@@ -413,6 +474,20 @@ class OwnerCommandService:
 
     def _parse_command(self, raw_text: str, business_id: int) -> dict[str, Any] | None:
         text = raw_text.strip()
+
+        # close_early: "close early at 5 PM tomorrow"
+        m = _CLOSE_EARLY_RE.match(text)
+        if m:
+            close_time_str = m.group(1).strip()
+            date_expr = (m.group(2) or "today").strip()
+            target = self._parse_date_expr(date_expr) if date_expr else "today"
+            if target is not None:
+                return {
+                    "command_type": "close_early",
+                    "close_time": close_time_str,
+                    "target_date": target,
+                    "reason": f"Owner requested early closure at {close_time_str}",
+                }
 
         # close_day: "close tomorrow", "close clinic 2026-08-15"
         m = _CLOSE_RE.match(text)
@@ -451,13 +526,20 @@ class OwnerCommandService:
                     "reason": "Doctor leave",
                 }
 
-        # get_summary (non-destructive, no proposal needed — but parsed here
-        # for completeness; the caller can handle it without confirmation)
+        # get_summary (non-destructive, no proposal needed)
         m = _GET_SUMMARY_RE.match(text)
         if m:
             return {
                 "command_type": "get_summary",
-                "target_date": None,
+                "target_date": m.group(1) or None,
+            }
+
+        # add_offer (non-destructive, no proposal needed)
+        m = _ADD_OFFER_RE.search(text)
+        if m:
+            return {
+                "command_type": "add_offer",
+                "description": text,
             }
 
         return None
@@ -511,7 +593,7 @@ class OwnerCommandService:
         target_date_expr = parsed.get("target_date")
         target_date = await self._resolve_target_date(business_id, target_date_expr)
 
-        if command_type in ("close_day", "cancel_appointments"):
+        if command_type in ("close_day", "close_early", "cancel_appointments"):
             appointments = await self._query_confirmed_appointments_on_date(
                 business_id, target_date
             )
@@ -560,6 +642,57 @@ class OwnerCommandService:
         return {}
 
     # ===================================================================
+    # Non-destructive commands (bypass proposal system)
+    # ===================================================================
+
+    async def _handle_get_summary(
+        self, business_id: int, parsed: dict[str, Any]
+    ) -> OwnerCommandResult:
+        target_date = await self._resolve_target_date(business_id, parsed.get("target_date"))
+        appointments = await self._query_confirmed_appointments_on_date(business_id, target_date)
+        tz_name = await self._get_business_timezone(business_id)
+        tz = ZoneInfo(tz_name)
+        count = len(appointments)
+        if count == 0:
+            text = f"No appointments on {target_date.isoformat()}."
+        else:
+            lines = []
+            for a in appointments:
+                local_time = a.start_at.astimezone(tz).strftime("%-I:%M %p")
+                name = a.customer_name or "Patient"
+                lines.append(f"  {local_time} — {name} ({a.service_name_snapshot})")
+            text = (
+                f"{count} appointment{'s' if count != 1 else ''} on "
+                f"{target_date.isoformat()}:\n" + "\n".join(lines)
+            )
+        return OwnerCommandResult(
+            command_type="get_summary",
+            success=True,
+            response_text=text,
+        )
+
+    async def _handle_add_offer(
+        self, business_id: int, parsed: dict[str, Any]
+    ) -> OwnerCommandResult:
+        description = parsed.get("description", "")
+        tz_name = await self._get_business_timezone(business_id)
+        today = datetime.now(ZoneInfo(tz_name)).date()
+        context = BusinessDailyContext(
+            business_id=business_id,
+            context_date=today,
+            context_type="offer",
+            content=description,
+            active=True,
+        )
+        self._session.add(context)
+        await self._session.flush()
+        return OwnerCommandResult(
+            command_type="add_offer",
+            success=True,
+            response_text=f"Offer added: {description}",
+        )
+
+    # ===================================================================
     # Internal — command execution
     # ===================================================================
 
@@ -572,6 +705,8 @@ class OwnerCommandService:
         """Dispatch to the appropriate command handler."""
         if command_type == "close_day":
             return await self._exec_close_day(business_id, payload)
+        if command_type == "close_early":
+            return await self._exec_close_early(business_id, payload)
         if command_type == "cancel_appointments":
             return await self._exec_cancel_appointments(business_id, payload)
         if command_type == "doctor_leave":
@@ -605,6 +740,68 @@ class OwnerCommandService:
             "cancelled_count": len(cancelled),
             "cancelled_appointment_ids": cancelled,
         }
+
+    async def _exec_close_early(self, business_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Override close_time for the target date, cancel appointments after it."""
+        target_date_str = payload.get("target_date", "today")
+        target_date = await self._resolve_target_date(business_id, target_date_str)
+        close_time_str = payload.get("close_time", "17:00")
+        reason = payload.get("reason", f"Owner requested early closure at {close_time_str}")
+
+        close_time = self._parse_time(close_time_str)
+
+        from fonely.models.schema import OperatingSchedule
+
+        dow = target_date.weekday()
+        sched = (
+            await self._session.scalars(
+                select(OperatingSchedule).where(
+                    OperatingSchedule.business_id == business_id,
+                    OperatingSchedule.day_of_week == dow,
+                    OperatingSchedule.is_active.is_(True),
+                )
+            )
+        ).first()
+        open_time = sched.open_time if sched else dt_time(9, 0)
+
+        await self._upsert_schedule_exception(
+            business_id=business_id,
+            resource_id=None,
+            exception_date=target_date,
+            is_closed=False,
+            reason=reason,
+            open_time=open_time,
+            close_time=close_time,
+        )
+
+        tz_name = await self._get_business_timezone(business_id)
+        tz = ZoneInfo(tz_name)
+        all_appts = await self._query_confirmed_appointments_on_date(business_id, target_date)
+        cancelled_ids: list[int] = []
+        for appt in all_appts:
+            local_time = appt.start_at.astimezone(tz).time()
+            if local_time >= close_time:
+                await self._cancel_single_appointment(appt, reason)
+                cancelled_ids.append(appt.id)
+
+        return {
+            "action": "close_early",
+            "target_date": target_date.isoformat(),
+            "close_time": close_time_str,
+            "reason": reason,
+            "cancelled_count": len(cancelled_ids),
+            "cancelled_appointment_ids": cancelled_ids,
+        }
+
+    @staticmethod
+    def _parse_time(time_str: str) -> dt_time:
+        s = time_str.strip().upper()
+        for fmt in ("%I:%M %p", "%I %p", "%H:%M", "%H"):
+            try:
+                return datetime.strptime(s, fmt).time()
+            except ValueError:
+                continue
+        return dt_time(17, 0)
 
     async def _exec_cancel_appointments(
         self, business_id: int, payload: dict[str, Any]

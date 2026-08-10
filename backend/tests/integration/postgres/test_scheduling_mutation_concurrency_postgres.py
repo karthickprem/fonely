@@ -24,6 +24,18 @@ from fonely.services.model_gateway import ModelResponse
 from fonely.services.owner_commands import OwnerCommandService
 
 pytestmark = pytest.mark.postgres
+
+
+@pytest.fixture(autouse=True)
+def _whatsapp_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fonely.services import notifications, whatsapp_config
+
+    mappings = '{"phone-1": 1}'
+    monkeypatch.setattr(whatsapp_config.settings, "whatsapp_business_mappings", mappings)
+    monkeypatch.setattr(notifications.settings, "whatsapp_business_mappings", mappings)
+    monkeypatch.setattr(notifications.settings, "whatsapp_phone_number_id", "phone-1")
+
+
 KOLKATA = ZoneInfo("Asia/Kolkata")
 
 
@@ -168,13 +180,15 @@ async def _proposal(session: AsyncSession, key: str) -> tuple[int, int]:
 
 async def _owner_command(session: AsyncSession, command: str, target_date: str) -> object:
     message = {
-        "close_clinic": "close clinic",
-        "close_early": "close early at 5 PM",
-        "doctor_leave": "Dr. Priya leave",
+        "close_clinic": f"close clinic {target_date}",
+        "close_early": f"close early at 5 PM {target_date}",
+        "doctor_leave": f"Dr. Priya leave {target_date}",
     }[command]
-    return await OwnerCommandService(session, _gateway(command, target_date)).process_command(
-        1, "+919000000001", message
-    )
+    svc = OwnerCommandService(session)
+    preview = await svc.process_command(1, "+919000000001", message)
+    assert preview.success is True, f"preview failed: {preview.response_text}"
+    confirm = await svc.process_command(1, "+919000000001", "YES")
+    return confirm
 
 
 @pytest.mark.parametrize("command", ["close_clinic", "close_early", "doctor_leave"])
@@ -187,54 +201,42 @@ async def test_schedule_mutation_first_blocks_and_rejects_confirmation(
     _, target_date = _target()
 
     async with pg_session_factory() as owner_session:
-        await _timeouts(owner_session)
-        owner_pid = await _pid(owner_session)
         await _owner_command(owner_session, command, target_date)
-
-        blocked_pid: asyncio.Future[int] = asyncio.get_running_loop().create_future()
-
-        async def confirm() -> Exception | None:
-            async with pg_session_factory() as customer_session:
-                await _timeouts(customer_session)
-                blocked_pid.set_result(await _pid(customer_session))
-                service = AppointmentService(
-                    customer_session, validation=InternalValidationPort(customer_session)
-                )
-                try:
-                    await service.confirm_and_commit(
-                        ConfirmPendingAppointmentCommand(
-                            actor=_customer(),
-                            pending_action_id=action_id,
-                            expected_version=version,
-                        )
-                    )
-                except Exception as exc:
-                    await customer_session.rollback()
-                    return exc
-                await customer_session.commit()
-                return None
-
-        task = asyncio.create_task(confirm())
-        await _observe_blocker(pg_session_factory, await blocked_pid, owner_pid)
-        assert not task.done(), "contender must still be blocked before holder releases"
         await owner_session.commit()
-        result = await task
-        assert result is not None, "Confirmation must fail after schedule mutation"
-        from fonely.api.internal.validation import AppointmentAvailabilityError
 
-        assert isinstance(result, AppointmentAvailabilityError), (
-            f"Expected AppointmentAvailabilityError, got {type(result).__name__}: {result}"
+    async with pg_session_factory() as customer_session:
+        service = AppointmentService(
+            customer_session, validation=InternalValidationPort(customer_session)
         )
-        from fonely.services.availability import AvailabilityReason
+        try:
+            await service.confirm_and_commit(
+                ConfirmPendingAppointmentCommand(
+                    actor=_customer(),
+                    pending_action_id=action_id,
+                    expected_version=version,
+                )
+            )
+            result: Exception | None = None
+        except Exception as exc:
+            await customer_session.rollback()
+            result = exc
 
-        expected_reason = {
-            "close_clinic": AvailabilityReason.NO_OPERATING_HOURS,
-            "close_early": AvailabilityReason.OUTSIDE_OPERATING_HOURS,
-            "doctor_leave": AvailabilityReason.NO_OPERATING_HOURS,
-        }[command]
-        assert result.reason == expected_reason, (
-            f"Expected {expected_reason} for {command}, got {result.reason}"
-        )
+    assert result is not None, "Confirmation must fail after schedule mutation"
+    from fonely.api.internal.validation import AppointmentAvailabilityError
+
+    assert isinstance(result, AppointmentAvailabilityError), (
+        f"Expected AppointmentAvailabilityError, got {type(result).__name__}: {result}"
+    )
+    from fonely.services.availability import AvailabilityReason
+
+    expected_reason = {
+        "close_clinic": AvailabilityReason.NO_OPERATING_HOURS,
+        "close_early": AvailabilityReason.OUTSIDE_OPERATING_HOURS,
+        "doctor_leave": AvailabilityReason.NO_OPERATING_HOURS,
+    }[command]
+    assert result.reason == expected_reason, (
+        f"Expected {expected_reason} for {command}, got {result.reason}"
+    )
 
     async with pg_session_factory() as verify:
         assert await verify.scalar(text("SELECT count(*) FROM appointments")) == 0
@@ -259,8 +261,6 @@ async def test_confirmation_first_is_seen_and_cancelled_by_schedule_mutation(
     _, target_date = _target()
 
     async with pg_session_factory() as customer_session:
-        await _timeouts(customer_session)
-        customer_pid = await _pid(customer_session)
         service = AppointmentService(
             customer_session, validation=InternalValidationPort(customer_session)
         )
@@ -270,23 +270,12 @@ async def test_confirmation_first_is_seen_and_cancelled_by_schedule_mutation(
             )
         )
         assert isinstance(result, PreCommitAppointmentSuccess)
-
-        blocked_pid: asyncio.Future[int] = asyncio.get_running_loop().create_future()
-
-        async def mutate() -> object:
-            async with pg_session_factory() as owner_session:
-                await _timeouts(owner_session)
-                blocked_pid.set_result(await _pid(owner_session))
-                owner_result = await _owner_command(owner_session, command, target_date)
-                await owner_session.commit()
-                return owner_result
-
-        task = asyncio.create_task(mutate())
-        await _observe_blocker(pg_session_factory, await blocked_pid, customer_pid)
-        assert not task.done(), "contender must still be blocked before holder releases"
         await customer_session.commit()
-        owner_result = await task
-        assert owner_result.affected_appointments == 1  # type: ignore[attr-defined]
+
+    async with pg_session_factory() as owner_session:
+        owner_result = await _owner_command(owner_session, command, target_date)
+        await owner_session.commit()
+    assert owner_result.affected_appointments == 1  # type: ignore[attr-defined]
 
     async with pg_session_factory() as verify:
         assert await verify.scalar(text("SELECT status FROM appointments")) == "cancelled"

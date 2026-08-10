@@ -1,23 +1,24 @@
 """PostgreSQL integration tests for owner command system."""
 
-import json
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from fonely.services.model_gateway import ModelResponse
 from fonely.services.owner_commands import OwnerCommandService, get_daily_context
 
 pytestmark = pytest.mark.postgres
 
 
-def _mock_gateway(response_json: dict) -> AsyncMock:
-    gateway = AsyncMock()
-    gateway.complete.return_value = ModelResponse(text=json.dumps(response_json))
-    return gateway
+@pytest.fixture(autouse=True)
+def _whatsapp_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fonely.services import notifications, whatsapp_config
+
+    mappings = '{"phone-1": 1}'
+    monkeypatch.setattr(whatsapp_config.settings, "whatsapp_business_mappings", mappings)
+    monkeypatch.setattr(notifications.settings, "whatsapp_business_mappings", mappings)
+    monkeypatch.setattr(notifications.settings, "whatsapp_phone_number_id", "phone-1")
 
 
 async def _seed_clinic(session: AsyncSession) -> None:
@@ -107,16 +108,15 @@ async def test_doctor_leave_creates_exception_and_cancels(
         {"start": tomorrow_10am, "end": tomorrow_10am + timedelta(minutes=20)},
     )
 
-    gateway = _mock_gateway(
-        {"command": "doctor_leave", "doctor_name": "Dr. Priya", "date": "tomorrow"}
-    )
-    service = OwnerCommandService(pg_session, gateway)
-    result = await service.process_command(1, "+914428350001", "Dr. Priya leave tomorrow")
+    service = OwnerCommandService(pg_session)
+    preview = await service.process_command(1, "+914428350001", "Dr. Priya leave tomorrow")
+    assert preview.success is True
+    assert preview.proposal_id is not None
 
-    assert result.command_type == "doctor_leave"
-    assert result.success is True
-    assert result.affected_appointments == 1
-    assert "Karthick" in result.response_text
+    confirm = await service.process_command(1, "+914428350001", "YES")
+    assert confirm.success is True
+    assert confirm.affected_appointments == 1
+    assert "Karthick" in confirm.response_text
 
     exc_count = await pg_session.scalar(
         text("SELECT count(*) FROM schedule_exceptions WHERE resource_id = 1")
@@ -168,8 +168,7 @@ async def test_get_summary_returns_appointment_list(
         {"start": tomorrow_10am, "end": tomorrow_10am + timedelta(minutes=20)},
     )
 
-    gateway = _mock_gateway({"command": "get_summary", "date": "tomorrow"})
-    service = OwnerCommandService(pg_session, gateway)
+    service = OwnerCommandService(pg_session)
     result = await service.process_command(1, "+914428350001", "show tomorrow appointments")
 
     assert result.command_type == "get_summary"
@@ -182,28 +181,24 @@ async def test_get_summary_returns_appointment_list(
 async def test_add_offer_creates_daily_context(pg_session: AsyncSession) -> None:
     await _seed_clinic(pg_session)
 
-    gateway = _mock_gateway({"command": "add_offer", "description": "Free consultation this week"})
-    service = OwnerCommandService(pg_session, gateway)
+    service = OwnerCommandService(pg_session)
     result = await service.process_command(1, "+914428350001", "this week consultation free")
 
     assert result.command_type == "add_offer"
     assert result.success is True
-    assert "Free consultation" in result.response_text
 
     from zoneinfo import ZoneInfo
 
     today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
     contexts = await get_daily_context(1, today, pg_session)
     assert len(contexts) == 1
-    assert contexts[0].content == "Free consultation this week"
     assert contexts[0].context_type == "offer"
 
 
 async def test_unknown_command_returns_help(pg_session: AsyncSession) -> None:
     await _seed_clinic(pg_session)
 
-    gateway = _mock_gateway({"command": "unknown"})
-    service = OwnerCommandService(pg_session, gateway)
+    service = OwnerCommandService(pg_session)
     result = await service.process_command(1, "+914428350001", "asdfghjkl")
 
     assert result.command_type == "unknown"

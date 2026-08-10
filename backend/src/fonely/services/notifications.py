@@ -563,7 +563,9 @@ class NotificationService:
         if phone_number_id is None:
             raise RuntimeError("whatsapp_business_mapping_missing_or_ambiguous")
 
-        price_str = str(price) if price is not None else None
+        from decimal import Decimal as _Decimal
+
+        price_str = str(_Decimal(str(price)).normalize()) if price is not None else None
 
         return NotificationPairSnapshot(
             schema_version=1,

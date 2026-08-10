@@ -131,7 +131,7 @@ class AppointmentServiceCommandPort:
                     ConfirmPendingAppointmentCommand(
                         actor=self._actor,
                         pending_action_id=cmd.proposal_id,
-                        expected_version=cmd.expected_version if hasattr(cmd, 'expected_version') and cmd.expected_version else 2,
+                        expected_version=cmd.expected_version or 2,
                     )
                 )
                 await session.commit()

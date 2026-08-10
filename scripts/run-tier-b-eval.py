@@ -65,16 +65,45 @@ def load_cases(n: int, category: str | None = None) -> list[dict]:
     return cases
 
 
+COST_PER_MTOK_INPUT_USD = 5.0
+COST_PER_MTOK_OUTPUT_USD = 25.0
+COST_CACHE_MULTIPLIER = 0.1
+SYSTEM_PROMPT_TOKENS = 800
+AVG_USER_TOKENS = 80
+AVG_ASSISTANT_TOKENS = 60
+STT_COST_PER_MINUTE_INR = 0.10
+USD_TO_INR = 84.0
+
+
+def estimate_cost_inr(turns: int) -> float:
+    """Derive cost from token arithmetic, not a hardcoded constant."""
+    history_tokens = 0
+    total_input_cost_usd = 0.0
+    total_output_cost_usd = 0.0
+    for t in range(turns):
+        sys_tokens = SYSTEM_PROMPT_TOKENS * (1.0 if t == 0 else COST_CACHE_MULTIPLIER)
+        input_tokens = sys_tokens + history_tokens + AVG_USER_TOKENS
+        total_input_cost_usd += input_tokens * COST_PER_MTOK_INPUT_USD / 1_000_000
+        total_output_cost_usd += AVG_ASSISTANT_TOKENS * COST_PER_MTOK_OUTPUT_USD / 1_000_000
+        history_tokens += AVG_USER_TOKENS + AVG_ASSISTANT_TOKENS
+    llm_inr = (total_input_cost_usd + total_output_cost_usd) * USD_TO_INR
+    audio_minutes = turns * 0.3
+    stt_inr = audio_minutes * STT_COST_PER_MINUTE_INR
+    return round(llm_inr + stt_inr, 2)
+
+
 def dry_run_case(case: dict) -> dict:
     """Simulate scoring without provider calls."""
+    n_turns = len(case["turns"])
     return {
         "case_id": case["case_id"],
         "category": case.get("category"),
         "risk_level": case.get("risk_level"),
-        "turns": len(case["turns"]),
+        "turns": n_turns,
         "status": "dry_run",
         "findings": [],
-        "cost_estimate_inr": 5.18,
+        "cost_estimate_inr": estimate_cost_inr(n_turns),
+        "cost_derivation": "token_arithmetic",
     }
 
 
@@ -132,7 +161,8 @@ def main():
         "cases_run": len(results),
         "defect_classes_found": len(defect_classes),
         "defect_curve": curve,
-        "estimated_cost_inr": len(results) * 5.18,
+        "estimated_cost_inr": sum(r["cost_estimate_inr"] for r in results),
+        "cost_derivation": "per_case_token_arithmetic",
         "actual_cost_inr": 0,
     }
     summary_path = REPORTS_DIR / f"summary-{run_id}.json"

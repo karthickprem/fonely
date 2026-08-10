@@ -146,14 +146,23 @@ class OwnerCommandService:
         normalised = message.strip().lower()
 
         if normalised in _YES_TOKENS:
-            pending = await self._repo.get_latest_for_owner(business_id, owner.id)
-            if pending is None:
+            pending = await self._repo.get_pending_for_owner(business_id, owner.id)
+            if not pending:
                 return OwnerCommandResult(
                     command_type="confirm",
                     success=False,
                     response_text="No pending command to confirm.",
                 )
-            result = await self.confirm_command(business_id, pending.id)
+            if len(pending) != 1:
+                return OwnerCommandResult(
+                    command_type="confirm",
+                    success=False,
+                    response_text=(
+                        "More than one command is awaiting confirmation. "
+                        "Please choose the command explicitly."
+                    ),
+                )
+            result = await self.confirm_command(business_id, pending[0].id)
             return OwnerCommandResult(
                 command_type=result.get("command_type", "confirm"),
                 success=result.get("status") == "completed",
@@ -163,14 +172,23 @@ class OwnerCommandService:
             )
 
         if normalised in _NO_TOKENS:
-            pending = await self._repo.get_latest_for_owner(business_id, owner.id)
-            if pending is None:
+            pending = await self._repo.get_pending_for_owner(business_id, owner.id)
+            if not pending:
                 return OwnerCommandResult(
                     command_type="reject",
                     success=False,
                     response_text="No pending command to cancel.",
                 )
-            result = await self.reject_command(business_id, pending.id)
+            if len(pending) != 1:
+                return OwnerCommandResult(
+                    command_type="reject",
+                    success=False,
+                    response_text=(
+                        "More than one command is awaiting confirmation. "
+                        "Please choose the command explicitly."
+                    ),
+                )
+            result = await self.reject_command(business_id, pending[0].id)
             return OwnerCommandResult(
                 command_type="reject",
                 success=result.get("status") == "rejected",
@@ -218,9 +236,10 @@ class OwnerCommandService:
         affected = await self._query_affected(business_id, parsed)
 
         # 5. Build idempotency key
-        idem_key = f"owner-cmd-{parsed['command_type']}-{parsed.get('target_date', 'none')}"
+        resolved_date = await self._resolve_target_date(business_id, parsed.get("target_date"))
+        idem_key = f"owner-cmd-{parsed['command_type']}-{resolved_date.isoformat()}-{owner.id}"
 
-        # 6. Check for completed replay
+        # Check for completed replay
         completed = await self._repo.find_completed_by_key_prefix(business_id, idem_key)
         if completed is not None:
             return {
@@ -245,7 +264,36 @@ class OwnerCommandService:
         )
 
         if proposal is None:
-            # Partial unique conflict — pending already exists for this owner
+            # Could be partial-unique (one pending per owner) or
+            # idempotency-key collision from a prior rejected/expired attempt.
+            existing_by_key = await self._repo.get_by_idempotency_key(business_id, idem_key)
+            if existing_by_key is not None and existing_by_key.status in (
+                "rejected",
+                "expired",
+            ):
+                # Prior attempt was non-mutating terminal; create with suffixed key
+                retry_key = f"{idem_key}-r{uuid.uuid4().hex[:8]}"
+                proposal = await self._repo.create_idempotent(
+                    {
+                        "id": str(uuid.uuid4()),
+                        "business_id": business_id,
+                        "owner_user_id": owner.id,
+                        "command_type": parsed["command_type"],
+                        "command_payload": {**parsed, "affected_summary": affected},
+                        "status": "pending_confirmation",
+                        "idempotency_key": retry_key,
+                        "expires_at": utcnow() + timedelta(minutes=10),
+                    }
+                )
+                if proposal is not None:
+                    return {
+                        "status": "pending_confirmation",
+                        "proposal_id": proposal.id,
+                        "command_type": proposal.command_type,
+                        "command_payload": proposal.command_payload,
+                        "expires_at": proposal.expires_at.isoformat(),
+                    }
+            # Otherwise pending already exists for this owner
             existing = await self._repo.get_latest_for_owner(business_id, owner.id)
             if existing is not None:
                 return {

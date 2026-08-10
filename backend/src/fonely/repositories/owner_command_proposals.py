@@ -87,6 +87,23 @@ class OwnerCommandProposalRepository:
         )
         return (await self._session.scalars(stmt)).first()
 
+    async def get_pending_for_owner(
+        self,
+        business_id: int,
+        owner_user_id: int,
+    ) -> list[OwnerCommandProposal]:
+        stmt = (
+            select(OwnerCommandProposal)
+            .where(
+                OwnerCommandProposal.business_id == business_id,
+                OwnerCommandProposal.owner_user_id == owner_user_id,
+                OwnerCommandProposal.status == "pending_confirmation",
+            )
+            .order_by(OwnerCommandProposal.created_at, OwnerCommandProposal.id)
+            .with_for_update()
+        )
+        return list((await self._session.scalars(stmt)).all())
+
     async def get_latest_for_owner(
         self,
         business_id: int,
@@ -101,7 +118,7 @@ class OwnerCommandProposalRepository:
                 OwnerCommandProposal.owner_user_id == owner_user_id,
                 OwnerCommandProposal.status.in_(statuses),
             )
-            .order_by(OwnerCommandProposal.created_at.desc())
+            .order_by(OwnerCommandProposal.created_at.desc(), OwnerCommandProposal.id.desc())
             .limit(1)
             .with_for_update()
         )

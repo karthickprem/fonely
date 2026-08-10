@@ -263,6 +263,21 @@ async def test_dead_letter_after_max_attempts(
         assert event[0] == "dead_letter"
         assert event[1] == 5
 
+        attempt = (
+            await verify.execute(
+                text(
+                    "SELECT attempt_number, status, error_class "
+                    "FROM whatsapp_delivery_attempts "
+                    "WHERE notification_event_id = "
+                    "(SELECT id FROM notification_outbox "
+                    " WHERE idempotency_key = 'dead-letter-70')"
+                )
+            )
+        ).one()
+        assert attempt[0] == 5
+        assert attempt[1] == "failed"
+        assert attempt[2] == "ConnectionError"
+
 
 async def test_idempotent_notification_creation(pg_session: AsyncSession) -> None:
     await _seed_clinic(pg_session)

@@ -70,20 +70,24 @@ _PROPOSAL_TTL = timedelta(minutes=5)
 _ADVISORY_LOCK_NAMESPACE = b"fonely.owner_proposal_family.v1"
 
 
-def _proposal_family_lock_key(business_id: int, semantic_key: str) -> int:
+def _proposal_family_lock_key(business_id: int, semantic_digest: str) -> int:
     """Deterministic signed int64 advisory lock key for a proposal family.
 
-    Uses BLAKE2b with a fixed namespace so the key is stable across processes,
-    restarts, and Python versions (unlike hash() which is randomized).
+    Input: fixed namespace + business_id as 8-byte big-endian + full SHA-256
+    semantic digest bytes. BLAKE2b keyed hash → signed int64.
+    Stable across processes, restarts, and Python versions.
     """
     import struct
 
-    digest = hashlib.blake2b(
-        f"{business_id}:{semantic_key}".encode(),
+    biz_bytes = struct.pack(">Q", business_id)
+    digest_bytes = bytes.fromhex(semantic_digest)
+    data = biz_bytes + digest_bytes
+    result = hashlib.blake2b(
+        data,
         key=_ADVISORY_LOCK_NAMESPACE,
         digest_size=8,
     ).digest()
-    return int(struct.unpack(">q", digest)[0])
+    return int(struct.unpack(">q", result)[0])
 
 
 class ScheduleExceptionConflictError(Exception):
@@ -544,7 +548,7 @@ class OwnerCommandService:
         idem_key = f"owner-v1-{business_id}-{owner.id}-{payload_digest_full[:40]}"
         now = datetime.now(UTC)
 
-        family_lock_key = _proposal_family_lock_key(business_id, idem_key)
+        family_lock_key = _proposal_family_lock_key(business_id, payload_digest_full)
         await self._session.execute(
             sa_text("SELECT pg_advisory_xact_lock(:key)"),
             {"key": family_lock_key},
@@ -584,55 +588,42 @@ class OwnerCommandService:
         )
 
         if proposal is None:
-            # Advisory lock already held from above; recheck under lock
-            terminal = await self._proposals.get_by_idempotency_key(business_id, idem_key)
-            if terminal is not None:
-                if terminal.status in ("completed", "rejected", "expired"):
-                    evidence = terminal.result_evidence or {}
-                    outcome = evidence.get("outcome", terminal.status)
-                    return OwnerCommandResult(
-                        command_type=command_type,
-                        success=terminal.status == "completed",
-                        response_text=(
-                            f"This command was already processed ({outcome}). "
-                            "Send a new command if you need to take action."
-                        ),
-                        proposal_id=terminal.id,
-                    )
-                if terminal.status == "failed":
-                    completed_retry = await self._proposals.find_completed_by_key_prefix(
-                        business_id, idem_key
-                    )
-                    if completed_retry is not None:
-                        evidence = completed_retry.result_evidence or {}
-                        outcome = evidence.get("outcome", completed_retry.status)
-                        return OwnerCommandResult(
-                            command_type=command_type,
-                            success=True,
-                            response_text=(
-                                f"This command was already completed ({outcome}). "
-                                "Send a new command if you need to take action."
-                            ),
-                            proposal_id=completed_retry.id,
-                        )
-                    failed_count = await self._proposals.count_by_key_prefix(business_id, idem_key)
-                    retry_key = f"{idem_key}-attempt-{failed_count + 1}"
-                    proposal = await self._proposals.create_idempotent(
-                        {
-                            "id": uuid.uuid4().hex,
-                            "business_id": business_id,
-                            "owner_user_id": owner.id,
-                            "owner_phone_snapshot": owner.phone,
-                            "command_type": command_type,
-                            "command_payload": payload,
-                            "preview_snapshot": preview,
-                            "payload_digest": digest,
-                            "status": "pending_confirmation",
-                            "expected_version": 1,
-                            "idempotency_key": retry_key,
-                            "expires_at": now + _PROPOSAL_TTL,
-                        }
-                    )
+            # Advisory lock already held; recheck family under lock
+            completed_in_family = await self._proposals.find_completed_by_key_prefix(
+                business_id, idem_key
+            )
+            if completed_in_family is not None:
+                evidence = completed_in_family.result_evidence or {}
+                outcome = evidence.get("outcome", "completed")
+                return OwnerCommandResult(
+                    command_type=command_type,
+                    success=True,
+                    response_text=(
+                        f"This command was already completed ({outcome}). "
+                        "Send a new command if you need to take action."
+                    ),
+                    proposal_id=completed_in_family.id,
+                )
+
+            # No completed winner — create monotonic retry attempt
+            attempt_count = await self._proposals.count_by_key_prefix(business_id, idem_key)
+            retry_key = f"{idem_key}-attempt-{attempt_count + 1}"
+            proposal = await self._proposals.create_idempotent(
+                {
+                    "id": uuid.uuid4().hex,
+                    "business_id": business_id,
+                    "owner_user_id": owner.id,
+                    "owner_phone_snapshot": owner.phone,
+                    "command_type": command_type,
+                    "command_payload": payload,
+                    "preview_snapshot": preview,
+                    "payload_digest": digest,
+                    "status": "pending_confirmation",
+                    "expected_version": 1,
+                    "idempotency_key": retry_key,
+                    "expires_at": now + _PROPOSAL_TTL,
+                }
+            )
 
             if proposal is None:
                 existing = await self._proposals.get_latest_for_owner(business_id, owner.id)

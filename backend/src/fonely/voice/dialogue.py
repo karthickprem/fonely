@@ -258,6 +258,36 @@ def contains_medical_advice(text: str) -> bool:
     return bool(_MEDICAL_ADVICE.search(text))
 
 
+_BOOKING_SUCCESS = re.compile(
+    r"(?:book(?:ing)?|appointment).*(?:confirm|confirmed|booked|saved|fixed|scheduled|ஆயிடுச்சு|உறுதி|பதிவு|aayiduchu|aagiduchu|panniten|pannitten)",
+    re.IGNORECASE,
+)
+
+SAFE_NO_RECEIPT = "Details collect பண்ணிட்டேன், verify பண்றேன். சிறிது நேரம் காத்திருங்க."
+
+
+def contains_booking_success(text: str) -> bool:
+    return bool(_BOOKING_SUCCESS.search(text))
+
+
+def gate_response(
+    response: str,
+    *,
+    has_receipt: bool,
+) -> tuple[str, bool]:
+    """Receipt-keyed gate. Any turn, any phase, no receipt → no success language.
+
+    Returns (gated_text, was_suppressed). The predicate is receipt
+    existence, not conversation state. A receipt exists only because
+    something committed — there is no other way to set it.
+    """
+    if contains_medical_advice(response):
+        return "Doctor பார்த்துதான் சொல்ல முடியும். Appointment book பண்ணலாமா?", True
+    if not has_receipt and contains_booking_success(response):
+        return SAFE_NO_RECEIPT, True
+    return response, False
+
+
 TERMINAL_RESPONSES = {
     "abandoned": {
         "ta-Latn": "Sari, booking vendum-na call pannunga.",

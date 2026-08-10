@@ -638,6 +638,66 @@ class TestD5NoUnpromptedAvailability:
         assert bc.should_include_availability is True
 
 
+class TestReceiptKeyedGate:
+    """Gate keys on receipt existence, not conversation state."""
+
+    def test_success_blocked_without_receipt(self):
+        from fonely.voice.dialogue import gate_response
+        text, suppressed = gate_response(
+            "உங்கள் appointment confirm ஆயிடுச்சு!", has_receipt=False,
+        )
+        assert suppressed
+        assert "confirm" not in text.lower()
+        assert "verify" in text or "காத்திருங்க" in text
+
+    def test_success_allowed_with_receipt(self):
+        from fonely.voice.dialogue import gate_response
+        text, suppressed = gate_response(
+            "உங்கள் appointment confirm ஆயிடுச்சு!", has_receipt=True,
+        )
+        assert not suppressed
+        assert "confirm" in text.lower()
+
+    def test_non_success_passes_without_receipt(self):
+        from fonely.voice.dialogue import gate_response
+        text, suppressed = gate_response(
+            "எந்த date-ல வரணும்?", has_receipt=False,
+        )
+        assert not suppressed
+        assert text == "எந்த date-ல வரணும்?"
+
+    def test_medical_blocked_regardless_of_receipt(self):
+        from fonely.voice.dialogue import gate_response
+        text, suppressed = gate_response(
+            "Take Paracetamol 500mg", has_receipt=True,
+        )
+        assert suppressed
+        assert "doctor" in text.lower() or "Doctor" in text
+
+    def test_recovery_text_is_coherent_tamil(self):
+        from fonely.voice.dialogue import gate_response, SAFE_NO_RECEIPT
+        text, _ = gate_response("Booking confirmed!", has_receipt=False)
+        assert text == SAFE_NO_RECEIPT
+        assert any("஀" <= c <= "௿" for c in text)
+        assert len(text) > 10
+
+    def test_preconfirmation_success_blocked(self):
+        """The exact defect: model speaks success before caller confirms."""
+        from fonely.voice.dialogue import gate_response
+        text, suppressed = gate_response(
+            "உங்கள் appointment confirm பண்ணிட்டோம், Karthick.",
+            has_receipt=False,
+        )
+        assert suppressed
+
+    def test_tanglish_success_blocked(self):
+        from fonely.voice.dialogue import gate_response
+        text, suppressed = gate_response(
+            "Booking fix aayiduchu bro!", has_receipt=False,
+        )
+        assert suppressed
+
+
 class TestBookingCollectionRender:
     def test_render_includes_all_fields(self):
         bc = BookingCollection()

@@ -300,7 +300,7 @@ class TestCorrelationProbes:
 
         import asyncio
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             store.register_admitted_call(
                 CorrelationRecord(
                     provider="exotel",
@@ -335,7 +335,7 @@ class TestCorrelationProbes:
 
         import asyncio
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             store.register_admitted_call(
                 CorrelationRecord(
                     provider="exotel",

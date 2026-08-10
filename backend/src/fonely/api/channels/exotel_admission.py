@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import hmac
 import logging
+import threading
+from dataclasses import dataclass
 from typing import Any
 
 from fonely.services.exotel_config import ExotelNumberMapping
@@ -17,6 +19,60 @@ logger = logging.getLogger("fonely.api.channels.exotel_admission")
 
 _AUTH_HEADER = "X-Exotel-Webhook-Secret"
 _MIN_SECRET_CHARS = 32
+
+
+@dataclass(frozen=True, slots=True)
+class StreamAdmissionDecision:
+    admitted: bool
+    reason: str
+
+
+class StreamAdmissionController:
+    """Atomic global + per-business media session admission."""
+
+    def __init__(self, max_per_business: int, max_global: int) -> None:
+        if max_per_business <= 0 or max_global <= 0:
+            raise ValueError("admission limits must be positive")
+        self._max_per_business = max_per_business
+        self._max_global = max_global
+        self._business_counts: dict[str, int] = {}
+        self._global_count = 0
+        self._total_admitted = 0
+        self._total_released = 0
+        self._lock = threading.Lock()
+
+    def try_admit(self, business_id: str) -> StreamAdmissionDecision:
+        with self._lock:
+            business_count = self._business_counts.get(business_id, 0)
+            if self._global_count >= self._max_global:
+                return StreamAdmissionDecision(False, "global_capacity")
+            if business_count >= self._max_per_business:
+                return StreamAdmissionDecision(False, "business_capacity")
+            self._business_counts[business_id] = business_count + 1
+            self._global_count += 1
+            self._total_admitted += 1
+            return StreamAdmissionDecision(True, "admitted")
+
+    def release(self, business_id: str) -> None:
+        with self._lock:
+            count = self._business_counts.get(business_id, 0)
+            if count <= 0:
+                return
+            if count == 1:
+                self._business_counts.pop(business_id, None)
+            else:
+                self._business_counts[business_id] = count - 1
+            self._global_count -= 1
+            self._total_released += 1
+
+    def active(self) -> int:
+        with self._lock:
+            return self._global_count
+
+    def counts(self) -> tuple[int, int]:
+        """Return total admitted and released for lifecycle evidence."""
+        with self._lock:
+            return self._total_admitted, self._total_released
 
 
 def verify_gateway_secret(

@@ -58,6 +58,53 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             logger.error("engine_disposal_failed", extra={"operation": "shutdown"})
 
 
+def _mount_exotel_routes(app: FastAPI) -> None:
+    """Mount Exotel callback and media routes under fail-closed configuration.
+
+    Routes are absent (not mounted-but-erroring) when config is incomplete.
+    """
+    from fonely.api.channels.exotel_admission import (
+        StreamAdmissionController,
+        is_secret_strong,
+    )
+    from fonely.domain.calls.correlation import InMemoryCorrelationStore
+    from fonely.services.exotel_config import ExotelNumberMapping, InvalidNumberMappingError
+
+    secret = settings.exotel_webhook_secret
+    if not secret or not is_secret_strong(secret):
+        return
+
+    try:
+        mapping = ExotelNumberMapping.from_json(settings.exotel_number_mappings)
+    except InvalidNumberMappingError:
+        logger.warning("exotel_invalid_number_mappings_route_not_mounted")
+        return
+    if mapping.is_empty():
+        return
+
+    account_id = settings.exotel_sid
+    if not account_id:
+        return
+
+    from fonely.api.channels.exotel import router as callback_router
+    from fonely.api.channels.exotel_stream import router as stream_router
+
+    app.state.exotel_gateway_secret = secret
+    app.state.exotel_mapping = mapping
+    app.state.exotel_correlation = InMemoryCorrelationStore()
+    app.state.exotel_admission = StreamAdmissionController(
+        max_per_business=10, max_global=100
+    )
+    app.state.exotel_account_id = account_id
+    app.state.exotel_environment = "production" if not settings.debug else "sandbox"
+    app.state.exotel_expected_sample_rate = 16000
+    app.state.exotel_session_timeout_seconds = 3600
+    app.state.exotel_runtime_factory = None
+
+    app.include_router(callback_router)
+    app.include_router(stream_router)
+
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="Fonely Internal API",
@@ -90,11 +137,7 @@ def create_app() -> FastAPI:
 
         app.include_router(whatsapp_router)
 
-    # Exotel webhook route is intentionally NOT mounted.
-    # Requires: migration (exotel_inbound_events table),
-    # InboundCallIntakeService wiring, gateway IP allowlist, and
-    # sandbox-verified fixtures.
-    # See docs/EXOTEL_PROVIDER_CONTRACT.md for the full gate checklist.
+    _mount_exotel_routes(app)
 
     @app.get("/metrics")
     async def metrics_endpoint(request: Request) -> Response:

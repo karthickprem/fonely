@@ -619,7 +619,7 @@ class AppointmentService:
     async def confirm_reschedule(
         self,
         command: ConfirmPendingAppointmentRescheduleCommand,
-    ) -> AppointmentRescheduleResult:
+    ) -> AppointmentRescheduleResult | PreCommitAppointmentFailure:
         action = await self._pa_service._require_action(
             command.actor.business_id,
             command.pending_action_id,
@@ -822,16 +822,17 @@ class AppointmentService:
                 raise
 
         if overlap_exc is not None:
-            await self._pa_service.fail_commit(
+            fail_result = await self._pa_service.fail_commit(
                 FailCommitCommand(
                     context=committing_context,
                     error_code="resource_unavailable",
                     retryable=True,
                 )
             )
-            raise AppointmentDomainError(
-                AppointmentErrorCode.SLOT_CONFLICT,
-                "New time slot conflicts with existing allocation",
+            return PreCommitAppointmentFailure(
+                pending_action_id=context.pending_action_id,
+                pending_action_version=fail_result.version,
+                error_code=AppointmentCommitFailureCode.RESOURCE_UNAVAILABLE,
             )
 
         assert updated is not None

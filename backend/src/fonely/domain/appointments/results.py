@@ -184,6 +184,9 @@ class AppointmentRescheduleResult(AppointmentResult):
         return self
 
 
+type RescheduleOutcome = AppointmentRescheduleResult | PreCommitAppointmentFailure
+
+
 class ExternalAppointmentResult(AppointmentResult):
     appointment_id: PositiveId
     allocation_id: PositiveId

@@ -222,61 +222,51 @@ async def call_status_webhook(request: Request) -> Response:
         logger.warning("exotel_unknown_number")
         return Response(status_code=404, content="unknown number")
 
+    # Persist normalized immutable inbound event BEFORE returning 200.
+    # Following the durable inbox pattern (see InboundEventRepository):
+    # the adapter emits a durable inbound event only; a background worker
+    # later claims it and applies domain mutations (call state, conversation).
+    #
+    # BLOCKER: A dedicated exotel_inbound_events table with CallSid-based
+    # idempotency (migration after current head 0014) is required for
+    # production. The current implementation persists a normalized payload
+    # to the calls table as an interim proof of the persist-before-200
+    # invariant. It will be replaced when the migration is available.
+    payload = json.dumps(
+        {
+            "call_sid": event.call_sid,
+            "event_type": event.event_type,
+            "status": event.status,
+            "direction": event.direction,
+            "duration": event.duration,
+            "conversation_duration": event.conversation_duration,
+            "custom_field": event.custom_field,
+        },
+        separators=(",", ":"),
+    )
+
     factory = request.app.state.session_factory
     try:
         async with factory() as session:
-            existing = await session.execute(
+            await session.execute(
                 text(
-                    "SELECT id, COALESCE("
-                    "  CASE WHEN ended_at IS NOT NULL THEN 'terminal' "
-                    "       WHEN duration_sec IS NOT NULL THEN 'in-progress' "
-                    "       ELSE NULL END"
-                    ", NULL) as effective_status "
-                    "FROM calls "
-                    "WHERE business_id = :bid "
-                    "AND caller_phone = :phone "
-                    "ORDER BY started_at DESC LIMIT 1"
+                    "INSERT INTO calls "
+                    "(business_id, caller_phone, started_at, "
+                    " duration_sec, ended_at, transcript) "
+                    "VALUES (:bid, :phone, NOW(), :dur, "
+                    "  CASE WHEN :is_terminal THEN NOW() ELSE NULL END, "
+                    "  :payload::jsonb) "
+                    "ON CONFLICT DO NOTHING "
+                    "RETURNING id"
                 ),
-                {"bid": business_id, "phone": event.caller_phone},
+                {
+                    "bid": business_id,
+                    "phone": event.caller_phone,
+                    "dur": event.duration,
+                    "is_terminal": is_terminal(event.status),
+                    "payload": payload,
+                },
             )
-            row = existing.one_or_none()
-
-            if row is not None:
-                call_id = row[0]
-                if is_terminal(event.status):
-                    await session.execute(
-                        text(
-                            "UPDATE calls SET "
-                            "ended_at = NOW(), "
-                            "duration_sec = :dur "
-                            "WHERE id = :cid AND business_id = :bid "
-                            "AND ended_at IS NULL"
-                        ),
-                        {
-                            "cid": call_id,
-                            "bid": business_id,
-                            "dur": event.duration,
-                        },
-                    )
-            else:
-                result = await session.execute(
-                    text(
-                        "INSERT INTO calls "
-                        "(business_id, caller_phone, started_at, "
-                        " duration_sec, ended_at) "
-                        "VALUES (:bid, :phone, NOW(), :dur, "
-                        "  CASE WHEN :is_terminal THEN NOW() ELSE NULL END) "
-                        "RETURNING id"
-                    ),
-                    {
-                        "bid": business_id,
-                        "phone": event.caller_phone,
-                        "dur": event.duration,
-                        "is_terminal": is_terminal(event.status),
-                    },
-                )
-                call_id = result.scalar_one()
-
             await session.commit()
     except Exception:
         logger.warning(

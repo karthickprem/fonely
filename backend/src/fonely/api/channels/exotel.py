@@ -1,20 +1,11 @@
-"""Exotel telephony webhook adapter — durable inbound event ingress.
+"""Exotel telephony webhook adapter — thin ingress to typed intake.
 
-Receives call status callbacks from Exotel, authenticates, parses into
-typed events, and persists durably before returning 200. Does NOT
-mutate domain state (calls table) directly — emits normalized durable
-inbound events only. A background worker claims and processes them.
+Authenticates, parses, validates, and delegates to InboundCallEventIntake.
+Does NOT mutate domain state (calls, conversations, owner commands).
+Does NOT import sqlalchemy or execute SQL.
 
-INTERIM AUTH: generic shared-secret possession check via
-X-Exotel-Webhook-Secret header. NOT replay protection, NOT
-provider-native signature verification. Exotel documents NO callback
-authentication mechanism. Before production 10/10, deploy behind a
-gateway with source-IP restriction (see docs/EXOTEL_PROVIDER_CONTRACT.md
-§4 Option A). CallSid idempotency/replay is handled at the persistence
-layer.
-
-WebSocket/audio stream authentication is NOT covered by this adapter
-and requires a separate contract.
+INTERIM AUTH: shared-secret possession check. Exotel documents NO native
+callback authentication. See docs/EXOTEL_PROVIDER_CONTRACT.md §4.
 """
 
 import hmac
@@ -25,7 +16,6 @@ from enum import StrEnum
 from typing import Any
 
 from fastapi import APIRouter, Request, Response, WebSocket, WebSocketDisconnect
-from sqlalchemy import text
 from starlette.requests import ClientDisconnect
 
 from fonely.core.config import settings
@@ -33,9 +23,7 @@ from fonely.domain.calls.events import (
     ExotelCallbackParseError,
     parse_exotel_callback,
 )
-from fonely.domain.calls.transitions import (
-    is_terminal,
-)
+from fonely.domain.calls.intake import DuplicateCallEventError, InboundCallEventIntake
 from fonely.services.exotel_config import ExotelNumberMapping
 
 logger = logging.getLogger("fonely.api.channels.exotel")
@@ -127,12 +115,12 @@ def _get_mapping(app: object) -> ExotelNumberMapping:
     return mapping
 
 
-def _parse_multipart_fields(raw: bytes, content_type: str) -> dict[str, str]:
-    """Extract flat field values from multipart/form-data.
+def _get_intake(app: object) -> InboundCallEventIntake | None:
+    return getattr(getattr(app, "state", None), "exotel_intake", None)
 
-    Minimal parser for Exotel callbacks which are flat key-value pairs.
-    Does not handle file uploads or nested parts.
-    """
+
+def _parse_multipart_fields(raw: bytes, content_type: str) -> dict[str, str]:
+    """Extract flat field values from multipart/form-data."""
     boundary = None
     for part in content_type.split(";"):
         part = part.strip()
@@ -169,7 +157,7 @@ def _parse_multipart_fields(raw: bytes, content_type: str) -> dict[str, str]:
 
 @router.post("/call-status")
 async def call_status_webhook(request: Request) -> Response:
-    """Handle Exotel call status callbacks with durable persistence."""
+    """Authenticate, parse, validate, persist via intake, return 200."""
     if not _verify_webhook_auth(request):
         return Response(status_code=401, content="unauthorized")
 
@@ -216,58 +204,34 @@ async def call_status_webhook(request: Request) -> Response:
     except ExotelCallbackParseError:
         return Response(status_code=400, content="invalid callback payload")
 
+    # Tenant routing: for inbound calls, To is the Exotel virtual number
+    # (maps to business). For outbound, From is the virtual number.
+    # Try called_number (To) first; fall back to caller_phone (From).
     mapping = _get_mapping(request.app)
     business_id = mapping.get_business_id(event.called_number)
+    if business_id is None:
+        business_id = mapping.get_business_id(event.caller_phone)
     if business_id is None:
         logger.warning("exotel_unknown_number")
         return Response(status_code=404, content="unknown number")
 
-    # Persist normalized immutable inbound event BEFORE returning 200.
-    # Following the durable inbox pattern (see InboundEventRepository):
-    # the adapter emits a durable inbound event only; a background worker
-    # later claims it and applies domain mutations (call state, conversation).
-    #
-    # BLOCKER: A dedicated exotel_inbound_events table with CallSid-based
-    # idempotency (migration after current head 0014) is required for
-    # production. The current implementation persists a normalized payload
-    # to the calls table as an interim proof of the persist-before-200
-    # invariant. It will be replaced when the migration is available.
-    payload = json.dumps(
-        {
-            "call_sid": event.call_sid,
-            "event_type": event.event_type,
-            "status": event.status,
-            "direction": event.direction,
-            "duration": event.duration,
-            "conversation_duration": event.conversation_duration,
-            "custom_field": event.custom_field,
-        },
-        separators=(",", ":"),
-    )
+    intake = _get_intake(request.app)
+    if intake is None:
+        logger.error("exotel_intake_not_configured")
+        return Response(status_code=503, content="service unavailable")
 
-    factory = request.app.state.session_factory
     try:
-        async with factory() as session:
-            await session.execute(
-                text(
-                    "INSERT INTO calls "
-                    "(business_id, caller_phone, started_at, "
-                    " duration_sec, ended_at, transcript) "
-                    "VALUES (:bid, :phone, NOW(), :dur, "
-                    "  CASE WHEN :is_terminal THEN NOW() ELSE NULL END, "
-                    "  :payload::jsonb) "
-                    "ON CONFLICT DO NOTHING "
-                    "RETURNING id"
-                ),
-                {
-                    "bid": business_id,
-                    "phone": event.caller_phone,
-                    "dur": event.duration,
-                    "is_terminal": is_terminal(event.status),
-                    "payload": payload,
-                },
-            )
-            await session.commit()
+        await intake.persist(business_id, event)
+    except DuplicateCallEventError:
+        logger.info(
+            "exotel_callback_duplicate",
+            extra={
+                "business_id": business_id,
+                "call_sid": event.call_sid,
+                "event_type": event.event_type,
+            },
+        )
+        return Response(status_code=200, content="ok")
     except Exception:
         logger.warning(
             "exotel_callback_persistence_failed",
@@ -288,19 +252,13 @@ async def call_status_webhook(request: Request) -> Response:
 
 
 # ---------------------------------------------------------------------------
-# Audio stream (placeholder — requires separate auth contract)
+# Audio stream (placeholder — separate auth contract required)
 # ---------------------------------------------------------------------------
 
 
 @router.websocket("/audio-stream")
 async def audio_stream(websocket: WebSocket) -> None:
-    """Accept Exotel audio stream WebSocket.
-
-    Placeholder: accept, log, and close. Actual audio processing
-    will be wired to Pipecat pipeline by Dev4. WebSocket authentication
-    is NOT covered by the HTTP callback auth and requires a separate
-    provider contract.
-    """
+    """Placeholder for Exotel audio stream. Dev4 scope."""
     await websocket.accept()
     logger.info("exotel_audio_stream_connected")
     try:

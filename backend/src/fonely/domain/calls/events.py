@@ -92,6 +92,8 @@ def canonical_payload_digest(event: ExotelCallbackEvent) -> str:
     payload = json.dumps(
         {
             "call_sid": event.call_sid,
+            "called_number": event.called_number,
+            "caller_phone": event.caller_phone,
             "conversation_duration": event.conversation_duration,
             "custom_field": event.custom_field,
             "direction": event.direction,

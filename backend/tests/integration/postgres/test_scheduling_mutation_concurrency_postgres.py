@@ -172,9 +172,12 @@ async def _owner_command(session: AsyncSession, command: str, target_date: str) 
         "close_early": "close early at 5 PM",
         "doctor_leave": "Dr. Priya leave",
     }[command]
-    return await OwnerCommandService(session, _gateway(command, target_date)).process_command(
-        1, "+919000000001", message
-    )
+    service = OwnerCommandService(session, _gateway(command, target_date))
+    preview = await service.process_command(1, "+919000000001", message)
+    if not preview.success:
+        return preview
+    confirm = await service.process_command(1, "+919000000001", "YES")
+    return confirm
 
 
 @pytest.mark.parametrize("command", ["close_clinic", "close_early", "doctor_leave"])

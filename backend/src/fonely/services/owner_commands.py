@@ -448,8 +448,16 @@ class OwnerCommandService:
 
         affected = await self._query_appointments_after_time(business_id, target_date, new_close)
         sched_state = await self._query_schedule_state(business_id, None, target_date)
+        weekly = await self._query_weekly_schedule(business_id, target_date)
+        combined_sched: list[dict[str, Any]] = [
+            *sched_state,
+            {"weekly_schedule": weekly},
+        ]
         preview = self._build_preview_snapshot(
-            parsed.command, target_date, affected, schedule_state=sched_state
+            parsed.command,
+            target_date,
+            affected,
+            schedule_state=combined_sched,
         )
         payload: dict[str, Any] = {
             "command_type": "close_early",
@@ -1042,6 +1050,36 @@ class OwnerCommandService:
             for row in rows
         ]
 
+    async def _query_weekly_schedule(
+        self,
+        business_id: int,
+        target_date: date,
+    ) -> list[dict[str, Any]]:
+        from fonely.models.schema import OperatingSchedule
+
+        day_of_week = schedule_weekday(target_date)
+        rows = (
+            (
+                await self._session.execute(
+                    select(OperatingSchedule).where(
+                        OperatingSchedule.business_id == business_id,
+                        OperatingSchedule.day_of_week == day_of_week,
+                        OperatingSchedule.is_active.is_(True),
+                        OperatingSchedule.resource_id.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        return [
+            {
+                "open_time": r.open_time.isoformat() if r.open_time else None,
+                "close_time": r.close_time.isoformat() if r.close_time else None,
+            }
+            for r in rows
+        ]
+
     async def _upsert_schedule_exception(
         self,
         business_id: int,
@@ -1249,7 +1287,12 @@ class OwnerCommandService:
             new_close = dt_time(int(parts[0]), int(parts[1]) if len(parts) > 1 else 0)
             targets = await self._query_appointments_after_time(business_id, target_date, new_close)
             sched = await self._query_schedule_state(business_id, None, target_date)
-            return targets, sched
+            weekly = await self._query_weekly_schedule(business_id, target_date)
+            combined_sched: list[dict[str, Any]] = [
+                *sched,
+                {"weekly_schedule": weekly},
+            ]
+            return targets, combined_sched
         return [], []
 
     # -----------------------------------------------------------------------

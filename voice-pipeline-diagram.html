@@ -1,0 +1,456 @@
+<title>Fonely Voice Booking Pipeline</title>
+<style>
+  @import url('data:text/css,');
+  :root {
+    --bg: #0c1117;
+    --surface: #151c25;
+    --surface-raised: #1a2332;
+    --border: #243040;
+    --text: #e2e8f0;
+    --text-muted: #8899aa;
+    --accent: #3b9eff;
+    --accent-dim: #1a3a5c;
+    --green: #22c55e;
+    --green-dim: #0a2e1a;
+    --red: #ef4444;
+    --red-dim: #2e0a0a;
+    --orange: #f59e0b;
+    --orange-dim: #2e1a00;
+    --purple: #a78bfa;
+    --purple-dim: #1a1033;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f8f9fb;
+      --surface: #ffffff;
+      --surface-raised: #f0f2f5;
+      --border: #d4dae3;
+      --text: #1a2332;
+      --text-muted: #5a6b7d;
+      --accent: #2563eb;
+      --accent-dim: #dbeafe;
+      --green: #16a34a;
+      --green-dim: #dcfce7;
+      --red: #dc2626;
+      --red-dim: #fef2f2;
+      --orange: #d97706;
+      --orange-dim: #fef3c7;
+      --purple: #7c3aed;
+      --purple-dim: #ede9fe;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0c1117;
+    --surface: #151c25;
+    --surface-raised: #1a2332;
+    --border: #243040;
+    --text: #e2e8f0;
+    --text-muted: #8899aa;
+    --accent: #3b9eff;
+    --accent-dim: #1a3a5c;
+    --green: #22c55e;
+    --green-dim: #0a2e1a;
+    --red: #ef4444;
+    --red-dim: #2e0a0a;
+    --orange: #f59e0b;
+    --orange-dim: #2e1a00;
+    --purple: #a78bfa;
+    --purple-dim: #1a1033;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    line-height: 1.5;
+    padding: 2rem 1.5rem;
+    max-width: 960px;
+    margin: 0 auto;
+  }
+
+  h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.25rem; }
+  .subtitle { color: var(--text-muted); font-size: 0.875rem; margin-bottom: 2rem; }
+
+  .pipeline {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .stage {
+    display: grid;
+    grid-template-columns: 120px 1fr;
+    gap: 1rem;
+    align-items: start;
+  }
+
+  .stage-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    padding-top: 0.75rem;
+    text-align: right;
+  }
+
+  .block {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.875rem 1rem;
+    position: relative;
+  }
+  .block-title {
+    font-size: 0.8rem;
+    font-weight: 700;
+    margin-bottom: 0.25rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .block-desc {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    line-height: 1.4;
+  }
+
+  .tag {
+    display: inline-block;
+    font-size: 0.6rem;
+    font-weight: 600;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .tag-det { background: var(--green-dim); color: var(--green); }
+  .tag-llm { background: var(--purple-dim); color: var(--purple); }
+  .tag-ext { background: var(--accent-dim); color: var(--accent); }
+  .tag-gate { background: var(--red-dim); color: var(--red); }
+
+  .arrow {
+    display: flex;
+    justify-content: center;
+    padding: 0 0 0 120px;
+  }
+  .arrow svg { width: 20px; height: 20px; }
+  .arrow svg path { fill: var(--border); }
+
+  .decision-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+    margin-top: 0.5rem;
+  }
+  .decision {
+    background: var(--surface-raised);
+    border-radius: 5px;
+    padding: 0.5rem 0.625rem;
+    font-size: 0.7rem;
+  }
+  .decision strong {
+    display: block;
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.15rem;
+  }
+  .decision.pass strong { color: var(--green); }
+  .decision.block strong { color: var(--red); }
+  .decision.force strong { color: var(--orange); }
+
+  .state-box {
+    background: var(--surface-raised);
+    border-radius: 5px;
+    padding: 0.5rem 0.625rem;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.68rem;
+    margin-top: 0.5rem;
+    line-height: 1.5;
+    overflow-x: auto;
+  }
+  .state-box .field { color: var(--accent); }
+  .state-box .value { color: var(--green); }
+  .state-box .missing { color: var(--red); }
+
+  .section-divider {
+    border: none;
+    border-top: 1px dashed var(--border);
+    margin: 1rem 0;
+  }
+
+  .legend {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-bottom: 1.5rem;
+    padding: 0.75rem 1rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+  }
+
+  .example {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-top: 1.5rem;
+  }
+  .example h3 {
+    font-size: 0.8rem;
+    font-weight: 700;
+    margin-bottom: 0.75rem;
+  }
+  .turn {
+    display: grid;
+    grid-template-columns: 70px 1fr auto;
+    gap: 0.5rem;
+    padding: 0.4rem 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.72rem;
+    align-items: baseline;
+  }
+  .turn:last-child { border-bottom: none; }
+  .turn-who { font-weight: 600; color: var(--text-muted); font-size: 0.65rem; text-transform: uppercase; letter-spacing: 0.04em; }
+  .turn-action { font-size: 0.6rem; }
+  .turn-action .tag { font-size: 0.55rem; }
+
+  @media (max-width: 640px) {
+    .stage { grid-template-columns: 1fr; }
+    .stage-label { text-align: left; padding-top: 0; }
+    .arrow { padding: 0; }
+    .decision-grid { grid-template-columns: 1fr; }
+  }
+</style>
+
+<h1>Fonely Voice Booking Pipeline</h1>
+<p class="subtitle">Deterministic state machine + LLM — how each turn flows from caller voice to spoken response</p>
+
+<div class="legend">
+  <div class="legend-item"><span class="tag tag-det">Deterministic</span> Code-enforced, same every time</div>
+  <div class="legend-item"><span class="tag tag-llm">LLM</span> GPT-5.6 Luna generates text</div>
+  <div class="legend-item"><span class="tag tag-ext">External</span> Real provider service</div>
+  <div class="legend-item"><span class="tag tag-gate">Gate</span> Blocks bad output</div>
+</div>
+
+<div class="pipeline">
+
+  <!-- CALLER -->
+  <div class="stage">
+    <div class="stage-label">Caller</div>
+    <div class="block">
+      <div class="block-title">🎤 Voice Input <span class="tag tag-ext">External</span></div>
+      <div class="block-desc">Caller speaks Tamil, Tanglish, or English into the browser mic. WebRTC captures audio.</div>
+    </div>
+  </div>
+
+  <div class="arrow"><svg viewBox="0 0 20 20"><path d="M10 3 L10 14 M5 10 L10 15 L15 10"/></svg></div>
+
+  <!-- STT -->
+  <div class="stage">
+    <div class="stage-label">Speech → Text</div>
+    <div class="block">
+      <div class="block-title">Sarvam STT <span class="tag tag-ext">External</span></div>
+      <div class="block-desc">Converts Tamil audio to text. Model: saaras:v3, codemix mode. Output: "இன்னைக்கு 12 மணிக்கு appointment புக் பண்ணனும்"</div>
+    </div>
+  </div>
+
+  <div class="arrow"><svg viewBox="0 0 20 20"><path d="M10 3 L10 14 M5 10 L10 15 L15 10"/></svg></div>
+
+  <!-- STATE MACHINE -->
+  <div class="stage">
+    <div class="stage-label">State Machine</div>
+    <div class="block" style="border-color: var(--green); border-width: 2px;">
+      <div class="block-title">BookingStateInjector <span class="tag tag-det">Deterministic</span></div>
+      <div class="block-desc">
+        <strong>This is the brain.</strong> Imported from <code>fonely.voice.dialogue.BookingCollection</code> — the gated code, not a copy.
+      </div>
+
+      <div class="decision-grid">
+        <div class="decision pass">
+          <strong>1. Parse date</strong>
+          "இன்னைக்கு" → today, "நாளைக்கு" → tomorrow. Tamil numerals: ஐந்து=5, பத்து=10
+        </div>
+        <div class="decision pass">
+          <strong>2. Parse time</strong>
+          "12 மணிக்கு" → 12:00, "5 pm" → 17:00. Matches against offered slots only.
+        </div>
+        <div class="decision pass">
+          <strong>3. Track fields</strong>
+          Owns the order: reason → date → time → name → confirmation. LLM cannot skip or reorder.
+        </div>
+        <div class="decision pass">
+          <strong>4. Detect confirmation</strong>
+          "yeah", "ok", "ஆமா", "sari" all recognized. Code-enforced, not prompt-dependent.
+        </div>
+      </div>
+
+      <div class="state-box">
+        <span class="field">active:</span> <span class="value">true</span><br>
+        <span class="field">reason:</span> <span class="value">toothache</span><br>
+        <span class="field">target_date:</span> <span class="value">2026-08-10</span><br>
+        <span class="field">selected_time:</span> <span class="value">17:00</span><br>
+        <span class="field">patient_name:</span> <span class="missing">missing</span><br>
+        <span class="field">required_field:</span> <span class="value">name</span> ← LLM must ask THIS
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow"><svg viewBox="0 0 20 20"><path d="M10 3 L10 14 M5 10 L10 15 L15 10"/></svg></div>
+
+  <!-- LLM -->
+  <div class="stage">
+    <div class="stage-label">LLM</div>
+    <div class="block" style="border-color: var(--purple); border-width: 2px;">
+      <div class="block-title">GPT-5.6 Luna <span class="tag tag-llm">LLM</span></div>
+      <div class="block-desc">
+        Receives the caller's text + booking state. Sees <code>required_field: name</code> and generates a natural Tamil response asking for the name. <strong>It phrases the question — it does not choose which question.</strong>
+      </div>
+      <div class="state-box" style="color: var(--purple);">
+        Output: "உங்க பேரு சொல்லுங்க?"
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow"><svg viewBox="0 0 20 20"><path d="M10 3 L10 14 M5 10 L10 15 L15 10"/></svg></div>
+
+  <!-- POST-LLM GATE -->
+  <div class="stage">
+    <div class="stage-label">Safety Gates</div>
+    <div class="block" style="border-color: var(--red); border-width: 2px;">
+      <div class="block-title">BookingPostLLMGate <span class="tag tag-gate">Gate</span></div>
+      <div class="block-desc">Four deterministic checks on every LLM response before it reaches the caller.</div>
+
+      <div class="decision-grid">
+        <div class="decision block">
+          <strong>Gate 1: Medical advice</strong>
+          If LLM says "root canal தேவை" → replaced with "Doctor பார்த்துதான் சொல்வாங்க"
+        </div>
+        <div class="decision block">
+          <strong>Gate 2: Confirmation loop</strong>
+          If caller said "yeah" → force "Booking note பண்ணிட்டேன்" — never repeat readback
+        </div>
+        <div class="decision block">
+          <strong>Gate 3: Conversation closure</strong>
+          If caller said "bye" after booking → force "நன்றி, take care!"
+        </div>
+        <div class="decision force">
+          <strong>Gate 4: Forced readback</strong>
+          If all 4 fields collected but LLM skipped readback → inject deterministic readback
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arrow"><svg viewBox="0 0 20 20"><path d="M10 3 L10 14 M5 10 L10 15 L15 10"/></svg></div>
+
+  <!-- TTS -->
+  <div class="stage">
+    <div class="stage-label">Text → Speech</div>
+    <div class="block">
+      <div class="block-title">Cartesia TTS <span class="tag tag-ext">External</span></div>
+      <div class="block-desc">Kavitha Tamil voice, sonic-3.5. Converts the approved text to natural Tamil audio at 24kHz.</div>
+    </div>
+  </div>
+
+  <div class="arrow"><svg viewBox="0 0 20 20"><path d="M10 3 L10 14 M5 10 L10 15 L15 10"/></svg></div>
+
+  <!-- CALLER HEARS -->
+  <div class="stage">
+    <div class="stage-label">Caller hears</div>
+    <div class="block">
+      <div class="block-title">🔊 Voice Response</div>
+      <div class="block-desc">Only text that passed all 4 gates reaches the caller's ear. Medical advice, confirmation loops, and false bookings are physically impossible.</div>
+    </div>
+  </div>
+
+</div>
+
+<hr class="section-divider">
+
+<!-- EXAMPLE CONVERSATION -->
+<div class="example">
+  <h3>Example: Karthick's toothache booking</h3>
+
+  <div class="turn">
+    <div class="turn-who">Caller</div>
+    <div>"இன்னைக்கு 12 மணிக்கு appointment புக் பண்ணனும்"</div>
+    <div class="turn-action"><span class="tag tag-det">Det</span> date=today, time=12:00 (not offered)</div>
+  </div>
+
+  <div class="turn">
+    <div class="turn-who">Fonely</div>
+    <div>"12 மணிக்கு slot இல்ல. 10:00, 11:00, 5:00, 6:30 available. எந்த time?"</div>
+    <div class="turn-action"><span class="tag tag-det">Det</span> required_field=time</div>
+  </div>
+
+  <div class="turn">
+    <div class="turn-who">Caller</div>
+    <div>"5 மணிக்கு ஓகே"</div>
+    <div class="turn-action"><span class="tag tag-det">Det</span> selected_time=17:00 ✓</div>
+  </div>
+
+  <div class="turn">
+    <div class="turn-who">Fonely</div>
+    <div>"என்ன reason-க்காக visit?"</div>
+    <div class="turn-action"><span class="tag tag-det">Det</span> required_field=reason (date+time preserved!)</div>
+  </div>
+
+  <div class="turn">
+    <div class="turn-who">Caller</div>
+    <div>"பல்லு வலிக்குது"</div>
+    <div class="turn-action"><span class="tag tag-det">Det</span> reason=toothache, required_field=name</div>
+  </div>
+
+  <div class="turn">
+    <div class="turn-who">Fonely</div>
+    <div>"பேரு சொல்லுங்க?"</div>
+    <div class="turn-action"><span class="tag tag-llm">LLM</span> phrases the question</div>
+  </div>
+
+  <div class="turn">
+    <div class="turn-who">Caller</div>
+    <div>"B"</div>
+    <div class="turn-action"><span class="tag tag-det">Det</span> name=B (accepted, no "full name" demand)</div>
+  </div>
+
+  <div class="turn">
+    <div class="turn-who">Fonely</div>
+    <div>"Toothache, இன்னைக்கு 5:00 PM, B. இது correct-ஆ?"</div>
+    <div class="turn-action"><span class="tag tag-gate">Gate4</span> forced readback from facts</div>
+  </div>
+
+  <div class="turn">
+    <div class="turn-who">Caller</div>
+    <div>"yeah"</div>
+    <div class="turn-action"><span class="tag tag-det">Det</span> confirmation detected</div>
+  </div>
+
+  <div class="turn">
+    <div class="turn-who">Fonely</div>
+    <div>"Booking note பண்ணிட்டேன். வேற doubt இருக்கா?"</div>
+    <div class="turn-action"><span class="tag tag-gate">Gate2</span> forced closure (no readback repeat)</div>
+  </div>
+
+  <div class="turn">
+    <div class="turn-who">Caller</div>
+    <div>"no bye"</div>
+    <div class="turn-action"><span class="tag tag-det">Det</span> closure detected</div>
+  </div>
+
+  <div class="turn">
+    <div class="turn-who">Fonely</div>
+    <div>"நன்றி, take care! Clinic-ல சந்திப்போம்."</div>
+    <div class="turn-action"><span class="tag tag-gate">Gate3</span> deterministic goodbye</div>
+  </div>
+</div>

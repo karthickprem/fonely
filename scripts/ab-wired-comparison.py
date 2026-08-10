@@ -133,6 +133,37 @@ SCENARIOS = [
     ("Multiple services", ["Scaling-um root canal-um வேணும்"]),
     ("Romanized Tamil", ["naalaikku scaling appointment venum", "6:30", "Karthick"]),
     ("Implicit booking", ["doctor பாக்கணும்"]),
+    # Additional 30 cases for 50 total
+    ("Tooth extraction", ["Tooth extraction appointment வேணும்", "நாளைக்கு", "காலை 10", "Lakshmi"]),
+    ("Cleaning + date first", ["இன்னைக்கு cleaning appointment", "5 pm", "Ramya"]),
+    ("Root canal formal", ["Root canal treatment-க்கு appointment எடுக்கணும்", "நாளைக்கு", "11 am", "கணேஷ்"]),
+    ("Consultation only", ["Consultation appointment", "இன்னைக்கு", "10 am", "Anand"]),
+    ("Evening preference", ["Evening-ல doctor பாக்கணும்", "Scaling", "நாளைக்கு", "6:30", "Deepa"]),
+    ("Morning preference", ["காலை appointment வேணும்", "Scaling", "இன்னைக்கு", "10", "Suresh"]),
+    ("Pain urgent", ["ரொம்ப வலி, urgent-ஆ doctor வேணும்", "இன்னைக்கே", "5 pm", "Ravi"]),
+    ("Change service after date", ["இன்னைக்கு scaling", "actually consultation மாத்துங்க", "6:30", "Priya"]),
+    ("Two people booking", ["எனக்கும் என் மகனுக்கும் appointment வேணும்"]),
+    ("Cancel question", ["என் appointment cancel பண்ணணும்"]),
+    ("Reschedule attempt", ["என் appointment-ஐ reschedule பண்ணணும்"]),
+    ("Fee comparison", ["Scaling-க்கும் root canal-க்கும் fee என்ன?"]),
+    ("Insurance query mid-booking", ["Appointment வேணும் scaling", "insurance cover ஆகுமா?", "நாளைக்கு", "6:30", "Geetha"]),
+    ("Very short answers", ["Appointment", "Scaling", "Tomorrow", "6:30", "K"]),
+    ("Long rambling caller", ["எனக்கு ஒரு பல்லு வலிக்குது, actually ரெண்டு பல்லு, ஒரு side-ல scaling வேணும் இன்னொரு side-ல root canal பண்ணணும்னு நினைக்கிறேன் ஆனா doctor-கிட்ட கேட்டுட்டு decide பண்ணணும்"]),
+    ("Mixed script in one sentence", ["நாளைக்கு morning-ல ஒரு appointment fix பண்ணுங்க scaling-க்கு"]),
+    ("Code-switch every word", ["enna time-la doctor available-a innaikku?"]),
+    ("Confirm then change mind", ["Scaling நாளைக்கு 6:30 Karthick", "ஆமா", "wait, time மாத்தணும்"]),
+    ("Ask about specific doctor", ["Dr. Priya available-ஆ இன்னைக்கு?"]),
+    ("Previous visit reference", ["Last time வந்தேன், same doctor-கிட்ட போகணும்"]),
+    ("Child appointment", ["என் குழந்தைக்கு dentist appointment வேணும்"]),
+    ("Emergency framing", ["Emergency-ஆ tooth broken"]),
+    ("Whispered/quiet", ["appointment... scaling... tomorrow..."]),
+    ("Numbers as words Tamil", ["ஆறரை மணிக்கு", "நாளைக்கு", "scaling", "Meena"]),
+    ("Repeat after agent", ["Agent சொன்னது repeat பண்ணுங்க"]),
+    ("Ask agent name", ["உங்க பேரு என்ன?"]),
+    ("Frustrated caller", ["ரொம்ப நேரமா wait பண்றேன், quickly book பண்ணுங்க"]),
+    ("Grateful caller", ["நன்றி, ரொம்ப helpful-ஆ இருக்கு"]),
+    ("Wrong number check", ["இது dental clinic-தானா?"]),
+    ("Silence then speak", ["...", "scaling appointment நாளைக்கு"]),
 ]
 
 
@@ -167,12 +198,16 @@ async def run_wired(model_name: str, model_id: str, cases: list) -> dict:
             call_msgs = [{"system": system_with_state}] + messages_for_llm
             response = await call_model(model_id, call_msgs)
 
-            # 6. Post-LLM gates
+            # 6. Score RAW LLM output BEFORE gating
+            raw_response = response
+            raw_defects = score_response(raw_response, caller_text, bc, offered_times=OFFERED_TIMES)
+
+            # 7. Post-LLM gates
             if contains_medical_advice(response):
                 response = MEDICAL_SAFE
             elif confirmed:
                 response = "Booking note பண்ணிட்டேன். வேற ஏதாவது doubt இருக்கா?"
-                confirmed = False  # only once
+                confirmed = False
             else:
                 readback = bc.format_readback()
                 if readback and "correct" not in response.lower():
@@ -180,8 +215,9 @@ async def run_wired(model_name: str, model_id: str, cases: list) -> dict:
 
             messages_for_llm.append({"role": "assistant", "content": response})
 
-            # 7. Score using validated Tier B instrument
-            defects = score_response(response, caller_text, bc, offered_times=OFFERED_TIMES)
+            # 8. Score GATED output — what the caller actually hears
+            gated_defects = score_response(response, caller_text, bc, offered_times=OFFERED_TIMES)
+            defects = gated_defects  # report what reaches the caller
             case_defects.extend(defects)
 
             print(f"  [{model_name:>6}] T{turn_idx+1} CALLER: {caller_text[:50]}")
@@ -208,14 +244,42 @@ async def main(n_cases: int):
 
         data = await run_wired(model_name, model_id, cases)
 
-        print(f"\n{model_name} SUMMARY:")
+        HARM = {
+            "false_confirmation": "CRITICAL",
+            "wrong_day_booking": "CRITICAL",
+            "wrong_time_booking": "CRITICAL",
+            "invented_availability": "HIGH",
+            "medical_advice_given": "HIGH",
+            "ambiguity_guessed": "HIGH",
+            "date_lost_across_turns": "HIGH",
+            "time_lost_across_turns": "HIGH",
+            "model_ignores_collection_state": "MEDIUM",
+            "wrong_language_response": "MEDIUM",
+            "booking_not_activated": "MEDIUM",
+            "correction_not_applied": "MEDIUM",
+            "field_re_asked": "LOW",
+        }
         counts = Counter(data["total"])
-        if counts:
-            for cls, count in counts.most_common():
-                print(f"  {cls}: {count}")
-        else:
-            print(f"  No defects")
-        print(f"  Total: {len(data['total'])} defects across {len(cases)} cases")
+        critical = sum(c for cls, c in counts.items() if HARM.get(cls) == "CRITICAL")
+        high = sum(c for cls, c in counts.items() if HARM.get(cls) == "HIGH")
+        medium = sum(c for cls, c in counts.items() if HARM.get(cls) == "MEDIUM")
+        low = sum(c for cls, c in counts.items() if HARM.get(cls) == "LOW")
+
+        print(f"\n{model_name} SUMMARY (by severity, never totaled):")
+        print(f"  CRITICAL: {critical}")
+        for cls, c in counts.most_common():
+            if HARM.get(cls) == "CRITICAL":
+                print(f"    {cls}: {c}")
+        print(f"  HIGH: {high}")
+        for cls, c in counts.most_common():
+            if HARM.get(cls) == "HIGH":
+                print(f"    {cls}: {c}")
+        print(f"  MEDIUM: {medium}")
+        for cls, c in counts.most_common():
+            if HARM.get(cls) == "MEDIUM":
+                print(f"    {cls}: {c}")
+        print(f"  LOW: {low}")
+        print(f"  ({len(cases)} cases)")
 
         # Add delay between models to avoid gateway throttling
         if model_name == "Luna":

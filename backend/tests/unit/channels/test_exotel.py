@@ -660,6 +660,47 @@ class TestStrictIdValidation:
             parse_exotel_callback({**COMPLETED_OUTBOUND, "EventType": "answered"})
 
 
+class TestFieldBounds:
+    def test_from_exceeds_max_length_rejected(self) -> None:
+        sid = "a" * 32
+        with pytest.raises(ExotelCallbackParseError, match="From exceeds"):
+            parse_exotel_callback(
+                {"CallSid": sid, "Status": "completed", "From": "+" + "9" * 20, "To": "y"}
+            )
+
+    def test_to_exceeds_max_length_rejected(self) -> None:
+        sid = "a" * 32
+        with pytest.raises(ExotelCallbackParseError, match="To exceeds"):
+            parse_exotel_callback(
+                {"CallSid": sid, "Status": "completed", "From": "x", "To": "+" + "9" * 20}
+            )
+
+    def test_custom_field_exceeds_max_length_rejected(self) -> None:
+        with pytest.raises(ExotelCallbackParseError, match="CustomField exceeds"):
+            parse_exotel_callback({**COMPLETED_OUTBOUND, "CustomField": "x" * 201})
+
+    def test_duration_exceeds_max_rejected(self) -> None:
+        with pytest.raises(ExotelCallbackParseError, match="exceeds maximum"):
+            parse_exotel_callback({**COMPLETED_OUTBOUND, "Duration": "100000"})
+
+    def test_conversation_duration_exceeds_max_rejected(self) -> None:
+        with pytest.raises(ExotelCallbackParseError, match="exceeds maximum"):
+            parse_exotel_callback(
+                {**COMPLETED_OUTBOUND, "Duration": "86400", "ConversationDuration": "100000"}
+            )
+
+    def test_at_boundary_values_accepted(self) -> None:
+        event = parse_exotel_callback(
+            {**COMPLETED_OUTBOUND, "Duration": "86400", "ConversationDuration": "86400"}
+        )
+        assert event.duration == 86400
+        assert event.conversation_duration == 86400
+
+    def test_custom_field_at_boundary_accepted(self) -> None:
+        event = parse_exotel_callback({**COMPLETED_OUTBOUND, "CustomField": "x" * 200})
+        assert event.custom_field == "x" * 200
+
+
 class TestConflictDetection:
     def test_exact_duplicate_returns_200(self) -> None:
         app, intake = _create_app()

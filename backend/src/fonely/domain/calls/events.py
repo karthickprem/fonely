@@ -44,6 +44,9 @@ _VALID_EVENT_TYPES = frozenset(ExotelEventType)
 _VALID_DIRECTIONS = frozenset({"inbound", "outbound-dial", "outbound-api"})
 
 _CALL_SID_RE = re.compile(r"^[a-zA-Z0-9]{16,128}$")
+_MAX_PHONE_LEN = 20
+_MAX_CUSTOM_FIELD_LEN = 200
+_MAX_DURATION_SECONDS = 86400
 
 
 class ExotelCallbackParseError(ValueError):
@@ -116,6 +119,10 @@ def _strict_nonneg_int(value: Any, field: str) -> int | None:
         raise ExotelCallbackParseError(f"invalid {field}: {value!r}") from exc
     if parsed < 0:
         raise ExotelCallbackParseError(f"negative {field}: {parsed}")
+    if parsed > _MAX_DURATION_SECONDS:
+        raise ExotelCallbackParseError(
+            f"{field} exceeds maximum ({_MAX_DURATION_SECONDS}s): {parsed}"
+        )
     return parsed
 
 
@@ -129,6 +136,13 @@ def _validate_event_type_status_consistency(event_type: str, status: str) -> Non
         raise ExotelCallbackParseError(
             f"EventType 'answered' inconsistent with terminal status '{status}'"
         )
+
+
+def _bounded_custom_field(raw: Any) -> str | None:
+    val = str(raw or "").strip() or None
+    if val is not None and len(val) > _MAX_CUSTOM_FIELD_LEN:
+        raise ExotelCallbackParseError(f"CustomField exceeds {_MAX_CUSTOM_FIELD_LEN} chars")
+    return val
 
 
 def parse_exotel_callback(data: dict[str, Any]) -> ExotelCallbackEvent:
@@ -161,6 +175,10 @@ def parse_exotel_callback(data: dict[str, Any]) -> ExotelCallbackEvent:
     called_number = str(data.get("To") or "").strip()
     if not caller_phone or not called_number:
         raise ExotelCallbackParseError("missing From or To")
+    if len(caller_phone) > _MAX_PHONE_LEN:
+        raise ExotelCallbackParseError(f"From exceeds {_MAX_PHONE_LEN} chars")
+    if len(called_number) > _MAX_PHONE_LEN:
+        raise ExotelCallbackParseError(f"To exceeds {_MAX_PHONE_LEN} chars")
 
     direction_raw = str(data.get("Direction") or "").strip().lower() or None
     if direction_raw is not None and direction_raw not in _VALID_DIRECTIONS:
@@ -180,5 +198,5 @@ def parse_exotel_callback(data: dict[str, Any]) -> ExotelCallbackEvent:
         duration=duration,
         conversation_duration=conv_dur,
         direction=direction_raw,
-        custom_field=str(data.get("CustomField") or "").strip() or None,
+        custom_field=_bounded_custom_field(data.get("CustomField")),
     )

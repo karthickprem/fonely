@@ -70,6 +70,10 @@ def collection_manifest_file(partition: str) -> str:
     return f"collection-{partition}.json"
 
 
+def execution_manifest_file(partition: str) -> str:
+    return f"execution-selected-{partition}.json"
+
+
 def event_stream_file(partition: str) -> str:
     return f"events-{partition}.jsonl"
 

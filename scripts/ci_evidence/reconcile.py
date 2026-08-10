@@ -73,8 +73,10 @@ def _validate_manifest(root: TrustedRoot, environment: str) -> dict[str, Any]:
 
 def _validate_phases(
     root: TrustedRoot, manifest: dict[str, Any]
-) -> tuple[list[str], dict[str, int]]:
-    errors = []
+) -> tuple[list[str], list[str], list[str], dict[str, int]]:
+    incomplete: list[str] = []
+    evidence: list[str] = []
+    test_fail: list[str] = []
     phase_exits: dict[str, int] = {}
 
     try:
@@ -82,15 +84,15 @@ def _validate_phases(
     except EvidenceWriteError:
         required = manifest.get("required_phases", [])
         if required:
-            errors.append(f"no phase results but {len(required)} required")
-        return errors, phase_exits
+            incomplete.append(f"no phase results but {len(required)} required")
+        return incomplete, evidence, test_fail, phase_exits
 
     content = raw.decode().strip()
     if not content:
         required = manifest.get("required_phases", [])
         if required:
-            errors.append(f"no phase results but {len(required)} required")
-        return errors, phase_exits
+            incomplete.append(f"no phase results but {len(required)} required")
+        return incomplete, evidence, test_fail, phase_exits
 
     seen_phases: list[str] = []
     prev_seq = 0
@@ -98,44 +100,44 @@ def _validate_phases(
         try:
             record = json.loads(line)
         except json.JSONDecodeError:
-            errors.append(f"malformed phase result line {i + 1}")
+            evidence.append(f"malformed phase result line {i + 1}")
             continue
         if not isinstance(record, dict):
-            errors.append(f"phase result {i + 1} not an object")
+            evidence.append(f"phase result {i + 1} not an object")
             continue
         if record.get("schema_version") != PHASE_RESULT_SCHEMA:
-            errors.append(f"phase result {i + 1} bad schema")
+            evidence.append(f"phase result {i + 1} bad schema")
         phase = record.get("phase", "")
         if not isinstance(phase, str) or not phase:
-            errors.append(f"phase result {i + 1} missing phase name")
+            evidence.append(f"phase result {i + 1} missing phase name")
             continue
         if phase in seen_phases:
-            errors.append(f"duplicate phase: {phase}")
+            evidence.append(f"duplicate phase: {phase}")
         seen_phases.append(phase)
         seq = record.get("sequence", 0)
         if not isinstance(seq, int) or seq != prev_seq + 1:
-            errors.append(f"phase sequence gap at {seq}")
+            evidence.append(f"phase sequence gap at {seq}")
         prev_seq = seq
         exit_code = record.get("exit_code", 0)
         if not isinstance(exit_code, int):
-            errors.append(f"phase {phase} non-integer exit_code")
+            evidence.append(f"phase {phase} non-integer exit_code")
             continue
         phase_exits[phase] = exit_code
         if exit_code != 0:
-            errors.append(f"phase {phase} exit={exit_code}")
+            test_fail.append(f"phase {phase} exit={exit_code}")
 
     required = manifest.get("required_phases", [])
     if seen_phases != required:
         missing = [p for p in required if p not in seen_phases]
         extra = [p for p in seen_phases if p not in required]
         if missing:
-            errors.append(f"missing required phases: {', '.join(missing)}")
+            incomplete.append(f"missing required phases: {', '.join(missing)}")
         if extra:
-            errors.append(f"unknown/extra phases: {', '.join(extra)}")
+            evidence.append(f"unknown/extra phases: {', '.join(extra)}")
         if not missing and not extra and seen_phases != required:
-            errors.append(f"phase order mismatch: observed {seen_phases} != required {required}")
+            evidence.append(f"phase order mismatch: observed {seen_phases} != required {required}")
 
-    return errors, phase_exits
+    return incomplete, evidence, test_fail, phase_exits
 
 
 def _validate_collections(
@@ -611,8 +613,12 @@ def reconcile(
                 manifest_raw = safe_read(root, RUN_MANIFEST_FILE)
                 manifest_data = json.loads(manifest_raw)
                 if isinstance(manifest_data, dict):
-                    terminal["source_sha"] = manifest_data.get("source_sha")
-                    terminal["workflow_run_id"] = manifest_data.get("workflow_run_id")
+                    sha = manifest_data.get("source_sha")
+                    run_id = manifest_data.get("workflow_run_id")
+                    if isinstance(sha, str) and len(sha) == 40:
+                        terminal["source_sha"] = sha
+                    if isinstance(run_id, str) and run_id:
+                        terminal["workflow_run_id"] = run_id
             except Exception:
                 pass
             try:
@@ -628,7 +634,7 @@ def _reconcile_inner(
 ) -> dict[str, Any]:
     manifest = _validate_manifest(root, environment)
 
-    phase_errors, phase_exits = _validate_phases(root, manifest)
+    phase_inc, phase_ev, phase_test, phase_exits = _validate_phases(root, manifest)
 
     npg_nodes, pg_nodes, collection_errors = _validate_collections(root, manifest)
 
@@ -691,17 +697,19 @@ def _reconcile_inner(
     evidence_errors.extend(pg_errors)
     evidence_errors.extend(waiver_errors)
 
+    incomplete_errors.extend(phase_inc)
+    evidence_errors.extend(phase_ev)
+    test_errors.extend(phase_test)
+
     terminal_state = _classify_terminal(
-        phase_errors,
+        [],
         collection_errors,
         incomplete_errors,
         evidence_errors,
         test_errors,
     )
 
-    all_errors = (
-        phase_errors + collection_errors + incomplete_errors + evidence_errors + test_errors
-    )
+    all_errors = collection_errors + incomplete_errors + evidence_errors + test_errors
 
     artifact_hashes = {}
     for relpath in [

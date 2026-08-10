@@ -10,8 +10,8 @@ from pathlib import Path
 
 from ci_evidence.schemas import (
     RUN_MANIFEST_FILE,
-    collection_manifest_file,
     event_stream_file,
+    execution_manifest_file,
 )
 from ci_evidence.writer import TrustedRoot, exclusive_create_json
 
@@ -84,7 +84,7 @@ class TestCollectionManifest:
         test_file = _write_test(tmp_path, "test_simple.py", content)
         r = _run_pytest(evidence, test_file)
         assert r.returncode == 0, r.stderr
-        manifest = json.loads((evidence / collection_manifest_file("non_pg")).read_text())
+        manifest = json.loads((evidence / execution_manifest_file("non_pg")).read_text())
         assert manifest["schema_version"] == 1
         assert manifest["node_count"] == 2
         assert len(manifest["nodes"]) == 2
@@ -105,7 +105,7 @@ def test_p(x): pass
         )
         r = _run_pytest(evidence, test_file)
         assert r.returncode == 0, r.stderr
-        manifest = json.loads((evidence / collection_manifest_file("non_pg")).read_text())
+        manifest = json.loads((evidence / execution_manifest_file("non_pg")).read_text())
         assert any("[" in n for n in manifest["nodes"])
 
 

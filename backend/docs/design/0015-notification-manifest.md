@@ -1,4 +1,4 @@
-# Migration 0015: Notification Manifest — Revised Design
+# Migration 0015: Notification Manifest — Final Design
 
 ## Problem
 
@@ -24,29 +24,54 @@ Current schema (0014) lacks:
 | `entity_id` | INTEGER | NO | | Appointment ID |
 | `operation` | VARCHAR(20) | NO | | CHECK IN ('create','cancel','reschedule') |
 | `pending_action_id` | INTEGER | NO | | Every operation has a PA |
-| `appointment_commit_id` | INTEGER | YES | | NULL for create (no AppointmentCommit); NOT NULL for cancel/reschedule |
-| `initiated_by_phone` | VARCHAR(20) | NO | | Trusted actor phone from ActorContext |
-| `initiated_by_role` | VARCHAR(20) | NO | | Trusted actor role from ActorContext |
-| `initiated_by_bu_id` | INTEGER | YES | | BusinessUser.id if actor is owner; NULL if customer/system |
+| `actor_kind` | VARCHAR(20) | NO | | CHECK IN ('customer','owner','system') |
+| `actor_phone` | VARCHAR(20) | YES | | Trusted phone from ActorContext; NULL only for system |
+| `actor_bu_id` | INTEGER | YES | | BusinessUser.id if owner; NULL otherwise |
 | `recipient_count` | INTEGER | NO | | CHECK > 0. Expected event count |
 | `recipient_manifest` | JSONB | NO | | CHECK jsonb_typeof = 'array' AND jsonb_array_length > 0 |
 | `channel` | VARCHAR(20) | NO | | "whatsapp" |
 | `phone_number_id` | VARCHAR(100) | NO | | WhatsApp sender identity at creation |
 | `equivalence_digest` | VARCHAR(64) | NO | | SHA-256 of canonical manifest |
 | `schema_version` | INTEGER | NO | 1 | CHECK > 0 |
-| `outbox_event_ids` | INTEGER[] | NO | | Historical references; no FK |
+| `outbox_event_ids` | INTEGER[] | NO | | Archival references; no FK |
 | `created_at` | TIMESTAMPTZ | NO | now() | |
+
+### Actor Identity
+
+No placeholder phone numbers. Actor kind is modeled explicitly:
+
+```sql
+CHECK (
+  (actor_kind = 'system' AND actor_phone IS NULL AND actor_bu_id IS NULL)
+  OR (actor_kind = 'customer' AND actor_phone IS NOT NULL AND actor_bu_id IS NULL)
+  OR (actor_kind = 'owner' AND actor_phone IS NOT NULL AND actor_bu_id IS NOT NULL)
+)
+```
+
+| Actor | `actor_kind` | `actor_phone` | `actor_bu_id` |
+|-------|-------------|--------------|--------------|
+| Customer booking/cancelling | "customer" | customer phone | NULL |
+| Owner cancelling via command | "owner" | owner phone | BusinessUser.id |
+| System-initiated (future) | "system" | NULL | NULL |
+
+All from trusted `ActorContext` at command boundary. Never fabricated.
 
 ### Operation Identity
 
 Every committed appointment mutation has a PendingAction:
-- **Create**: PA with `committed_entity_type='appointment'`, `committed_entity_id=appointment.id`
-- **Cancel**: PA with `committed_entity_type='appointment_commit'`, `committed_entity_id=commit.id`
-- **Reschedule**: PA with `committed_entity_type='appointment_commit'`, `committed_entity_id=commit.id`
+- **Create**: PA with `committed_entity_type='appointment'`
+- **Cancel**: PA with `committed_entity_type='appointment_commit'`
+- **Reschedule**: PA with `committed_entity_type='appointment_commit'`
 
-`pending_action_id` is NOT NULL for all operations. This is the canonical
-operation-instance identity. Two reschedules of the same appointment have
-different PendingActions → different manifests.
+`pending_action_id` is NOT NULL for all operations. Two reschedules of
+the same appointment have different PendingActions → different manifests.
+
+The `appointment_commit_id` column from v1 design is **removed**.
+`appointment_commits` lacks a tenant-scoped composite unique key
+`(business_id, id)`, so a tenant-scoped FK is impossible with current
+schema. Cancel/reschedule commit linkage is derived through the
+tenant-scoped PendingAction's `committed_entity_type='appointment_commit'`
+and `committed_entity_id`.
 
 ### Foreign Keys
 
@@ -61,46 +86,30 @@ ALTER TABLE notification_manifests
   ADD CONSTRAINT fk_manifest_pending_action
   FOREIGN KEY (business_id, pending_action_id)
   REFERENCES pending_actions(business_id, id) ON DELETE RESTRICT;
-
--- Appointment commit (simple, nullable)
--- Only for cancel/reschedule. create has NULL.
-ALTER TABLE notification_manifests
-  ADD CONSTRAINT fk_manifest_appointment_commit
-  FOREIGN KEY (appointment_commit_id)
-  REFERENCES appointment_commits(id) ON DELETE RESTRICT;
-
--- CHECK: cancel/reschedule require appointment_commit_id
-ALTER TABLE notification_manifests
-  ADD CONSTRAINT ck_manifest_commit_consistency
-  CHECK (
-    (operation = 'create' AND appointment_commit_id IS NULL)
-    OR (operation IN ('cancel','reschedule') AND appointment_commit_id IS NOT NULL)
-  );
 ```
 
-All FKs use `ON DELETE RESTRICT`. PendingActions, appointments, and
-AppointmentCommits cannot be deleted while a manifest references them.
-This is intentional: retention ordering must delete manifests before
-their referents.
+No FK to `appointment_commits` (no tenant-scoped composite unique exists).
+No FK to `notification_outbox` (outbox rows are deletable by retention).
+
+All FKs use `ON DELETE RESTRICT`. PendingActions cannot be deleted while
+a manifest references them. Retention ordering: manifests before referents.
 
 ### `outbox_event_ids` Column
 
-`INTEGER[]` — historical references to `notification_outbox.id` values
-that existed at creation time. **No FK constraint.** After retention
-cleanup, outbox rows are gone but the manifest preserves the evidence.
-Named `outbox_event_ids` (not `notification_event_ids`) to signal they
-are archival references, not live joins.
+`INTEGER[]` — archival references to `notification_outbox.id` values that
+existed at manifest creation. **No FK constraint.** After retention cleanup,
+outbox rows are gone but the manifest preserves the evidence. These are
+historical identifiers, not live joins.
 
 ### Uniqueness
 
 ```sql
--- One manifest per operation-instance (every operation has a PA)
 CREATE UNIQUE INDEX uq_manifest_operation_instance
 ON notification_manifests (business_id, pending_action_id);
 ```
 
-Single index. No partial indexes needed since `pending_action_id` is NOT NULL
-for all operations. PA uniqueness guarantees one manifest per operation-instance.
+Single index. `pending_action_id` is NOT NULL for all operations.
+PA uniqueness guarantees one manifest per operation-instance.
 
 ### Indexes
 
@@ -139,7 +148,7 @@ by `BusinessUser.id` ascending.
       "resource_name": "Dr. Priya",
       "business_timezone": "Asia/Kolkata",
       "start_at": "2026-08-15T04:30:00+00:00",
-      "price": "500",
+      "price": "500.00",
       "phone_number_id": "phone-1"
     },
     "digest": "sha256hex..."
@@ -151,7 +160,7 @@ by `BusinessUser.id` ascending.
     "bu_id": 1,
     "idempotency_key": "notif-create-owner-42-bu1-pa100",
     "outbox_event_id": 502,
-    "snapshot": { ... },
+    "snapshot": { "..." : "..." },
     "digest": "sha256hex..."
   }
 ]
@@ -162,7 +171,7 @@ by `BusinessUser.id` ascending.
 Root `equivalence_digest` binds:
 1. `schema_version`
 2. `business_id`, `entity_type`, `entity_id`, `operation`, `pending_action_id`
-3. `initiated_by_phone`, `initiated_by_role`, `initiated_by_bu_id`
+3. `actor_kind`, `actor_phone`, `actor_bu_id`
 4. `channel`, `phone_number_id`
 5. Per-recipient: `recipient_type`, `phone_e164`, `bu_id`, `idempotency_key`, per-event `digest`
 
@@ -172,198 +181,186 @@ canonical = json.dumps(digest_input, sort_keys=True, separators=(",", ":"))
 equivalence_digest = hashlib.sha256(canonical.encode()).hexdigest()
 ```
 
-Size constraint: `recipient_manifest` JSONB max 100KB (CHECK `octet_length(recipient_manifest::text) <= 102400`). Practical limit: ~30 recipients.
-
-### Actor Identity
-
-| Actor | `initiated_by_phone` | `initiated_by_role` | `initiated_by_bu_id` |
-|-------|---------------------|--------------------|--------------------|
-| Customer booking | customer phone | "customer" | NULL |
-| Customer cancelling | customer phone | "customer" | NULL |
-| Owner cancelling via command | owner phone | "owner" | BusinessUser.id |
-| System (future) | "+0" | "system" | NULL |
-
-All from trusted `ActorContext` at command boundary. Never fabricated.
+Size constraint: `CHECK (octet_length(recipient_manifest::text) <= 102400)`.
+Practical limit: ~30 recipients with full snapshots.
 
 ## Decision Table: Replay Evidence Classification
 
-| Condition | Classification | Appointment Replay | Notification Evidence | API Behavior |
-|-----------|---------------|-------------------|----------------------|-------------|
-| Manifest exists, digest valid, outbox rows present | `manifested_complete` | Return committed result | Return manifest evidence | Success with full evidence |
-| Manifest exists, digest valid, outbox rows deleted (retention) | `manifested_retained` | Return committed result | Return manifest evidence (no delivery state) | Success with evidence; delivery state unavailable |
-| Manifest exists, digest INVALID | `manifest_corrupted` | FAIL CLOSED | FAIL CLOSED | Error: evidence corruption |
-| No manifest, outbox rows with v1 snapshot+digest, complete set | `legacy_complete_v1` | Return committed result | Accept outbox evidence with info log | Success; legacy note |
-| No manifest, outbox rows legacy format (no snapshot), all recipients present | `legacy_unmanifested` | Return committed result | Notification evidence UNKNOWN | Success with `notification_evidence: "unverifiable"` flag |
-| No manifest, outbox rows legacy format, partial/missing | `legacy_partial` | Return committed result | FAIL CLOSED for notification equivalence | Success with `notification_evidence: "partial_unverifiable"` flag |
-| No manifest, no outbox rows at all | `legacy_irrecoverable` | Return committed result | Notification evidence IRRECOVERABLE | Success with `notification_evidence: "irrecoverable"` flag |
-| No manifest, outbox rows with v1 snapshot, but partial set | `partial_new` | FAIL CLOSED | FAIL CLOSED | Error: incomplete evidence |
+**Founder policy (confirmed)**: return authoritative committed appointment
+result with explicit machine-readable `notification_evidence` status.
+Never claim notification success/delivery. Never make a committed
+appointment appear failed because historical notification proof is
+unavailable.
 
-Key: appointment replay (committed mutation result) is always authoritative
-from the appointment/commit row. Notification evidence is a separate axis.
-The API response must carry both: `appointment_result` (always authoritative)
-and `notification_evidence` (classified per above). Never invent notification
-success from appointment commit alone.
+| Condition | Classification | Appointment Result | `notification_evidence` | HTTP | Operator Alert |
+|-----------|---------------|-------------------|------------------------|------|---------------|
+| Manifest exists, digest valid, outbox present | `manifested_complete` | Committed result | `"verified"` | 200 | None |
+| Manifest exists, digest valid, outbox deleted | `manifested_retained` | Committed result | `"verified_delivery_unknown"` | 200 | None |
+| Manifest exists, digest INVALID | `manifest_corrupted` | **FAIL CLOSED** | N/A | 409/500 | `notification_manifest_corrupted` (business_id, entity_id, operation — no PII) |
+| No manifest, legacy outbox, all recipients present | `legacy_unmanifested` | Committed result | `"unverifiable"` | 200 | `legacy_notification_unverifiable` (business_id, entity_id — no PII) |
+| No manifest, legacy outbox, partial recipients | `legacy_partial` | Committed result | `"partial_unverifiable"` | 200 | `legacy_notification_partial` (business_id, entity_id — no PII) |
+| No manifest, no outbox rows | `legacy_irrecoverable` | Committed result | `"irrecoverable"` | 200 | `legacy_notification_irrecoverable` (business_id, entity_id — no PII) |
+| No manifest, new-format outbox (v1 snapshot), COMPLETE set | N/A — should not occur after rollout | **FAIL CLOSED** | N/A | 500 | `missing_manifest_with_v1_outbox` — indicates manifest write failed |
+| No manifest, new-format outbox (v1 snapshot), PARTIAL set | `partial_new` | **FAIL CLOSED** | N/A | 500 | `partial_v1_outbox_without_manifest` |
+| Manifest exists, corrupted snapshot in manifest | `manifest_corrupted` | **FAIL CLOSED** | N/A | 409/500 | `notification_manifest_corrupted` |
 
-## FOUNDER/PRODUCT POLICY DECISION REQUIRED
+**Key invariant**: partial new-format rows are NEVER classified as legacy.
+New-format evidence without a manifest indicates a write failure and
+fails closed immediately.
 
-**Question**: When `notification_evidence` is `legacy_unmanifested` or
-`legacy_irrecoverable`, should the API:
+### Domain Result Shape
 
-(a) Return appointment success with an explicit evidence limitation flag
-    (caller can see the appointment succeeded but notification proof is
-    unavailable), or
+```python
+@dataclass
+class AppointmentReplayResult:
+    appointment: AppointmentConfirmationResult  # always authoritative
+    notification_evidence: str  # "verified" | "verified_delivery_unknown" |
+                                # "unverifiable" | "partial_unverifiable" |
+                                # "irrecoverable"
+```
 
-(b) Fail the replay entirely (treat unproven notification as a failed
-    operation)?
-
-Recommendation: (a) — the appointment is committed and authoritative.
-Blocking replay on notification evidence would make already-completed
-operations appear to fail, which is strictly worse for the clinic.
-The limitation flag enables operator alerting without false failures.
-
-**This is a product-level decision, not an engineering one. Awaiting CEO.**
+All `notification_evidence` values except `"verified"` and
+`"verified_delivery_unknown"` emit PII-safe operator alerts via the
+existing metrics/logging infrastructure (business_id + entity_id only).
 
 ## Retention Contract
 
 ### Manifest Retention
 Manifests are retained for the **same period as their referent PendingAction**.
 Current PendingAction retention: indefinite (no cleanup policy exists).
-When PendingAction retention is implemented, manifest deletion must
-happen BEFORE PendingAction deletion (FK ordering).
 
-### Deletion Order (when retention is added)
-1. Delete delivered `notification_outbox` rows (already supported)
-2. Delete `notification_manifests` whose operation is terminal AND
-   beyond retention horizon
-3. Delete `pending_actions` (existing policy, runs after manifest cleanup)
-4. Appointments/commits: existing policy
+When PendingAction retention is implemented:
+1. Delete delivered `notification_outbox` rows (existing policy)
+2. Delete `notification_manifests` beyond retention horizon
+3. Delete `pending_actions` (runs after manifest cleanup, FK enforces order)
+
+After manifest deletion, replay of that operation returns
+`notification_evidence: "irrecoverable"` (manifest gone, outbox gone).
 
 ### Privacy Basis
-Manifests contain recipient phone numbers and names. Deletion is
-authorized under the same data-retention policy as PendingActions
-and appointments. No separate consent model.
+Manifests contain recipient phone numbers and names. Subject to the same
+data-retention and deletion-request policy as PendingActions and
+appointments. No separate consent model.
 
-### No Manual TRUNCATE
-Immutable evidence may not be destroyed to force downgrade.
-Downgrade is refused while manifests exist (see below).
+### No Destructive Bypass
+Immutable evidence may not be destroyed to force downgrade or bypass
+retention. No `TRUNCATE` escape hatch in normal procedure.
 
 ## Deployment/Rollout Sequence
 
 Single-node staging/production. No concurrent application versions.
 
 ```
-1. STOP application (maintenance window — brief)
+1. STOP application (maintenance window)
 2. Run: alembic upgrade 0015
-   - CREATE TABLE notification_manifests
-   - CREATE INDEXES
-   - Backfill: (see below — may be empty on first deploy)
+   - CREATE TABLE notification_manifests (pure DDL)
+   - Zero backfill (no v1 outbox rows on current main)
 3. DEPLOY new application code (manifest-writing NotificationService)
 4. START application
 5. VERIFY: new appointments produce manifests
 ```
 
-Writer quiescence is guaranteed by step 1 (stop application).
+Writer quiescence is guaranteed by step 1 (application stopped).
 No dual-write compatibility needed for single-node deployment.
 
 ### Backfill
 
 On main `6a15a40`, the notification service produces outbox rows with:
-- `idempotency_key`: `appt-confirm-patient-{id}`, `appt-confirm-owner-{id}`,
+- Keys: `appt-confirm-patient-{id}`, `appt-confirm-owner-{id}`,
   `appt-cancel-patient-{id}`, `appt-cancel-owner-{id}`
 - No `equivalence_snapshot` or `equivalence_digest` in payload
 - Owner phone from `Business.primary_contact_phone` (not BusinessUser)
 - No reschedule notifications
 
-Since `6ec5a72` was never integrated to main, there are NO Category A
-(v1 snapshot) rows in production. All existing outbox rows are Category B
-(legacy format) or Category C (already deleted).
+Since `6ec5a72` was never integrated to main, there are **zero v1-format
+outbox rows** in production. All existing outbox rows are legacy format.
 
-**Backfill produces zero manifests.** All existing operations are
-`legacy_unmanifested` or `legacy_irrecoverable`. The backfill step
-is a no-op but must be present in the migration for correctness
-(future upgrades from branches that DID create v1 rows).
+**Backfill produces zero manifests.** The migration is pure DDL — no
+application code imports, no data transformation. All existing operations
+are classified `legacy_unmanifested` or `legacy_irrecoverable` by the
+application's decision table, not by the migration.
 
-### Backfill SQL (for completeness)
+Non-main branch shapes (e.g., `6ec5a72`'s embedded-JSONB format) are
+out of scope for this migration.
 
-```sql
--- No-op for current main deployment.
--- If v1 outbox rows existed, this would group them into manifests.
--- Left as documentation; actual backfill is application-level
--- because canonical digest computation requires Python.
+## Mapping-Independent Credential Resolution
+
+Current `ConfiguredWhatsAppSenderResolver.resolve()` (line 47-49):
+```python
+mapped_business = self._business_mappings.get(phone_number_id)
+if mapped_business != business_id:
+    raise NotificationDeliveryError("channel_identity_mismatch")
 ```
 
-## Migration Quality
+This rejects a committed `phone_number_id` if the current mapping rotated.
+Retry of a committed event fails even though the event is valid.
 
-### Parent
-`0014` (single head, linear chain)
+### Required Fix
 
-### ORM Parity
-`NotificationManifest` model added to `schema.py` with all columns,
-constraints, and indexes matching the migration SQL.
+Trusted credential lookup by committed sender identity:
 
-### Offline SQL
-Migration is pure DDL (CREATE TABLE + indexes + constraints).
-No application imports. Can be rendered and reviewed as SQL.
+1. Worker reads `phone_number_id` from committed event payload
+2. Credential resolver accepts `phone_number_id` if:
+   - The `phone_number_id` has a valid access token in the credential store
+   - The `business_id` on the event matches the `business_id` that ORIGINALLY
+     owned this `phone_number_id` (recorded in the manifest, not in current mapping)
+3. Mapping rotation (reassigning a phone_number_id to a different business)
+   must not break in-flight retries for the original business
+4. One tenant cannot use another's sender: the manifest records which
+   `phone_number_id` was authorized at commit time, and the credential
+   resolver verifies the event's `business_id` against the manifest's
+   recorded ownership, not current mutable mapping
 
-### Fresh Upgrade
-Empty database → all 15 migrations → `notification_manifests` table
-exists with correct schema. Zero rows.
+This is an application-level fix, not a schema change.
 
-### Populated Upgrade
-Database with existing outbox rows → 0015 adds `notification_manifests`.
-Backfill is no-op (no v1 rows on main). Existing outbox rows untouched.
-
-### Concurrent-Write Safety (during upgrade)
-Application is stopped (step 1 of rollout). No concurrent writes.
-
-### Downgrade
+## Downgrade Safety
 
 ```python
 def downgrade():
-    # Acquire ACCESS EXCLUSIVE lock to prevent concurrent inserts
+    # ACCESS EXCLUSIVE prevents concurrent inserts during check+drop
     op.execute("LOCK TABLE notification_manifests IN ACCESS EXCLUSIVE MODE")
 
-    # Preflight: refuse if manifests exist
     count = op.get_bind().execute(
         text("SELECT count(*) FROM notification_manifests")
     ).scalar()
     if count > 0:
         raise RuntimeError(
-            f"Cannot downgrade: {count} notification manifest(s) would be lost. "
+            f"Cannot downgrade: {count} notification manifest(s) exist. "
             "Resolve retention before downgrading."
         )
 
     op.drop_table("notification_manifests")
 ```
 
-The `LOCK TABLE ... ACCESS EXCLUSIVE` before the count prevents
-concurrent inserts between the check and the drop. The lock is
-held within the same transaction as the DROP.
+### Concurrent Contention Outcomes
 
-No manual TRUNCATE escape. If manifests exist, the downgrade fails
-and the operator must resolve retention first.
+**Scenario A: Downgrade succeeds (table empty)**
+1. Downgrade acquires ACCESS EXCLUSIVE lock
+2. Concurrent INSERT blocked (waits for lock)
+3. Count check: 0 manifests
+4. DROP TABLE executes within same transaction
+5. Transaction commits → lock released
+6. Blocked INSERT fails: `relation "notification_manifests" does not exist`
+7. Application error surfaces as notification creation failure → appointment
+   savepoint rolls back (correct fail-closed behavior)
 
-### Upgrade/Downgrade/Re-upgrade
+**Scenario B: Downgrade refused (manifests exist)**
+1. Downgrade acquires ACCESS EXCLUSIVE lock
+2. Concurrent INSERT blocked (waits for lock)
+3. Count check: N > 0 manifests
+4. RuntimeError raised → transaction rolls back → lock released
+5. Blocked INSERT proceeds normally (table still exists)
+6. No data loss, no evidence corruption
 
-1. `alembic upgrade 0015` → table created
-2. `alembic downgrade 0014` → table dropped (if empty)
-3. `alembic upgrade 0015` → table recreated
-
-No data loss because step 2 only succeeds if table is empty.
-
-### Live Contention (downgrade)
-
-Test: insert a manifest row, attempt downgrade → expect refusal with
-count in error message. Delete the row, retry downgrade → succeeds.
-Test: concurrent insert during downgrade → blocked by ACCESS EXCLUSIVE
-lock, insert waits, downgrade completes (or fails), insert either
-succeeds (re-upgrade path) or fails (table gone).
+Both outcomes are terminal and correct. No insert can slip between
+the count check and the DROP because the ACCESS EXCLUSIVE lock is
+held for the entire transaction.
 
 ## Application Correction Checklist (post-schema approval)
 
 ### 1. Reschedule Operation Key
-- Key: `notif-reschedule-patient-{appt_id}-pa{pending_action_id}`
-- Owner: `notif-reschedule-owner-{appt_id}-bu{bu_id}-pa{pending_action_id}`
+- `notif-reschedule-patient-{appt_id}-pa{pending_action_id}`
+- `notif-reschedule-owner-{appt_id}-bu{bu_id}-pa{pending_action_id}`
 - Each PA produces unique keys → multiple reschedules don't collide
 
 ### 2. Immutable `old_start_at`
@@ -374,37 +371,34 @@ succeeds (re-upgrade path) or fails (table gone).
 - Replay loads manifest by `(business_id, pending_action_id)`
 - Verify `equivalence_digest` matches recomputed canonical
 - Verify `recipient_count` matches `jsonb_array_length(recipient_manifest)`
-- Return all `outbox_event_ids` (or manifest evidence if outbox deleted)
+- Classify per decision table; never invent notification success
 
-### 4. E.164 Phone Validation
+### 4. E.164 Phone Validation and Dedup
 - All recipient phones validated via `core.validators.normalize_phone`
-- Dedup by normalized phone (not raw)
+- Dedup by normalized E.164 phone (not raw)
 - Invalid phone → `NotificationConfigurationError` before any mutation
 
 ### 5. Fixed-Point Price
-- `format(Decimal(str(price)), 'f')` — not `Decimal.normalize()` which strips trailing zeros
+- `format(Decimal(str(price)), 'f')` — deterministic, no trailing-zero stripping
 
 ### 6. WhatsApp Reschedule Renderer
 - Add `appointment_rescheduled` case to `_format_message`
 - Patient: "Your appointment has been rescheduled from {old_time} to {new_time}"
 - Owner: "{patient_name}'s appointment rescheduled from {old_time} to {new_time}"
 
-### 7. Mapping-Independent Retry
-- Current `ConfiguredWhatsAppSenderResolver.resolve()` rejects stored
-  `phone_number_id` if current mapping changed (line 48-49)
-- Fix: trusted credential lookup by committed `phone_number_id` directly,
-  with access_token resolution independent of business→phone mapping
-- Sender identity is immutable in the manifest; routing is operational
+### 7. Mapping-Independent Credential Resolution
+- See dedicated section above
+- Trusted lookup by committed sender identity with business-scoped ownership check
 
 ### 8. Actor Binding
-- `initiated_by_phone` and `initiated_by_role` from trusted `ActorContext`
-- `initiated_by_bu_id` from BusinessUser lookup if role is owner
-- Never from `Business.primary_contact_phone`
+- `actor_kind` from `ActorContext.verified_role` mapped to customer/owner/system
+- `actor_phone` from `ActorContext.normalized_phone` (NULL for system)
+- `actor_bu_id` from BusinessUser lookup if role is owner
 
 ### 9. Stranded Committing PA Race
-- When cancellation `begin_commit` succeeds but concurrent already-cancelled
-  `INVALID_STATE` is caught as success by owner flow, PA stays `committing`
-- Fix: wrap `begin_commit` + post-begin validation in one savepoint,
+- `begin_commit` succeeds → concurrent already-cancelled `INVALID_STATE`
+  caught as success → PA stays `committing`
+- Fix: wrap begin_commit + post-begin validation in one savepoint,
   OR explicitly `fail_commit` on the caught path
 - Independent-session race test required
 
@@ -412,31 +406,34 @@ succeeds (re-upgrade path) or fails (table gone).
 - Two independent sessions confirming same PA
 - asyncio.Event barrier, pg_blocking_pids observation
 - Exactly one appointment + one manifest + correct outbox count
-- Blocked contender returns exact existing evidence
+- Blocked contender returns exact existing evidence with correct
+  `notification_evidence` classification
 
 ### 11. Tenant-Scoped SQL
 - All manifest queries scoped by `business_id`
-- Composite FK (business_id, pending_action_id)
+- Composite FK `(business_id, pending_action_id)`
 - No cross-tenant manifest lookup
 
 ### 12. Retention → Replay Test
 - Create appointment with manifest + outbox events
 - Delete outbox rows (simulate retention)
-- Replay: manifest provides authoritative evidence
+- Replay: manifest provides `verified_delivery_unknown` evidence
 - Zero new outbox rows or mutations
+- Delete manifest → replay returns `irrecoverable`
 
 ## Required Migration Evidence Plan
 
-1. **ORM parity**: model matches migration DDL exactly
+1. **ORM parity**: `NotificationManifest` model matches migration DDL exactly
 2. **Offline SQL**: `alembic upgrade --sql 0014:0015` produces reviewable DDL
 3. **Fresh upgrade**: empty DB → 0015 → table exists, schema correct
 4. **Populated upgrade**: DB with legacy outbox → 0015 → table exists,
-   zero manifests (backfill no-op), existing outbox untouched
+   zero manifests, existing outbox untouched
 5. **Writer quiescence**: application stopped during migration (single-node)
-6. **Main 0014 legacy inventory**: 4 idempotency key patterns, no snapshot/digest,
-   single owner from `Business.primary_contact_phone`, no reschedule notifications
-7. **Locked downgrade refusal**: ACCESS EXCLUSIVE lock before count check,
-   refuse with count if manifests exist
-8. **Concurrent late-writer proof**: test insert during downgrade blocked by lock
+6. **Main 0014 legacy inventory fixtures**: 4 idempotency key patterns,
+   no snapshot/digest, single owner from `Business.primary_contact_phone`,
+   no reschedule notifications — tested with exact legacy fixtures
+7. **Locked downgrade refusal**: ACCESS EXCLUSIVE → count > 0 → refuse
+8. **Concurrent late-writer proof**: Scenario A (INSERT fails after DROP)
+   and Scenario B (INSERT proceeds after refused downgrade) — both tested
 9. **Upgrade/downgrade/re-upgrade**: roundtrip with no evidence loss
 10. **Sanitized preflight**: error messages contain counts only, no PII

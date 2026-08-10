@@ -115,9 +115,15 @@ def _validate_phases(
             errors.append(f"phase {phase} exit={exit_code}")
 
     required = manifest.get("required_phases", [])
-    missing = [p for p in required if p not in seen_phases]
-    if missing:
-        errors.append(f"missing required phases: {', '.join(missing)}")
+    if seen_phases != required:
+        missing = [p for p in required if p not in seen_phases]
+        extra = [p for p in seen_phases if p not in required]
+        if missing:
+            errors.append(f"missing required phases: {', '.join(missing)}")
+        if extra:
+            errors.append(f"unknown/extra phases: {', '.join(extra)}")
+        if not missing and not extra and seen_phases != required:
+            errors.append(f"phase order mismatch: observed {seen_phases} != required {required}")
 
     return errors, phase_exits
 

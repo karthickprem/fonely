@@ -279,6 +279,31 @@ class TestPrePytestPhaseFailure:
         _phase_fail(evidence, "dependency_install")
         assert _reconcile(evidence, waivers)["state"] == TERMINAL_TEST_FAILED
 
+    def test_extra_bogus_phase_fails(self, tmp_path: Path) -> None:
+        evidence, waivers = tmp_path / "e", tmp_path / "w.json"
+        evidence.mkdir()
+        _full(evidence, waivers)
+        from ci_evidence.schemas import PHASE_RESULTS_FILE
+
+        existing = (evidence / PHASE_RESULTS_FILE).read_bytes()
+        bogus = (
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "phase": "bogus_phase",
+                    "sequence": 2,
+                    "exit_code": 0,
+                    "failure_class": None,
+                    "start_utc": "T",
+                    "end_utc": "T",
+                }
+            )
+            + "\n"
+        )
+        (evidence / PHASE_RESULTS_FILE).write_bytes(existing + bogus.encode())
+        t = _reconcile(evidence, waivers)
+        assert t["state"] != TERMINAL_SUCCESS
+
 
 class TestTestFailure:
     def test_non_pg_test_failure(self, tmp_path: Path) -> None:

@@ -10,6 +10,7 @@ import re
 import subprocess
 from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 import pytest
@@ -51,36 +52,110 @@ def postgres_database_url() -> str:
     return _test_database_url()
 
 
+_SUITE_LOCK_ID = 0x466F6E656C795447  # "FonelyTG" as int64
+
+
+def _reset_schema(database_url: str) -> None:
+    """Drop and recreate public schema for a deterministic clean slate.
+
+    Recovers from any residual migration state — partial downgrade,
+    populated guard failure, or cross-session schema drift — without
+    depending on alembic downgrade succeeding.
+    """
+    import asyncio
+
+    async def _do_reset() -> None:
+        engine = create_async_engine(database_url, isolation_level="AUTOCOMMIT")
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
+                await conn.execute(text("CREATE SCHEMA public"))
+                await conn.execute(text("GRANT ALL ON SCHEMA public TO PUBLIC"))
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_do_reset())
+
+
+class _SuiteLock:
+    """Session-lifetime advisory lock held via a dedicated event loop."""
+
+    def __init__(self, database_url: str) -> None:
+        import asyncio
+
+        import asyncpg
+
+        parsed = urlparse(database_url.replace("+asyncpg", ""))
+        self._loop = asyncio.new_event_loop()
+        self._conn: Any = self._loop.run_until_complete(
+            asyncpg.connect(
+                host=parsed.hostname or "localhost",
+                port=parsed.port or 5432,
+                user=parsed.username,
+                password=parsed.password,
+                database=parsed.path.lstrip("/"),
+            )
+        )
+        acquired = self._loop.run_until_complete(
+            self._conn.fetchval(f"SELECT pg_try_advisory_lock({_SUITE_LOCK_ID})")
+        )
+        if not acquired:
+            self._loop.run_until_complete(self._conn.close())
+            self._loop.close()
+            pytest.fail(
+                "Another test suite holds the database lock. "
+                "Wait for it to finish or use a separate database "
+                "(e.g. fonely_test_<suffix>)."
+            )
+
+    def release(self) -> None:
+        import warnings
+
+        try:
+            self._loop.run_until_complete(self._conn.close())
+        except Exception:
+            warnings.warn(
+                "Advisory lock connection did not close cleanly",
+                stacklevel=2,
+            )
+        finally:
+            self._loop.close()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def migrated_postgres(postgres_database_url: str) -> Generator[None, None, None]:
     env = os.environ.copy()
     env["DATABASE_URL"] = postgres_database_url
     alembic = str(BACKEND_ROOT / ".venv" / "bin" / "alembic")
-    subprocess.run(
-        [alembic, "downgrade", "base"],
-        cwd=BACKEND_ROOT,
-        env=env,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    subprocess.run(
-        [alembic, "upgrade", "head"],
-        cwd=BACKEND_ROOT,
-        env=env,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    yield
-    subprocess.run(
-        [alembic, "downgrade", "base"],
-        cwd=BACKEND_ROOT,
-        env=env,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    lock = _SuiteLock(postgres_database_url)
+    try:
+        _reset_schema(postgres_database_url)
+        subprocess.run(
+            [alembic, "upgrade", "head"],
+            cwd=BACKEND_ROOT,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        yield
+        result = subprocess.run(
+            [alembic, "downgrade", "base"],
+            cwd=BACKEND_ROOT,
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            import warnings
+
+            warnings.warn(
+                f"Teardown downgrade failed (exit {result.returncode})",
+                stacklevel=1,
+            )
+    finally:
+        lock.release()
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")

@@ -402,6 +402,7 @@ async def _clean_and_restore(pg_engine: AsyncEngine, database_url: str) -> None:
             "0012",
             "0013",
             "0014",
+            "0015",
         ):
             tables_0005 = (
                 "notification_outbox, "
@@ -563,7 +564,7 @@ async def test_populated_migration_cycle(
 
     async with pg_engine.begin() as conn:
         rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-        assert rev == "0014"
+        assert rev == "0015"
 
         lines_after_upgrade = tuple((await conn.execute(text(line_query))).all())
         assert len(lines_after_upgrade) == 2
@@ -649,7 +650,7 @@ async def test_populated_migration_cycle(
 
     async with pg_engine.begin() as conn:
         rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-        assert rev == "0014"
+        assert rev == "0015"
 
         lines_after_reupgrade = tuple((await conn.execute(text(line_query))).all())
         assert len(lines_after_reupgrade) == 2

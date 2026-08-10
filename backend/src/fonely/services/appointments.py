@@ -163,7 +163,7 @@ class AppointmentService:
             command.pending_action_id,
         )
         if existing is not None:
-            return self._replay_result(existing, action.version)
+            return await self._replay_result(existing, action)
 
         context = CommitResultContext(
             business_id=command.actor.business_id,
@@ -180,23 +180,25 @@ class AppointmentService:
             proposed_data.facts.resource_id,
         )
 
-        begin_result = await self._pa_service.begin_commit(BeginCommitCommand(context=context))
-        committing_version = begin_result.version
-        committing_context = CommitResultContext(
-            business_id=context.business_id,
-            pending_action_id=context.pending_action_id,
-            expected_version=committing_version,
-            engine="appointment_engine",
-        )
-
-        envelope = PendingAppointmentEnvelope.model_validate(begin_result.payload)
-        data = envelope.data
-        assert isinstance(data, CreateAppointmentData)
-        facts = data.facts
-
         overlap_exc: IntegrityError | None = None
         try:
             async with self._session.begin_nested():
+                begin_result = await self._pa_service.begin_commit(
+                    BeginCommitCommand(context=context)
+                )
+                committing_version = begin_result.version
+                committing_context = CommitResultContext(
+                    business_id=context.business_id,
+                    pending_action_id=context.pending_action_id,
+                    expected_version=committing_version,
+                    engine="appointment_engine",
+                )
+
+                envelope = PendingAppointmentEnvelope.model_validate(begin_result.payload)
+                data = envelope.data
+                assert isinstance(data, CreateAppointmentData)
+                facts = data.facts
+
                 appointment = await self._repo.insert(
                     {
                         "business_id": command.actor.business_id,
@@ -263,22 +265,19 @@ class AppointmentService:
                     _restore_deferred_sql(APPOINTMENT_CREATE_POST_COMPLETION_CONSTRAINTS)
                 )
 
-                try:
-                    from fonely.services.notifications import NotificationService
+                from fonely.services.notifications import NotificationService
 
-                    await NotificationService(self._session).create_appointment_notifications(
-                        business_id=command.actor.business_id,
-                        appointment_id=appointment.id,
-                        customer_phone=data.customer_phone,
-                        customer_name=data.customer_name,
-                        service_name=facts.service_name,
-                        resource_name=facts.resource_name,
-                        start_at=facts.start_at,
-                        price=facts.price,
-                        business_timezone=facts.business_timezone,
-                    )
-                except Exception:
-                    logger.warning("notification_outbox_insert_failed", exc_info=True)
+                await NotificationService(self._session).create_appointment_notifications(
+                    business_id=command.actor.business_id,
+                    appointment_id=appointment.id,
+                    customer_phone=data.customer_phone,
+                    customer_name=data.customer_name,
+                    service_name=facts.service_name,
+                    resource_name=facts.resource_name,
+                    start_at=facts.start_at,
+                    price=facts.price,
+                    business_timezone=facts.business_timezone,
+                )
         except IntegrityError as exc:
             if (
                 getattr(exc.orig, "sqlstate", None) == _OVERLAP_SQLSTATE
@@ -291,7 +290,12 @@ class AppointmentService:
         if overlap_exc is not None:
             fail_result = await self._pa_service.fail_commit(
                 FailCommitCommand(
-                    context=committing_context,
+                    context=CommitResultContext(
+                        business_id=context.business_id,
+                        pending_action_id=context.pending_action_id,
+                        expected_version=begin_result.version,
+                        engine="appointment_engine",
+                    ),
                     error_code="resource_unavailable",
                     retryable=True,
                 )
@@ -404,20 +408,12 @@ class AppointmentService:
             command.actor.business_id, command.pending_action_id
         )
         if existing_commit is not None:
-            return self._replay_cancellation(existing_commit, data)
+            return await self._replay_cancellation(existing_commit, data)
 
         context = CommitResultContext(
             business_id=command.actor.business_id,
             pending_action_id=command.pending_action_id,
             expected_version=command.expected_version,
-            engine="appointment_engine",
-        )
-
-        begin_result = await self._pa_service.begin_commit(BeginCommitCommand(context=context))
-        committing_context = CommitResultContext(
-            business_id=context.business_id,
-            pending_action_id=context.pending_action_id,
-            expected_version=begin_result.version,
             engine="appointment_engine",
         )
 
@@ -440,12 +436,23 @@ class AppointmentService:
             )
 
         now = datetime.now(tz=appointment.start_at.tzinfo)
+        old_start_at = appointment.start_at
+        old_customer_phone = appointment.customer_phone
+        old_customer_name = appointment.customer_name
 
         before_snapshot = await self._authoritative_snapshot(
             data.target_appointment_id, command.actor.business_id
         )
 
         async with self._session.begin_nested():
+            begin_result = await self._pa_service.begin_commit(BeginCommitCommand(context=context))
+            committing_context = CommitResultContext(
+                business_id=context.business_id,
+                pending_action_id=context.pending_action_id,
+                expected_version=begin_result.version,
+                engine="appointment_engine",
+            )
+
             await self._repo.update_allocation_status(
                 command.actor.business_id,
                 data.target_appointment_id,
@@ -464,7 +471,8 @@ class AppointmentService:
             )
             if updated is None:
                 raise AppointmentDomainError(
-                    AppointmentErrorCode.STALE_VERSION, "Appointment version changed"
+                    AppointmentErrorCode.STALE_VERSION,
+                    "Appointment version changed",
                 )
 
             after_snapshot = await self._authoritative_snapshot(
@@ -505,22 +513,19 @@ class AppointmentService:
                 _restore_deferred_sql(APPOINTMENT_CANCEL_POST_COMPLETION_CONSTRAINTS)
             )
 
-            try:
-                from fonely.services.notifications import NotificationService
+            from fonely.services.notifications import NotificationService
 
-                await NotificationService(self._session).create_cancellation_notifications(
-                    business_id=command.actor.business_id,
-                    appointment_id=appointment.id,
-                    customer_phone=appointment.customer_phone,
-                    customer_name=appointment.customer_name,
-                    service_name=appointment.service_name_snapshot,
-                    resource_name=appointment.resource_name_snapshot,
-                    start_at=appointment.start_at,
-                    business_timezone=appointment.business_timezone_snapshot,
-                    reason=data.reason_code,
-                )
-            except Exception:
-                logger.warning("cancellation_notification_failed", exc_info=True)
+            await NotificationService(self._session).create_cancellation_notifications(
+                business_id=command.actor.business_id,
+                appointment_id=data.target_appointment_id,
+                customer_phone=old_customer_phone,
+                customer_name=old_customer_name,
+                service_name=appointment.service_name_snapshot,
+                resource_name=appointment.resource_name_snapshot,
+                start_at=old_start_at,
+                business_timezone=appointment.business_timezone_snapshot,
+                reason=data.reason_code,
+            )
 
         return AppointmentCancellationResult(
             appointment_id=data.target_appointment_id,
@@ -632,7 +637,7 @@ class AppointmentService:
             command.actor.business_id, command.pending_action_id
         )
         if existing_commit is not None:
-            return self._replay_reschedule(existing_commit, data)
+            return await self._replay_reschedule(existing_commit, data)
         new_facts = data.new_facts
 
         context = CommitResultContext(
@@ -681,19 +686,11 @@ class AppointmentService:
             command.actor.business_id, command.pending_action_id
         )
         if existing_commit is not None:
-            return self._replay_reschedule(existing_commit, data)
+            return await self._replay_reschedule(existing_commit, data)
 
-        begin_result = await self._pa_service.begin_commit(BeginCommitCommand(context=context))
-        committing_context = CommitResultContext(
-            business_id=context.business_id,
-            pending_action_id=context.pending_action_id,
-            expected_version=begin_result.version,
-            engine="appointment_engine",
-        )
-        revalidated = PendingAppointmentEnvelope.model_validate(begin_result.payload)
-        revalidated_data = revalidated.data
-        assert isinstance(revalidated_data, RescheduleAppointmentData)
-        new_facts = revalidated_data.new_facts
+        old_start_at = appointment.start_at
+        old_customer_phone = appointment.customer_phone
+        old_customer_name = appointment.customer_name
 
         now = datetime.now(tz=appointment.start_at.tzinfo)
         before_snapshot = await self._authoritative_snapshot(
@@ -703,6 +700,20 @@ class AppointmentService:
         overlap_exc: IntegrityError | None = None
         try:
             async with self._session.begin_nested():
+                begin_result = await self._pa_service.begin_commit(
+                    BeginCommitCommand(context=context)
+                )
+                committing_context = CommitResultContext(
+                    business_id=context.business_id,
+                    pending_action_id=context.pending_action_id,
+                    expected_version=begin_result.version,
+                    engine="appointment_engine",
+                )
+                revalidated = PendingAppointmentEnvelope.model_validate(begin_result.payload)
+                revalidated_data = revalidated.data
+                assert isinstance(revalidated_data, RescheduleAppointmentData)
+                new_facts = revalidated_data.new_facts
+
                 await self._repo.update_allocation_status(
                     command.actor.business_id,
                     data.target_appointment_id,
@@ -735,7 +746,8 @@ class AppointmentService:
                 )
                 if updated is None:
                     raise AppointmentDomainError(
-                        AppointmentErrorCode.STALE_VERSION, "Appointment version changed"
+                        AppointmentErrorCode.STALE_VERSION,
+                        "Appointment version changed",
                     )
 
                 await self._repo.insert_allocation(
@@ -791,6 +803,21 @@ class AppointmentService:
                 await self._repo.force_constraints(
                     _restore_deferred_sql(APPOINTMENT_RESCHEDULE_POST_COMPLETION_CONSTRAINTS)
                 )
+
+                from fonely.services.notifications import NotificationService
+
+                await NotificationService(self._session).create_reschedule_notifications(
+                    business_id=command.actor.business_id,
+                    appointment_id=data.target_appointment_id,
+                    pending_action_id=command.pending_action_id,
+                    customer_phone=old_customer_phone,
+                    customer_name=old_customer_name,
+                    service_name=new_facts.service_name,
+                    resource_name=new_facts.resource_name,
+                    old_start_at=old_start_at,
+                    new_start_at=new_facts.start_at,
+                    business_timezone=new_facts.business_timezone,
+                )
         except IntegrityError as exc:
             if (
                 getattr(exc.orig, "sqlstate", None) == _OVERLAP_SQLSTATE
@@ -803,7 +830,12 @@ class AppointmentService:
         if overlap_exc is not None:
             await self._pa_service.fail_commit(
                 FailCommitCommand(
-                    context=committing_context,
+                    context=CommitResultContext(
+                        business_id=context.business_id,
+                        pending_action_id=context.pending_action_id,
+                        expected_version=begin_result.version,
+                        engine="appointment_engine",
+                    ),
                     error_code="resource_unavailable",
                     retryable=True,
                 )
@@ -1009,7 +1041,7 @@ class AppointmentService:
             confirmation_facts=self._operation_facts_from_envelope(envelope),
         )
 
-    def _replay_cancellation(
+    async def _replay_cancellation(
         self, commit: object, data: CancelAppointmentData
     ) -> AppointmentCancellationResult:
         if (
@@ -1019,15 +1051,31 @@ class AppointmentService:
             raise PendingActionIdempotencyConflictError(
                 "Committed cancellation evidence does not match pending action"
             )
+        before = commit.before_snapshot  # type: ignore[attr-defined]
         after = commit.after_snapshot  # type: ignore[attr-defined]
         cancelled_at = datetime.fromisoformat(str(after["cancelled_at"]).replace("Z", "+00:00"))
+
+        from fonely.services.notifications import NotificationService
+
+        await NotificationService(self._session).verify_cancellation_notifications(
+            business_id=commit.business_id,  # type: ignore[attr-defined]
+            appointment_id=data.target_appointment_id,
+            customer_phone=str(before["customer_phone"]),
+            customer_name=before.get("customer_name"),
+            service_name=str(before["service_name"]),
+            resource_name=str(before["resource_name"]),
+            start_at=datetime.fromisoformat(str(before["start_at"]).replace("Z", "+00:00")),
+            business_timezone=str(before["business_timezone"]),
+            reason=data.reason_code,
+        )
+
         return AppointmentCancellationResult(
             appointment_id=data.target_appointment_id,
             appointment_commit_id=commit.id,  # type: ignore[attr-defined]
             cancelled_at=cancelled_at,
         )
 
-    def _replay_reschedule(
+    async def _replay_reschedule(
         self, commit: object, data: RescheduleAppointmentData
     ) -> AppointmentRescheduleResult:
         if (
@@ -1037,7 +1085,24 @@ class AppointmentService:
             raise PendingActionIdempotencyConflictError(
                 "Committed reschedule evidence does not match pending action"
             )
+        before = commit.before_snapshot  # type: ignore[attr-defined]
         after = commit.after_snapshot  # type: ignore[attr-defined]
+
+        from fonely.services.notifications import NotificationService
+
+        await NotificationService(self._session).verify_reschedule_notifications(
+            business_id=commit.business_id,  # type: ignore[attr-defined]
+            appointment_id=data.target_appointment_id,
+            pending_action_id=commit.pending_action_id,  # type: ignore[attr-defined]
+            customer_phone=str(before["customer_phone"]),
+            customer_name=before.get("customer_name"),
+            service_name=str(after["service_name"]),
+            resource_name=str(after["resource_name"]),
+            old_start_at=datetime.fromisoformat(str(before["start_at"]).replace("Z", "+00:00")),
+            new_start_at=datetime.fromisoformat(str(after["start_at"]).replace("Z", "+00:00")),
+            business_timezone=str(after["business_timezone"]),
+        )
+
         return AppointmentRescheduleResult(
             appointment_id=data.target_appointment_id,
             appointment_commit_id=commit.id,  # type: ignore[attr-defined]
@@ -1112,11 +1177,28 @@ class AppointmentService:
             business_timezone=facts.business_timezone,
         )
 
-    def _replay_result(
+    async def _replay_result(
         self,
         appointment: object,
-        authoritative_version: int,
+        action: PendingAction,
     ) -> PreCommitAppointmentSuccess:
+        committed_data = PendingAppointmentEnvelope.model_validate(action.proposed_payload).data
+        assert isinstance(committed_data, CreateAppointmentData)
+
+        from fonely.services.notifications import NotificationService
+
+        await NotificationService(self._session).verify_appointment_notifications(
+            business_id=action.business_id,
+            appointment_id=appointment.id,  # type: ignore[attr-defined]
+            customer_phone=committed_data.customer_phone,
+            customer_name=committed_data.customer_name,
+            service_name=committed_data.facts.service_name,
+            resource_name=committed_data.facts.resource_name,
+            start_at=committed_data.facts.start_at,
+            price=committed_data.facts.price,
+            business_timezone=committed_data.facts.business_timezone,
+        )
+
         return PreCommitAppointmentSuccess(
             appointment=AppointmentConfirmationResult(
                 appointment_id=appointment.id,  # type: ignore[attr-defined]
@@ -1130,5 +1212,5 @@ class AppointmentService:
                 price=appointment.price_snapshot,  # type: ignore[attr-defined]
                 business_timezone=appointment.business_timezone_snapshot,  # type: ignore[attr-defined]
             ),
-            pending_action_version=authoritative_version,
+            pending_action_version=action.version,
         )

@@ -4,6 +4,8 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from fonely.domain.appointments.commands import (
     ConfirmPendingAppointmentCommand,
     CreatePendingAppointmentCommand,
@@ -178,7 +180,9 @@ async def test_proposal_validates_once() -> None:
     assert validation.validate_for_actor.call_count == 1
 
 
-async def test_confirm_replay_returns_authoritative_version() -> None:
+async def test_confirm_replay_returns_authoritative_version(
+    monkeypatch: "pytest.MonkeyPatch",
+) -> None:
     session = AsyncMock()
     validation = _mock_validation()
     service = AppointmentService(session, validation=validation)
@@ -200,11 +204,20 @@ async def test_confirm_replay_returns_authoritative_version() -> None:
     action.version = 5
     action.initiated_by = "+919123456789"
     action.action_type = "appointment"
+    action.proposed_payload = canonical_payload_dict(_resolved_envelope())
 
     service._repo = AsyncMock()
     service._repo.get_by_business_and_pending_action.return_value = existing
     service._pa_service = AsyncMock()
     service._pa_service._require_action = AsyncMock(return_value=action)
+
+    from fonely.services import notifications
+
+    monkeypatch.setattr(
+        notifications.NotificationService,
+        "verify_appointment_notifications",
+        AsyncMock(return_value=[1, 2]),
+    )
 
     result = await service.confirm_and_commit(
         ConfirmPendingAppointmentCommand(
@@ -220,13 +233,12 @@ async def test_confirm_replay_returns_authoritative_version() -> None:
     session.commit.assert_not_called()
 
 
-async def test_confirm_does_not_call_outer_commit() -> None:
-    session = AsyncMock(spec=[])
+async def test_confirm_does_not_call_outer_commit(
+    monkeypatch: "pytest.MonkeyPatch",
+) -> None:
+    session = AsyncMock()
     session.commit = AsyncMock()
     session.rollback = AsyncMock()
-    session.flush = AsyncMock()
-    session.execute = AsyncMock()
-    session.add = MagicMock()
     validation = _mock_validation()
     service = AppointmentService(session, validation=validation)
 
@@ -281,6 +293,14 @@ async def test_confirm_does_not_call_outer_commit() -> None:
         yield
 
     session.begin_nested = _fake_nested
+
+    from fonely.services import notifications
+
+    monkeypatch.setattr(
+        notifications.NotificationService,
+        "create_appointment_notifications",
+        AsyncMock(return_value=[1, 2]),
+    )
 
     result = await service.confirm_and_commit(
         ConfirmPendingAppointmentCommand(

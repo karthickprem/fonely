@@ -82,7 +82,7 @@ class TestPopulated0014Downgrade:
             assert "non-terminal inbound events" in result.stderr
             async with pg_engine.connect() as conn:
                 rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-                assert rev == "0014"
+                assert rev == "0015"
         finally:
             async with pg_engine.begin() as conn:
                 await conn.execute(
@@ -116,7 +116,7 @@ class TestPopulated0014Downgrade:
             assert "non-terminal inbound events" in result.stderr
             async with pg_engine.connect() as conn:
                 rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-                assert rev == "0014"
+                assert rev == "0015"
         finally:
             async with pg_engine.begin() as conn:
                 await conn.execute(
@@ -149,7 +149,7 @@ class TestPopulated0014Downgrade:
             assert "non-terminal inbound events" in result.stderr
             async with pg_engine.connect() as conn:
                 rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-                assert rev == "0014"
+                assert rev == "0015"
         finally:
             async with pg_engine.begin() as conn:
                 await conn.execute(
@@ -244,7 +244,7 @@ class TestPopulated0014Downgrade:
             assert "response_failed" in result.stderr
             async with pg_engine.connect() as conn:
                 rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-                assert rev == "0014"
+                assert rev == "0015"
         finally:
             async with pg_engine.begin() as conn:
                 await conn.execute(
@@ -316,7 +316,7 @@ class TestPopulated0014Downgrade:
             assert "non-terminal inbound events" in result.stderr
             async with pg_engine.connect() as conn:
                 rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-                assert rev == "0014"
+                assert rev == "0015"
         finally:
             async with pg_engine.begin() as conn:
                 await conn.execute(
@@ -349,7 +349,7 @@ class TestPopulated0014Downgrade:
             assert "non-terminal inbound events" in result.stderr
             async with pg_engine.connect() as conn:
                 rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-                assert rev == "0014"
+                assert rev == "0015"
         finally:
             async with pg_engine.begin() as conn:
                 await conn.execute(
@@ -580,7 +580,7 @@ class TestDeliveryAttemptDowngradeGuard:
             assert "delivery-attempt evidence" in result.stderr
             async with pg_engine.connect() as conn:
                 rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-                assert rev == "0014"
+                assert rev == "0015"
         finally:
             async with pg_engine.begin() as conn:
                 await conn.execute(
@@ -726,7 +726,7 @@ class TestActiveClaimDowngradeGuard:
             assert "active notification claims" in result.stderr
             async with pg_engine.connect() as conn:
                 rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-                assert rev == "0014"
+                assert rev == "0015"
         finally:
             async with pg_engine.begin() as conn:
                 await conn.execute(text("DELETE FROM notification_outbox WHERE business_id = 900"))

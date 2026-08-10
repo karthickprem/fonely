@@ -218,7 +218,10 @@ class BusinessUser(Base):
     """Sole authority for owner/manager authorization."""
 
     __tablename__ = "business_users"
-    __table_args__ = (UniqueConstraint("business_id", "phone"),)
+    __table_args__ = (
+        UniqueConstraint("business_id", "phone"),
+        UniqueConstraint("business_id", "id", name="uq_business_users_business_id"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
@@ -1378,3 +1381,86 @@ class BusinessDailyContext(Base):
     created_by_phone: Mapped[str | None] = mapped_column(String(20))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# =============================================================================
+# Owner Command Proposals
+# =============================================================================
+
+
+class OwnerCommandProposal(Base):
+    """Durable owner command proposals with confirmation workflow.
+
+    Tracks close_clinic, close_early, and doctor_leave commands through
+    a state machine: pending_confirmation -> confirmed -> executing ->
+    completed/failed, with reject and expiry terminal states.
+    """
+
+    __tablename__ = "owner_command_proposals"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["business_id", "owner_user_id"],
+            ["business_users.business_id", "business_users.id"],
+            name="fk_owner_proposal_business_user",
+        ),
+        UniqueConstraint(
+            "business_id",
+            "idempotency_key",
+            name="uq_owner_proposal_idempotency",
+        ),
+        CheckConstraint(
+            "command_type IN ('close_clinic', 'close_early', 'doctor_leave')",
+            name="ck_owner_proposal_command_type",
+        ),
+        CheckConstraint(
+            "status IN ('pending_confirmation', 'confirmed', 'executing', "
+            "'completed', 'rejected', 'expired', 'failed')",
+            name="ck_owner_proposal_status",
+        ),
+        CheckConstraint(
+            "expected_version > 0",
+            name="ck_owner_proposal_expected_version",
+        ),
+        Index(
+            "uq_owner_proposal_owner_pending",
+            "business_id",
+            "owner_user_id",
+            unique=True,
+            postgresql_where="status = 'pending_confirmation'",
+        ),
+        Index(
+            "ix_owner_proposal_pending_expiry",
+            "status",
+            "expires_at",
+            postgresql_where="status = 'pending_confirmation'",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    owner_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    owner_phone_snapshot: Mapped[str] = mapped_column(String(20), nullable=False)
+    command_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    command_payload: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    preview_snapshot: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    payload_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+        default="pending_confirmation",
+        server_default="pending_confirmation",
+    )
+    result_evidence: Mapped[Any | None] = mapped_column(JSONB, nullable=True)
+    expected_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    idempotency_key: Mapped[str] = mapped_column(String(100), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failure_code: Mapped[str | None] = mapped_column(String(100))
+    failure_message: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

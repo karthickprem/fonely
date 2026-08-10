@@ -1,7 +1,13 @@
 # Exotel Deployment, Acceptance, and Post-0015 Plan
 
-Status: COMPLETE credential-free contract proof.
-Owner: Dev1. Route remains disabled until all blockers resolved.
+Status: DESIGNED and UNIT-TESTED. NOT production-ready.
+  - Route: ABSENT from production app (intentionally not mounted)
+  - Worker: NON-RUNNABLE (requires provider_call_sid migration)
+  - Schema: NOT MIGRATED (waiting Dev3 0015 integration)
+  - Intake: NOT WIRED to production session factory
+  - Gateway: IP ranges UNKNOWN (requires sandbox or Exotel support)
+  - Fixtures: SYNTHETIC (requires sandbox capture for verification)
+Owner: Dev1.
 
 ---
 

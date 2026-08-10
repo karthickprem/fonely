@@ -1,7 +1,8 @@
 """In-memory InboundCallEventIntake with claim/complete/fail lifecycle.
 
 Enforces semantic idempotency, digest-based duplicate vs conflict
-detection, forward-only transitions, lease ownership, and dead-letter.
+detection, lease ownership, and dead-letter. Late events are persisted
+durably — forward-only transition is the worker's responsibility.
 """
 
 from __future__ import annotations
@@ -9,14 +10,14 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
-from fonely.domain.calls.events import ExotelCallbackEvent, canonical_payload_digest
 from fonely.domain.calls.intake import (
     ClaimedCallEvent,
     ConflictingCallEventError,
     DuplicateCallEventError,
+    InboundCallEvent,
     InboundCallEventRecord,
+    canonical_event_digest,
 )
-from fonely.domain.calls.transitions import validate_transition
 
 
 @dataclass
@@ -37,19 +38,18 @@ class InMemoryCallEventIntake:
         self._state: dict[int, _EventState] = {}
         self._next_id = 1
         self._seen: dict[tuple[int, str, str], InboundCallEventRecord] = {}
-        self._call_status: dict[tuple[int, str], str] = {}
         self.persist_called = False
         self.persist_count = 0
 
     async def persist(
         self,
         business_id: int,
-        event: ExotelCallbackEvent,
+        event: InboundCallEvent,
     ) -> InboundCallEventRecord:
         self.persist_called = True
         self.persist_count += 1
 
-        digest = canonical_payload_digest(event)
+        digest = canonical_event_digest(event)
         dedup_key = (business_id, event.call_sid, event.event_type)
 
         existing = self._seen.get(dedup_key)
@@ -63,11 +63,8 @@ class InMemoryCallEventIntake:
                 f"digest {digest} != {existing.payload_digest}"
             )
 
-        call_key = (business_id, event.call_sid)
-        current_status = self._call_status.get(call_key)
-        new_status = validate_transition(current_status, event.status)
-        self._call_status[call_key] = new_status
-
+        # Late events are persisted durably — no transition validation here.
+        # The worker handles forward-only transition during processing.
         record = InboundCallEventRecord(
             id=self._next_id,
             business_id=business_id,
@@ -156,7 +153,6 @@ class InMemoryCallEventIntake:
     def clear(self) -> None:
         self._events.clear()
         self._seen.clear()
-        self._call_status.clear()
         self._state.clear()
         self._next_id = 1
         self.persist_called = False

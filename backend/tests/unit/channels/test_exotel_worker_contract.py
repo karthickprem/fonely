@@ -15,7 +15,9 @@ from fastapi.testclient import TestClient
 from fonely.api.channels.exotel import router
 from fonely.core.config import settings
 from fonely.domain.calls.events import parse_exotel_callback
+from fonely.domain.calls.intake import InboundCallEvent
 from fonely.services.exotel_config import ExotelNumberMapping
+from fonely.workers.exotel_worker import SchemaNotReadyError
 from tests.fixtures.exotel_callbacks.fixtures import (
     ANSWERED_OUTBOUND,
     COMPLETED_OUTBOUND,
@@ -33,6 +35,11 @@ def _create_app() -> tuple[FastAPI, InMemoryCallEventIntake]:
     intake = InMemoryCallEventIntake()
     app.state.exotel_intake = intake
     return app, intake
+
+
+def _to_inbound(fixture: dict) -> InboundCallEvent:
+    """Parse fixture via Exotel DTO then map to neutral event."""
+    return parse_exotel_callback(fixture).to_inbound_event()
 
 
 @pytest.fixture(autouse=True)
@@ -53,13 +60,13 @@ def _auth_headers() -> dict[str, str]:
 class TestClaimLifecycle:
     async def test_persist_creates_received_event(self) -> None:
         intake = InMemoryCallEventIntake()
-        event = parse_exotel_callback(ANSWERED_OUTBOUND)
+        event = _to_inbound(ANSWERED_OUTBOUND)
         record = await intake.persist(1, event)
         assert intake.get_intake_status(record.id) == "received"
 
     async def test_claim_transitions_to_processing(self) -> None:
         intake = InMemoryCallEventIntake()
-        event = parse_exotel_callback(ANSWERED_OUTBOUND)
+        event = _to_inbound(ANSWERED_OUTBOUND)
         await intake.persist(1, event)
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
@@ -72,14 +79,14 @@ class TestClaimLifecycle:
 
     async def test_claim_skips_processing_events(self) -> None:
         intake = InMemoryCallEventIntake()
-        event = parse_exotel_callback(ANSWERED_OUTBOUND)
+        event = _to_inbound(ANSWERED_OUTBOUND)
         await intake.persist(1, event)
         await intake.claim_next_eligible()
         assert await intake.claim_next_eligible() is None
 
     async def test_complete_transitions_to_completed(self) -> None:
         intake = InMemoryCallEventIntake()
-        event = parse_exotel_callback(ANSWERED_OUTBOUND)
+        event = _to_inbound(ANSWERED_OUTBOUND)
         await intake.persist(1, event)
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
@@ -89,7 +96,7 @@ class TestClaimLifecycle:
 
     async def test_fail_transitions_to_failed(self) -> None:
         intake = InMemoryCallEventIntake()
-        event = parse_exotel_callback(ANSWERED_OUTBOUND)
+        event = _to_inbound(ANSWERED_OUTBOUND)
         await intake.persist(1, event)
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
@@ -99,7 +106,7 @@ class TestClaimLifecycle:
 
     async def test_failed_event_re_claimable(self) -> None:
         intake = InMemoryCallEventIntake()
-        event = parse_exotel_callback(ANSWERED_OUTBOUND)
+        event = _to_inbound(ANSWERED_OUTBOUND)
         await intake.persist(1, event)
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
@@ -110,7 +117,7 @@ class TestClaimLifecycle:
 
     async def test_stale_claim_token_rejected(self) -> None:
         intake = InMemoryCallEventIntake()
-        event = parse_exotel_callback(ANSWERED_OUTBOUND)
+        event = _to_inbound(ANSWERED_OUTBOUND)
         await intake.persist(1, event)
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
@@ -120,7 +127,7 @@ class TestClaimLifecycle:
 
     async def test_stale_claim_version_rejected(self) -> None:
         intake = InMemoryCallEventIntake()
-        event = parse_exotel_callback(ANSWERED_OUTBOUND)
+        event = _to_inbound(ANSWERED_OUTBOUND)
         await intake.persist(1, event)
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
@@ -129,7 +136,7 @@ class TestClaimLifecycle:
 
     async def test_dead_letter_after_max_attempts(self) -> None:
         intake = InMemoryCallEventIntake()
-        event = parse_exotel_callback(ANSWERED_OUTBOUND)
+        event = _to_inbound(ANSWERED_OUTBOUND)
         record = await intake.persist(1, event)
         for _ in range(5):
             claimed = await intake.claim_next_eligible()
@@ -140,7 +147,7 @@ class TestClaimLifecycle:
 
     async def test_dead_letter_not_reclaimable(self) -> None:
         intake = InMemoryCallEventIntake()
-        event = parse_exotel_callback(ANSWERED_OUTBOUND)
+        event = _to_inbound(ANSWERED_OUTBOUND)
         await intake.persist(1, event)
         for _ in range(5):
             claimed = await intake.claim_next_eligible()
@@ -148,6 +155,18 @@ class TestClaimLifecycle:
                 break
             await intake.mark_failed(claimed.id, claimed.claim_token, claimed.claim_version)
         assert await intake.claim_next_eligible() is None
+
+
+# ============================================================================
+# Schema guard
+# ============================================================================
+
+
+class TestSchemaGuard:
+    def test_schema_not_ready_error_importable(self) -> None:
+        assert SchemaNotReadyError is not None
+        err = SchemaNotReadyError("test")
+        assert "test" in str(err)
 
 
 # ============================================================================
@@ -234,3 +253,27 @@ class TestAdapterIntakeWorkerProof:
         assert claimed is not None
         await intake.mark_completed(claimed.id, claimed.claim_token, claimed.claim_version)
         assert await intake.claim_next_eligible() is None
+
+    async def test_late_event_persisted_and_claimable(self) -> None:
+        """Late lower-state event is persisted by intake (worker handles no-op)."""
+        app, intake = _create_app()
+        client = TestClient(app)
+
+        client.post(
+            "/webhooks/exotel/call-status", json=COMPLETED_OUTBOUND, headers=_auth_headers()
+        )
+        late_answered = {**ANSWERED_OUTBOUND, "CallSid": COMPLETED_OUTBOUND["CallSid"]}
+        r2 = client.post(
+            "/webhooks/exotel/call-status", json=late_answered, headers=_auth_headers()
+        )
+        assert r2.status_code == 200
+        assert len(intake.events) == 2
+
+        claimed1 = await intake.claim_next_eligible()
+        assert claimed1 is not None
+        await intake.mark_completed(claimed1.id, claimed1.claim_token, claimed1.claim_version)
+
+        claimed2 = await intake.claim_next_eligible()
+        assert claimed2 is not None
+        assert claimed2.event_type == "answered"
+        await intake.mark_completed(claimed2.id, claimed2.claim_token, claimed2.claim_version)

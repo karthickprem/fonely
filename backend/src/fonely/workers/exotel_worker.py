@@ -1,7 +1,11 @@
-"""Exotel inbound event worker — claims and processes durable call events.
+"""Inbound call event worker — claims and processes durable call events.
 
-Follows InboundWorker pattern. Feature-disabled until migration.
-Uses CallSid-based identity and per-(business, call_sid) advisory lock.
+Follows InboundWorker pattern. Feature-disabled until migration creates
+the exotel_inbound_events table and calls.provider_call_sid column.
+
+GUARD: process_one() checks schema readiness before processing.
+The worker MUST NOT run without provider_call_sid identity — no
+latest-call fallback.
 """
 
 from __future__ import annotations
@@ -13,7 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fonely.domain.calls.intake import ClaimedCallEvent
-from fonely.domain.calls.transitions import is_terminal, validate_transition
+from fonely.domain.calls.transitions import LateCallEventError, is_terminal, validate_transition
 from fonely.repositories.exotel_intake import ExotelInboundEventRepository
 
 logger = logging.getLogger("fonely.workers.exotel_worker")
@@ -23,6 +27,10 @@ class StaleClaimError(Exception):
     """Fenced completion returned false — lease expired or another worker took the claim."""
 
 
+class SchemaNotReadyError(Exception):
+    """Worker cannot run without required schema (provider_call_sid column)."""
+
+
 def _advisory_lock_key(business_id: int, call_sid: str) -> int:
     """Deterministic advisory lock key for (business_id, call_sid)."""
     data = f"{business_id}:{call_sid}".encode()
@@ -30,16 +38,38 @@ def _advisory_lock_key(business_id: int, call_sid: str) -> int:
     return int.from_bytes(digest, "big", signed=True)
 
 
-class ExotelInboundWorker:
-    """Poll → claim → advisory lock → validate → domain mutation → complete/fail."""
+class InboundCallEventWorker:
+    """Poll → guard → claim → advisory lock → validate → domain mutation → complete/fail.
+
+    Schema guard: refuses to process if calls.provider_call_sid column
+    does not exist. This prevents the unsafe latest-call fallback.
+    """
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._factory = session_factory
+        self._schema_verified = False
+
+    async def _verify_schema(self, session: AsyncSession) -> None:
+        """Check that required schema exists. Raises SchemaNotReadyError if not."""
+        if self._schema_verified:
+            return
+        result = await session.execute(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = 'calls' AND column_name = 'provider_call_sid'"
+            )
+        )
+        if result.scalar_one_or_none() is None:
+            raise SchemaNotReadyError(
+                "calls.provider_call_sid column missing — "
+                "run migration before starting worker"
+            )
+        self._schema_verified = True
 
     async def process_one(self) -> bool:
         """Process one eligible event. Returns True if processed."""
-        # Claim in its own transaction (separate from domain mutation)
         async with self._factory() as claim_session:
+            await self._verify_schema(claim_session)
             repo = ExotelInboundEventRepository(claim_session)
             claimed = await repo.claim_next_eligible()
             if claimed is None:
@@ -48,15 +78,23 @@ class ExotelInboundWorker:
 
         try:
             async with self._factory() as session:
-                # Advisory lock serializes processing per (business, CallSid)
                 lock_key = _advisory_lock_key(claimed.business_id, claimed.call_sid)
                 await session.execute(
                     text("SELECT pg_advisory_xact_lock(:key)"),
                     {"key": lock_key},
                 )
 
-                # Domain mutation and fenced completion in same transaction
-                await self._apply_domain_mutation(session, claimed)
+                try:
+                    await self._apply_domain_mutation(session, claimed)
+                except LateCallEventError:
+                    logger.info(
+                        "worker_ooo_noop",
+                        extra={
+                            "business_id": claimed.business_id,
+                            "call_sid": claimed.call_sid,
+                            "status": claimed.status,
+                        },
+                    )
                 repo = ExotelInboundEventRepository(session)
                 ok = await repo.mark_completed(
                     claimed.id, claimed.claim_token, claimed.claim_version
@@ -70,7 +108,7 @@ class ExotelInboundWorker:
                 await session.commit()
 
             logger.info(
-                "exotel_event_processed",
+                "call_event_processed",
                 extra={
                     "business_id": claimed.business_id,
                     "call_sid": claimed.call_sid,
@@ -81,13 +119,13 @@ class ExotelInboundWorker:
 
         except StaleClaimError:
             logger.warning(
-                "exotel_event_stale_claim",
+                "call_event_stale_claim",
                 extra={"event_id": claimed.id, "call_sid": claimed.call_sid},
             )
             return False
         except Exception:
             logger.warning(
-                "exotel_event_processing_failed",
+                "call_event_processing_failed",
                 extra={"business_id": claimed.business_id, "call_sid": claimed.call_sid},
                 exc_info=True,
             )
@@ -97,29 +135,28 @@ class ExotelInboundWorker:
                     await repo.mark_failed(claimed.id, claimed.claim_token, claimed.claim_version)
                     await fail_session.commit()
             except Exception:
-                logger.error("exotel_event_failure_recording_failed", exc_info=True)
+                logger.error("call_event_failure_recording_failed", exc_info=True)
             return False
 
     async def _apply_domain_mutation(
         self, session: AsyncSession, claimed: ClaimedCallEvent
     ) -> None:
-        """Apply call state using CallSid identity with forward-only transitions.
+        """Apply call state using CallSid-based identity.
 
-        Looks up by (business_id, call_sid) — not by latest tenant call.
+        Looks up by (business_id, provider_call_sid). No latest-call fallback.
         Creates a new call record if no matching CallSid exists.
+        Raises LateCallEventError if a terminal already processed.
         """
-        # NOTE: requires calls.provider_call_sid column (migration blocker).
-        # Until migration, falls back to business_id-only lookup as interim.
         existing = await session.execute(
             text(
                 "SELECT id, "
                 "  CASE WHEN ended_at IS NOT NULL THEN 'completed' "
                 "       ELSE 'in-progress' END as current_status "
                 "FROM calls "
-                "WHERE business_id = :bid "
-                "ORDER BY started_at DESC LIMIT 1"
+                "WHERE business_id = :bid AND provider_call_sid = :sid "
+                "FOR UPDATE"
             ),
-            {"bid": claimed.business_id},
+            {"bid": claimed.business_id, "sid": claimed.call_sid},
         )
         row = existing.one_or_none()
 
@@ -137,14 +174,15 @@ class ExotelInboundWorker:
         else:
             await session.execute(
                 text(
-                    "INSERT INTO calls (business_id, caller_phone, started_at, "
-                    "  duration_sec, ended_at) "
-                    "VALUES (:bid, :phone, NOW(), :dur, "
+                    "INSERT INTO calls (business_id, caller_phone, provider_call_sid, "
+                    "  started_at, duration_sec, ended_at) "
+                    "VALUES (:bid, :phone, :sid, NOW(), :dur, "
                     "  CASE WHEN :terminal THEN NOW() ELSE NULL END)"
                 ),
                 {
                     "bid": claimed.business_id,
                     "phone": claimed.caller_phone,
+                    "sid": claimed.call_sid,
                     "dur": claimed.duration,
                     "terminal": is_terminal(claimed.status),
                 },

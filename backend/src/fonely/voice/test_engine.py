@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import date, time as dt_time
 from typing import Any
 
-from .runtime import CommandPort, CommandResult, ConfirmCommand, ProposeCommand
+from .runtime import CommandPort, CommandResult, CommitReceipt, ConfirmCommand, ProposeCommand
 
 
 @dataclass
@@ -68,6 +68,11 @@ class TestBookingEngine:
                 existing = self._proposals[existing_id]
                 if existing.business_id != cmd.business_id:
                     return CommandResult(success=False, error="idempotency_business_mismatch")
+                # Same key + different payload digest = conflict
+                if cmd.payload_digest and existing.idempotency_key == cmd.idempotency_key:
+                    stored_digest = getattr(existing, '_payload_digest', '')
+                    if stored_digest and stored_digest != cmd.payload_digest:
+                        return CommandResult(success=False, error="idempotency_payload_conflict")
                 return CommandResult(
                     success=True, operation="create",
                     proposal_id=existing.proposal_id,
@@ -92,6 +97,7 @@ class TestBookingEngine:
                 idempotency_key=cmd.idempotency_key,
                 created_at_ns=time.monotonic_ns(),
             )
+            proposal._payload_digest = cmd.payload_digest
             self._proposals[pid] = proposal
             if cmd.idempotency_key:
                 self._idempotency_index[cmd.idempotency_key] = pid
@@ -109,17 +115,28 @@ class TestBookingEngine:
             if proposal.business_id != cmd.business_id:
                 return CommandResult(success=False, error="business_mismatch")
 
-            # Idempotent: already committed returns same
+            # Idempotent: already committed returns same receipt
             if proposal.status == "committed":
                 existing = next(
                     (c for c in self._commitments.values() if c.proposal_id == cmd.proposal_id),
                     None,
                 )
                 if existing:
+                    receipt = CommitReceipt(
+                        commitment_id=existing.commitment_id,
+                        proposal_id=cmd.proposal_id,
+                        business_id=proposal.business_id,
+                        operation="create",
+                        idempotency_key=proposal.idempotency_key,
+                        confirm_idempotency_key=existing.idempotency_key,
+                        payload_digest=getattr(proposal, '_payload_digest', ''),
+                        committed_at_ns=existing.committed_at_ns,
+                        facts=existing.facts,
+                    )
                     return CommandResult(
                         success=True, operation="create",
                         proposal_id=cmd.proposal_id, committed=True,
-                        evidence=existing.facts,
+                        receipt=receipt,
                     )
 
             if proposal.status != "pending":
@@ -136,6 +153,7 @@ class TestBookingEngine:
             cid = self._next_commitment_id
             self._next_commitment_id += 1
             proposal.status = "committed"
+            committed_at = time.monotonic_ns()
 
             facts = {
                 "commitment_id": cid,
@@ -146,9 +164,6 @@ class TestBookingEngine:
                 "target_date": str(proposal.target_date),
                 "target_time": proposal.target_time,
                 "customer_name": proposal.customer_name,
-                "idempotency_key": proposal.idempotency_key,
-                "confirm_idempotency_key": cmd.idempotency_key,
-                "committed_at_ns": time.monotonic_ns(),
             }
 
             commitment = Commitment(
@@ -157,14 +172,25 @@ class TestBookingEngine:
                 business_id=proposal.business_id,
                 idempotency_key=cmd.idempotency_key,
                 facts=facts,
-                committed_at_ns=facts["committed_at_ns"],
+                committed_at_ns=committed_at,
             )
             self._commitments[cid] = commitment
 
+            receipt = CommitReceipt(
+                commitment_id=cid,
+                proposal_id=cmd.proposal_id,
+                business_id=proposal.business_id,
+                operation="create",
+                idempotency_key=proposal.idempotency_key,
+                confirm_idempotency_key=cmd.idempotency_key,
+                payload_digest=getattr(proposal, '_payload_digest', ''),
+                committed_at_ns=committed_at,
+                facts=facts,
+            )
             return CommandResult(
                 success=True, operation="create",
                 proposal_id=cmd.proposal_id, committed=True,
-                evidence=facts,
+                receipt=receipt,
             )
 
     @property

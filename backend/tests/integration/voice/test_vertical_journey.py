@@ -227,7 +227,7 @@ class TestVerticalConsequentialBlockJourney:
         assert len(turn_events) == 1
         assert not turn_events[0]["allowed"]
         assert not turn_events[0]["has_audio"]
-        assert not turn_events[0]["commit_evidence"]
+        assert not turn_events[0]["commit_receipt"]
         # Only greeting audio, no response audio
         assert len(media.sent_audio) == 1  # greeting only
 

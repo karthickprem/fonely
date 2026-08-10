@@ -201,7 +201,7 @@ class TestCanonicalConsequentialBlockJourney:
         turn_events = [e for e in media.events if e["type"] == "turn_complete"]
         assert not turn_events[0]["allowed"]
         assert not turn_events[0]["has_audio"]
-        assert not turn_events[0]["commit_evidence"]
+        assert not turn_events[0]["commit_receipt"]
         # Only greeting audio delivered
         assert len(media.sent_audio) == 1
 

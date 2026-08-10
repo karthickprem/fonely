@@ -103,7 +103,7 @@ async def run_voice_session(
                 "terminal": result.terminal,
                 "speech_class": result.speech_class,
                 "has_audio": len(result.response_audio) > 0,
-                "commit_evidence": result.commit_evidence is not None,
+                "commit_receipt": result.commit_receipt is not None,
             })
 
             if result.terminal:

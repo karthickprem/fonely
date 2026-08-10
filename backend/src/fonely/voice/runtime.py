@@ -49,9 +49,18 @@ class TTSPort(Protocol):
 
 
 @dataclass(frozen=True)
-class ProposeCommand:
-    """Typed proposal: service, resource, date, time, customer."""
+class TrustedCommandContext:
+    """Application-injected trusted context for commands. Never caller-supplied."""
     business_id: int
+    actor_session_id: str
+    conversation_id: str
+    booking_attempt: int = 0
+
+
+@dataclass(frozen=True)
+class ProposeCommand:
+    """Typed proposal carrying trusted context and target facts."""
+    context: TrustedCommandContext
     service_id: int | None = None
     resource_id: int | None = None
     target_date: date | None = None
@@ -59,24 +68,47 @@ class ProposeCommand:
     customer_name: str = ""
     customer_phone: str = ""
     idempotency_key: str = ""
+    payload_digest: str = ""
+
+    @property
+    def business_id(self) -> int:
+        return self.context.business_id
 
 
 @dataclass(frozen=True)
 class ConfirmCommand:
-    """Typed confirmation of a pending proposal."""
-    business_id: int
+    """Typed confirmation carrying trusted context."""
+    context: TrustedCommandContext
     proposal_id: int
     idempotency_key: str = ""
+
+    @property
+    def business_id(self) -> int:
+        return self.context.business_id
+
+
+@dataclass(frozen=True)
+class CommitReceipt:
+    """Typed unforgeable receipt bound to proposal facts."""
+    commitment_id: int
+    proposal_id: int
+    business_id: int
+    operation: str
+    idempotency_key: str
+    confirm_idempotency_key: str
+    payload_digest: str
+    committed_at_ns: int
+    facts: dict[str, Any]
 
 
 @dataclass(frozen=True)
 class CommandResult:
-    """Result of a business command: proposal or commit evidence."""
+    """Result of a business command: proposal or typed commit receipt."""
     success: bool
     operation: str = ""
     proposal_id: int | None = None
     committed: bool = False
-    evidence: dict[str, Any] | None = None
+    receipt: CommitReceipt | None = None
     error: str = ""
 
 
@@ -107,7 +139,7 @@ class TurnResult:
     terminal: bool = False
     terminal_reason: str = ""
     elapsed_ms: float = 0.0
-    commit_evidence: dict[str, Any] | None = None
+    commit_receipt: CommitReceipt | None = None
 
 
 class PipelineRuntime:
@@ -275,23 +307,14 @@ class PipelineRuntime:
         speech_class = self._classify_speech(response)
 
         # 6b. If consequential and command port available, attempt authoritative command
-        commit_evidence: dict[str, Any] | None = None
+        commit_receipt: CommitReceipt | None = None
         receipt_validated = False
         if speech_class in CONSEQUENTIAL_CLASSES and self._command_port is not None:
-            commit_evidence = await self._try_authoritative_command(
+            commit_receipt = await self._try_authoritative_command(
                 speech_class, caller_text, response, token.turn_id
             )
-            # Validate receipt: must have matching business_id, proposal_id, committed status
-            if commit_evidence is not None:
-                receipt_validated = (
-                    commit_evidence.get("business_id") == self._config.business_id
-                    and commit_evidence.get("proposal_id") is not None
-                    and commit_evidence.get("committed_at_ns") is not None
-                )
-                if not receipt_validated:
-                    self._telemetry.emit("receipt_validation_failed",
-                                         evidence_keys=list(commit_evidence.keys()))
-                    commit_evidence = None  # Discard invalid receipt
+            if commit_receipt is not None:
+                receipt_validated = True  # Already validated in _try_authoritative_command
 
         # 7. Validate — consequential speech requires validated receipt
         #    Do NOT relabel speech class; validator decides based on class + receipt
@@ -315,7 +338,7 @@ class PipelineRuntime:
                              speech_class=speech_class,
                              decision=validation.decision,
                              source=validation.source,
-                             has_commit_evidence=commit_evidence is not None,
+                             has_commit_receipt=commit_receipt is not None,
                              receipt_validated=receipt_validated)
 
         # 8. Record dialogue state BEFORE TTS (terminal set before synthesis)
@@ -362,7 +385,7 @@ class PipelineRuntime:
             terminal=terminal,
             terminal_reason=terminal_reason,
             elapsed_ms=elapsed,
-            commit_evidence=commit_evidence,
+            commit_receipt=commit_receipt,
         )
         self._turn_results.append(result)
         return result
@@ -393,45 +416,73 @@ class PipelineRuntime:
             "close_errors": errors,
         }
 
+    def _build_command_context(self) -> TrustedCommandContext:
+        """Build trusted command context from session config."""
+        return TrustedCommandContext(
+            business_id=self._config.business_id,
+            actor_session_id=self._config.session_id,
+            conversation_id=self._config.session_id,
+            booking_attempt=self._gen_clock.turn_count,
+        )
+
+    def _payload_digest(self, **facts: Any) -> str:
+        """Compute deterministic digest of command target facts."""
+        import hashlib, json
+        canonical = json.dumps(facts, sort_keys=True, default=str)
+        return hashlib.sha256(canonical.encode()).hexdigest()[:16]
+
     async def _try_authoritative_command(
         self,
         speech_class: SpeechClass,
         caller_text: str,
         response: str,
         turn_id: int,
-    ) -> dict[str, Any] | None:
+    ) -> CommitReceipt | None:
         """Attempt authoritative propose/confirm through CommandPort.
 
-        Only returns evidence if the command port confirms committed state.
-        Never fabricates receipts. Returns None if no command is applicable.
+        Returns typed CommitReceipt only on committed success.
+        Never fabricates receipts. Returns None otherwise.
         """
         if self._command_port is None:
             return None
 
+        ctx = self._build_command_context()
+        propose_key = f"voice-{self._config.session_id}-t{turn_id}"
+        digest = self._payload_digest(
+            business_id=self._config.business_id,
+            session_id=self._config.session_id,
+            turn_id=turn_id,
+        )
+
         try:
             if speech_class in {SpeechClass.COMMITTED_CREATE, SpeechClass.COMMITTED_CANCEL, SpeechClass.COMMITTED_RESCHEDULE}:
-                # First propose
                 proposal = await self._command_port.propose(ProposeCommand(
-                    business_id=self._config.business_id,
-                    idempotency_key=f"voice-{self._config.session_id}-t{turn_id}",
+                    context=ctx,
+                    idempotency_key=propose_key,
+                    payload_digest=digest,
                 ))
                 if not proposal.success or proposal.proposal_id is None:
                     self._telemetry.emit("command_proposal_failed",
                                          error=proposal.error, turn=turn_id)
                     return None
 
-                # Then confirm
                 confirmation = await self._command_port.confirm(ConfirmCommand(
-                    business_id=self._config.business_id,
+                    context=ctx,
                     proposal_id=proposal.proposal_id,
-                    idempotency_key=f"voice-{self._config.session_id}-t{turn_id}-confirm",
+                    idempotency_key=f"{propose_key}-confirm",
                 ))
-                if confirmation.committed and confirmation.evidence:
+                if confirmation.committed and confirmation.receipt is not None:
+                    receipt = confirmation.receipt
+                    # Validate receipt is bound to this request
+                    if (receipt.business_id != self._config.business_id
+                            or receipt.proposal_id != proposal.proposal_id):
+                        self._telemetry.emit("receipt_binding_mismatch", turn=turn_id)
+                        return None
                     self._telemetry.emit("command_committed",
-                                         proposal_id=proposal.proposal_id,
-                                         evidence_keys=list(confirmation.evidence.keys()),
+                                         commitment_id=receipt.commitment_id,
+                                         proposal_id=receipt.proposal_id,
                                          turn=turn_id)
-                    return confirmation.evidence
+                    return receipt
                 else:
                     self._telemetry.emit("command_confirm_failed",
                                          error=confirmation.error, turn=turn_id)

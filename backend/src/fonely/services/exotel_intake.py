@@ -1,8 +1,5 @@
 """Application-level inbound call intake — owns the transaction for persist-before-200.
 
-Wraps ExotelInboundEventRepository in a session-factory-owned transaction.
-The adapter calls this; it commits before returning.
-
 Provider-neutral: accepts InboundCallEvent, not Exotel DTO.
 """
 
@@ -16,16 +13,11 @@ from fonely.domain.calls.intake import (
     InboundCallEvent,
     InboundCallEventRecord,
 )
-from fonely.repositories.exotel_intake import ExotelInboundEventRepository
+from fonely.repositories.exotel_intake import InboundCallEventRepository
 
 
 class InboundCallIntakeService:
-    """Transaction-owning intake for the adapter's persist-before-200 contract.
-
-    Creates a session, persists via the repository, and commits before
-    returning. On duplicate/conflict, the appropriate typed exception
-    propagates to the adapter (which maps each to its HTTP status).
-    """
+    """Transaction-owning intake for the adapter's persist-before-200 contract."""
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._factory = session_factory
@@ -36,7 +28,7 @@ class InboundCallIntakeService:
         event: InboundCallEvent,
     ) -> InboundCallEventRecord:
         async with self._factory() as session:
-            repo = ExotelInboundEventRepository(session)
+            repo = InboundCallEventRepository(session)
             try:
                 record = await repo.persist(business_id, event)
                 await session.commit()

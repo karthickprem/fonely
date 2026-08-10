@@ -1,25 +1,29 @@
 """Forward-only call status transition validation.
 
-Provider-neutral: uses canonical call status strings, not Exotel enums.
-Adapters map provider-specific statuses to these canonical values.
+Provider-neutral: uses canonical call status strings with underscores.
+Adapters normalize provider-specific formats (hyphens, etc).
 """
 
 from __future__ import annotations
 
 QUEUED = "queued"
-IN_PROGRESS = "in-progress"
+RINGING = "ringing"
+IN_PROGRESS = "in_progress"
 COMPLETED = "completed"
 FAILED = "failed"
 BUSY = "busy"
-NO_ANSWER = "no-answer"
+NO_ANSWER = "no_answer"
 
 _TERMINAL = frozenset({COMPLETED, FAILED, BUSY, NO_ANSWER})
 
-_ALL_STATUSES = frozenset({QUEUED, IN_PROGRESS, COMPLETED, FAILED, BUSY, NO_ANSWER})
+_ALL_STATUSES = frozenset(
+    {QUEUED, RINGING, IN_PROGRESS, COMPLETED, FAILED, BUSY, NO_ANSWER}
+)
 
 _ALLOWED_TRANSITIONS: dict[str | None, frozenset[str]] = {
     None: _ALL_STATUSES,
     QUEUED: _ALL_STATUSES - {QUEUED},
+    RINGING: frozenset({IN_PROGRESS}) | _TERMINAL,
     IN_PROGRESS: _TERMINAL,
 }
 for _t in _TERMINAL:
@@ -34,11 +38,7 @@ class InvalidCallTransitionError(Exception):
 
 
 class LateCallEventError(Exception):
-    """A lower-state event arrived after a terminal status.
-
-    This is a harmless acknowledged no-op: the terminal status wins.
-    The caller should log the anomaly and continue, not 500 or dead-letter.
-    """
+    """A lower-state event arrived after a terminal status — harmless no-op."""
 
     def __init__(self, current: str, attempted: str) -> None:
         self.current = current
@@ -47,13 +47,6 @@ class LateCallEventError(Exception):
 
 
 def validate_transition(current_status: str | None, new_status: str) -> str:
-    """Return the new status if the transition is valid.
-
-    - Same status: idempotent no-op, returns current.
-    - Terminal → lower state: raises LateCallEventError (harmless).
-    - Terminal → different terminal: raises InvalidCallTransitionError.
-    - Forward transition: returns new status.
-    """
     if current_status is not None and current_status == new_status:
         return current_status
 

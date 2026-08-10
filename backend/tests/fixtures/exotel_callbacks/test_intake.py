@@ -37,7 +37,7 @@ class InMemoryCallEventIntake:
         self._events: list[InboundCallEventRecord] = []
         self._state: dict[int, _EventState] = {}
         self._next_id = 1
-        self._seen: dict[tuple[int, str, str], InboundCallEventRecord] = {}
+        self._seen: dict[tuple[int, str, str, str], InboundCallEventRecord] = {}
         self.persist_called = False
         self.persist_count = 0
 
@@ -50,25 +50,24 @@ class InMemoryCallEventIntake:
         self.persist_count += 1
 
         digest = canonical_event_digest(event)
-        dedup_key = (business_id, event.call_sid, event.event_type)
+        dedup_key = (business_id, event.provider, event.provider_call_id, event.event_type)
 
         existing = self._seen.get(dedup_key)
         if existing is not None:
             if existing.payload_digest == digest:
                 raise DuplicateCallEventError(
-                    f"exact duplicate: {event.call_sid}/{event.event_type}"
+                    f"exact duplicate: {event.provider_call_id}/{event.event_type}"
                 )
             raise ConflictingCallEventError(
-                f"conflicting: {event.call_sid}/{event.event_type} "
+                f"conflicting: {event.provider_call_id}/{event.event_type} "
                 f"digest {digest} != {existing.payload_digest}"
             )
 
-        # Late events are persisted durably — no transition validation here.
-        # The worker handles forward-only transition during processing.
         record = InboundCallEventRecord(
             id=self._next_id,
             business_id=business_id,
-            call_sid=event.call_sid,
+            provider=event.provider,
+            provider_call_id=event.provider_call_id,
             event_type=event.event_type,
             status=event.status,
             caller_phone=event.caller_phone,
@@ -102,7 +101,7 @@ class InMemoryCallEventIntake:
                 es.attempts += 1
                 return ClaimedCallEvent(
                     id=eid,
-                    call_sid=es.record.call_sid,
+                    provider_call_id=es.record.provider_call_id,
                     business_id=es.record.business_id,
                     event_type=es.record.event_type,
                     status=es.record.status,

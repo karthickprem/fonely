@@ -190,9 +190,9 @@ async def test_add_offer_creates_daily_context(pg_session: AsyncSession) -> None
     assert result.success is True
     assert "Free consultation" in result.response_text
 
-    from datetime import date
+    from zoneinfo import ZoneInfo
 
-    today = date.today()
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
     contexts = await get_daily_context(1, today, pg_session)
     assert len(contexts) == 1
     assert contexts[0].content == "Free consultation this week"

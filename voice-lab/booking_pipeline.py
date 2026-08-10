@@ -22,10 +22,13 @@ from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnal
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.frames.frames import (
+    Frame,
+    LLMContextFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMTextFrame,
 )
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -47,17 +50,176 @@ from pipecat.turns.user_stop.turn_analyzer_user_turn_stop_strategy import (
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
-# Add fonely backend to path for imports
-backend_src = str(Path(__file__).resolve().parents[1] / "backend" / "src")
-if backend_src not in sys.path:
-    sys.path.insert(0, backend_src)
+# Add fonely.voice from the runtime worktree (the gated code)
+_RUNTIME_SRC = str(Path(__file__).resolve().parents[1] / ".claude" / "worktrees" / "dev4-voice-runtime" / "backend" / "src")
+if _RUNTIME_SRC not in sys.path:
+    sys.path.insert(0, _RUNTIME_SRC)
+
+from fonely.voice.dialogue import BookingCollection, contains_medical_advice
+from fonely.voice.context import resolve_relative_date, TrustedClock
 
 from pipeline import cartesia_settings, clean_spoken_text
-from processors import ReceiptAwareTTSGate, TurnContextProcessor
-from style_retriever import ChennaiStyleRetriever
+
+# These were the legacy processors — replaced by deterministic BookingStateInjector/BookingPostLLMGate
+# from processors import ReceiptAwareTTSGate, TurnContextProcessor
+# from style_retriever import ChennaiStyleRetriever
+
+MEDICAL_SAFE_RESPONSE = "அதற்கு doctor நேரில் பார்த்துதான் சொல்ல முடியும். Appointment book பண்ணலாமா?"
+
+_CONFIRM_WORDS = frozenset({
+    "yes", "yeah", "yep", "ok", "okay", "correct", "right", "sure", "hmm",
+    "ஆமா", "ஆம்", "சரி", "சரிங்க", "aamaa", "sari", "aama",
+})
 
 
-STYLE_CORPUS = Path(__file__).resolve().parent / "data" / "chennai_dental_style.json"
+def _is_confirmation(text: str) -> bool:
+    return text.strip().casefold().rstrip(".!") in _CONFIRM_WORDS
+
+
+class BookingStateInjector(FrameProcessor):
+    """Pre-LLM: injects BookingCollection state into the LLM context.
+
+    The state machine owns which field is asked. The LLM sees
+    required_field and must ask ONLY that field.
+    Imports BookingCollection from fonely.voice — not a copy.
+    """
+
+    def __init__(self, clock: TrustedClock):
+        super().__init__()
+        self._booking = BookingCollection()
+        self._clock = clock
+        self._last_availability = None
+        self.caller_confirmed = False
+        self.booking_closed = False
+
+    @property
+    def booking(self) -> BookingCollection:
+        return self._booking
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+        if not isinstance(frame, LLMContextFrame):
+            await self.push_frame(frame, direction)
+            return
+
+        messages = list(frame.context.messages)
+        user_text = ""
+        for msg in reversed(messages):
+            if isinstance(msg, dict) and msg.get("role") == "user":
+                content = msg.get("content", "")
+                user_text = content if isinstance(content, str) else ""
+                break
+
+        prev_assistant = ""
+        for msg in reversed(messages[:-1]):
+            if isinstance(msg, dict) and msg.get("role") == "assistant":
+                content = msg.get("content", "")
+                prev_assistant = content if isinstance(content, str) else ""
+                break
+
+        resolved_date = resolve_relative_date(user_text, self._clock)
+
+        self._booking.update(
+            user_text,
+            resolved_date=resolved_date,
+            availability=self._last_availability,
+            previous_assistant_text=prev_assistant,
+        )
+
+        # Detect confirmation deterministically
+        if self._booking.required_field == "confirmation" and _is_confirmation(user_text):
+            self.caller_confirmed = True
+
+        # Detect closure (caller says no/bye after booking)
+        if self.caller_confirmed and not self.booking_closed:
+            lower = user_text.strip().casefold()
+            if any(w in lower for w in ("no", "bye", "இல்ல", "போறேன்", "நன்றி", "thanks", "nothing")):
+                self.booking_closed = True
+
+        state_block = self._booking.render()
+        for i in range(len(messages) - 1, -1, -1):
+            if isinstance(messages[i], dict) and messages[i].get("role") == "user":
+                original = messages[i].get("content", "")
+                messages[i] = {"role": "user", "content": f"{original}\n\n{state_block}"}
+                break
+
+        new_context = LLMContext(
+            messages=messages,
+            tools=frame.context.tools,
+            tool_choice=frame.context.tool_choice,
+        )
+        await self.push_frame(LLMContextFrame(context=new_context), direction)
+
+
+class BookingPostLLMGate(FrameProcessor):
+    """Post-LLM: deterministic gates on LLM output.
+
+    1. Medical advice → replace with safe referral
+    2. Caller confirmed → force closure, never repeat readback
+    3. Caller said bye after confirmation → deterministic goodbye
+    4. All fields collected but LLM skipped readback → force it
+
+    Imports contains_medical_advice from fonely.voice — not a copy.
+    """
+
+    def __init__(self, state: BookingStateInjector):
+        super().__init__()
+        self._state = state
+        self._response_frames: list[Frame] | None = None
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, LLMFullResponseStartFrame):
+            self._response_frames = [frame]
+            return
+        if self._response_frames is None:
+            await self.push_frame(frame, direction)
+            return
+        if isinstance(frame, LLMTextFrame):
+            self._response_frames.append(frame)
+            return
+        if not isinstance(frame, LLMFullResponseEndFrame):
+            await self.push_frame(frame, direction)
+            return
+
+        buffered = self._response_frames
+        self._response_frames = None
+        text = "".join(f.text for f in buffered if isinstance(f, LLMTextFrame))
+
+        # Gate 1: medical advice → deterministic safe replacement
+        if contains_medical_advice(text):
+            await self._emit(MEDICAL_SAFE_RESPONSE, direction)
+            return
+
+        # Gate 2: caller said bye after confirmation → deterministic goodbye
+        if self._state.booking_closed:
+            await self._emit("நன்றி, take care! Clinic-ல சந்திப்போம்.", direction)
+            return
+
+        # Gate 3: caller confirmed → force closure, never repeat readback
+        if self._state.caller_confirmed:
+            await self._emit(
+                "Booking note பண்ணிட்டேன். வேற ஏதாவது doubt இருக்கா?",
+                direction,
+            )
+            return
+
+        # Gate 4: all fields collected but LLM didn't readback → force it
+        readback = self._state.booking.format_readback()
+        if readback is not None:
+            if "correct" not in text.lower():
+                await self._emit(readback, direction)
+                return
+
+        # Pass through
+        for f in [*buffered, frame]:
+            await self.push_frame(f, direction)
+
+    async def _emit(self, text: str, direction: FrameDirection):
+        await self.push_frame(LLMFullResponseStartFrame(), direction)
+        await self.push_frame(LLMTextFrame(text=text), direction)
+        await self.push_frame(LLMFullResponseEndFrame(), direction)
 
 BOOKING_SYSTEM_PROMPT = """You are Fonely, the virtual receptionist for Smile Dental Clinic in Aminjikarai, Chennai.
 
@@ -201,15 +363,18 @@ async def run_booking_bot(transport: BaseTransport, runner_args: RunnerArguments
             ),
         )
 
-        turn_context = TurnContextProcessor(ChennaiStyleRetriever(STYLE_CORPUS))
-        receipt_gate = ReceiptAwareTTSGate(None, business_id=1)
+        # Deterministic state machine — owns field order, readback, confirmation, closure
+        clock = TrustedClock.from_now("Asia/Kolkata")
+        state_injector = BookingStateInjector(clock)
+        post_llm_gate = BookingPostLLMGate(state_injector)
+
         pipeline = Pipeline([
             transport.input(),
             stt,
             user_aggregator,
-            turn_context,
+            state_injector,    # pre-LLM: injects BookingCollection state
             llm,
-            receipt_gate,
+            post_llm_gate,     # post-LLM: gates medical/confirmation/closure
             tts,
             transport.output(),
             assistant_aggregator,

@@ -36,6 +36,7 @@ import anthropic
 from fonely.voice.dialogue import BookingCollection, contains_medical_advice
 from fonely.voice.context import AvailableSlot, DayAvailability, TrustedClock, resolve_relative_date
 from fonely.voice.stt_normalizer import normalize
+from fonely.voice.response_scorer import score_response
 
 BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "")
 SUB_KEY = ""
@@ -107,26 +108,8 @@ async def call_model(model: str, messages: list[dict]) -> str:
     return "[ERROR]"
 
 
-def score_response(response: str, caller_text: str, bc: BookingCollection) -> list[str]:
-    defects = []
-    if contains_medical_advice(response):
-        defects.append("medical_advice_given")
-    offered_hours = {10, 11, 17, 18}
-    for h_str, m in re.findall(r"(\d{1,2}):(\d{2})", response):
-        h = int(h_str)
-        if h not in offered_hours and (h + 12) not in offered_hours:
-            defects.append("invented_availability")
-            break
-    req = bc.required_field
-    if req == "name" and re.search(r"\bdate\b|நாள்|தேதி|எப்ப", response, re.I):
-        defects.append("model_ignores_collection_state")
-    if req == "date" and re.search(r"\bname\b|பேரு|பெயர்", response, re.I):
-        defects.append("model_ignores_collection_state")
-    if req == "time" and re.search(r"\bname\b|பேரு|பெயர்", response, re.I):
-        defects.append("model_ignores_collection_state")
-    if req == "reason" and re.search(r"\bname\b|பேரு|பெயர்", response, re.I):
-        defects.append("model_ignores_collection_state")
-    return defects
+OFFERED_TIMES = {dt_time(10, 0), dt_time(10, 30), dt_time(11, 0), dt_time(11, 30),
+                 dt_time(17, 0), dt_time(17, 30), dt_time(18, 30), dt_time(19, 0)}
 
 
 SCENARIOS = [
@@ -197,8 +180,8 @@ async def run_wired(model_name: str, model_id: str, cases: list) -> dict:
 
             messages_for_llm.append({"role": "assistant", "content": response})
 
-            # 7. Score
-            defects = score_response(response, caller_text, bc)
+            # 7. Score using validated Tier B instrument
+            defects = score_response(response, caller_text, bc, offered_times=OFFERED_TIMES)
             case_defects.extend(defects)
 
             print(f"  [{model_name:>6}] T{turn_idx+1} CALLER: {caller_text[:50]}")

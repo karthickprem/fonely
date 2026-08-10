@@ -69,6 +69,15 @@ _DESTRUCTIVE_COMMANDS = frozenset({"doctor_leave", "close_clinic", "close_early"
 _PROPOSAL_TTL = timedelta(minutes=5)
 _ADVISORY_LOCK_NAMESPACE = b"fonely.owner_proposal_family.v1"
 
+_NONMUTATING_FAILURE_CODES = frozenset(
+    {
+        "target_drift",
+        "schedule_exception_conflict",
+        "payload_integrity_mismatch",
+        "target_date_past",
+    }
+)
+
 
 def _proposal_family_lock_key(business_id: int, semantic_digest: str) -> int:
     """Deterministic signed int64 advisory lock key for a proposal family.
@@ -138,12 +147,24 @@ class OwnerCommandOutcomeEvidence(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _is_retryable_terminal(status: str, failure_code: str | None) -> bool:
+    return status in ("rejected", "expired") or (
+        status == "failed" and failure_code in _NONMUTATING_FAILURE_CODES
+    )
+
+
 class OwnerCommandService:
     def __init__(self, session: AsyncSession, model: ModelGateway) -> None:
         self._session = session
         self._parser = OwnerCommandParser(model)
         self._appointments = AppointmentRepository(session)
         self._proposals = OwnerCommandProposalRepository(session)
+
+    async def _acquire_family_lock(self, business_id: int, payload_digest: str) -> None:
+        from sqlalchemy import text as sa_text
+
+        key = _proposal_family_lock_key(business_id, payload_digest)
+        await self._session.execute(sa_text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
 
     # -----------------------------------------------------------------------
     # Entry point
@@ -605,7 +626,32 @@ class OwnerCommandService:
                     proposal_id=completed_in_family.id,
                 )
 
-            # No completed winner — create monotonic retry attempt
+            # Check if the base terminal is retryable
+            base_terminal = await self._proposals.get_by_idempotency_key(business_id, idem_key)
+            if base_terminal is not None and not _is_retryable_terminal(
+                base_terminal.status, base_terminal.failure_code
+            ):
+                if base_terminal.status in ("pending_confirmation", "executing"):
+                    existing = await self._proposals.get_latest_for_owner(business_id, owner.id)
+                    return OwnerCommandResult(
+                        command_type=command_type,
+                        success=False,
+                        response_text=(
+                            "You already have a pending command. "
+                            "Reply YES to confirm or NO to cancel."
+                        ),
+                        proposal_id=existing.id if existing else None,
+                    )
+                return OwnerCommandResult(
+                    command_type=command_type,
+                    success=False,
+                    response_text=(
+                        "This command failed and requires manual review. "
+                        "Please contact support or try a different command."
+                    ),
+                    proposal_id=base_terminal.id,
+                )
+
             attempt_count = await self._proposals.count_by_key_prefix(business_id, idem_key)
             retry_key = f"{idem_key}-attempt-{attempt_count + 1}"
             proposal = await self._proposals.create_idempotent(
@@ -701,6 +747,8 @@ class OwnerCommandService:
         owner: BusinessUser,
         proposal: Any,
     ) -> OwnerCommandResult:
+        confirm_digest = self._compute_payload_digest(proposal.command_payload)
+        await self._acquire_family_lock(business_id, confirm_digest)
         now = datetime.now(UTC)
 
         if proposal.expires_at <= now:
@@ -1036,6 +1084,8 @@ class OwnerCommandService:
         owner: BusinessUser,
         proposal: Any,
     ) -> OwnerCommandResult:
+        reject_digest = self._compute_payload_digest(proposal.command_payload)
+        await self._acquire_family_lock(business_id, reject_digest)
         rejected = await self._proposals.transition_status(
             proposal.id,
             business_id,

@@ -1,10 +1,6 @@
 """Typed generic inbound call event intake interface.
 
-The adapter calls this to persist a validated, normalized, immutable
-inbound event. Production implementation will use a dedicated
-exotel_inbound_events table (migration blocker — after Dev3's 0015 and
-integrated head is known). The adapter NEVER mutates domain state
-(calls table, conversation, owner commands) directly.
+The adapter NEVER mutates domain state directly.
 """
 
 from __future__ import annotations
@@ -16,7 +12,11 @@ from fonely.domain.calls.events import ExotelCallbackEvent
 
 
 class DuplicateCallEventError(Exception):
-    """Semantic duplicate: same CallSid+EventType already persisted."""
+    """Semantic duplicate: same (business_id, call_sid, event_type) already persisted."""
+
+
+class ConflictingCallEventError(Exception):
+    """Same dedup key but different payload digest — conflicting terminal."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,8 +31,27 @@ class InboundCallEventRecord:
     caller_phone: str
     called_number: str
     duration: int | None
+    conversation_duration: int | None
     direction: str | None
+    custom_field: str | None
     payload_digest: str
+
+
+@dataclass(frozen=True, slots=True)
+class ClaimedCallEvent:
+    """Typed claimed event for worker processing — not a positional dict."""
+
+    id: int
+    call_sid: str
+    business_id: int
+    event_type: str
+    status: str
+    caller_phone: str
+    called_number: str
+    duration: int | None
+    direction: str | None
+    claim_token: str
+    claim_version: int
 
 
 class InboundCallEventIntake(Protocol):
@@ -41,7 +60,8 @@ class InboundCallEventIntake(Protocol):
     Implementations must:
     - Persist before returning (no background queue)
     - Enforce (business_id, call_sid, event_type) semantic idempotency
-    - Raise DuplicateCallEventError on duplicate
+    - Raise DuplicateCallEventError on exact duplicate
+    - Raise ConflictingCallEventError on same key but different digest
     - Never mutate domain state (calls, conversations, etc.)
     """
 

@@ -1,36 +1,36 @@
 """Durable Exotel inbound event persistence.
 
-Implements InboundCallEventIntake for production use. Requires the
-exotel_inbound_events table (migration deferred until Dev3 0015
-integrates and head is known).
+Reuses the InboundEventRepository durable inbox pattern (claim/lease/
+backoff/dead-letter) from the WhatsApp integration. Provider-specific
+normalized payload and typed processor.
 
-Until the migration is applied, only the InMemoryCallEventIntake test
-double should be used. This module imports no ORM model — it uses raw
-SQL against the schema defined in EXOTEL_MIGRATION_WORKER_DESIGN.md.
+Requires the exotel_inbound_events table (migration deferred until
+Dev3 0015 integrates). Feature-disabled until migration is applied.
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
 from datetime import UTC, datetime
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from fonely.domain.calls.events import ExotelCallbackEvent
+from fonely.domain.calls.events import ExotelCallbackEvent, canonical_payload_digest
 from fonely.domain.calls.intake import (
+    ClaimedCallEvent,
+    ConflictingCallEventError,
     DuplicateCallEventError,
     InboundCallEventRecord,
 )
+
+BACKOFF_SECONDS = (30, 60, 120, 300, 600)
 
 
 class ExotelInboundEventRepository:
     """Production InboundCallEventIntake backed by exotel_inbound_events.
 
     Semantic idempotency on (business_id, call_sid, event_type).
-    Does NOT mutate domain state — stores the raw inbound event only.
-    A separate worker claims and processes events.
+    Digest comparison distinguishes exact duplicate from conflicting terminal.
     """
 
     def __init__(self, session: AsyncSession) -> None:
@@ -41,20 +41,7 @@ class ExotelInboundEventRepository:
         business_id: int,
         event: ExotelCallbackEvent,
     ) -> InboundCallEventRecord:
-        payload = json.dumps(
-            {
-                "call_sid": event.call_sid,
-                "event_type": event.event_type,
-                "status": event.status,
-                "direction": event.direction,
-                "duration": event.duration,
-                "conversation_duration": event.conversation_duration,
-                "custom_field": event.custom_field,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        digest = hashlib.sha256(payload.encode()).hexdigest()[:32]
+        digest = canonical_payload_digest(event)
 
         try:
             result = await self._session.execute(
@@ -85,14 +72,27 @@ class ExotelInboundEventRepository:
                 },
             )
             row_id = result.scalar_one()
+            await self._session.commit()
         except Exception as exc:
-            if "uq_exotel_inbound_call_event" in str(exc):
-                raise DuplicateCallEventError(
-                    f"duplicate: {event.call_sid}/{event.event_type}"
+            exc_str = str(exc)
+            if "uq_exotel_inbound_call_event" in exc_str:
+                await self._session.rollback()
+                existing_digest = await self._session.scalar(
+                    text(
+                        "SELECT payload_digest FROM exotel_inbound_events "
+                        "WHERE business_id = :bid AND call_sid = :sid "
+                        "  AND event_type = :etype"
+                    ),
+                    {"bid": business_id, "sid": event.call_sid, "etype": event.event_type},
+                )
+                if existing_digest == digest:
+                    raise DuplicateCallEventError(
+                        f"exact duplicate: {event.call_sid}/{event.event_type}"
+                    ) from exc
+                raise ConflictingCallEventError(
+                    f"conflicting: {event.call_sid}/{event.event_type}"
                 ) from exc
             raise
-
-        await self._session.flush()
 
         return InboundCallEventRecord(
             id=row_id,
@@ -103,16 +103,16 @@ class ExotelInboundEventRepository:
             caller_phone=event.caller_phone,
             called_number=event.called_number,
             duration=event.duration,
+            conversation_duration=event.conversation_duration,
             direction=event.direction,
+            custom_field=event.custom_field,
             payload_digest=digest,
         )
 
-    async def claim_next_eligible(self) -> dict | None:
-        """Claim one eligible event for processing.
+    async def claim_next_eligible(self) -> ClaimedCallEvent | None:
+        """Claim one eligible event. SELECT FOR UPDATE SKIP LOCKED."""
+        import uuid
 
-        Returns a dict with event fields and claim metadata, or None.
-        Uses SELECT FOR UPDATE SKIP LOCKED for concurrent safety.
-        """
         result = await self._session.execute(
             text(
                 "SELECT id, call_sid, business_id, event_type, status, "
@@ -133,8 +133,6 @@ class ExotelInboundEventRepository:
         if row is None:
             return None
 
-        import uuid
-
         claim_token = str(uuid.uuid4())
         new_version = row[9] + 1
         await self._session.execute(
@@ -148,31 +146,25 @@ class ExotelInboundEventRepository:
                 "  attempts = attempts + 1 "
                 "WHERE id = :eid AND claim_version = :old_version"
             ),
-            {
-                "token": claim_token,
-                "version": new_version,
-                "eid": row[0],
-                "old_version": row[9],
-            },
+            {"token": claim_token, "version": new_version, "eid": row[0], "old_version": row[9]},
         )
-        await self._session.flush()
+        await self._session.commit()
 
-        return {
-            "id": row[0],
-            "call_sid": row[1],
-            "business_id": row[2],
-            "event_type": row[3],
-            "status": row[4],
-            "caller_phone": row[5],
-            "called_number": row[6],
-            "duration": row[7],
-            "direction": row[8],
-            "claim_token": claim_token,
-            "claim_version": new_version,
-        }
+        return ClaimedCallEvent(
+            id=row[0],
+            call_sid=row[1],
+            business_id=row[2],
+            event_type=row[3],
+            status=row[4],
+            caller_phone=row[5],
+            called_number=row[6],
+            duration=row[7],
+            direction=row[8],
+            claim_token=claim_token,
+            claim_version=new_version,
+        )
 
     async def mark_completed(self, event_id: int, claim_token: str, claim_version: int) -> bool:
-        """Mark event as completed after successful domain processing."""
         result = await self._session.execute(
             text(
                 "UPDATE exotel_inbound_events SET "
@@ -191,8 +183,6 @@ class ExotelInboundEventRepository:
         return result.rowcount > 0  # type: ignore[union-attr]
 
     async def mark_failed(self, event_id: int, claim_token: str, claim_version: int) -> bool:
-        """Mark event as failed with backoff; dead-letter after max attempts."""
-        backoff_seconds = [30, 60, 120, 300, 600]
         result = await self._session.execute(
             text(
                 "UPDATE exotel_inbound_events SET "
@@ -202,7 +192,8 @@ class ExotelInboundEventRepository:
                 "  END, "
                 "  next_attempt_at = CASE "
                 "    WHEN attempts >= max_attempts THEN NULL "
-                "    ELSE NOW() + make_interval(secs => :backoff) "
+                "    ELSE NOW() + make_interval(secs => "
+                "      (ARRAY[30,60,120,300,600])[LEAST(attempts, 5)]) "
                 "  END, "
                 "  dead_lettered_at = CASE "
                 "    WHEN attempts >= max_attempts THEN NOW() "
@@ -216,11 +207,6 @@ class ExotelInboundEventRepository:
                 "  AND claim_version = :version "
                 "  AND intake_status = 'processing'"
             ),
-            {
-                "eid": event_id,
-                "token": claim_token,
-                "version": claim_version,
-                "backoff": backoff_seconds[0],
-            },
+            {"eid": event_id, "token": claim_token, "version": claim_version},
         )
         return result.rowcount > 0  # type: ignore[union-attr]

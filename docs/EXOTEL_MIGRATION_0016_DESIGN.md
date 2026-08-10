@@ -232,6 +232,27 @@ mutate domain state except through an audited operator command.
 
 ---
 
+### Expired processing at max_attempts
+
+If a worker crashes on the final attempt (attempts == max_attempts) and
+the lease expires, the event is stuck in `processing` with no live claimant.
+The claim query excludes `processing` events only when `lease_expires_at >= NOW()`.
+An expired `processing` at max_attempts must be deterministically dead-lettered:
+
+```sql
+-- Periodic sweep (same as pending expiry):
+UPDATE inbound_call_events
+SET intake_status = 'dead_letter', dead_lettered_at = NOW()
+WHERE intake_status = 'processing'
+  AND lease_expires_at < NOW()
+  AND attempts >= max_attempts
+```
+
+Events with `attempts < max_attempts` and expired lease are reclaimable
+by the normal claim query (already handled).
+
+---
+
 ## 5. Durable CONFLICT Evidence
 
 ### Storage
@@ -369,6 +390,33 @@ but different `business_id`, `called_number`, `direction`, or
 `provider_account_id` → ConflictingCorrelationError. The stream handler
 rejects the connection. The original binding is preserved.
 
+### Activation after runtime success
+
+The correlation binding is created BEFORE the runtime factory is invoked.
+If runtime startup fails or the stream is immediately aborted:
+
+```sql
+UPDATE call_correlation_bindings
+SET terminal_at = NOW()
+WHERE provider = :provider AND provider_call_id = :call_id
+```
+
+This prevents a stale MATCHED binding from correlating callbacks to a
+runtime that never ran. The stream handler's `finally` block sets
+`terminal_at` on both normal completion and failure.
+
+### E.164 normalization
+
+Before mapping lookup and correlation comparison, normalize phone numbers:
+- Strip leading/trailing whitespace
+- If number starts with `0` (Indian local format), do NOT add country code
+  (this is configuration-dependent and sandbox-verifiable)
+- Mapping keys and callback values compared after normalization
+- Malformed numbers (empty, >20 chars) fail closed
+
+Full E.164 normalization (country code insertion) is deferred to post-sandbox
+(OQ-1 will reveal actual format).
+
 ### Callback correlation
 
 When a status callback arrives, the handler queries:
@@ -468,6 +516,13 @@ Routes are mounted when ALL of:
 Routes are NOT mounted until schema readiness is verified at first request.
 The callback handler returns 503 when intake service is not wired.
 The media handler returns 1013 when runtime factory is not wired.
+
+### Callback route mandatory dependencies
+
+When the callback route is enabled (mounted), correlation and admission
+are MANDATORY — not optional. Missing wiring produces 503, never
+fail-open processing. The handler checks `_get_correlation(request.app)`
+and `_get_intake(request.app)` — both None → 503.
 
 ### Schema readiness gate (in worker)
 

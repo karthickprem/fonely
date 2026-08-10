@@ -106,9 +106,9 @@ class InboundCallEventRepository:
         """Claim one eligible event. Caller commits."""
         result = await self._session.execute(
             text(
-                "SELECT id, provider_call_id, business_id, event_type, "
-                "  status, caller_phone, called_number, duration, "
-                "  direction, claim_version "
+                "SELECT id, provider, provider_call_id, business_id, "
+                "  event_type, status, caller_phone, called_number, "
+                "  duration, direction, claim_version "
                 "FROM inbound_call_events "
                 "WHERE ("
                 "  (intake_status IN ('received', 'failed') "
@@ -124,9 +124,9 @@ class InboundCallEventRepository:
         if row is None:
             return None
 
-        row_business_id = row[2]
+        row_business_id = row[3]
         claim_token = str(uuid.uuid4())
-        new_version = row[9] + 1
+        new_version = row[10] + 1
         await self._session.execute(
             text(
                 "UPDATE inbound_call_events SET "
@@ -144,21 +144,22 @@ class InboundCallEventRepository:
                 "version": new_version,
                 "eid": row[0],
                 "bid": row_business_id,
-                "old_version": row[9],
+                "old_version": row[10],
             },
         )
         await self._session.flush()
 
         return ClaimedCallEvent(
             id=row[0],
-            provider_call_id=row[1],
-            business_id=row[2],
-            event_type=row[3],
-            status=row[4],
-            caller_phone=row[5],
-            called_number=row[6],
-            duration=row[7],
-            direction=row[8],
+            provider=row[1],
+            provider_call_id=row[2],
+            business_id=row[3],
+            event_type=row[4],
+            status=row[5],
+            caller_phone=row[6],
+            called_number=row[7],
+            duration=row[8],
+            direction=row[9],
             claim_token=claim_token,
             claim_version=new_version,
         )

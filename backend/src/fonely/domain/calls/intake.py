@@ -88,6 +88,7 @@ class ClaimedCallEvent:
     """Typed claimed event for worker processing."""
 
     id: int
+    provider: str
     provider_call_id: str
     business_id: int
     event_type: str

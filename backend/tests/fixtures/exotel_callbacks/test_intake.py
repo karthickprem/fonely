@@ -101,6 +101,7 @@ class InMemoryCallEventIntake:
                 es.attempts += 1
                 return ClaimedCallEvent(
                     id=eid,
+                    provider=es.record.provider,
                     provider_call_id=es.record.provider_call_id,
                     business_id=es.record.business_id,
                     event_type=es.record.event_type,

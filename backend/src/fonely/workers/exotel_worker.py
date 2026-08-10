@@ -29,8 +29,8 @@ class SchemaNotReadyError(Exception):
     """Worker cannot run without required schema."""
 
 
-def _advisory_lock_key(business_id: int, provider_call_id: str) -> int:
-    data = f"{business_id}:{provider_call_id}".encode()
+def _advisory_lock_key(business_id: int, provider: str, provider_call_id: str) -> int:
+    data = f"{business_id}:{provider}:{provider_call_id}".encode()
     digest = hashlib.blake2b(data, digest_size=8).digest()
     return int.from_bytes(digest, "big", signed=True)
 
@@ -70,7 +70,9 @@ class InboundCallEventWorker:
 
         try:
             async with self._factory() as session:
-                lock_key = _advisory_lock_key(claimed.business_id, claimed.provider_call_id)
+                lock_key = _advisory_lock_key(
+                    claimed.business_id, claimed.provider, claimed.provider_call_id,
+                )
                 await session.execute(
                     text("SELECT pg_advisory_xact_lock(:key)"),
                     {"key": lock_key},
@@ -144,11 +146,15 @@ class InboundCallEventWorker:
         Uses call_status column to preserve failed/busy/no_answer.
         No latest-call fallback. No ended_at-based status derivation.
         """
+        # calls table lookup does not include provider (migration-blocked).
+        # Intake dedup + advisory lock both include provider, preventing
+        # cross-provider collision at the queue level.
         existing = await session.execute(
             text(
                 "SELECT id, call_status "
                 "FROM calls "
-                "WHERE business_id = :bid AND provider_call_id = :cid "
+                "WHERE business_id = :bid "
+                "  AND provider_call_id = :cid "
                 "FOR UPDATE"
             ),
             {"bid": claimed.business_id, "cid": claimed.provider_call_id},

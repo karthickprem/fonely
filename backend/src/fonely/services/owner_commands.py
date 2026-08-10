@@ -67,6 +67,23 @@ _NO_TOKENS = frozenset({"no", "n", "cancel", "reject", "stop", "venda", "vendam"
 _DESTRUCTIVE_COMMANDS = frozenset({"doctor_leave", "close_clinic", "close_early"})
 
 _PROPOSAL_TTL = timedelta(minutes=5)
+_ADVISORY_LOCK_NAMESPACE = b"fonely.owner_proposal_family.v1"
+
+
+def _proposal_family_lock_key(business_id: int, semantic_key: str) -> int:
+    """Deterministic signed int64 advisory lock key for a proposal family.
+
+    Uses BLAKE2b with a fixed namespace so the key is stable across processes,
+    restarts, and Python versions (unlike hash() which is randomized).
+    """
+    import struct
+
+    digest = hashlib.blake2b(
+        f"{business_id}:{semantic_key}".encode(),
+        key=_ADVISORY_LOCK_NAMESPACE,
+        digest_size=8,
+    ).digest()
+    return int(struct.unpack(">q", digest)[0])
 
 
 class ScheduleExceptionConflictError(Exception):
@@ -519,10 +536,35 @@ class OwnerCommandService:
         affected: list[dict[str, str]],
         target_date: date,
     ) -> OwnerCommandResult:
+        from sqlalchemy import text as sa_text
+
         bound = {"command_payload": payload, "preview_snapshot": preview}
         digest = self._compute_payload_digest(bound)
-        idem_key = f"owner-v1-{business_id}-{owner.id}-{self._compute_payload_digest(payload)[:40]}"
+        payload_digest_full = self._compute_payload_digest(payload)
+        idem_key = f"owner-v1-{business_id}-{owner.id}-{payload_digest_full[:40]}"
         now = datetime.now(UTC)
+
+        family_lock_key = _proposal_family_lock_key(business_id, idem_key)
+        await self._session.execute(
+            sa_text("SELECT pg_advisory_xact_lock(:key)"),
+            {"key": family_lock_key},
+        )
+
+        completed_existing = await self._proposals.find_completed_by_key_prefix(
+            business_id, idem_key
+        )
+        if completed_existing is not None:
+            evidence = completed_existing.result_evidence or {}
+            outcome = evidence.get("outcome", completed_existing.status)
+            return OwnerCommandResult(
+                command_type=command_type,
+                success=True,
+                response_text=(
+                    f"This command was already completed ({outcome}). "
+                    "Send a new command if you need to take action."
+                ),
+                proposal_id=completed_existing.id,
+            )
 
         proposal = await self._proposals.create_idempotent(
             {
@@ -542,16 +584,7 @@ class OwnerCommandService:
         )
 
         if proposal is None:
-            from sqlalchemy import text as sa_text
-
-            family_lock_key = (
-                hash(f"owner-proposal-family-{business_id}-{idem_key}") & 0x7FFFFFFFFFFFFFFF
-            )
-            await self._session.execute(
-                sa_text("SELECT pg_advisory_xact_lock(:key)"),
-                {"key": family_lock_key},
-            )
-
+            # Advisory lock already held from above; recheck under lock
             terminal = await self._proposals.get_by_idempotency_key(business_id, idem_key)
             if terminal is not None:
                 if terminal.status in ("completed", "rejected", "expired"):

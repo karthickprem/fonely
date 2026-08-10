@@ -718,7 +718,9 @@ async def test_pending_partial_unique_savepoint_preserves_outer(
         first = await service.process_command(1, "+914428350001", "Dr. Priya leave tomorrow")
         assert first.success is True
 
-        second = await service.process_command(1, "+914428350001", "Dr. Priya leave tomorrow")
+        close_gw = _mock_gateway({"command": "close_clinic", "date": "tomorrow"})
+        service2 = OwnerCommandService(session, close_gw)
+        second = await service2.process_command(1, "+914428350001", "close clinic tomorrow")
         assert second.success is False
         assert "pending" in second.response_text.lower()
 

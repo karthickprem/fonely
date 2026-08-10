@@ -306,15 +306,23 @@ class PipelineRuntime:
         # 6. Classify speech — DEFAULT CONSEQUENTIAL for unknown
         speech_class = self._classify_speech(response)
 
-        # 6b. If consequential and command port available, attempt authoritative command
+        # 6b. Command invocation ONLY when dialogue state confirms user intent
+        #     NEVER triggered by LLM text containing commit vocabulary
         commit_receipt: CommitReceipt | None = None
         receipt_validated = False
-        if speech_class in CONSEQUENTIAL_CLASSES and self._command_port is not None:
+        user_confirmed = (
+            self._dialogue.last_assistant_text  # There was a readback
+            and self._is_user_confirmation(caller_text)  # User explicitly confirmed
+            and self._has_complete_facts()  # All required facts collected
+            and self._command_port is not None
+            and self._session_mode == "live"
+        )
+        if user_confirmed:
             commit_receipt = await self._try_authoritative_command(
                 speech_class, caller_text, response, token.turn_id
             )
             if commit_receipt is not None:
-                receipt_validated = True  # Already validated in _try_authoritative_command
+                receipt_validated = True
 
         # 7. Validate — consequential speech requires validated receipt
         #    Do NOT relabel speech class; validator decides based on class + receipt
@@ -416,6 +424,22 @@ class PipelineRuntime:
             "close_errors": errors,
         }
 
+    def _is_user_confirmation(self, caller_text: str) -> bool:
+        """Detect explicit user confirmation from caller text."""
+        import re
+        lower = caller_text.lower().strip()
+        confirm_patterns = [
+            r"^(yes|ஆமா|ஆம்|சரி|correct|confirm|okay|ok|proceed|aamaa|aama|sari)\b",
+            r"(confirm பண்ணுங்க|சரிங்க|correct-ஆ|confirm pannunga)",
+        ]
+        return any(re.search(p, lower) for p in confirm_patterns)
+
+    def _has_complete_facts(self) -> bool:
+        """Check if dialogue has collected all required booking facts."""
+        asked = set(self._dialogue.asked_fields)
+        required = {"reason", "date", "time", "name"}
+        return required <= asked
+
     def _build_command_context(self) -> TrustedCommandContext:
         """Build trusted command context from session config."""
         return TrustedCommandContext(
@@ -473,10 +497,14 @@ class PipelineRuntime:
                 ))
                 if confirmation.committed and confirmation.receipt is not None:
                     receipt = confirmation.receipt
-                    # Validate receipt is bound to this request
+                    # Validate receipt is bound to this exact request
                     if (receipt.business_id != self._config.business_id
-                            or receipt.proposal_id != proposal.proposal_id):
-                        self._telemetry.emit("receipt_binding_mismatch", turn=turn_id)
+                            or receipt.proposal_id != proposal.proposal_id
+                            or (digest and receipt.payload_digest != digest)):
+                        self._telemetry.emit("receipt_binding_mismatch",
+                                             turn=turn_id,
+                                             expected_digest=digest[:8] if digest else "",
+                                             receipt_digest=receipt.payload_digest[:8] if receipt.payload_digest else "")
                         return None
                     self._telemetry.emit("command_committed",
                                          commitment_id=receipt.commitment_id,

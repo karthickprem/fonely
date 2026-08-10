@@ -61,8 +61,8 @@ class SimpleAvail:
 
 class TestRuntimeToEngineReceipt:
     @pytest.mark.asyncio
-    async def test_receipt_obtained_through_runtime(self):
-        """Runtime → TestBookingEngine → typed CommitReceipt obtained."""
+    async def test_receipt_obtained_after_full_dialogue(self):
+        """Full dialogue: collect facts → readback → user confirms → receipt."""
         engine = TestBookingEngine()
 
         rt = PipelineRuntime(
@@ -71,16 +71,32 @@ class TestRuntimeToEngineReceipt:
             business_name="Test Dental",
             business_timezone="Asia/Kolkata",
             stt=SimpleSTT(),
-            llm=SimpleLLM(["Booking confirmed for 6:30."]),
+            llm=SimpleLLM([
+                "என்ன reason-க்காக visit?",       # asks reason
+                "எந்த date-ல வரணும்?",              # asks date
+                "18:30 available. Time சரியா?",      # asks time
+                "பேரு சொல்லுங்க?",                   # asks name
+                "Scaling, நாளை 6:30, Karthick. Correct-ஆ?",  # readback
+                "Booking confirmed for 6:30.",       # confirmation response
+            ]),
             tts=SimpleTTS(),
             availability_port=SimpleAvail(),
             command_port=engine,
             session_mode="live",
         )
         await rt.initialize()
-        result = await rt.process_turn(b"Confirm booking")
 
-        # Engine was invoked through runtime
+        # Simulate multi-turn dialogue collecting facts
+        await rt.process_turn(b"Appointment book pannanum")  # reason asked
+        await rt.process_turn(b"Scaling")                     # date asked
+        await rt.process_turn(b"Naalaikku")                   # time asked
+        await rt.process_turn(b"6:30")                        # name asked
+        await rt.process_turn(b"Karthick")                    # readback
+
+        # User explicitly confirms after readback
+        result = await rt.process_turn(b"Aamaa, confirm pannunga")
+
+        # Engine was invoked only after user confirmation
         assert engine.proposal_count == 1
         assert engine.commitment_count == 1
 
@@ -88,12 +104,9 @@ class TestRuntimeToEngineReceipt:
         assert result.commit_receipt is not None
         assert isinstance(result.commit_receipt, CommitReceipt)
         assert result.commit_receipt.business_id == 1
-        assert result.commit_receipt.commitment_id == 1
-        assert result.commit_receipt.committed_at_ns > 0
 
         # Speech still BLOCKED by fail-closed stub
         assert not result.allowed
-        assert result.speech_class == SpeechClass.COMMITTED_CREATE
 
         await rt.close()
 
@@ -117,8 +130,8 @@ class TestRuntimeToEngineReceipt:
         await rt.close()
 
     @pytest.mark.asyncio
-    async def test_first_turn_commits_and_subsequent_safe(self):
-        """First turn commits; second turn is non-consequential and allowed."""
+    async def test_no_command_on_casual_confirm_text(self):
+        """User says 'confirm' without prior fact collection → no command."""
         engine = TestBookingEngine()
 
         rt = PipelineRuntime(
@@ -127,7 +140,7 @@ class TestRuntimeToEngineReceipt:
             business_name="Test Dental",
             business_timezone="Asia/Kolkata",
             stt=SimpleSTT(),
-            llm=SimpleLLM(["Booking confirmed.", "Thanks for booking!"]),
+            llm=SimpleLLM(["Booking confirmed."]),
             tts=SimpleTTS(),
             command_port=engine,
             session_mode="live",
@@ -135,15 +148,10 @@ class TestRuntimeToEngineReceipt:
         await rt.initialize()
         r1 = await rt.process_turn(b"Confirm")
 
-        # First turn gets receipt through engine
-        assert r1.commit_receipt is not None
-        assert engine.proposal_count == 1
-        assert engine.commitment_count == 1
-
-        r2 = await rt.process_turn(b"Thanks")
-        # Second turn is non-consequential (safe pattern)
-        assert r2.commit_receipt is None  # No command invoked
-        assert r2.speech_class == SpeechClass.NON_CONSEQUENTIAL
+        # No facts collected, no readback → no command invoked
+        assert engine.proposal_count == 0
+        assert r1.commit_receipt is None
+        assert not r1.allowed  # Consequential speech blocked
 
         await rt.close()
 

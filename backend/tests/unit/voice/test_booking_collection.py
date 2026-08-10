@@ -285,6 +285,74 @@ class TestReceiptGatedSpeech:
         await rt.close()
 
 
+class _ConformanceFakeReceipt:
+    """Test-only fake matching ADR 0002 committed receipt shape.
+
+    Impossible to configure in production: requires a sentinel source
+    value that no real application port produces.
+    """
+
+    _SENTINEL = "__test_conformance_only__"
+
+    def __init__(self, *, service_name="Scaling", resource_name="Dr. Priya",
+                 start_at_utc=None, end_at_utc=None, business_timezone="Asia/Kolkata",
+                 notification_intent_state="queued"):
+        from datetime import UTC
+        now = datetime.now(UTC)
+        self.status = "committed"
+        self.source = self._SENTINEL
+        self.operation = "create"
+        self.business_id = 1
+        self.appointment_id = 42
+        self.proposal_id = 7
+        self.proposal_version = 2
+        self.confirmation_id = "conf-001"
+        self.committed_at = now
+        self.service_name = service_name
+        self.resource_name = resource_name
+        self.start_at_utc = start_at_utc or datetime(2026, 8, 11, 13, 0, tzinfo=UTC)
+        self.end_at_utc = end_at_utc or datetime(2026, 8, 11, 13, 30, tzinfo=UTC)
+        self.business_timezone = business_timezone
+        self.customer_subject = "customer-1"
+        self.payload_digest = "digest-fake"
+        self.notification_intent_state = notification_intent_state
+        self.offer_id = "offer-001"
+        self.slot_token = "token-opaque-server-generated"
+
+
+class TestConformanceFake:
+    """Verify the test fake matches ADR 0002 shape without being production-usable."""
+
+    def test_has_all_adr_fields(self):
+        r = _ConformanceFakeReceipt()
+        for field in [
+            "status", "source", "operation", "business_id", "appointment_id",
+            "proposal_id", "proposal_version", "confirmation_id", "committed_at",
+            "service_name", "resource_name", "start_at_utc", "end_at_utc",
+            "business_timezone", "customer_subject", "payload_digest",
+            "notification_intent_state", "offer_id", "slot_token",
+        ]:
+            assert hasattr(r, field), f"missing field: {field}"
+
+    def test_sentinel_prevents_production_use(self):
+        r = _ConformanceFakeReceipt()
+        assert r.source == "__test_conformance_only__"
+        assert r.source != "appointment_service"
+        assert r.source != "test_engine"
+
+    def test_notification_state_is_valid(self):
+        for state in ("queued", "not_queued", "not_applicable"):
+            r = _ConformanceFakeReceipt(notification_intent_state=state)
+            assert r.notification_intent_state == state
+
+    def test_timestamps_are_aware(self):
+        r = _ConformanceFakeReceipt()
+        assert r.committed_at.tzinfo is not None
+        assert r.start_at_utc.tzinfo is not None
+        assert r.end_at_utc.tzinfo is not None
+        assert r.end_at_utc > r.start_at_utc
+
+
 class TestBookingCollectionRender:
     def test_render_includes_all_fields(self):
         bc = BookingCollection()

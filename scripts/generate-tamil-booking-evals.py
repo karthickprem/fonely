@@ -86,10 +86,30 @@ CONFIRMATIONS = [
 ]
 
 TANGENT_QUESTIONS = [
-    ("fee எவ்வளவு?", "price_query"),
-    ("clinic எங்க இருக்கு?", "location_query"),
-    ("parking இருக்கா?", "facility_query"),
-    ("insurance accept பண்றீங்களா?", "insurance_query"),
+    ("fee எவ்வளவு?", "business_information_query"),
+    ("clinic எங்க இருக்கு?", "business_information_query"),
+    ("parking இருக்கா?", "business_information_query"),
+    ("insurance accept பண்றீங்களா?", "business_information_query"),
+]
+
+NOISE_PREFIXES = [
+    "um, ",
+    "actually, ",
+    "ஒரு நிமிஷம், ",
+    "wait wait, ",
+    "",
+]
+
+SELF_CORRECTIONS = [
+    ("sorry, {old} இல்ல, {new}", "correction"),
+    ("{old} வேண்டாம், {new} வேணும்", "correction"),
+    ("actually {new}, not {old}", "correction"),
+]
+
+TIME_BEFORE_DATE_REQUESTS = [
+    ("5 pm-க்கு appointment புக் பண்ணனும்", "native_script"),
+    ("6:30 appointment வேணும்", "native_script"),
+    ("10 மணிக்கு doctor appointment", "native_script"),
 ]
 
 MEDICAL_TRIGGERS = [
@@ -159,10 +179,12 @@ def generate_all() -> list[dict]:
     register_counts = {"native_tanglish": 0, "romanized_tanglish": 0, "mixed": 0}
 
     # --- SCENARIO 1: date+time in first utterance, alternatives, select, reason, name ---
-    for date_word, date_val, date_mode in DATES_TAMIL[:4]:
-        for time_word, time_val, time_mode, _ in TIMES_TANGLISH[:3]:
-            for reason_word, reason_val, reason_mode in REASONS[:3]:
-                for name_word, name_val, name_mode in NAMES[:3]:
+    for date_word, date_val, date_mode in DATES_TAMIL:
+        for time_word, time_val, time_mode, _ in TIMES_TANGLISH[:6]:
+            if time_val == "AMBIGUOUS":
+                continue
+            for reason_word, reason_val, reason_mode in REASONS:
+                for name_word, name_val, name_mode in NAMES:
                     reg = "native_tanglish" if "native" in date_mode else "romanized_tanglish"
                     register_counts[reg] = register_counts.get(reg, 0) + 1
                     turns = [
@@ -377,6 +399,72 @@ def generate_all() -> list[dict]:
             notes="Slot must survive unrelated question without re-asking.",
         ))
         cid += 1
+
+    # --- Time-before-date: caller states time first, then date ---
+    for req, mode in TIME_BEFORE_DATE_REQUESTS:
+        for date_word, date_val, dmode in DATES_TAMIL[:4]:
+            turns = [
+                make_turn(
+                    req,
+                    intent="appointment_create",
+                    constraints=["must recognize time preference", "must ask for date"],
+                ),
+                make_turn(
+                    date_word,
+                    intent="availability_query",
+                    constraints=[
+                        f"must parse {date_word} as {date_val}",
+                        "must query availability for that date",
+                        "must check if previously stated time is available",
+                    ],
+                    forbidden=["re-ask time", "ignore time from first utterance"],
+                ),
+            ]
+            cases.append(make_case(
+                cid,
+                category="time_before_date",
+                title=f"Time first: {req[:30]} → {date_word}",
+                turns=turns,
+                tags=["time_first", "flow_order"],
+                input_mode=mode,
+                notes="Caller states time preference before date. System should remember the time.",
+            ))
+            cid += 1
+
+    # --- Self-correction mid-flow ---
+    for date_word, date_val, dmode in DATES_TAMIL[:3]:
+        for noise in NOISE_PREFIXES[:3]:
+            for old_reason, new_reason in [("scaling", "root canal"), ("cleaning", "checkup")]:
+                turns = [
+                    make_turn(
+                        f"{date_word} appointment புக் பண்ணனும், {old_reason} வேணும்",
+                        intent="appointment_create",
+                        constraints=["must parse date and reason"],
+                    ),
+                    make_turn(
+                        f"{noise}{old_reason} வேண்டாம், {new_reason} வேணும்",
+                        intent="appointment_revise",
+                        constraints=[
+                            f"must update reason from {old_reason} to {new_reason}",
+                            "must preserve date",
+                            "must not treat correction as new booking",
+                        ],
+                        forbidden=[
+                            f"keep {old_reason}",
+                            "re-ask date",
+                            "start new booking",
+                        ],
+                    ),
+                ]
+                cases.append(make_case(
+                    cid,
+                    category="self_correction",
+                    title=f"Self-correct: {old_reason}→{new_reason} ({noise.strip() or 'no prefix'})",
+                    turns=turns,
+                    tags=["correction", "mid_flow", "state_update"],
+                    notes=f"Self-correction with noise prefix '{noise.strip()}'. Date must survive.",
+                ))
+                cid += 1
 
     # --- Wrong language check ---
     turns = [

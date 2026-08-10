@@ -229,7 +229,7 @@ def create_demo_app():
                     "terminal": result.terminal,
                     "terminal_reason": result.terminal_reason,
                     "availability_queried": result.availability_queried,
-                    "commit_evidence": result.commit_evidence is not None,
+                    "commit_evidence": result.commit_receipt is not None,
                 })
 
                 if result.terminal:

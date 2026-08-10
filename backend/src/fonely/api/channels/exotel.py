@@ -1,15 +1,13 @@
 """Exotel telephony webhook adapter — thin ingress to typed intake.
 
-Authenticates, parses, validates, and delegates to InboundCallEventIntake.
+Authenticates via gateway-injected secret (Exotel does NOT sign callbacks).
+Parses, validates, correlates, and delegates to InboundCallEventIntake.
 Does NOT mutate domain state. Does NOT import sqlalchemy.
 
-INTERIM AUTH: shared-secret possession check. Exotel documents NO native
-callback authentication. See docs/EXOTEL_PROVIDER_CONTRACT.md §4.
-
-Audio WebSocket is NOT exposed — it requires a separate auth contract.
+Auth before body. Quarantine only after auth. Correlation does not
+replace semantic dedup.
 """
 
-import hmac
 import json
 import logging
 from dataclasses import dataclass
@@ -19,8 +17,17 @@ from typing import Any
 from fastapi import APIRouter, Request, Response
 from starlette.requests import ClientDisconnect
 
+from fonely.api.channels.exotel_admission import (
+    resolve_business_id,
+    verify_gateway_secret,
+)
 from fonely.core.config import settings
+from fonely.domain.calls.correlation import (
+    CallCorrelationStore,
+    CorrelationOutcome,
+)
 from fonely.domain.calls.events import (
+    EXOTEL_PROVIDER,
     ExotelCallbackParseError,
     parse_exotel_callback,
 )
@@ -35,45 +42,7 @@ logger = logging.getLogger("fonely.api.channels.exotel")
 
 router = APIRouter(prefix="/webhooks/exotel", tags=["exotel"])
 
-_AUTH_HEADER = "X-Exotel-Webhook-Secret"
 _MAX_BODY_BYTES = 65_536
-_MIN_SECRET_CHARS = 32
-
-
-# ---------------------------------------------------------------------------
-# Auth
-# ---------------------------------------------------------------------------
-
-
-def _ascii_secret(secret: str) -> bytes | None:
-    if len(secret) < _MIN_SECRET_CHARS or secret != secret.strip():
-        return None
-    try:
-        return secret.encode("ascii")
-    except UnicodeEncodeError:
-        return None
-
-
-def is_interim_webhook_secret_strong(secret: str) -> bool:
-    """Check minimum deploy-time strength for the interim secret."""
-    return _ascii_secret(secret) is not None
-
-
-def _verify_webhook_auth(request: Request) -> bool:
-    configured = _ascii_secret(settings.exotel_webhook_secret)
-    if configured is None:
-        return False
-    raw_values = request.headers.getlist(_AUTH_HEADER)
-    if len(raw_values) != 1:
-        return False
-    provided = raw_values[0]
-    if not provided or provided != provided.strip():
-        return False
-    try:
-        provided_bytes = provided.encode("ascii")
-    except UnicodeEncodeError:
-        return False
-    return hmac.compare_digest(configured, provided_bytes)
 
 
 # ---------------------------------------------------------------------------
@@ -124,6 +93,10 @@ def _get_intake(app: object) -> InboundCallEventIntake | None:
     return getattr(getattr(app, "state", None), "exotel_intake", None)
 
 
+def _get_correlation(app: object) -> CallCorrelationStore | None:
+    return getattr(getattr(app, "state", None), "exotel_correlation", None)
+
+
 def _parse_multipart_fields(raw: bytes, content_type: str) -> dict[str, str]:
     """Extract flat scalar field values from multipart/form-data.
 
@@ -160,21 +133,6 @@ def _parse_multipart_fields(raw: bytes, content_type: str) -> dict[str, str]:
     return fields
 
 
-def _resolve_business_id(mapping: ExotelNumberMapping, called: str, caller: str) -> int | None:
-    """Tenant routing — direction-neutral, ambiguity-rejecting.
-
-    Exact callback field semantics for From/To are sandbox-unverified
-    (OQ-1). Try both numbers against the mapping. If both map to the
-    same business, accept. If both map to different businesses, reject
-    as ambiguous. If exactly one maps, accept that one.
-    """
-    to_bid = mapping.get_business_id(called)
-    from_bid = mapping.get_business_id(caller)
-    if to_bid is not None and from_bid is not None and to_bid != from_bid:
-        return None
-    return to_bid or from_bid
-
-
 # ---------------------------------------------------------------------------
 # Call status webhook
 # ---------------------------------------------------------------------------
@@ -182,8 +140,8 @@ def _resolve_business_id(mapping: ExotelNumberMapping, called: str, caller: str)
 
 @router.post("/call-status")
 async def call_status_webhook(request: Request) -> Response:
-    """Authenticate, parse, validate, persist via intake, return 200."""
-    if not _verify_webhook_auth(request):
+    """Gateway auth → parse → validate → correlate → persist → 200."""
+    if not verify_gateway_secret(request.headers, settings.exotel_webhook_secret):
         return Response(status_code=401, content="unauthorized")
 
     content_type = (request.headers.get("content-type") or "").lower().split(";")[0].strip()
@@ -230,7 +188,7 @@ async def call_status_webhook(request: Request) -> Response:
         return Response(status_code=400, content="invalid callback payload")
 
     mapping = _get_mapping(request.app)
-    business_id = _resolve_business_id(mapping, event.called_number, event.caller_phone)
+    business_id = resolve_business_id(mapping, event.called_number, event.caller_phone)
     if business_id is None:
         logger.warning("exotel_unknown_number")
         return Response(status_code=404, content="unknown number")
@@ -239,6 +197,38 @@ async def call_status_webhook(request: Request) -> Response:
     if intake is None:
         logger.error("exotel_intake_not_configured")
         return Response(status_code=503, content="service unavailable")
+
+    correlation = _get_correlation(request.app)
+    if correlation is not None:
+        provider_account = getattr(
+            getattr(request.app, "state", None),
+            "exotel_account_id", "",
+        )
+        result = await correlation.correlate(
+            provider=EXOTEL_PROVIDER,
+            provider_account_id=provider_account,
+            provider_call_id=event.call_sid,
+            called_number=event.called_number,
+            business_id=business_id,
+            direction=event.direction,
+        )
+        if result.outcome == CorrelationOutcome.CONFLICT:
+            logger.warning(
+                "exotel_callback_correlation_conflict",
+                extra={
+                    "business_id": business_id,
+                    "event_type": event.event_type,
+                },
+            )
+            return Response(status_code=200, content="ok")
+        if result.outcome == CorrelationOutcome.PENDING:
+            logger.info(
+                "exotel_callback_quarantined",
+                extra={
+                    "business_id": business_id,
+                    "event_type": event.event_type,
+                },
+            )
 
     inbound_event = event.to_inbound_event()
     try:
@@ -280,7 +270,3 @@ async def call_status_webhook(request: Request) -> Response:
         },
     )
     return Response(status_code=200, content="ok")
-
-
-# Audio WebSocket is NOT exposed — requires separate auth contract.
-# See docs/EXOTEL_PROVIDER_CONTRACT.md §4.

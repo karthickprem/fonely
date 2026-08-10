@@ -33,9 +33,7 @@ class ExotelNumberMapping:
         try:
             parsed = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise InvalidNumberMappingError(
-                "EXOTEL_NUMBER_MAPPINGS is not valid JSON"
-            ) from exc
+            raise InvalidNumberMappingError("EXOTEL_NUMBER_MAPPINGS is not valid JSON") from exc
         if not isinstance(parsed, dict):
             raise InvalidNumberMappingError(
                 f"EXOTEL_NUMBER_MAPPINGS must be a JSON object, got {type(parsed).__name__}"
@@ -47,9 +45,7 @@ class ExotelNumberMapping:
         validated: dict[str, int] = {}
         for key, value in mappings.items():
             if not isinstance(key, str) or not key:
-                raise InvalidNumberMappingError(
-                    "mapping key must be a non-empty string"
-                )
+                raise InvalidNumberMappingError("mapping key must be a non-empty string")
             if isinstance(value, bool):
                 raise InvalidNumberMappingError(
                     "mapping value must be a positive integer, got bool"
@@ -59,9 +55,7 @@ class ExotelNumberMapping:
                     f"mapping value must be a positive integer, got {type(value).__name__}"
                 )
             if value <= 0:
-                raise InvalidNumberMappingError(
-                    f"mapping value must be positive, got {value}"
-                )
+                raise InvalidNumberMappingError(f"mapping value must be positive, got {value}")
             validated[key] = value
         return validated
 

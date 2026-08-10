@@ -146,8 +146,13 @@ class TestStrictEventParsing:
 class TestCallStatusTransitions:
     def test_none_to_any_allowed(self) -> None:
         all_statuses = (
-            "queued", "ringing", "in_progress",
-            "completed", "failed", "busy", "no_answer",
+            "queued",
+            "ringing",
+            "in_progress",
+            "completed",
+            "failed",
+            "busy",
+            "no_answer",
         )
         for status in all_statuses:
             assert validate_transition(None, status) == status

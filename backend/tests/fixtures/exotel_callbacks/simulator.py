@@ -63,24 +63,26 @@ class ExotelSimulator:
         return json.dumps({"event": "connected"})
 
     def start_msg(self) -> str:
-        return json.dumps({
-            "event": "start",
-            "sequence_number": self._next_seq(),
-            "stream_sid": self.config.stream_sid,
-            "start": {
+        return json.dumps(
+            {
+                "event": "start",
+                "sequence_number": self._next_seq(),
                 "stream_sid": self.config.stream_sid,
-                "call_sid": self.config.call_sid,
-                "account_sid": self.config.account_sid,
-                "from": self.config.from_number,
-                "to": self.config.to_number,
-                "custom_parameters": self.config.custom_parameters,
-                "media_format": {
-                    "encoding": self.config.encoding,
-                    "sample_rate": str(self.config.sample_rate),
-                    "bit_rate": str(self.config.bit_rate),
+                "start": {
+                    "stream_sid": self.config.stream_sid,
+                    "call_sid": self.config.call_sid,
+                    "account_sid": self.config.account_sid,
+                    "from": self.config.from_number,
+                    "to": self.config.to_number,
+                    "custom_parameters": self.config.custom_parameters,
+                    "media_format": {
+                        "encoding": self.config.encoding,
+                        "sample_rate": str(self.config.sample_rate),
+                        "bit_rate": str(self.config.bit_rate),
+                    },
                 },
-            },
-        })
+            }
+        )
 
     def media_msg(self, pcm_bytes: bytes | None = None) -> str:
         """Generate a media message with PCM audio.
@@ -96,42 +98,48 @@ class ExotelSimulator:
         chunk_duration_ms = len(pcm_bytes) * 1000 // (self.config.sample_rate * 2)
         self._timestamp_ms += chunk_duration_ms
 
-        return json.dumps({
-            "event": "media",
-            "sequence_number": self._next_seq(),
-            "stream_sid": self.config.stream_sid,
-            "media": {
-                "chunk": str(self._chunk),
-                "timestamp": str(self._timestamp_ms),
-                "payload": base64.b64encode(pcm_bytes).decode(),
-            },
-        })
+        return json.dumps(
+            {
+                "event": "media",
+                "sequence_number": self._next_seq(),
+                "stream_sid": self.config.stream_sid,
+                "media": {
+                    "chunk": str(self._chunk),
+                    "timestamp": str(self._timestamp_ms),
+                    "payload": base64.b64encode(pcm_bytes).decode(),
+                },
+            }
+        )
 
     def media_frames(self, count: int) -> list[str]:
         return [self.media_msg() for _ in range(count)]
 
     def stop_msg(self, reason: str = "callended") -> str:
-        return json.dumps({
-            "event": "stop",
-            "sequence_number": self._next_seq(),
-            "stream_sid": self.config.stream_sid,
-            "stop": {
-                "call_sid": self.config.call_sid,
-                "account_sid": self.config.account_sid,
-                "reason": reason,
-            },
-        })
+        return json.dumps(
+            {
+                "event": "stop",
+                "sequence_number": self._next_seq(),
+                "stream_sid": self.config.stream_sid,
+                "stop": {
+                    "call_sid": self.config.call_sid,
+                    "account_sid": self.config.account_sid,
+                    "reason": reason,
+                },
+            }
+        )
 
     def dtmf_msg(self, digit: str, duration: int = 100) -> str:
-        return json.dumps({
-            "event": "dtmf",
-            "sequence_number": self._next_seq(),
-            "stream_sid": self.config.stream_sid,
-            "dtmf": {
-                "digit": digit,
-                "duration": str(duration),
-            },
-        })
+        return json.dumps(
+            {
+                "event": "dtmf",
+                "sequence_number": self._next_seq(),
+                "stream_sid": self.config.stream_sid,
+                "dtmf": {
+                    "digit": digit,
+                    "duration": str(duration),
+                },
+            }
+        )
 
     def status_callback(
         self,
@@ -163,16 +171,18 @@ class ExotelSimulator:
         pcm_bytes = b"\x00" * (self.config.sample_rate * 2 * 20 // 1000)
         self._chunk += 1
         self._timestamp_ms = timestamp_ms
-        return json.dumps({
-            "event": "media",
-            "sequence_number": self._next_seq(),
-            "stream_sid": self.config.stream_sid,
-            "media": {
-                "chunk": str(self._chunk),
-                "timestamp": str(timestamp_ms),
-                "payload": base64.b64encode(pcm_bytes).decode(),
-            },
-        })
+        return json.dumps(
+            {
+                "event": "media",
+                "sequence_number": self._next_seq(),
+                "stream_sid": self.config.stream_sid,
+                "media": {
+                    "chunk": str(self._chunk),
+                    "timestamp": str(timestamp_ms),
+                    "payload": base64.b64encode(pcm_bytes).decode(),
+                },
+            }
+        )
 
     def status_callback_wrong_business(self) -> dict[str, str]:
         """Callback claiming a number that maps to a different business."""

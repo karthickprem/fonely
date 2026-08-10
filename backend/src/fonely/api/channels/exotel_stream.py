@@ -114,17 +114,13 @@ def validate_start_event(msg: dict[str, Any]) -> ExotelStartMetadata:
     try:
         sample_rate = int(raw_rate)
     except (ValueError, TypeError) as exc:
-        raise ExotelStartValidationError(
-            f"malformed sample_rate: {raw_rate!r}"
-        ) from exc
+        raise ExotelStartValidationError(f"malformed sample_rate: {raw_rate!r}") from exc
     if sample_rate not in _SUPPORTED_RATES:
         raise ExotelStartValidationError(f"unsupported sample_rate: {sample_rate}")
 
     channels = media_format.get("channels")
     if channels is not None and str(channels) != "1":
-        raise ExotelStartValidationError(
-            f"unsupported channels: {channels} (expected mono)"
-        )
+        raise ExotelStartValidationError(f"unsupported channels: {channels} (expected mono)")
 
     return ExotelStartMetadata(
         stream_sid=stream_sid,
@@ -176,15 +172,9 @@ async def exotel_media_websocket(websocket: WebSocket) -> None:
         return
 
     mapping: ExotelNumberMapping | None = getattr(state, "exotel_mapping", None)
-    correlation: CallCorrelationStore | None = getattr(
-        state, "exotel_correlation", None
-    )
-    admission: StreamAdmissionController | None = getattr(
-        state, "exotel_admission", None
-    )
-    runtime_factory: ExotelRuntimeFactory | None = getattr(
-        state, "exotel_runtime_factory", None
-    )
+    correlation: CallCorrelationStore | None = getattr(state, "exotel_correlation", None)
+    admission: StreamAdmissionController | None = getattr(state, "exotel_admission", None)
+    runtime_factory: ExotelRuntimeFactory | None = getattr(state, "exotel_runtime_factory", None)
     expected_account = getattr(state, "exotel_account_id", "")
     environment = getattr(state, "exotel_environment", "")
     expected_rate = getattr(state, "exotel_expected_sample_rate", 0)
@@ -209,9 +199,7 @@ async def exotel_media_websocket(websocket: WebSocket) -> None:
         if metadata.account_sid != expected_account:
             raise ExotelStartValidationError("provider account mismatch")
 
-        business_id = resolve_business_id(
-            mapping, metadata.to_number, metadata.from_number
-        )
+        business_id = resolve_business_id(mapping, metadata.to_number, metadata.from_number)
         if business_id is None:
             await websocket.close(code=4404, reason="unknown tenant")
             return
@@ -233,9 +221,7 @@ async def exotel_media_websocket(websocket: WebSocket) -> None:
             )
         )
 
-        provisioning_drift = check_rate_drift(
-            metadata.sample_rate, expected_rate
-        )
+        provisioning_drift = check_rate_drift(metadata.sample_rate, expected_rate)
         if provisioning_drift:
             logger.error(
                 "exotel_stream_provisioning_drift",
@@ -258,9 +244,7 @@ async def exotel_media_websocket(websocket: WebSocket) -> None:
             websocket,
             FastAPIWebsocketParams(
                 serializer=serializer,
-                session_timeout=getattr(
-                    state, "exotel_session_timeout_seconds", 3600
-                ),
+                session_timeout=getattr(state, "exotel_session_timeout_seconds", 3600),
                 allowed_origins=[],
             ),
         )

@@ -54,8 +54,7 @@ class InboundCallEventWorker:
         )
         if result.scalar_one() == 0:
             raise SchemaNotReadyError(
-                "calls.provider_call_id column missing — "
-                "run migration before starting worker"
+                "calls.provider_call_id column missing — run migration before starting worker"
             )
         self._schema_verified = True
 
@@ -71,7 +70,9 @@ class InboundCallEventWorker:
         try:
             async with self._factory() as session:
                 lock_key = _advisory_lock_key(
-                    claimed.business_id, claimed.provider, claimed.provider_call_id,
+                    claimed.business_id,
+                    claimed.provider,
+                    claimed.provider_call_id,
                 )
                 await session.execute(
                     text("SELECT pg_advisory_xact_lock(:key)"),
@@ -91,14 +92,14 @@ class InboundCallEventWorker:
                     )
                 repo = InboundCallEventRepository(session)
                 ok = await repo.mark_completed(
-                    claimed.id, claimed.business_id,
-                    claimed.claim_token, claimed.claim_version,
+                    claimed.id,
+                    claimed.business_id,
+                    claimed.claim_token,
+                    claimed.claim_version,
                 )
                 if not ok:
                     await session.rollback()
-                    raise StaleClaimError(
-                        f"fenced completion false for event {claimed.id}"
-                    )
+                    raise StaleClaimError(f"fenced completion false for event {claimed.id}")
                 await session.commit()
 
             logger.info(
@@ -130,8 +131,10 @@ class InboundCallEventWorker:
                 async with self._factory() as fail_session:
                     repo = InboundCallEventRepository(fail_session)
                     await repo.mark_failed(
-                        claimed.id, claimed.business_id,
-                        claimed.claim_token, claimed.claim_version,
+                        claimed.id,
+                        claimed.business_id,
+                        claimed.claim_token,
+                        claimed.claim_version,
                     )
                     await fail_session.commit()
             except Exception:

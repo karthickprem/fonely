@@ -69,6 +69,10 @@ _DESTRUCTIVE_COMMANDS = frozenset({"doctor_leave", "close_clinic", "close_early"
 _PROPOSAL_TTL = timedelta(minutes=5)
 
 
+class ScheduleExceptionConflictError(Exception):
+    """Raised when a schedule exception insertion conflicts with a different existing one."""
+
+
 # ---------------------------------------------------------------------------
 # Result
 # ---------------------------------------------------------------------------
@@ -257,8 +261,13 @@ class OwnerCommandService:
 
         await self._appointments.lock_resource_schedule(business_id, resource.id)
         affected = await self._query_resource_appointments(business_id, resource.id, target_date)
+        sched_state = await self._query_schedule_state(business_id, resource.id, target_date)
         preview = self._build_preview_snapshot(
-            parsed.command, target_date, affected, resource_name=resource.name
+            parsed.command,
+            target_date,
+            affected,
+            resource_name=resource.name,
+            schedule_state=sched_state,
         )
         payload = {
             "command_type": "doctor_leave",
@@ -280,7 +289,10 @@ class OwnerCommandService:
     ) -> OwnerCommandResult:
         await self._lock_business_resources(business_id)
         affected = await self._query_all_appointments(business_id, target_date)
-        preview = self._build_preview_snapshot(parsed.command, target_date, affected)
+        sched_state = await self._query_schedule_state(business_id, None, target_date)
+        preview = self._build_preview_snapshot(
+            parsed.command, target_date, affected, schedule_state=sched_state
+        )
         payload = {
             "command_type": "close_clinic",
             "target_date": target_date.isoformat(),
@@ -373,7 +385,10 @@ class OwnerCommandService:
             )
 
         affected = await self._query_appointments_after_time(business_id, target_date, new_close)
-        preview = self._build_preview_snapshot(parsed.command, target_date, affected)
+        sched_state = await self._query_schedule_state(business_id, None, target_date)
+        preview = self._build_preview_snapshot(
+            parsed.command, target_date, affected, schedule_state=sched_state
+        )
         payload: dict[str, Any] = {
             "command_type": "close_early",
             "target_date": target_date.isoformat(),
@@ -395,8 +410,10 @@ class OwnerCommandService:
         affected: list[dict[str, str]],
         *,
         resource_name: str | None = None,
+        schedule_state: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         snapshot: dict[str, Any] = {
+            "proposal_schema_version": 1,
             "command_type": command_type,
             "target_date": target_date.isoformat(),
             "affected_count": len(affected),
@@ -411,6 +428,7 @@ class OwnerCommandService:
                 }
                 for a in affected
             ],
+            "schedule_state": schedule_state if schedule_state is not None else [],
         }
         if resource_name:
             snapshot["resource_name"] = resource_name
@@ -611,6 +629,24 @@ class OwnerCommandService:
         try:
             async with self._session.begin_nested():
                 result = await self._execute_confirmed(business_id, owner, executing)
+        except ScheduleExceptionConflictError:
+            logger.warning("owner_command_schedule_conflict proposal_id=%s", proposal.id)
+            await self._proposals.transition_status(
+                proposal.id,
+                business_id,
+                executing.expected_version,
+                "failed",
+                failure_code="schedule_exception_conflict",
+                failure_message="A conflicting schedule exception already exists",
+            )
+            return OwnerCommandResult(
+                command_type=proposal.command_type,
+                success=False,
+                response_text=(
+                    "A conflicting schedule change already exists for this date. "
+                    "No changes were made. Please send the command again."
+                ),
+            )
         except Exception:
             logger.exception("owner_command_execution_failed proposal_id=%s", proposal.id)
             # Savepoint rolled back all schedule/cancel/outbox effects;
@@ -649,30 +685,45 @@ class OwnerCommandService:
         target_date = date.fromisoformat(payload["target_date"])
 
         preview_appointments = proposal.preview_snapshot.get("appointments", [])
+        preview_schedule_state = proposal.preview_snapshot.get("schedule_state", [])
         preview_count = len(preview_appointments)
 
-        # Recompute targets under fresh locks
-        current_targets = await self._targets_at_confirmation(business_id, command_type, payload)
+        # Recompute targets and schedule state under fresh locks
+        current_targets, current_schedule_state = await self._targets_at_confirmation(
+            business_id, command_type, payload
+        )
 
         # Detect drift by comparing canonical target facts digest.
         # Any fact change (ID, time, patient, service, resource, count)
-        # requires abort + re-preview.
-        def _targets_digest(targets: list[dict[str, str]]) -> str:
-            canonical = json.dumps(
-                sorted(targets, key=lambda a: a.get("appointment_id", "")),
-                sort_keys=True,
-                separators=(",", ":"),
-            )
+        # or schedule state change requires abort + re-preview.
+        def _facts_digest(data: Any) -> str:
+            if isinstance(data, list) and all(isinstance(d, dict) for d in data):
+                canonical = json.dumps(
+                    sorted(data, key=lambda a: a.get("appointment_id", a.get("is_closed", ""))),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            else:
+                canonical = json.dumps(data, sort_keys=True, separators=(",", ":"))
             return hashlib.sha256(canonical.encode()).hexdigest()
 
-        preview_digest = _targets_digest(preview_appointments)
-        current_digest = _targets_digest(current_targets)
+        preview_targets_digest = _facts_digest(preview_appointments)
+        current_targets_digest = _facts_digest(current_targets)
+        preview_schedule_digest = _facts_digest(preview_schedule_state)
+        current_schedule_digest = _facts_digest(current_schedule_state)
 
-        if preview_digest != current_digest:
-            drift_details = [
+        drift_details: list[str] = []
+        if preview_targets_digest != current_targets_digest:
+            drift_details.append(
                 f"Target facts changed between preview and confirmation "
                 f"(preview: {preview_count} targets, current: {len(current_targets)})"
-            ]
+            )
+        if preview_schedule_digest != current_schedule_digest:
+            drift_details.append(
+                "Schedule exception state changed between preview and confirmation"
+            )
+
+        if drift_details:
             evidence = OwnerCommandOutcomeEvidence(
                 outcome="drift_abort",
                 command_type=command_type,
@@ -699,11 +750,19 @@ class OwnerCommandService:
                 command_type=command_type,
                 success=False,
                 response_text=(
-                    "Appointments changed since the preview. "
+                    "Appointments or schedule changed since the preview. "
                     "No changes were made. Please send the command again."
                 ),
                 proposal_id=proposal.id,
             )
+
+        # Lock each target appointment row FOR UPDATE in ascending ID order
+        # to prevent customer cancel/reschedule from interleaving.
+        target_ids = sorted(
+            int(t["appointment_id"]) for t in current_targets if t.get("appointment_id")
+        )
+        for appt_id in target_ids:
+            await self._appointments.lock_appointment(business_id, appt_id)
 
         # Execute the actual command
         if command_type == "doctor_leave":
@@ -836,6 +895,105 @@ class OwnerCommandService:
         )
 
     # -----------------------------------------------------------------------
+    # Schedule exception helpers
+    # -----------------------------------------------------------------------
+
+    async def _query_schedule_state(
+        self,
+        business_id: int,
+        resource_id: int | None,
+        target_date: date,
+    ) -> list[dict[str, Any]]:
+        """Query existing schedule exceptions for the given scope and date.
+
+        Returns a serialisable list of dicts describing each matching exception.
+        """
+        conditions = [
+            ScheduleException.business_id == business_id,
+            ScheduleException.exception_date == target_date,
+        ]
+        if resource_id is not None:
+            conditions.append(ScheduleException.resource_id == resource_id)
+        else:
+            conditions.append(ScheduleException.resource_id.is_(None))
+
+        rows = (
+            (await self._session.execute(select(ScheduleException).where(*conditions)))
+            .scalars()
+            .all()
+        )
+        return [
+            {
+                "is_closed": row.is_closed,
+                "open_time": row.open_time.isoformat() if row.open_time else None,
+                "close_time": row.close_time.isoformat() if row.close_time else None,
+                "reason": row.reason,
+            }
+            for row in rows
+        ]
+
+    async def _upsert_schedule_exception(
+        self,
+        business_id: int,
+        resource_id: int | None,
+        target_date: date,
+        is_closed: bool,
+        open_time: dt_time | None = None,
+        close_time: dt_time | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """Insert a schedule exception or no-op if identical; raise on conflict.
+
+        Uses the unique indices (business_id, exception_date) WHERE resource_id IS NULL
+        and (business_id, resource_id, exception_date) WHERE resource_id IS NOT NULL.
+        """
+        conditions = [
+            ScheduleException.business_id == business_id,
+            ScheduleException.exception_date == target_date,
+        ]
+        if resource_id is not None:
+            conditions.append(ScheduleException.resource_id == resource_id)
+        else:
+            conditions.append(ScheduleException.resource_id.is_(None))
+
+        existing = (
+            await self._session.execute(
+                select(ScheduleException).where(*conditions).with_for_update()
+            )
+        ).scalar_one_or_none()
+
+        if existing is not None:
+            # Check if identical
+            existing_open = existing.open_time
+            existing_close = existing.close_time
+            if (
+                existing.is_closed == is_closed
+                and existing_open == open_time
+                and existing_close == close_time
+            ):
+                # Identical exception already exists — no-op
+                return
+
+            # Different exception exists for the same scope — conflict
+            raise ScheduleExceptionConflictError(
+                f"A different schedule exception already exists for "
+                f"business_id={business_id}, resource_id={resource_id}, "
+                f"date={target_date.isoformat()}"
+            )
+
+        exc = ScheduleException(
+            business_id=business_id,
+            resource_id=resource_id,
+            exception_date=target_date,
+            is_closed=is_closed,
+            open_time=open_time,
+            close_time=close_time,
+            reason=reason,
+        )
+        self._session.add(exc)
+        await self._session.flush()
+
+    # -----------------------------------------------------------------------
     # Execution helpers (doctor_leave, close_clinic, close_early)
     # -----------------------------------------------------------------------
 
@@ -851,15 +1009,13 @@ class OwnerCommandService:
 
         await self._appointments.lock_resource_schedule(business_id, resource_id)
 
-        exc = ScheduleException(
+        await self._upsert_schedule_exception(
             business_id=business_id,
             resource_id=resource_id,
-            exception_date=target_date,
+            target_date=target_date,
             is_closed=True,
             reason=reason,
         )
-        self._session.add(exc)
-        await self._session.flush()
 
         return await self._cancel_appointments_for_resource(
             business_id, resource_id, target_date, owner_phone
@@ -876,15 +1032,13 @@ class OwnerCommandService:
 
         await self._lock_business_resources(business_id)
 
-        exc = ScheduleException(
+        await self._upsert_schedule_exception(
             business_id=business_id,
             resource_id=None,
-            exception_date=target_date,
+            target_date=target_date,
             is_closed=True,
             reason=reason,
         )
-        self._session.add(exc)
-        await self._session.flush()
 
         return await self._cancel_all_appointments(business_id, target_date, owner_phone)
 
@@ -928,25 +1082,23 @@ class OwnerCommandService:
 
         if truncated:
             effective = truncated[0]
-            exc = ScheduleException(
+            await self._upsert_schedule_exception(
                 business_id=business_id,
                 resource_id=None,
-                exception_date=target_date,
+                target_date=target_date,
                 is_closed=False,
                 open_time=effective.open_time,
                 close_time=effective.close_time,
                 reason=reason,
             )
         else:
-            exc = ScheduleException(
+            await self._upsert_schedule_exception(
                 business_id=business_id,
                 resource_id=None,
-                exception_date=target_date,
+                target_date=target_date,
                 is_closed=True,
                 reason=reason,
             )
-        self._session.add(exc)
-        await self._session.flush()
 
         return await self._cancel_appointments_after_time(
             business_id, target_date, new_close, owner_phone
@@ -961,24 +1113,33 @@ class OwnerCommandService:
         business_id: int,
         command_type: str,
         payload: dict[str, Any],
-    ) -> list[dict[str, str]]:
-        """Recompute affected appointments under fresh locks for drift detection."""
+    ) -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
+        """Recompute affected appointments and schedule state under fresh locks.
+
+        Returns (target_appointments, schedule_state) for drift detection.
+        """
         target_date = date.fromisoformat(payload["target_date"])
 
         if command_type == "doctor_leave":
             resource_id: int = payload["resource_id"]
             await self._appointments.lock_resource_schedule(business_id, resource_id)
-            return await self._query_resource_appointments(business_id, resource_id, target_date)
+            targets = await self._query_resource_appointments(business_id, resource_id, target_date)
+            sched = await self._query_schedule_state(business_id, resource_id, target_date)
+            return targets, sched
         elif command_type == "close_clinic":
             await self._lock_business_resources(business_id)
-            return await self._query_all_appointments(business_id, target_date)
+            targets = await self._query_all_appointments(business_id, target_date)
+            sched = await self._query_schedule_state(business_id, None, target_date)
+            return targets, sched
         elif command_type == "close_early":
             await self._lock_business_resources(business_id)
             close_time_str = payload.get("close_time", "")
             parts = close_time_str.split(":")
             new_close = dt_time(int(parts[0]), int(parts[1]) if len(parts) > 1 else 0)
-            return await self._query_appointments_after_time(business_id, target_date, new_close)
-        return []
+            targets = await self._query_appointments_after_time(business_id, target_date, new_close)
+            sched = await self._query_schedule_state(business_id, None, target_date)
+            return targets, sched
+        return [], []
 
     # -----------------------------------------------------------------------
     # Owner identity

@@ -1,15 +1,19 @@
 """Tenant-scoped owner command proposal persistence."""
 
+import logging
 from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql import func
 
 from fonely.models.schema import OwnerCommandProposal
+
+logger = logging.getLogger("fonely.repositories.owner_command_proposals")
 
 
 class OwnerCommandProposalRepository:
@@ -17,6 +21,15 @@ class OwnerCommandProposalRepository:
         self._session = session
 
     async def create_idempotent(self, values: dict[str, Any]) -> OwnerCommandProposal | None:
+        """Insert a new proposal, handling both unique constraints.
+
+        The INSERT uses ON CONFLICT DO NOTHING for the partial unique index
+        (one pending per owner). However, the idempotency_key unique constraint
+        ``uq_owner_proposal_idempotency`` can also fire when the same payload
+        is submitted and a terminal proposal already exists. We catch that
+        IntegrityError and return None so the service layer can look up the
+        terminal replay.
+        """
         stmt = (
             pg_insert(OwnerCommandProposal)
             .values(**values)
@@ -26,7 +39,19 @@ class OwnerCommandProposalRepository:
             )
             .returning(OwnerCommandProposal)
         )
-        return (await self._session.execute(stmt)).scalar_one_or_none()
+        try:
+            return (await self._session.execute(stmt)).scalar_one_or_none()
+        except IntegrityError as exc:
+            # The idempotency_key unique constraint fired — a terminal
+            # proposal with the same key already exists.
+            if "uq_owner_proposal_idempotency" in str(exc):
+                logger.info(
+                    "create_idempotent: idempotency_key conflict for key=%s",
+                    values.get("idempotency_key"),
+                )
+                await self._session.rollback()
+                return None
+            raise
 
     async def get_by_id(self, business_id: int, proposal_id: str) -> OwnerCommandProposal | None:
         stmt = (

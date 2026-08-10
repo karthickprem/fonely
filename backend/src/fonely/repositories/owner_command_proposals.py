@@ -67,6 +67,29 @@ class OwnerCommandProposalRepository:
         )
         return (await self._session.scalars(stmt)).first()
 
+    async def count_by_key_prefix(self, business_id: int, key_prefix: str) -> int:
+        from sqlalchemy import func
+
+        stmt = select(func.count()).where(
+            OwnerCommandProposal.business_id == business_id,
+            OwnerCommandProposal.idempotency_key.startswith(key_prefix),
+        )
+        return (await self._session.scalar(stmt)) or 0
+
+    async def find_completed_by_key_prefix(
+        self, business_id: int, key_prefix: str
+    ) -> OwnerCommandProposal | None:
+        stmt = (
+            select(OwnerCommandProposal)
+            .where(
+                OwnerCommandProposal.business_id == business_id,
+                OwnerCommandProposal.idempotency_key.startswith(key_prefix),
+                OwnerCommandProposal.status == "completed",
+            )
+            .limit(1)
+        )
+        return (await self._session.scalars(stmt)).first()
+
     async def get_latest_for_owner(
         self,
         business_id: int,

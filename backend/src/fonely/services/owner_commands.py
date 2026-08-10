@@ -557,23 +557,37 @@ class OwnerCommandService:
                         proposal_id=terminal.id,
                     )
                 if terminal.status == "failed":
-                    retry_key = f"{idem_key}-retry-{terminal.expected_version}"
+                    completed_retry = await self._proposals.find_completed_by_key_prefix(
+                        business_id, idem_key
+                    )
+                    if completed_retry is not None:
+                        evidence = completed_retry.result_evidence or {}
+                        outcome = evidence.get("outcome", completed_retry.status)
+                        return OwnerCommandResult(
+                            command_type=command_type,
+                            success=True,
+                            response_text=(
+                                f"This command was already completed ({outcome}). "
+                                "Send a new command if you need to take action."
+                            ),
+                            proposal_id=completed_retry.id,
+                        )
+                    failed_count = await self._proposals.count_by_key_prefix(business_id, idem_key)
+                    retry_key = f"{idem_key}-attempt-{failed_count + 1}"
                     proposal = await self._proposals.create_idempotent(
                         {
-                            **{
-                                "id": uuid.uuid4().hex,
-                                "business_id": business_id,
-                                "owner_user_id": owner.id,
-                                "owner_phone_snapshot": owner.phone,
-                                "command_type": command_type,
-                                "command_payload": payload,
-                                "preview_snapshot": preview,
-                                "payload_digest": digest,
-                                "status": "pending_confirmation",
-                                "expected_version": 1,
-                                "idempotency_key": retry_key,
-                                "expires_at": now + _PROPOSAL_TTL,
-                            }
+                            "id": uuid.uuid4().hex,
+                            "business_id": business_id,
+                            "owner_user_id": owner.id,
+                            "owner_phone_snapshot": owner.phone,
+                            "command_type": command_type,
+                            "command_payload": payload,
+                            "preview_snapshot": preview,
+                            "payload_digest": digest,
+                            "status": "pending_confirmation",
+                            "expected_version": 1,
+                            "idempotency_key": retry_key,
+                            "expires_at": now + _PROPOSAL_TTL,
                         }
                     )
 

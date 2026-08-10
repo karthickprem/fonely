@@ -14,12 +14,15 @@ from ci_evidence.schemas import (
     TERMINAL_INCOMPLETE,
     TERMINAL_SUCCESS,
     TERMINAL_TEST_FAILED,
+    VALID_PHASES,
     collection_manifest_file,
     digest_bytes,
     digest_nodes,
     event_stream_file,
 )
 from ci_evidence.writer import TrustedRoot, exclusive_create_json
+
+ALL_PHASES = list(VALID_PHASES)
 
 
 def _setup_full_evidence(evidence: Path, waivers: Path) -> None:
@@ -37,25 +40,27 @@ def _setup_full_evidence(evidence: Path, waivers: Path) -> None:
                 "workflow_run_id": "1",
                 "workflow_attempt": 1,
                 "environment": "ci",
-                "required_phases": ["lint"],
+                "required_phases": ALL_PHASES,
                 "created_at_utc": "2026-08-10T00:00:00+00:00",
             },
         )
 
-    (evidence / PHASE_RESULTS_FILE).write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "phase": "lint",
-                "sequence": 1,
-                "exit_code": 0,
-                "failure_class": None,
-                "start_utc": "2026-08-10T00:00:00+00:00",
-                "end_utc": "2026-08-10T00:00:01+00:00",
-            }
+    lines = []
+    for i, phase in enumerate(ALL_PHASES):
+        lines.append(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "phase": phase,
+                    "sequence": i + 1,
+                    "exit_code": 0,
+                    "failure_class": None,
+                    "start_utc": "2026-08-10T00:00:00+00:00",
+                    "end_utc": "2026-08-10T00:00:01+00:00",
+                }
+            )
         )
-        + "\n"
-    )
+    (evidence / PHASE_RESULTS_FILE).write_text("\n".join(lines) + "\n")
 
     npg_nodes = ["tests/test_a.py::test_a"]
     pg_nodes = ["tests/integration/postgres/test_b.py::test_b"]
@@ -162,20 +167,24 @@ class TestTestFailed:
         waivers = tmp_path / "waivers.json"
         _setup_full_evidence(evidence, waivers)
         (evidence / TERMINAL_FILE).unlink(missing_ok=True)
-        (evidence / PHASE_RESULTS_FILE).write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "phase": "lint",
-                    "sequence": 1,
-                    "exit_code": 1,
-                    "failure_class": "nonzero_exit",
-                    "start_utc": "2026-08-10T00:00:00+00:00",
-                    "end_utc": "2026-08-10T00:00:01+00:00",
-                }
+        lines = []
+        for i, phase in enumerate(ALL_PHASES):
+            exit_code = 1 if phase == "lint" else 0
+            failure = "nonzero_exit" if exit_code else None
+            lines.append(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "phase": phase,
+                        "sequence": i + 1,
+                        "exit_code": exit_code,
+                        "failure_class": failure,
+                        "start_utc": "T",
+                        "end_utc": "T",
+                    }
+                )
             )
-            + "\n"
-        )
+        (evidence / PHASE_RESULTS_FILE).write_text("\n".join(lines) + "\n")
         terminal = reconcile(str(evidence), str(waivers), "ci")
         assert terminal["state"] == TERMINAL_TEST_FAILED
 

@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 from ci_evidence.schemas import (
     COLLECTION_MANIFEST_SCHEMA,
     EXECUTION_EVENT_SCHEMA,
+    MAX_NODES,
     MAX_WAIVER_LIFETIME_DAYS,
     PHASE_RESULT_SCHEMA,
     PHASE_RESULTS_FILE,
@@ -32,6 +33,7 @@ from ci_evidence.schemas import (
     VALID_ENVIRONMENTS,
     VALID_EVENT_OUTCOMES,
     VALID_EVENT_PHASES,
+    VALID_PHASES,
     WAIVER_EXCEPTION_CLASSES,
     WAIVER_SCHEMA,
     collection_manifest_file,
@@ -46,18 +48,26 @@ class ReconcileError(Exception):
     pass
 
 
-def _load_json(root: TrustedRoot, relpath: str) -> Any:
+def _load_json(root: TrustedRoot, relpath: str) -> tuple[dict[str, Any], bytes]:
     raw = safe_read(root, relpath)
-    return json.loads(raw), raw
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ReconcileError(f"{relpath}: expected JSON object, got {type(data).__name__}")
+    return data, raw
 
 
-def _validate_manifest(root: TrustedRoot) -> dict[str, Any]:
+def _validate_manifest(root: TrustedRoot, environment: str) -> dict[str, Any]:
     data, _ = _load_json(root, RUN_MANIFEST_FILE)
     if not isinstance(data, dict) or data.get("schema_version") != RUN_MANIFEST_SCHEMA:
         raise ReconcileError("invalid run manifest schema")
     for key in ("source_sha", "source_tree", "workflow_run_id", "environment"):
         if not isinstance(data.get(key), str) or not data[key]:
             raise ReconcileError(f"manifest missing {key}")
+    if data["environment"] != environment:
+        raise ReconcileError(f"CLI environment {environment!r} != manifest {data['environment']!r}")
+    required = data.get("required_phases")
+    if not isinstance(required, list) or required != list(VALID_PHASES):
+        raise ReconcileError("manifest required_phases does not match canonical phase catalogue")
     return data
 
 
@@ -152,9 +162,32 @@ def _validate_collections(
         if data.get("source_sha") != manifest["source_sha"]:
             errors.append(f"{partition} manifest SHA mismatch")
 
+        if data.get("environment") != manifest["environment"]:
+            errors.append(f"{partition} manifest environment mismatch")
+
+        if data.get("partition") != partition:
+            errors.append(f"{partition} manifest partition field mismatch")
+
         nodes = data.get("nodes", [])
+        if not isinstance(nodes, list):
+            errors.append(f"{partition} manifest nodes not a list")
+            partitions[partition] = set()
+            continue
+
         if not nodes:
             errors.append(f"{partition} manifest empty")
+
+        if len(nodes) > MAX_NODES:
+            errors.append(f"{partition} manifest exceeds {MAX_NODES} nodes")
+            partitions[partition] = set()
+            continue
+
+        if not all(isinstance(n, str) and n for n in nodes):
+            errors.append(f"{partition} manifest contains invalid node IDs")
+
+        declared_count = data.get("node_count")
+        if not isinstance(declared_count, int) or declared_count != len(nodes):
+            errors.append(f"{partition} manifest node_count={declared_count} != {len(nodes)}")
 
         node_set = set(nodes)
         if len(nodes) != len(node_set):
@@ -306,8 +339,8 @@ def _validate_node_state_machines(
             continue
 
         ordered = [p for p in phases_seen if p in required_order]
-        expected_prefix = list(required_order[: len(ordered)])
-        if ordered != expected_prefix:
+        order_indices = [required_order.index(p) for p in ordered]
+        if order_indices != sorted(order_indices):
             errors.append(f"{partition} invalid phase order {ordered}: {node_id}")
             continue
 
@@ -333,8 +366,8 @@ def _validate_node_state_machines(
                 errors.append(f"xfail requires waiver: {node_id}")
             elif partition == "non_pg":
                 errors.append(f"non_pg skip not waivable: {node_id}")
-            if call or teardown:
-                errors.append(f"{partition} phases after setup skip: {node_id}")
+            if call:
+                errors.append(f"{partition} call after setup skip: {node_id}")
             continue
 
         if setup_outcome in ("failed", "error"):
@@ -371,18 +404,29 @@ def _validate_node_state_machines(
 def _validate_pg_proof(
     pg_events: dict[str, list[dict[str, Any]]],
     pg_nodes: set[str],
-    waived_nodes: set[str],
+    waived_nodes: dict[str, str],
 ) -> list[str]:
     errors = []
     for node_id in pg_nodes:
-        if node_id in waived_nodes:
-            continue
         events = pg_events.get(node_id, [])
-        call_events = [e for e in events if e.get("phase") == "call"]
-        if not call_events:
+        phase_map = {e.get("phase"): e for e in events}
+        setup = phase_map.get("setup")
+        call = phase_map.get("call")
+        waiver_class = waived_nodes.get(node_id)
+
+        if waiver_class == "setup_skip":
+            if not setup or setup["outcome"] != "skipped":
+                errors.append(f"setup_skip waiver but setup not skipped: {node_id}")
+            continue
+
+        if waiver_class == "call_xfail":
+            if not call or not call.get("wasxfail"):
+                errors.append(f"call_xfail waiver but call not xfail: {node_id}")
+            continue
+
+        if not call:
             errors.append(f"PG node missing call evidence: {node_id}")
             continue
-        call = call_events[0]
         if call["outcome"] == "skipped":
             errors.append(f"PG node call skipped without waiver: {node_id}")
         elif call["outcome"] != "passed":
@@ -395,9 +439,9 @@ def _validate_waivers(
     environment: str,
     pg_nodes: set[str],
     now: datetime,
-) -> tuple[set[str], list[str]]:
+) -> tuple[dict[str, str], list[str]]:
     errors = []
-    waived: set[str] = set()
+    waived: dict[str, str] = {}
 
     try:
         data = json.loads(waiver_path.read_bytes())
@@ -497,7 +541,7 @@ def _validate_waivers(
         seen.append(identity)
 
         if environment in envs:
-            waived.add(node_id)
+            waived[node_id] = exc_class
 
     return waived, errors
 
@@ -549,6 +593,7 @@ def reconcile(
             KeyError,
             TypeError,
             ValueError,
+            AttributeError,
         ) as exc:
             state = TERMINAL_EVIDENCE_FAILED
             if isinstance(exc, EvidenceWriteError) and "not found" in str(exc):
@@ -569,7 +614,7 @@ def _reconcile_inner(
 ) -> dict[str, Any]:
     is_incomplete = False
 
-    manifest = _validate_manifest(root)
+    manifest = _validate_manifest(root, environment)
 
     phase_errors, phase_exits = _validate_phases(root, manifest)
 

@@ -21,6 +21,7 @@ from ci_evidence.schemas import (
     TERMINAL_INCOMPLETE,
     TERMINAL_SUCCESS,
     TERMINAL_TEST_FAILED,
+    VALID_PHASES,
     collection_manifest_file,
     digest_bytes,
     digest_nodes,
@@ -29,6 +30,7 @@ from ci_evidence.schemas import (
 from ci_evidence.writer import EvidenceWriteError, TrustedRoot, exclusive_create_json
 
 SHA = "a" * 40
+ALL_PHASES = list(VALID_PHASES)
 NPG = "tests/test_a.py::test_a"
 PG = "tests/integration/postgres/test_b.py::test_b"
 PG2 = "tests/integration/postgres/test_c.py::test_c"
@@ -46,44 +48,50 @@ def _manifest(evidence: Path) -> None:
                 "workflow_run_id": "1",
                 "workflow_attempt": 1,
                 "environment": "ci",
-                "required_phases": ["lint"],
+                "required_phases": ALL_PHASES,
                 "created_at_utc": "2026-08-10T00:00:00+00:00",
             },
         )
 
 
 def _phase_ok(evidence: Path) -> None:
-    (evidence / PHASE_RESULTS_FILE).write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "phase": "lint",
-                "sequence": 1,
-                "exit_code": 0,
-                "failure_class": None,
-                "start_utc": "T",
-                "end_utc": "T",
-            }
+    lines = []
+    for i, phase in enumerate(ALL_PHASES):
+        lines.append(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "phase": phase,
+                    "sequence": i + 1,
+                    "exit_code": 0,
+                    "failure_class": None,
+                    "start_utc": "T",
+                    "end_utc": "T",
+                }
+            )
         )
-        + "\n"
-    )
+    (evidence / PHASE_RESULTS_FILE).write_text("\n".join(lines) + "\n")
 
 
 def _phase_fail(evidence: Path, phase: str = "lint", code: int = 1) -> None:
-    (evidence / PHASE_RESULTS_FILE).write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "phase": phase,
-                "sequence": 1,
-                "exit_code": code,
-                "failure_class": "nonzero_exit",
-                "start_utc": "T",
-                "end_utc": "T",
-            }
+    lines = []
+    for i, p in enumerate(ALL_PHASES):
+        exit_code = code if p == phase else 0
+        failure = "nonzero_exit" if exit_code else None
+        lines.append(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "phase": p,
+                    "sequence": i + 1,
+                    "exit_code": exit_code,
+                    "failure_class": failure,
+                    "start_utc": "T",
+                    "end_utc": "T",
+                }
+            )
         )
-        + "\n"
-    )
+    (evidence / PHASE_RESULTS_FILE).write_text("\n".join(lines) + "\n")
 
 
 def _events_for(
@@ -223,7 +231,7 @@ class TestSuccess:
             [NPG],
             [PG],
             pg_overrides={
-                PG: [("setup", "skipped", None)],
+                PG: [("setup", "skipped", None), ("teardown", "passed", None)],
             },
         )
         _waivers(waivers, [_waiver_entry(PG, "setup_skip")])
@@ -240,7 +248,7 @@ class TestSuccess:
             evidence,
             [NPG],
             [pg_param],
-            pg_overrides={pg_param: [("setup", "skipped", None)]},
+            pg_overrides={pg_param: [("setup", "skipped", None), ("teardown", "passed", None)]},
         )
         _waivers(waivers, [_waiver_entry(pg_param, "setup_skip")])
         assert _reconcile(evidence, waivers)["state"] == TERMINAL_SUCCESS
@@ -257,7 +265,7 @@ class TestSuccess:
             evidence,
             [NPG],
             [pg_param],
-            pg_overrides={pg_param: [("setup", "skipped", None)]},
+            pg_overrides={pg_param: [("setup", "skipped", None), ("teardown", "passed", None)]},
         )
         _waivers(waivers, [_waiver_entry(wrong_waiver, "setup_skip")])
         t = _reconcile(evidence, waivers)
@@ -361,7 +369,7 @@ class TestPGProof:
             [NPG],
             [PG],
             pg_overrides={
-                PG: [("setup", "skipped", None)],
+                PG: [("setup", "skipped", None), ("teardown", "passed", None)],
             },
         )
         _waivers(waivers)
@@ -379,7 +387,7 @@ class TestPGProof:
             [NPG],
             [PG, PG2],
             pg_overrides={
-                PG: [("setup", "skipped", None)],
+                PG: [("setup", "skipped", None), ("teardown", "passed", None)],
             },
         )
         _waivers(waivers)
@@ -397,7 +405,7 @@ class TestPGProof:
             [NPG],
             [PG],
             pg_overrides={
-                PG: [("setup", "skipped", None)],
+                PG: [("setup", "skipped", None), ("teardown", "passed", None)],
             },
         )
         _waivers(waivers)
@@ -416,7 +424,7 @@ class TestSkipAndXfail:
             [NPG],
             [PG],
             npg_overrides={
-                NPG: [("setup", "skipped", None)],
+                NPG: [("setup", "skipped", None), ("teardown", "passed", None)],
             },
         )
         _waivers(waivers)
@@ -433,7 +441,7 @@ class TestSkipAndXfail:
             [NPG],
             [PG],
             npg_overrides={
-                NPG: [("setup", "skipped", None)],
+                NPG: [("setup", "skipped", None), ("teardown", "passed", None)],
             },
         )
         _waivers(waivers)
@@ -450,7 +458,7 @@ class TestSkipAndXfail:
             [NPG],
             [PG],
             npg_overrides={
-                NPG: [("setup", "skipped", None)],
+                NPG: [("setup", "skipped", None), ("teardown", "passed", None)],
             },
         )
         _waivers(waivers)
@@ -468,7 +476,7 @@ class TestSkipAndXfail:
             [node],
             [PG],
             npg_overrides={
-                node: [("setup", "skipped", None)],
+                node: [("setup", "skipped", None), ("teardown", "passed", None)],
             },
         )
         _waivers(waivers)
@@ -879,7 +887,7 @@ class TestWaiverGovernance:
             [NPG],
             [PG],
             pg_overrides={
-                PG: [("setup", "skipped", None)],
+                PG: [("setup", "skipped", None), ("teardown", "passed", None)],
             },
         )
         _waivers(waivers, [_waiver_entry(PG, "setup_skip", env="staging")])
@@ -897,7 +905,7 @@ class TestWaiverGovernance:
             [NPG],
             [PG],
             pg_overrides={
-                PG: [("setup", "skipped", None)],
+                PG: [("setup", "skipped", None), ("teardown", "passed", None)],
             },
         )
         entry = _waiver_entry(PG, "setup_skip")
@@ -917,7 +925,7 @@ class TestWaiverGovernance:
             [NPG],
             [PG],
             pg_overrides={
-                PG: [("setup", "skipped", None)],
+                PG: [("setup", "skipped", None), ("teardown", "passed", None)],
             },
         )
         _waivers(

@@ -415,6 +415,18 @@ class OwnerCommandService:
                 success=False,
                 response_text="Close time must be after the opening time.",
             )
+        biz_tz_name = await self._get_business_timezone(business_id)
+        biz_today = datetime.now(ZoneInfo(biz_tz_name)).date()
+        if target_date == biz_today:
+            now_local_time = datetime.now(ZoneInfo(biz_tz_name)).time()
+            if new_close <= now_local_time:
+                return OwnerCommandResult(
+                    command_type="close_early",
+                    success=False,
+                    response_text=(
+                        "Close time must be in the future. The specified time has already passed."
+                    ),
+                )
         if new_close >= latest_close:
             return OwnerCommandResult(
                 command_type="close_early",
@@ -522,43 +534,58 @@ class OwnerCommandService:
         )
 
         if proposal is None:
-            # Check if a terminal proposal with the same idempotency key
-            # already exists — replay its result for identical intent
             terminal = await self._proposals.get_by_idempotency_key(business_id, idem_key)
-            if terminal is not None and terminal.status in (
-                "completed",
-                "rejected",
-                "expired",
-            ):
-                evidence = terminal.result_evidence or {}
-                outcome = evidence.get("outcome", terminal.status)
-                return OwnerCommandResult(
-                    command_type=command_type,
-                    success=terminal.status == "completed",
-                    response_text=(
-                        f"This command was already processed ({outcome}). "
-                        "Send a new command if you need to take action."
-                    ),
-                    proposal_id=terminal.id,
-                )
+            if terminal is not None:
+                if terminal.status in ("completed", "rejected", "expired"):
+                    evidence = terminal.result_evidence or {}
+                    outcome = evidence.get("outcome", terminal.status)
+                    return OwnerCommandResult(
+                        command_type=command_type,
+                        success=terminal.status == "completed",
+                        response_text=(
+                            f"This command was already processed ({outcome}). "
+                            "Send a new command if you need to take action."
+                        ),
+                        proposal_id=terminal.id,
+                    )
+                if terminal.status == "failed":
+                    retry_key = f"{idem_key}-retry-{terminal.expected_version}"
+                    proposal = await self._proposals.create_idempotent(
+                        {
+                            **{
+                                "id": uuid.uuid4().hex,
+                                "business_id": business_id,
+                                "owner_user_id": owner.id,
+                                "owner_phone_snapshot": owner.phone,
+                                "command_type": command_type,
+                                "command_payload": payload,
+                                "preview_snapshot": preview,
+                                "payload_digest": digest,
+                                "status": "pending_confirmation",
+                                "expected_version": 1,
+                                "idempotency_key": retry_key,
+                                "expires_at": now + _PROPOSAL_TTL,
+                            }
+                        }
+                    )
 
-            # Otherwise a pending proposal already exists for this owner
-            existing = await self._proposals.get_latest_for_owner(business_id, owner.id)
-            if existing is not None:
+            if proposal is None:
+                existing = await self._proposals.get_latest_for_owner(business_id, owner.id)
+                if existing is not None:
+                    return OwnerCommandResult(
+                        command_type=command_type,
+                        success=False,
+                        response_text=(
+                            "You already have a pending command awaiting confirmation. "
+                            "Reply YES to confirm or NO to cancel it first."
+                        ),
+                        proposal_id=existing.id,
+                    )
                 return OwnerCommandResult(
                     command_type=command_type,
                     success=False,
-                    response_text=(
-                        "You already have a pending command awaiting confirmation. "
-                        "Reply YES to confirm or NO to cancel it first."
-                    ),
-                    proposal_id=existing.id,
+                    response_text="Could not create command proposal. Please try again.",
                 )
-            return OwnerCommandResult(
-                command_type=command_type,
-                success=False,
-                response_text="Could not create command proposal. Please try again.",
-            )
 
         # Build preview text
         text = self._format_preview_text(command_type, target_date, affected, payload)
@@ -1046,18 +1073,14 @@ class OwnerCommandService:
         ).scalar_one_or_none()
 
         if existing is not None:
-            # Check if identical
-            existing_open = existing.open_time
-            existing_close = existing.close_time
             if (
                 existing.is_closed == is_closed
-                and existing_open == open_time
-                and existing_close == close_time
+                and existing.open_time == open_time
+                and existing.close_time == close_time
+                and existing.reason == reason
             ):
-                # Identical exception already exists — no-op
                 return
 
-            # Different exception exists for the same scope — conflict
             raise ScheduleExceptionConflictError(
                 f"A different schedule exception already exists for "
                 f"business_id={business_id}, resource_id={resource_id}, "

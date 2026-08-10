@@ -35,8 +35,8 @@ from pipecat.processors.aggregators.llm_response_universal import (
 )
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
-from pipecat.services.anthropic.llm import AnthropicLLMService
 from pipecat.services.cartesia.tts import CartesiaTTSService, GenerationConfig
+from pipecat.services.openai.llm import OpenAILLMService
 from pipecat.services.sarvam.stt import SarvamSTTService
 from pipecat.services.tts_service import TextAggregationMode
 from pipecat.transcriptions.language import Language
@@ -52,7 +52,7 @@ backend_src = str(Path(__file__).resolve().parents[1] / "backend" / "src")
 if backend_src not in sys.path:
     sys.path.insert(0, backend_src)
 
-from pipeline import build_anthropic_client, cartesia_settings, clean_spoken_text
+from pipeline import cartesia_settings, clean_spoken_text
 from processors import ReceiptAwareTTSGate, TurnContextProcessor
 from style_retriever import ChennaiStyleRetriever
 
@@ -147,13 +147,22 @@ async def run_booking_bot(transport: BaseTransport, runner_args: RunnerArguments
             ),
         )
 
-        llm = AnthropicLLMService(
-            api_key=anthropic_key,
-            client=build_anthropic_client(anthropic_key),
-            settings=AnthropicLLMService.Settings(
-                model="claude-opus-4-6",
+        # GPT-5.6 Luna via AMD gateway — 21x cheaper, better booking discipline
+        gateway_headers = {}
+        for line in os.environ.get("ANTHROPIC_CUSTOM_HEADERS", "").splitlines():
+            if ":" in line.strip():
+                k, v = line.strip().split(":", 1)
+                gateway_headers[k.strip()] = v.strip()
+        gateway_headers["user"] = "karthick"
+
+        llm = OpenAILLMService(
+            api_key=gateway_headers.get("Ocp-Apim-Subscription-Key", ""),
+            base_url=os.environ.get("ANTHROPIC_BASE_URL", "") + "/v1",
+            default_headers=gateway_headers,
+            settings=OpenAILLMService.Settings(
+                model="gpt-5.6-luna",
                 system_instruction=system_prompt,
-                max_tokens=300,
+                max_completion_tokens=300,
             ),
         )
 

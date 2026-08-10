@@ -288,12 +288,18 @@ class AppointmentService:
                 raise
 
         if overlap_exc is not None:
+            # Savepoint rolled back begin_commit; PA is back at
+            # awaiting_confirmation with original version. Re-read to get
+            # the authoritative post-rollback state for fail_commit.
+            action_after_rollback = await self._pa_service._require_action(
+                context.business_id, context.pending_action_id
+            )
             fail_result = await self._pa_service.fail_commit(
                 FailCommitCommand(
                     context=CommitResultContext(
                         business_id=context.business_id,
                         pending_action_id=context.pending_action_id,
-                        expected_version=begin_result.version,
+                        expected_version=action_after_rollback.version,
                         engine="appointment_engine",
                     ),
                     error_code="resource_unavailable",
@@ -828,12 +834,15 @@ class AppointmentService:
                 raise
 
         if overlap_exc is not None:
+            action_after_rollback = await self._pa_service._require_action(
+                context.business_id, context.pending_action_id
+            )
             await self._pa_service.fail_commit(
                 FailCommitCommand(
                     context=CommitResultContext(
                         business_id=context.business_id,
                         pending_action_id=context.pending_action_id,
-                        expected_version=begin_result.version,
+                        expected_version=action_after_rollback.version,
                         engine="appointment_engine",
                     ),
                     error_code="resource_unavailable",

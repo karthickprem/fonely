@@ -96,7 +96,7 @@ class OwnerCommandOutcomeEvidence(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal[1] = 1
-    outcome: Literal["completed", "completed_with_drift", "rejected", "expired"]
+    outcome: Literal["completed", "drift_abort", "rejected", "expired"]
     command_type: str
     target_date: str
     resource_name: str | None = None
@@ -180,6 +180,17 @@ class OwnerCommandService:
         parsed: ParsedOwnerCommand,
     ) -> OwnerCommandResult:
         """Build preview, persist proposal, return confirmation prompt."""
+        now = datetime.now(UTC)
+        existing_pending = await self._proposals.get_latest_for_owner(
+            business_id, owner.id, statuses=("pending_confirmation",)
+        )
+        if existing_pending is not None and existing_pending.expires_at <= now:
+            await self._proposals.transition_status(
+                existing_pending.id,
+                business_id,
+                existing_pending.expected_version,
+                "expired",
+            )
 
         target_date = self._resolve_date_from_parsed(
             await self._get_business_timezone(business_id), parsed
@@ -343,8 +354,7 @@ class OwnerCommandService:
                 ),
             )
 
-        # Query appointments that would fall outside the truncated schedule
-        affected = await self._query_appointments_outside_schedule(business_id, target_date)
+        affected = await self._query_appointments_after_time(business_id, target_date, new_close)
         preview = self._build_preview_snapshot(parsed.command, target_date, affected)
         payload: dict[str, Any] = {
             "command_type": "close_early",
@@ -389,8 +399,8 @@ class OwnerCommandService:
         return snapshot
 
     @staticmethod
-    def _compute_digest(preview_snapshot: dict[str, Any]) -> str:
-        canonical = json.dumps(preview_snapshot, sort_keys=True, separators=(",", ":"))
+    def _compute_payload_digest(command_payload: dict[str, Any]) -> str:
+        canonical = json.dumps(command_payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode()).hexdigest()
 
     async def _persist_preview(
@@ -403,7 +413,7 @@ class OwnerCommandService:
         affected: list[dict[str, str]],
         target_date: date,
     ) -> OwnerCommandResult:
-        digest = self._compute_digest(preview)
+        digest = self._compute_payload_digest(payload)
         idem_key = f"owner-v1-{business_id}-{owner.id}-{digest[:40]}"
         now = datetime.now(UTC)
 
@@ -484,7 +494,7 @@ class OwnerCommandService:
                 if service:
                     detail += f" ({service})"
                 lines.append(detail)
-            lines.append("\nAll affected patients will be notified.")
+            lines.append("\nNotifications will be queued for all affected patients.")
         else:
             lines.append("\nNo appointments will be affected.")
 
@@ -539,11 +549,32 @@ class OwnerCommandService:
                 ),
             )
 
-        # Execute under fresh locks
+        # Verify stored payload digest matches the immutable command payload
+        stored_digest = executing.payload_digest
+        recomputed_digest = self._compute_payload_digest(executing.command_payload)
+        if stored_digest != recomputed_digest:
+            await self._proposals.transition_status(
+                proposal.id,
+                business_id,
+                executing.expected_version,
+                "failed",
+                failure_code="payload_integrity_mismatch",
+                failure_message="Stored payload digest does not match command payload",
+            )
+            return OwnerCommandResult(
+                command_type=proposal.command_type,
+                success=False,
+                response_text="Command integrity check failed. Please send the command again.",
+            )
+
+        # Execute inside a command savepoint so partial effects roll back
         try:
-            result = await self._execute_confirmed(business_id, owner, executing)
+            async with self._session.begin_nested():
+                result = await self._execute_confirmed(business_id, owner, executing)
         except Exception:
             logger.exception("owner_command_execution_failed proposal_id=%s", proposal.id)
+            # Savepoint rolled back all schedule/cancel/outbox effects;
+            # safely mark failed outside the savepoint
             await self._proposals.transition_status(
                 proposal.id,
                 business_id,
@@ -555,7 +586,10 @@ class OwnerCommandService:
             return OwnerCommandResult(
                 command_type=proposal.command_type,
                 success=False,
-                response_text="An error occurred while executing the command. Please try again.",
+                response_text=(
+                    "An error occurred while executing the command. "
+                    "No changes were made. Please try again."
+                ),
             )
 
         return result
@@ -566,44 +600,71 @@ class OwnerCommandService:
         owner: BusinessUser,
         proposal: Any,
     ) -> OwnerCommandResult:
-        """Execute the confirmed destructive command with drift detection."""
+        """Execute the confirmed destructive command with drift detection.
+
+        Called inside a savepoint — any exception rolls back all effects.
+        """
         payload = proposal.command_payload
         command_type = proposal.command_type
         target_date = date.fromisoformat(payload["target_date"])
 
         preview_appointments = proposal.preview_snapshot.get("appointments", [])
         preview_count = len(preview_appointments)
-
-        # Recompute targets under fresh locks
-        current_targets = await self._targets_at_confirmation(business_id, command_type, payload)
-
-        # Detect drift
-        drift_detected = False
-        drift_details: list[str] = []
-        if len(current_targets) != preview_count:
-            drift_detected = True
-            drift_details.append(
-                f"Appointment count changed: {preview_count} at preview, {len(current_targets)} now"
-            )
-
-        # Check individual appointment IDs if available
         preview_ids = {
             str(a.get("appointment_id", ""))
             for a in preview_appointments
             if a.get("appointment_id")
         }
+
+        # Recompute targets under fresh locks
+        current_targets = await self._targets_at_confirmation(business_id, command_type, payload)
         current_ids = {
             str(a.get("appointment_id", "")) for a in current_targets if a.get("appointment_id")
         }
-        if preview_ids and current_ids:
-            added = current_ids - preview_ids
-            removed = preview_ids - current_ids
+
+        # Detect drift — any change requires abort + re-preview
+        added = current_ids - preview_ids if preview_ids else set()
+        removed = preview_ids - current_ids if preview_ids else set()
+
+        if added or removed or len(current_targets) != preview_count:
+            drift_details: list[str] = []
             if added:
-                drift_detected = True
-                drift_details.append(f"New appointments added: {len(added)}")
+                drift_details.append(f"New appointments: {len(added)}")
             if removed:
-                drift_detected = True
-                drift_details.append(f"Appointments removed since preview: {len(removed)}")
+                drift_details.append(f"Removed appointments: {len(removed)}")
+            if len(current_targets) != preview_count:
+                drift_details.append(f"Count changed: {preview_count} → {len(current_targets)}")
+            evidence = OwnerCommandOutcomeEvidence(
+                outcome="drift_abort",
+                command_type=command_type,
+                target_date=target_date.isoformat(),
+                resource_name=payload.get("resource_name"),
+                preview_count=preview_count,
+                confirm_count=len(current_targets),
+                cancelled_count=0,
+                drift_detected=True,
+                drift_details=drift_details,
+            )
+            now = datetime.now(UTC)
+            await self._proposals.transition_status(
+                proposal.id,
+                business_id,
+                proposal.expected_version,
+                "failed",
+                result_evidence=evidence.model_dump(mode="json"),
+                failure_code="target_drift",
+                failure_message="; ".join(drift_details),
+                completed_at=now,
+            )
+            return OwnerCommandResult(
+                command_type=command_type,
+                success=False,
+                response_text=(
+                    "Appointments changed since the preview. "
+                    "No changes were made. Please send the command again."
+                ),
+                proposal_id=proposal.id,
+            )
 
         # Execute the actual command
         if command_type == "doctor_leave":
@@ -621,24 +682,16 @@ class OwnerCommandService:
         else:
             cancelled = []
 
-        # Build evidence
-        outcome: Literal["completed", "completed_with_drift"] = (
-            "completed_with_drift" if drift_detected else "completed"
-        )
         evidence = OwnerCommandOutcomeEvidence(
-            outcome=outcome,
+            outcome="completed",
             command_type=command_type,
             target_date=target_date.isoformat(),
             resource_name=payload.get("resource_name"),
             preview_count=preview_count,
             confirm_count=len(current_targets),
             cancelled_count=len(cancelled),
-            drift_detected=drift_detected,
-            drift_details=drift_details,
-            cancelled_appointments=cancelled,
         )
 
-        # Transition to completed
         now = datetime.now(UTC)
         await self._proposals.transition_status(
             proposal.id,
@@ -649,10 +702,7 @@ class OwnerCommandService:
             completed_at=now,
         )
 
-        # Format completion text
-        text = self._format_completion_text(
-            command_type, target_date, payload, cancelled, drift_detected, drift_details
-        )
+        text = self._format_completion_text(command_type, target_date, payload, cancelled)
         return OwnerCommandResult(
             command_type=command_type,
             success=True,
@@ -669,8 +719,6 @@ class OwnerCommandService:
         target_date: date,
         payload: dict[str, Any],
         cancelled: list[dict[str, str]],
-        drift_detected: bool,
-        drift_details: list[str],
     ) -> str:
         date_str = target_date.strftime("%b %d")
         lines: list[str] = []
@@ -683,7 +731,7 @@ class OwnerCommandService:
                 for appt in cancelled:
                     lines.append(
                         f"  - {appt['time']} {appt['patient']}"
-                        f" ({appt.get('service', '')}) — notified"
+                        f" ({appt.get('service', '')}) — notification queued"
                     )
                 lines.append(f"{name} will not be booked for {date_str}.")
             else:
@@ -693,7 +741,7 @@ class OwnerCommandService:
             reason = payload.get("reason", "Closed")
             lines.append(f"Clinic closed on {date_str}. {reason}.")
             if cancelled:
-                lines.append(f"{len(cancelled)} appointment(s) cancelled and patients notified.")
+                lines.append(f"{len(cancelled)} appointment(s) cancelled. Notifications queued.")
 
         elif command_type == "close_early":
             close_time_str = payload.get("close_time", "")
@@ -707,14 +755,9 @@ class OwnerCommandService:
             if cancelled:
                 lines.append(f"{len(cancelled)} appointment(s) after {close_display} cancelled:")
                 for appt in cancelled:
-                    lines.append(f"  - {appt['time']} {appt['patient']} — notified")
+                    lines.append(f"  - {appt['time']} {appt['patient']} — notification queued")
             else:
                 lines.append("No appointments affected.")
-
-        if drift_detected:
-            lines.append("\nNote: Appointments changed between preview and confirmation:")
-            for detail in drift_details:
-                lines.append(f"  * {detail}")
 
         return "\n".join(lines)
 
@@ -870,8 +913,8 @@ class OwnerCommandService:
         self._session.add(exc)
         await self._session.flush()
 
-        return await self._cancel_appointments_outside_schedule(
-            business_id, target_date, owner_phone
+        return await self._cancel_appointments_after_time(
+            business_id, target_date, new_close, owner_phone
         )
 
     # -----------------------------------------------------------------------
@@ -896,7 +939,10 @@ class OwnerCommandService:
             return await self._query_all_appointments(business_id, target_date)
         elif command_type == "close_early":
             await self._lock_business_resources(business_id)
-            return await self._query_appointments_outside_schedule(business_id, target_date)
+            close_time_str = payload.get("close_time", "")
+            parts = close_time_str.split(":")
+            new_close = dt_time(int(parts[0]), int(parts[1]) if len(parts) > 1 else 0)
+            return await self._query_appointments_after_time(business_id, target_date, new_close)
         return []
 
     # -----------------------------------------------------------------------
@@ -1055,6 +1101,46 @@ class OwnerCommandService:
                 {
                     "appointment_id": str(appt.id),
                     "time": appt.start_at.astimezone(tz).strftime("%-I:%M %p"),
+                    "patient": appt.customer_name or "Patient",
+                    "service": appt.service_name_snapshot,
+                    "phone": appt.customer_phone,
+                    "resource_name": appt.resource_name_snapshot,
+                }
+            )
+        return result
+
+    async def _query_appointments_after_time(
+        self,
+        business_id: int,
+        target_date: date,
+        after_time: dt_time,
+    ) -> list[dict[str, str]]:
+        """Query confirmed appointments starting at or after a local time."""
+        tz_name = await self._get_business_timezone(business_id)
+        tz = ZoneInfo(tz_name)
+        appointments = (
+            (
+                await self._session.execute(
+                    select(Appointment).where(
+                        Appointment.business_id == business_id,
+                        Appointment.status == "confirmed",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        result: list[dict[str, str]] = []
+        for appt in appointments:
+            local = appt.start_at.astimezone(tz)
+            if local.date() != target_date:
+                continue
+            if local.time() < after_time:
+                continue
+            result.append(
+                {
+                    "appointment_id": str(appt.id),
+                    "time": local.strftime("%-I:%M %p"),
                     "patient": appt.customer_name or "Patient",
                     "service": appt.service_name_snapshot,
                     "phone": appt.customer_phone,
@@ -1308,6 +1394,46 @@ class OwnerCommandService:
             cancelled.append(
                 {
                     "time": appt.start_at.astimezone(tz).strftime("%-I:%M %p"),
+                    "patient": appt.customer_name or "Patient",
+                    "service": appt.service_name_snapshot,
+                }
+            )
+        return cancelled
+
+    async def _cancel_appointments_after_time(
+        self,
+        business_id: int,
+        target_date: date,
+        after_time: dt_time,
+        owner_phone: str,
+    ) -> list[dict[str, str]]:
+        tz_name = await self._get_business_timezone(business_id)
+        tz = ZoneInfo(tz_name)
+        appointments = (
+            (
+                await self._session.execute(
+                    select(Appointment).where(
+                        Appointment.business_id == business_id,
+                        Appointment.status == "confirmed",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        cancelled: list[dict[str, str]] = []
+        for appt in appointments:
+            local = appt.start_at.astimezone(tz)
+            if local.date() != target_date:
+                continue
+            if local.time() < after_time:
+                continue
+            await self._cancel_via_service(
+                business_id, appt.id, appt.version, owner_phone, "owner_close_early"
+            )
+            cancelled.append(
+                {
+                    "time": local.strftime("%-I:%M %p"),
                     "patient": appt.customer_name or "Patient",
                     "service": appt.service_name_snapshot,
                 }

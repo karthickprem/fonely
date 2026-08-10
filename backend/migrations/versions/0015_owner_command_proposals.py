@@ -179,14 +179,12 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute("LOCK TABLE owner_command_proposals IN ACCESS EXCLUSIVE MODE")
 
-    # Fail-closed populated downgrade guard: refuse if any rows carry
-    # result_evidence that cannot be represented without this table.
     op.execute(
         "DO $$ BEGIN "
-        "IF EXISTS (SELECT 1 FROM owner_command_proposals "
-        "WHERE result_evidence IS NOT NULL) THEN "
+        "IF EXISTS (SELECT 1 FROM owner_command_proposals) THEN "
         "RAISE EXCEPTION '0015 downgrade blocked: "
-        "rows with result_evidence exist and cannot be dropped'; "
+        "owner_command_proposals rows exist and cannot be represented "
+        "without this table — remediate or migrate before downgrade'; "
         "END IF; END $$"
     )
 

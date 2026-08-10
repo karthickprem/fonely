@@ -175,19 +175,26 @@ async def test_concurrent_repair_converges_to_one_row(
         )
         assert count == 1
 
-    both_ready = asyncio.Event()
-    ready_count = 0
-    ready_lock = asyncio.Lock()
+    both_observed = asyncio.Event()
+    observed_count = 0
+    observed_lock = asyncio.Lock()
     results: list[list[int] | Exception] = [[], []]
 
     async def racer(idx: int) -> None:
-        nonlocal ready_count
+        nonlocal observed_count
         async with pg_session_factory() as session:
-            async with ready_lock:
-                ready_count += 1
-                if ready_count == 2:
-                    both_ready.set()
-            await asyncio.wait_for(both_ready.wait(), timeout=5.0)
+            # Verify this session sees the incomplete pair before proceeding
+            count = await session.scalar(
+                text("SELECT count(*) FROM notification_outbox WHERE entity_id = :eid"),
+                {"eid": appt_id},
+            )
+            assert count == 1, f"racer {idx} sees {count} rows, expected 1"
+            # Signal readiness after confirming incomplete state
+            async with observed_lock:
+                observed_count += 1
+                if observed_count == 2:
+                    both_observed.set()
+            await asyncio.wait_for(both_observed.wait(), timeout=5.0)
             try:
                 ids = await _verify_pair(session, appointment_id=appt_id, operation=operation)
                 await session.commit()
@@ -295,9 +302,10 @@ async def test_savepoint_rollback_on_second_insert_failure(
         sentinel_id = sentinel_result.scalar_one()
         await session.flush()
 
-        service = NotificationService(session)
+        from fonely.repositories.notifications import NotificationRepository
 
-        original_insert = service._repo.insert_event_idempotent
+        real_repo = NotificationRepository(session)
+        original_insert = real_repo.insert_event_idempotent
         call_count = 0
 
         async def failing_second_insert(values):  # type: ignore[no-untyped-def]
@@ -307,10 +315,23 @@ async def test_savepoint_rollback_on_second_insert_failure(
                 raise RuntimeError("injected_second_insert_failure")
             return await original_insert(values)
 
-        service._repo.insert_event_idempotent = failing_second_insert  # type: ignore[assignment]
+        real_repo.insert_event_idempotent = failing_second_insert  # type: ignore[assignment]
+
+        service = NotificationService(session)
+        service._repo = real_repo
 
         with pytest.raises(RuntimeError, match="injected_second_insert_failure"):
-            await _create_v1_pair(session, appointment_id=appt_id, operation=operation)
+            await service.create_appointment_notifications(
+                business_id=1,
+                appointment_id=appt_id,
+                customer_phone="+919123456789",
+                customer_name="Patient",
+                service_name="Consultation",
+                resource_name="Dr. Priya",
+                start_at=NOW,
+                price=300,
+                business_timezone="Asia/Kolkata",
+            )
 
         pair_count = await session.scalar(
             text("SELECT count(*) FROM notification_outbox WHERE entity_id = :eid"),

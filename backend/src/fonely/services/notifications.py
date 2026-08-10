@@ -243,6 +243,8 @@ class NotificationService:
         expected_payload = expected["payload"]
         if not isinstance(persisted_payload, dict) or not isinstance(expected_payload, dict):
             return False
+        if set(persisted_payload.keys()) != set(expected_payload.keys()):
+            return False
         return all(persisted_payload.get(key) == expected_payload[key] for key in expected_payload)
 
     # ── format detection ────────────────────────────────────────────
@@ -270,16 +272,20 @@ class NotificationService:
         if business is None:
             raise RuntimeError("business_not_found")
         clinic_name = business.name or "Business"
-        owner = await self._session.scalar(
-            select(BusinessUser).where(
-                BusinessUser.business_id == business_id,
-                BusinessUser.role == "owner",
-                BusinessUser.is_active.is_(True),
+        owners = (
+            await self._session.scalars(
+                select(BusinessUser).where(
+                    BusinessUser.business_id == business_id,
+                    BusinessUser.role == "owner",
+                    BusinessUser.is_active.is_(True),
+                )
             )
-        )
-        if owner is None:
+        ).all()
+        if len(owners) == 0:
             raise RuntimeError("active_owner_not_found")
-        return clinic_name, owner.phone
+        if len(owners) > 1:
+            raise RuntimeError("multiple_active_owners")
+        return clinic_name, owners[0].phone
 
     # ── insert or verify single event ───────────────────────────────
 
@@ -508,12 +514,31 @@ class NotificationService:
             self._emit_metric(operation, "v1", "exact_existing")
             return [patient.id, owner.id]
 
-        # One missing — repair inside savepoint
+        # One missing — repair inside savepoint with locked revalidation
         async with self._session.begin_nested():
+            locked_patient = await self._repo.get_event_by_idempotency_key(
+                business_id, keys[0], lock=True
+            )
+            locked_owner = await self._repo.get_event_by_idempotency_key(
+                business_id, keys[1], lock=True
+            )
+            if locked_patient is not None and locked_owner is not None:
+                self._emit_metric(operation, "v1", "exact_existing")
+                return [locked_patient.id, locked_owner.id]
+            for locked, expected in zip(
+                (locked_patient, locked_owner), expected_values, strict=True
+            ):
+                if locked is not None and not self._event_equivalent(locked, expected):
+                    self._emit_metric(operation, "v1", "evidence_conflict")
+                    raise NotificationIdempotencyConflictError(
+                        "Committed notification member changed during repair"
+                    )
             ids = []
-            for event, expected in zip((patient, owner), expected_values, strict=True):
-                if event is not None:
-                    ids.append(event.id)
+            for locked, expected in zip(
+                (locked_patient, locked_owner), expected_values, strict=True
+            ):
+                if locked is not None:
+                    ids.append(locked.id)
                 else:
                     ids.append(await self._insert_or_verify(expected))
         self._emit_metric(operation, "v1", "exact_repaired")

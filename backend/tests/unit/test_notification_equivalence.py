@@ -30,7 +30,10 @@ async def test_cross_tenant_collision_on_insert() -> None:
     business.name = "Smile Dental"
     owner = MagicMock()
     owner.phone = "+919000000001"
-    session.scalar.side_effect = [business, owner]
+    session.scalar.return_value = business
+    scalars_result = MagicMock()
+    scalars_result.all.return_value = [owner]
+    session.scalars.return_value = scalars_result
     service = NotificationService(session)
     service._repo = AsyncMock()
     service._repo.insert_event_idempotent.side_effect = [None]
@@ -66,7 +69,10 @@ async def test_equivalent_replay_returns_existing_ids() -> None:
     business.name = "Smile Dental"
     owner = MagicMock()
     owner.phone = "+919000000001"
-    session.scalar.side_effect = [business, owner]
+    session.scalar.return_value = business
+    scalars_result = MagicMock()
+    scalars_result.all.return_value = [owner]
+    session.scalars.return_value = scalars_result
     service = NotificationService(session)
 
     from fonely.services.notifications import NotificationPairSnapshot
@@ -124,10 +130,41 @@ async def test_owner_ambiguity_raises() -> None:
     session = AsyncMock()
     business = MagicMock()
     business.name = "Smile Dental"
-    session.scalar.side_effect = [business, None]
+    session.scalar.return_value = business
+    scalars_result = MagicMock()
+    scalars_result.all.return_value = []
+    session.scalars.return_value = scalars_result
     service = NotificationService(session)
 
     with pytest.raises(RuntimeError, match="active_owner_not_found"):
+        await service.create_appointment_notifications(
+            business_id=1,
+            appointment_id=42,
+            customer_phone="+919123456789",
+            customer_name="Test",
+            service_name="Consultation",
+            resource_name="Dr. Priya",
+            start_at=NOW,
+            price=300,
+            business_timezone="Asia/Kolkata",
+        )
+
+
+async def test_multiple_active_owners_fails_closed() -> None:
+    session = AsyncMock()
+    business = MagicMock()
+    business.name = "Smile Dental"
+    owner1 = MagicMock()
+    owner1.phone = "+919000000001"
+    owner2 = MagicMock()
+    owner2.phone = "+919000000002"
+    session.scalar.return_value = business
+    scalars_result = MagicMock()
+    scalars_result.all.return_value = [owner1, owner2]
+    session.scalars.return_value = scalars_result
+    service = NotificationService(session)
+
+    with pytest.raises(RuntimeError, match="multiple_active_owners"):
         await service.create_appointment_notifications(
             business_id=1,
             appointment_id=42,

@@ -207,9 +207,17 @@ async def test_missing_v1_member_repairs_exactly_once(operation: str, missing: s
     owner_event = _event(owner, 72)
     inserted = _event(patient if missing == "patient" else owner, 73)
     service._repo = AsyncMock()
-    service._repo.get_event_by_idempotency_key.side_effect = (
-        [None, owner_event] if missing == "patient" else [patient_event, None]
-    )
+    # Called 4 times: 2 initial reads + 2 locked re-reads inside savepoint
+    if missing == "patient":
+        service._repo.get_event_by_idempotency_key.side_effect = [
+            None, owner_event,  # initial: patient missing, owner exists
+            None, owner_event,  # locked re-read: same state
+        ]
+    else:
+        service._repo.get_event_by_idempotency_key.side_effect = [
+            patient_event, None,  # initial: patient exists, owner missing
+            patient_event, None,  # locked re-read: same state
+        ]
     service._repo.insert_event_idempotent.side_effect = [inserted]
 
     expected_ids = [73, 72] if missing == "patient" else [71, 73]

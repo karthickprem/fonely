@@ -64,7 +64,13 @@ The appointment was committed before v1 evidence was deployed. Outbox rows exist
 
 2. Check if both patient and owner rows exist for the entity.
 
-3. If both exist and the appointment is in a terminal state (confirmed/cancelled/rescheduled), the notification was likely delivered. Leave rows unchanged.
+3. If both exist, check each row's outbox delivery status:
+   - `delivered` with `delivered_at`: notification was delivered. Leave unchanged.
+   - `pending` / `processing`: notification is queued but not yet delivered. Monitor worker.
+   - `failed` with `attempts < max_attempts`: worker will retry. Monitor.
+   - `dead_letter`: delivery permanently failed. Investigate `last_error` and consider manual remediation.
+   - `unknown`: delivery status is ambiguous (e.g., provider timeout). Manual investigation required — do NOT infer delivery from appointment state alone.
+   - Never infer "likely delivered" from row existence or appointment terminal state. Only the outbox `status` and `delivered_at` fields are authoritative delivery evidence.
 
 4. If one member is missing:
    - Preserve the surviving row

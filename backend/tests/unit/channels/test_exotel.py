@@ -473,6 +473,131 @@ class TestNumberMapping:
         assert mapping.get_business_id("09999999999") is None
 
 
+# ============================================================================
+# Adapter: Semantic idempotency and OOO through full stack
+# ============================================================================
+
+
+class TestSemanticIdempotency:
+    def test_terminal_before_answered_stores_terminal_only(self) -> None:
+        """OOO: terminal arrives first (answered lost or delayed)."""
+        app, intake = _create_app()
+        client = TestClient(app)
+        response = client.post(
+            "/webhooks/exotel/call-status", json=COMPLETED_OUTBOUND, headers=_auth_headers()
+        )
+        assert response.status_code == 200
+        assert len(intake.events) == 1
+        assert intake.events[0].status == "completed"
+
+    def test_second_terminal_for_same_call_is_duplicate_200(self) -> None:
+        """Second terminal callback (different status) for same CallSid is a
+        semantic duplicate on (business_id, call_sid, event_type=terminal)
+        and returns 200 with no second store."""
+        app, intake = _create_app()
+        client = TestClient(app)
+        client.post(
+            "/webhooks/exotel/call-status", json=COMPLETED_OUTBOUND, headers=_auth_headers()
+        )
+        failed_same_sid = {**FAILED_OUTBOUND, "CallSid": COMPLETED_OUTBOUND["CallSid"]}
+        response = client.post(
+            "/webhooks/exotel/call-status", json=failed_same_sid, headers=_auth_headers()
+        )
+        assert response.status_code == 200
+        assert len(intake.events) == 1
+        assert intake.events[0].status == "completed"
+
+    def test_same_terminal_callback_twice_is_idempotent_200(self) -> None:
+        """Exact duplicate terminal callback — 200, no second store."""
+        app, intake = _create_app()
+        client = TestClient(app)
+        client.post(
+            "/webhooks/exotel/call-status", json=COMPLETED_OUTBOUND, headers=_auth_headers()
+        )
+        response = client.post(
+            "/webhooks/exotel/call-status", json=COMPLETED_OUTBOUND, headers=_auth_headers()
+        )
+        assert response.status_code == 200
+        assert len(intake.events) == 1
+
+    def test_different_call_sids_independent(self) -> None:
+        """Two different calls with independent state."""
+        app, intake = _create_app()
+        client = TestClient(app)
+        client.post(
+            "/webhooks/exotel/call-status", json=COMPLETED_OUTBOUND, headers=_auth_headers()
+        )
+        client.post("/webhooks/exotel/call-status", json=FAILED_OUTBOUND, headers=_auth_headers())
+        assert len(intake.events) == 2
+        sids = {e.call_sid for e in intake.events}
+        assert len(sids) == 2
+
+    def test_full_lifecycle_answered_then_completed(self) -> None:
+        """Normal lifecycle: answered → completed for same CallSid."""
+        app, intake = _create_app()
+        client = TestClient(app)
+        r1 = client.post(
+            "/webhooks/exotel/call-status", json=ANSWERED_OUTBOUND, headers=_auth_headers()
+        )
+        r2 = client.post(
+            "/webhooks/exotel/call-status", json=COMPLETED_OUTBOUND, headers=_auth_headers()
+        )
+        assert r1.status_code == 200
+        assert r2.status_code == 200
+        assert len(intake.events) == 2
+        assert intake.events[0].status == "in-progress"
+        assert intake.events[1].status == "completed"
+
+    def test_payload_digest_differs_for_different_events(self) -> None:
+        """Each persisted record has a unique payload digest."""
+        app, intake = _create_app()
+        client = TestClient(app)
+        client.post("/webhooks/exotel/call-status", json=ANSWERED_OUTBOUND, headers=_auth_headers())
+        client.post(
+            "/webhooks/exotel/call-status", json=COMPLETED_OUTBOUND, headers=_auth_headers()
+        )
+        digests = {e.payload_digest for e in intake.events}
+        assert len(digests) == 2
+
+
+# ============================================================================
+# Domain: Transition matrix exhaustive
+# ============================================================================
+
+
+class TestTransitionMatrixExhaustive:
+    def test_queued_to_in_progress(self) -> None:
+        assert validate_transition("queued", "in-progress") == "in-progress"
+
+    def test_queued_to_completed(self) -> None:
+        assert validate_transition("queued", "completed") == "completed"
+
+    def test_queued_to_failed(self) -> None:
+        assert validate_transition("queued", "failed") == "failed"
+
+    def test_in_progress_to_busy_allowed(self) -> None:
+        assert validate_transition("in-progress", "busy") == "busy"
+
+    def test_in_progress_to_no_answer_allowed(self) -> None:
+        assert validate_transition("in-progress", "no-answer") == "no-answer"
+
+    def test_failed_to_completed_raises(self) -> None:
+        with pytest.raises(InvalidCallTransitionError):
+            validate_transition("failed", "completed")
+
+    def test_busy_to_no_answer_raises(self) -> None:
+        with pytest.raises(InvalidCallTransitionError):
+            validate_transition("busy", "no-answer")
+
+    def test_no_answer_to_in_progress_raises(self) -> None:
+        with pytest.raises(InvalidCallTransitionError):
+            validate_transition("no-answer", "in-progress")
+
+    def test_every_terminal_is_idempotent(self) -> None:
+        for status in ("completed", "failed", "busy", "no-answer"):
+            assert validate_transition(status, status) == status
+
+
 class TestAudioStreamWebSocket:
     def test_connects_and_closes(self) -> None:
         app, _ = _create_app()

@@ -41,7 +41,7 @@ class ExotelNumberMapping:
         return ExotelNumberMapping(parsed)
 
     @staticmethod
-    def _validate(mappings: dict[str, object]) -> dict[str, int]:
+    def _validate(mappings: dict[str, int] | dict[str, object]) -> dict[str, int]:
         validated: dict[str, int] = {}
         for key, value in mappings.items():
             if not isinstance(key, str) or not key:

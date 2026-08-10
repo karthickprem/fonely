@@ -233,10 +233,10 @@ class TestBargeInClear:
         assert parsed["event"] == "clear"
         assert parsed["streamSid"] == "MZ_barge"
 
-    async def test_stale_generation_audio_not_serialized(self) -> None:
-        """OutputAudioRawFrame from cleared generation → serializer still
-        produces audio (generation filtering is transport/runtime, not
-        serializer). This documents the boundary."""
+    async def test_serializer_does_not_filter_stale_generation_audio(self) -> None:
+        """Serializer produces audio regardless of generation — filtering
+        stale generations is the pipeline's responsibility, not the
+        serializer's."""
         from pipecat.frames.frames import OutputAudioRawFrame, StartFrame
         from pipecat.serializers.exotel import ExotelFrameSerializer
 

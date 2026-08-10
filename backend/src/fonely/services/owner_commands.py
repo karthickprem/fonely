@@ -203,16 +203,45 @@ class OwnerCommandService:
     ) -> OwnerCommandResult:
         """Build preview, persist proposal, return confirmation prompt."""
         now = datetime.now(UTC)
-        existing_pending = await self._proposals.get_latest_for_owner(
-            business_id, owner.id, statuses=("pending_confirmation",)
+        active = await self._proposals.get_latest_for_owner(
+            business_id,
+            owner.id,
+            statuses=("pending_confirmation", "executing"),
         )
-        if existing_pending is not None and existing_pending.expires_at <= now:
-            await self._proposals.transition_status(
-                existing_pending.id,
-                business_id,
-                existing_pending.expected_version,
-                "expired",
-            )
+        if active is not None:
+            if active.status == "executing":
+                return OwnerCommandResult(
+                    command_type=parsed.command,
+                    success=False,
+                    response_text=(
+                        "A command is currently being executed. Please wait for it to complete."
+                    ),
+                )
+            if active.expires_at <= now:
+                expired = await self._proposals.transition_status(
+                    active.id,
+                    business_id,
+                    active.expected_version,
+                    "expired",
+                )
+                if expired is None:
+                    return OwnerCommandResult(
+                        command_type=parsed.command,
+                        success=False,
+                        response_text=(
+                            "A previous command is being processed. Please try again in a moment."
+                        ),
+                    )
+            else:
+                return OwnerCommandResult(
+                    command_type=parsed.command,
+                    success=False,
+                    response_text=(
+                        "You already have a pending command awaiting confirmation. "
+                        "Reply YES to confirm or NO to cancel it first."
+                    ),
+                    proposal_id=active.id,
+                )
 
         target_date = self._resolve_date_from_parsed(
             await self._get_business_timezone(business_id), parsed
@@ -226,7 +255,28 @@ class OwnerCommandService:
                 ),
             )
 
-        # Command-specific validation and preview building
+        tz_name = await self._get_business_timezone(business_id)
+        today_local = datetime.now(ZoneInfo(tz_name)).date()
+        if target_date < today_local:
+            return OwnerCommandResult(
+                command_type=parsed.command,
+                success=False,
+                response_text="Cannot modify past dates. Please use today or a future date.",
+            )
+
+        if parsed.command == "doctor_leave" and not isinstance(parsed.doctor_name, str):
+            return OwnerCommandResult(
+                command_type="doctor_leave",
+                success=False,
+                response_text="Please specify which doctor, e.g. 'Dr. Priya leave tomorrow'.",
+            )
+        if parsed.command == "close_early" and not isinstance(parsed.close_time, str):
+            return OwnerCommandResult(
+                command_type="close_early",
+                success=False,
+                response_text="Please specify a close time, e.g. 'Close early at 6 PM'.",
+            )
+
         if parsed.command == "doctor_leave":
             return await self._preview_doctor_leave(business_id, owner, parsed, target_date)
         if parsed.command == "close_clinic":
@@ -479,7 +529,6 @@ class OwnerCommandService:
                 "completed",
                 "rejected",
                 "expired",
-                "failed",
             ):
                 evidence = terminal.result_evidence or {}
                 outcome = evidence.get("outcome", terminal.status)
@@ -1252,9 +1301,13 @@ class OwnerCommandService:
             .scalars()
             .all()
         )
+        now_utc = datetime.now(UTC)
         result: list[dict[str, str]] = []
         for appt in appointments:
             if appt.start_at.astimezone(tz).date() != target_date:
+                continue
+            effective_end = appt.effective_end_at or appt.end_at
+            if effective_end <= now_utc:
                 continue
             local_time = appt.start_at.astimezone(tz).strftime("%-I:%M %p")
             result.append(
@@ -1289,9 +1342,13 @@ class OwnerCommandService:
             .scalars()
             .all()
         )
+        now_utc = datetime.now(UTC)
         result: list[dict[str, str]] = []
         for appt in appointments:
             if appt.start_at.astimezone(tz).date() != target_date:
+                continue
+            effective_end = appt.effective_end_at or appt.end_at
+            if effective_end <= now_utc:
                 continue
             result.append(
                 {
@@ -1331,13 +1388,16 @@ class OwnerCommandService:
             .scalars()
             .all()
         )
+        now_utc = datetime.now(UTC)
         result: list[dict[str, str]] = []
         for appt in appointments:
             local_start = appt.start_at.astimezone(tz)
             if local_start.date() != target_date:
                 continue
-            effective_end = (appt.effective_end_at or appt.end_at).astimezone(tz)
-            # Skip only if the appointment fully ends at or before close time
+            effective_end_utc = appt.effective_end_at or appt.end_at
+            if effective_end_utc <= now_utc:
+                continue
+            effective_end = effective_end_utc.astimezone(tz)
             starts_after = local_start.time() >= after_time
             end_extends_past = effective_end.time() > after_time
             if not starts_after and not end_extends_past:

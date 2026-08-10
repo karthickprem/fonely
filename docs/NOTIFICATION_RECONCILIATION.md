@@ -121,3 +121,28 @@ Escalate immediately as a data integrity incident. A global idempotency key coll
 - All row-level investigation requires authorized database access through audited tooling.
 - Remediation notifications must use new idempotency identities — never reuse historical keys.
 - No appointment mutation is replayed or undone merely because notification evidence is incomplete.
+
+## Rollout Preflight: Owner Recipient
+
+Notification pairs require exactly one active `BusinessUser` with `role='owner'` per business. Businesses with zero or multiple active owners will fail closed (`active_owner_not_found` or `multiple_active_owners`) on any appointment mutation that creates notifications.
+
+### Before enabling this code path
+
+Run the following aggregate preflight query (no PII):
+
+```sql
+SELECT b.id, count(bu.id) AS owner_count
+FROM businesses b
+LEFT JOIN business_users bu
+  ON bu.business_id = b.id
+  AND bu.role = 'owner'
+  AND bu.is_active = true
+GROUP BY b.id
+HAVING count(bu.id) != 1;
+```
+
+Any row in this result requires remediation before deployment:
+- Zero owners: create a `BusinessUser` owner row from `primary_contact_phone` through the authorized onboarding procedure
+- Multiple owners: deactivate all but the designated notification recipient
+
+Do NOT silently substitute `Business.primary_contact_phone` — that field is onboarding metadata only and may not represent the current owner.

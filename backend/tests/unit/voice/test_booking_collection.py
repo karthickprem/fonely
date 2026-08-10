@@ -551,6 +551,93 @@ class TestD4NaalaikkuNotName:
         assert bc.patient_name is None
 
 
+class TestD1MedicalSafetyEnforcement:
+    """D1: treatment/medication/diagnosis in LLM output must be rejected."""
+
+    def test_treatment_suggestion_detected(self):
+        from fonely.voice.dialogue import contains_medical_advice
+        assert contains_medical_advice("சொத்தைக்கு root canal தேவைப்படலாம்")
+        assert contains_medical_advice("Take Paracetamol 500mg for the pain")
+        assert contains_medical_advice("You need an extraction")
+        assert contains_medical_advice("It could be an infection, take antibiotics")
+
+    def test_safe_referral_not_flagged(self):
+        from fonely.voice.dialogue import contains_medical_advice
+        assert not contains_medical_advice("Doctor பார்த்துதான் சொல்வாங்க")
+        assert not contains_medical_advice("Clinic-ஐ நேரடியாக call பண்ணுங்க")
+        assert not contains_medical_advice("நாளைக்கு 10:00 slot available")
+        assert not contains_medical_advice("என்ன reason-க்காக visit?")
+
+
+class TestD2DeterministicReadback:
+    """D2: when all fields collected, runtime must force deterministic readback."""
+
+    def test_readback_required_when_complete(self):
+        bc = BookingCollection()
+        bc.active = True
+        bc.reason = "scaling"
+        bc.target_date = date(2026, 8, 11)
+        bc.selected_time = time(18, 30)
+        bc.patient_name = "Karthick"
+        assert bc.required_field == "confirmation"
+        readback = bc.format_readback()
+        assert "scaling" in readback
+        assert "Karthick" in readback
+        assert "18:30" in readback
+
+    def test_readback_not_generated_when_incomplete(self):
+        bc = BookingCollection()
+        bc.active = True
+        bc.reason = "scaling"
+        bc.target_date = date(2026, 8, 11)
+        assert bc.required_field != "confirmation"
+        assert bc.format_readback() is None
+
+
+class TestD3FieldOrderEnforcement:
+    """D3: runtime owns field order; LLM gets required_field, not field choice."""
+
+    def test_required_field_order(self):
+        bc = BookingCollection()
+        bc.active = True
+        assert bc.required_field == "date"
+
+        bc.target_date = date(2026, 8, 11)
+        assert bc.required_field == "time"
+
+        bc.selected_time = time(18, 30)
+        assert bc.required_field == "reason"
+
+        bc.reason = "scaling"
+        assert bc.required_field == "name"
+
+        bc.patient_name = "Karthick"
+        assert bc.required_field == "confirmation"
+
+    def test_render_includes_required_field(self):
+        bc = BookingCollection()
+        bc.active = True
+        bc.target_date = date(2026, 8, 11)
+        rendered = bc.render()
+        assert "required_field: time" in rendered
+
+
+class TestD5NoUnpromptedAvailability:
+    """D5: availability must not appear in prompt until caller states a date."""
+
+    def test_no_availability_without_date(self):
+        bc = BookingCollection()
+        bc.active = True
+        assert bc.target_date is None
+        assert bc.should_include_availability is False
+
+    def test_availability_after_date(self):
+        bc = BookingCollection()
+        bc.active = True
+        bc.target_date = date(2026, 8, 11)
+        assert bc.should_include_availability is True
+
+
 class TestBookingCollectionRender:
     def test_render_includes_all_fields(self):
         bc = BookingCollection()

@@ -138,6 +138,20 @@ class BookingCollection:
         ):
             self.patient_name = caller_text.strip()
 
+    @property
+    def should_include_availability(self) -> bool:
+        return self.target_date is not None
+
+    def format_readback(self) -> str | None:
+        if self.required_field != "confirmation":
+            return None
+        time_str = self.selected_time.strftime("%H:%M") if self.selected_time else "?"
+        date_str = self.target_date.isoformat() if self.target_date else "?"
+        return (
+            f"{self.reason}, {date_str} {time_str}, {self.patient_name}. "
+            f"இது correct-ஆ?"
+        )
+
     def render(self) -> str:
         selected = self.selected_time.strftime("%H:%M") if self.selected_time else "missing"
         return (
@@ -220,6 +234,28 @@ def _is_date_or_time_word(normalized: str) -> bool:
 def _assistant_asks_name(text: str) -> bool:
     lower = text.casefold()
     return any(term in lower for term in ("name", "பேரு", "பெயர்", "நேம்"))
+
+
+_MEDICAL_ADVICE = re.compile(
+    r"\b(?:take|use|apply|need)\s+(?:paracetamol|ibuprofen|amoxicillin|crocin|combiflam|antibiotic)"
+    r"|\b\d+\s*(?:mg|ml)\b.*(?:daily|twice|once|thrice)"
+    r"|(?:root canal|extraction|filling|surgery|implant)\s+(?:தேவை|need|required|வேணும்)"
+    r"|(?:you |நீங்க )?\s*need\s+(?:a |an )?(?:root canal|extraction|filling|surgery|implant)"
+    r"|(?:could be|might be|probably)\s+(?:an? )?(?:infection|cavity|abscess|fracture)"
+    r"|(?:இருக்கலாம்|தேவைப்படலாம்)\s*$",
+    re.IGNORECASE,
+)
+
+SAFE_MEDICAL_REFERRAL = re.compile(
+    r"doctor\s+(?:பார்|பாக்க|கிட்ட)"
+    r"|clinic.*(?:call|contact|பண்ணு)"
+    r"|staff\s+(?:கிட்ட|with)",
+    re.IGNORECASE,
+)
+
+
+def contains_medical_advice(text: str) -> bool:
+    return bool(_MEDICAL_ADVICE.search(text))
 
 
 TERMINAL_RESPONSES = {

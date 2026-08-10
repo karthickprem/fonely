@@ -145,12 +145,16 @@ class TestStrictEventParsing:
 
 class TestCallStatusTransitions:
     def test_none_to_any_allowed(self) -> None:
-        for status in ("queued", "in-progress", "completed", "failed", "busy", "no-answer"):
+        all_statuses = (
+            "queued", "ringing", "in_progress",
+            "completed", "failed", "busy", "no_answer",
+        )
+        for status in all_statuses:
             assert validate_transition(None, status) == status
 
     def test_in_progress_to_terminal_allowed(self) -> None:
-        for terminal in ("completed", "failed", "busy", "no-answer"):
-            assert validate_transition("in-progress", terminal) == terminal
+        for terminal in ("completed", "failed", "busy", "no_answer"):
+            assert validate_transition("in_progress", terminal) == terminal
 
     def test_terminal_to_same_is_idempotent(self) -> None:
         assert validate_transition("completed", "completed") == "completed"
@@ -161,7 +165,7 @@ class TestCallStatusTransitions:
 
     def test_terminal_to_non_terminal_is_harmless_noop(self) -> None:
         with pytest.raises(LateCallEventError):
-            validate_transition("completed", "in-progress")
+            validate_transition("completed", "in_progress")
 
 
 # ============================================================================
@@ -408,7 +412,7 @@ class TestIntakeContract:
         )
         record = intake.events[0]
         assert record.business_id == 1
-        assert record.call_sid == COMPLETED_OUTBOUND["CallSid"]
+        assert record.provider_call_id == COMPLETED_OUTBOUND["CallSid"]
         assert record.event_type == "terminal"
         assert record.status == "completed"
         assert record.duration == 120
@@ -537,7 +541,7 @@ class TestSemanticIdempotency:
         )
         client.post("/webhooks/exotel/call-status", json=FAILED_OUTBOUND, headers=_auth_headers())
         assert len(intake.events) == 2
-        sids = {e.call_sid for e in intake.events}
+        sids = {e.provider_call_id for e in intake.events}
         assert len(sids) == 2
 
     def test_full_lifecycle_answered_then_completed(self) -> None:
@@ -553,7 +557,7 @@ class TestSemanticIdempotency:
         assert r1.status_code == 200
         assert r2.status_code == 200
         assert len(intake.events) == 2
-        assert intake.events[0].status == "in-progress"
+        assert intake.events[0].status == "in_progress"
         assert intake.events[1].status == "completed"
 
     def test_payload_digest_differs_for_different_events(self) -> None:
@@ -591,7 +595,7 @@ class TestSemanticIdempotency:
 
 class TestTransitionMatrixExhaustive:
     def test_queued_to_in_progress(self) -> None:
-        assert validate_transition("queued", "in-progress") == "in-progress"
+        assert validate_transition("queued", "in_progress") == "in_progress"
 
     def test_queued_to_completed(self) -> None:
         assert validate_transition("queued", "completed") == "completed"
@@ -599,11 +603,17 @@ class TestTransitionMatrixExhaustive:
     def test_queued_to_failed(self) -> None:
         assert validate_transition("queued", "failed") == "failed"
 
+    def test_ringing_to_in_progress(self) -> None:
+        assert validate_transition("ringing", "in_progress") == "in_progress"
+
+    def test_ringing_to_terminal(self) -> None:
+        assert validate_transition("ringing", "no_answer") == "no_answer"
+
     def test_in_progress_to_busy_allowed(self) -> None:
-        assert validate_transition("in-progress", "busy") == "busy"
+        assert validate_transition("in_progress", "busy") == "busy"
 
     def test_in_progress_to_no_answer_allowed(self) -> None:
-        assert validate_transition("in-progress", "no-answer") == "no-answer"
+        assert validate_transition("in_progress", "no_answer") == "no_answer"
 
     def test_failed_to_completed_raises(self) -> None:
         with pytest.raises(InvalidCallTransitionError):
@@ -611,14 +621,14 @@ class TestTransitionMatrixExhaustive:
 
     def test_busy_to_no_answer_raises(self) -> None:
         with pytest.raises(InvalidCallTransitionError):
-            validate_transition("busy", "no-answer")
+            validate_transition("busy", "no_answer")
 
     def test_no_answer_to_in_progress_is_harmless_noop(self) -> None:
         with pytest.raises(LateCallEventError):
-            validate_transition("no-answer", "in-progress")
+            validate_transition("no_answer", "in_progress")
 
     def test_every_terminal_is_idempotent(self) -> None:
-        for status in ("completed", "failed", "busy", "no-answer"):
+        for status in ("completed", "failed", "busy", "no_answer"):
             assert validate_transition(status, status) == status
 
 

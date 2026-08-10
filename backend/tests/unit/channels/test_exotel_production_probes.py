@@ -43,7 +43,8 @@ def _mock_session_factory(mock_session: AsyncMock) -> MagicMock:
 
 def _make_event() -> InboundCallEvent:
     return InboundCallEvent(
-        call_sid="a" * 32,
+        provider="exotel",
+        provider_call_id="a" * 32,
         event_type="terminal",
         status="completed",
         caller_phone="+919000000001",
@@ -59,7 +60,8 @@ def _make_record() -> InboundCallEventRecord:
     return InboundCallEventRecord(
         id=1,
         business_id=1,
-        call_sid="a" * 32,
+        provider="exotel",
+        provider_call_id="a" * 32,
         event_type="terminal",
         status="completed",
         caller_phone="+919000000001",
@@ -89,7 +91,7 @@ class TestIntakeServiceTransactionContract:
         service = InboundCallIntakeService(factory)
 
         with patch(
-            "fonely.services.exotel_intake.ExotelInboundEventRepository"
+            "fonely.services.exotel_intake.InboundCallEventRepository"
         ) as mock_repo_cls:
             mock_repo_cls.return_value.persist = AsyncMock(
                 return_value=_make_record()
@@ -109,7 +111,7 @@ class TestIntakeServiceTransactionContract:
         service = InboundCallIntakeService(factory)
 
         with patch(
-            "fonely.services.exotel_intake.ExotelInboundEventRepository"
+            "fonely.services.exotel_intake.InboundCallEventRepository"
         ) as mock_repo_cls:
             mock_repo_cls.return_value.persist = AsyncMock(
                 side_effect=DuplicateCallEventError("dup")
@@ -129,7 +131,7 @@ class TestIntakeServiceTransactionContract:
         service = InboundCallIntakeService(factory)
 
         with patch(
-            "fonely.services.exotel_intake.ExotelInboundEventRepository"
+            "fonely.services.exotel_intake.InboundCallEventRepository"
         ) as mock_repo_cls:
             mock_repo_cls.return_value.persist = AsyncMock(
                 side_effect=ConflictingCallEventError("conflict")
@@ -148,7 +150,7 @@ class TestIntakeServiceTransactionContract:
         service = InboundCallIntakeService(factory)
 
         with patch(
-            "fonely.services.exotel_intake.ExotelInboundEventRepository"
+            "fonely.services.exotel_intake.InboundCallEventRepository"
         ) as mock_repo_cls:
             mock_repo_cls.return_value.persist = AsyncMock(
                 side_effect=RuntimeError("db exploded")
@@ -169,7 +171,7 @@ class TestWorkerSchemaGuardProduction:
 
     async def test_process_one_raises_without_schema(self) -> None:
         """Real worker.process_one() raises SchemaNotReadyError when
-        COUNT(*) returns 0 for provider_call_sid in current_schema()."""
+        COUNT(*) returns 0 for provider_call_id in current_schema()."""
         mock_result = MagicMock()
         mock_result.scalar_one.return_value = 0
 
@@ -179,7 +181,7 @@ class TestWorkerSchemaGuardProduction:
         factory = _mock_session_factory(mock_session)
         worker = InboundCallEventWorker(factory)
 
-        with pytest.raises(SchemaNotReadyError, match="provider_call_sid"):
+        with pytest.raises(SchemaNotReadyError, match="provider_call_id"):
             await worker.process_one()
 
     async def test_process_one_returns_false_empty_queue(self) -> None:
@@ -374,7 +376,7 @@ class TestAdapterToRealIntakeService:
         secret = "test-exotel-webhook-secret-value"
         with patch.object(settings, "exotel_webhook_secret", secret), \
              patch(
-                 "fonely.services.exotel_intake.ExotelInboundEventRepository"
+                 "fonely.services.exotel_intake.InboundCallEventRepository"
              ) as mock_repo_cls:
             mock_repo_cls.return_value.persist = AsyncMock(
                 return_value=_make_record()
@@ -403,7 +405,7 @@ class TestAdapterToRealIntakeService:
         assert repo_call[0][0] == 1
         event = repo_call[0][1]
         assert isinstance(event, InboundCallEvent)
-        assert event.call_sid == "a" * 32
+        assert event.provider_call_id == "a" * 32
 
     def test_http_through_real_intake_service_rollback_on_dup(self) -> None:
         """Duplicate → real service rolls back → adapter returns 200."""
@@ -427,7 +429,7 @@ class TestAdapterToRealIntakeService:
         secret = "test-exotel-webhook-secret-value"
         with patch.object(settings, "exotel_webhook_secret", secret), \
              patch(
-                 "fonely.services.exotel_intake.ExotelInboundEventRepository"
+                 "fonely.services.exotel_intake.InboundCallEventRepository"
              ) as mock_repo_cls:
             mock_repo_cls.return_value.persist = AsyncMock(
                 side_effect=DuplicateCallEventError("dup")
@@ -469,8 +471,10 @@ class TestAdapterToRealIntakeService:
 
         neutral = exotel_event.to_inbound_event()
         assert isinstance(neutral, InboundCallEvent)
-        assert neutral.call_sid == exotel_event.call_sid
-        assert neutral.status == exotel_event.status
+        assert neutral.provider == "exotel"
+        assert neutral.provider_call_id == exotel_event.call_sid
+        assert neutral.status == "in_progress"
+        assert neutral.event_type == "answered"
 
 
 # ============================================================================

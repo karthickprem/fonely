@@ -16,11 +16,11 @@ from typing import Protocol
 
 
 class DuplicateCallEventError(Exception):
-    """Semantic duplicate: same (business_id, call_sid, event_type) already persisted."""
+    """Semantic duplicate: same dedup key already persisted with same digest."""
 
 
 class ConflictingCallEventError(Exception):
-    """Same dedup key but different payload digest — conflicting terminal."""
+    """Same dedup key but different payload digest."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,25 +31,22 @@ class InboundCallEvent:
     the intake. Fields are provider-neutral: no Exotel-specific naming.
     """
 
-    call_sid: str
-    called_number: str
+    provider: str
+    provider_call_id: str
+    event_type: str
+    status: str
     caller_phone: str
+    called_number: str
     conversation_duration: int | None
     custom_field: str | None
     direction: str | None
     duration: int | None
-    event_type: str
-    status: str
 
 
 def canonical_event_digest(event: InboundCallEvent) -> str:
-    """Canonical SHA-256 digest of the immutable event payload.
-
-    Shared between test double and production repository.
-    """
+    """Canonical SHA-256 digest of all immutable event fields."""
     payload = json.dumps(
         {
-            "call_sid": event.call_sid,
             "called_number": event.called_number,
             "caller_phone": event.caller_phone,
             "conversation_duration": event.conversation_duration,
@@ -57,6 +54,8 @@ def canonical_event_digest(event: InboundCallEvent) -> str:
             "direction": event.direction,
             "duration": event.duration,
             "event_type": event.event_type,
+            "provider": event.provider,
+            "provider_call_id": event.provider_call_id,
             "status": event.status,
         },
         sort_keys=True,
@@ -71,7 +70,8 @@ class InboundCallEventRecord:
 
     id: int
     business_id: int
-    call_sid: str
+    provider: str
+    provider_call_id: str
     event_type: str
     status: str
     caller_phone: str
@@ -85,10 +85,10 @@ class InboundCallEventRecord:
 
 @dataclass(frozen=True, slots=True)
 class ClaimedCallEvent:
-    """Typed claimed event for worker processing — not a positional dict."""
+    """Typed claimed event for worker processing."""
 
     id: int
-    call_sid: str
+    provider_call_id: str
     business_id: int
     event_type: str
     status: str
@@ -105,11 +105,11 @@ class InboundCallEventIntake(Protocol):
 
     Implementations must:
     - Persist before returning (no background queue)
-    - Enforce (business_id, call_sid, event_type) semantic idempotency
+    - Enforce (business_id, provider, provider_call_id, event_type) dedup
     - Raise DuplicateCallEventError on exact duplicate
     - Raise ConflictingCallEventError on same key but different digest
-    - Persist ALL valid events including late lower-state (worker handles no-op)
-    - Never mutate domain state (calls, conversations, etc.)
+    - Persist ALL valid events including late lower-state
+    - Never mutate domain state
     """
 
     async def persist(

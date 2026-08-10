@@ -1,7 +1,6 @@
-"""Durable Exotel inbound event persistence — caller-owned transactions.
+"""Durable inbound call event persistence — caller-owned transactions.
 
-Follows InboundEventRepository pattern. Requires exotel_inbound_events
-table (migration deferred until Dev3 0015 integrates).
+Requires inbound_call_events table (migration deferred until Dev3 0015).
 Feature-disabled until migration is applied.
 
 IMPORTANT: This repository flushes only. The caller owns commit/rollback.
@@ -27,7 +26,7 @@ from fonely.domain.calls.intake import (
 BACKOFF_SECONDS = (30, 60, 120, 300, 600)
 
 
-class ExotelInboundEventRepository:
+class InboundCallEventRepository:
     """Production InboundCallEventIntake. Caller owns the transaction."""
 
     def __init__(self, session: AsyncSession) -> None:
@@ -41,28 +40,25 @@ class ExotelInboundEventRepository:
         digest = canonical_event_digest(event)
         now = datetime.now(UTC)
 
-        # Concurrency-safe: INSERT with ON CONFLICT on the unique constraint
-        # (business_id, call_sid, event_type). The DB is the arbiter — no
-        # SELECT-then-INSERT race. On conflict, returns the existing row's
-        # digest for duplicate vs conflict classification.
         result = await self._session.execute(
             text(
-                "INSERT INTO exotel_inbound_events "
-                "(call_sid, business_id, event_type, status, "
+                "INSERT INTO inbound_call_events "
+                "(provider, provider_call_id, business_id, event_type, status, "
                 " caller_phone, called_number, duration, "
                 " conversation_duration, direction, custom_field, "
                 " payload_digest, received_at) "
-                "VALUES (:call_sid, :bid, :etype, :status, "
+                "VALUES (:provider, :call_id, :bid, :etype, :status, "
                 " :caller, :called, :dur, :conv_dur, :dir, "
                 " :custom, :digest, :now) "
-                "ON CONFLICT (business_id, call_sid, event_type) "
-                "DO UPDATE SET id = exotel_inbound_events.id "
+                "ON CONFLICT (business_id, provider, provider_call_id, event_type) "
+                "DO UPDATE SET id = inbound_call_events.id "
                 "RETURNING id, "
                 "  (xmax = 0) AS inserted, "
                 "  payload_digest"
             ),
             {
-                "call_sid": event.call_sid,
+                "provider": event.provider,
+                "call_id": event.provider_call_id,
                 "bid": business_id,
                 "etype": event.event_type,
                 "status": event.status,
@@ -82,10 +78,10 @@ class ExotelInboundEventRepository:
         if not inserted:
             if existing_digest == digest:
                 raise DuplicateCallEventError(
-                    f"exact duplicate: {event.call_sid}/{event.event_type}"
+                    f"exact duplicate: {event.provider_call_id}/{event.event_type}"
                 )
             raise ConflictingCallEventError(
-                f"conflicting: {event.call_sid}/{event.event_type}"
+                f"conflicting: {event.provider_call_id}/{event.event_type}"
             )
 
         await self._session.flush()
@@ -93,7 +89,8 @@ class ExotelInboundEventRepository:
         return InboundCallEventRecord(
             id=row_id,
             business_id=business_id,
-            call_sid=event.call_sid,
+            provider=event.provider,
+            provider_call_id=event.provider_call_id,
             event_type=event.event_type,
             status=event.status,
             caller_phone=event.caller_phone,
@@ -106,16 +103,13 @@ class ExotelInboundEventRepository:
         )
 
     async def claim_next_eligible(self) -> ClaimedCallEvent | None:
-        """Claim one eligible event across all tenants. Caller commits.
-
-        The UPDATE is tenant-scoped via business_id from the SELECTed row.
-        """
+        """Claim one eligible event. Caller commits."""
         result = await self._session.execute(
             text(
-                "SELECT id, call_sid, business_id, event_type, status, "
-                "  caller_phone, called_number, duration, direction, "
-                "  claim_version "
-                "FROM exotel_inbound_events "
+                "SELECT id, provider_call_id, business_id, event_type, "
+                "  status, caller_phone, called_number, duration, "
+                "  direction, claim_version "
+                "FROM inbound_call_events "
                 "WHERE ("
                 "  (intake_status IN ('received', 'failed') "
                 "   AND (next_attempt_at <= NOW() OR next_attempt_at IS NULL))"
@@ -135,7 +129,7 @@ class ExotelInboundEventRepository:
         new_version = row[9] + 1
         await self._session.execute(
             text(
-                "UPDATE exotel_inbound_events SET "
+                "UPDATE inbound_call_events SET "
                 "  intake_status = 'processing', "
                 "  claim_token = :token, "
                 "  claim_version = :version, "
@@ -157,7 +151,7 @@ class ExotelInboundEventRepository:
 
         return ClaimedCallEvent(
             id=row[0],
-            call_sid=row[1],
+            provider_call_id=row[1],
             business_id=row[2],
             event_type=row[3],
             status=row[4],
@@ -172,10 +166,9 @@ class ExotelInboundEventRepository:
     async def mark_completed(
         self, event_id: int, business_id: int, claim_token: str, claim_version: int
     ) -> bool:
-        """Mark completed. Returns False if claim is stale. Caller commits."""
         result = await self._session.execute(
             text(
-                "UPDATE exotel_inbound_events SET "
+                "UPDATE inbound_call_events SET "
                 "  intake_status = 'completed', "
                 "  completed_at = NOW(), "
                 "  claim_token = NULL, claimed_at = NULL, lease_expires_at = NULL "
@@ -192,13 +185,9 @@ class ExotelInboundEventRepository:
     async def mark_failed(
         self, event_id: int, business_id: int, claim_token: str, claim_version: int
     ) -> bool:
-        """Mark failed with attempt-indexed backoff. Dead-letter after max. Caller commits.
-
-        Requires unexpired lease (same fencing as mark_completed).
-        """
         result = await self._session.execute(
             text(
-                "UPDATE exotel_inbound_events SET "
+                "UPDATE inbound_call_events SET "
                 "  intake_status = CASE "
                 "    WHEN attempts >= max_attempts THEN 'dead_letter' "
                 "    ELSE 'failed' END, "

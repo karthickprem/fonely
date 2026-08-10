@@ -82,7 +82,7 @@ class TestClaimLifecycle:
         await intake.persist(1, event)
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
-        assert claimed.call_sid == event.call_sid
+        assert claimed.provider_call_id == event.provider_call_id
         assert intake.get_intake_status(1) == "processing"
 
     async def test_claim_empty_queue_returns_none(self) -> None:
@@ -181,7 +181,7 @@ class TestClaimLifecycle:
 class TestSchemaGuard:
     async def test_verify_schema_raises_without_column(self) -> None:
         """Worker._verify_schema raises when COUNT(*)=0 for
-        provider_call_sid in current_schema()."""
+        provider_call_id in current_schema()."""
         from unittest.mock import AsyncMock, MagicMock
 
         from fonely.workers.exotel_worker import InboundCallEventWorker
@@ -192,7 +192,7 @@ class TestSchemaGuard:
         mock_session.execute.return_value = mock_result
 
         worker = InboundCallEventWorker(AsyncMock())
-        with pytest.raises(SchemaNotReadyError, match="provider_call_sid"):
+        with pytest.raises(SchemaNotReadyError, match="provider_call_id"):
             await worker._verify_schema(mock_session)
 
     async def test_verify_schema_passes_with_column(self) -> None:
@@ -248,7 +248,7 @@ class TestAdapterIntakeWorkerProof:
 
         claimed1 = await intake.claim_next_eligible()
         assert claimed1 is not None
-        assert claimed1.status == "in-progress"
+        assert claimed1.status == "in_progress"
         await _complete(intake, claimed1)
 
         claimed2 = await intake.claim_next_eligible()
@@ -339,7 +339,7 @@ class TestAdapterIntakeWorkerProof:
         c2 = await intake.claim_next_eligible()
         assert c2 is not None
         assert c2.event_type == "answered"
-        assert c2.status == "in-progress"
+        assert c2.status == "in_progress"
         await _complete(intake, c2)
         assert intake.get_intake_status(c2.id) == "completed"
 
@@ -433,7 +433,8 @@ class TestSQLContractPatterns:
         event = _to_inbound(COMPLETED_OUTBOUND)
         await intake.persist(1, event)
         modified = InboundCallEvent(
-            call_sid=event.call_sid,
+            provider=event.provider,
+            provider_call_id=event.provider_call_id,
             event_type=event.event_type,
             status=event.status,
             caller_phone=event.caller_phone,

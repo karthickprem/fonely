@@ -40,7 +40,7 @@ def test_ci_uses_frozen_sync_and_required_root_qa_gates() -> None:
 def test_ci_evidence_initializer_after_checkout() -> None:
     workflow = (PROJECT_ROOT / ".github" / "workflows" / "backend-ci.yml").read_text()
     checkout_pos = workflow.index("actions/checkout@")
-    init_pos = workflow.index("orchestrator.py init")
+    init_pos = workflow.index("ci_evidence.orchestrator init")
     setup_pos = workflow.index("actions/setup-python@")
     assert checkout_pos < init_pos < setup_pos
 
@@ -58,15 +58,15 @@ def test_ci_evidence_plugin_explicitly_loaded() -> None:
 
 def test_ci_evidence_reconciler_always() -> None:
     workflow = (PROJECT_ROOT / ".github" / "workflows" / "backend-ci.yml").read_text()
-    reconcile_idx = workflow.index("reconcile.py")
-    pre_block = workflow[max(0, reconcile_idx - 200):reconcile_idx]
+    reconcile_idx = workflow.index("ci_evidence.reconcile")
+    pre_block = workflow[max(0, reconcile_idx - 200) : reconcile_idx]
     assert "always()" in pre_block
 
 
 def test_ci_evidence_upload_always() -> None:
     workflow = (PROJECT_ROOT / ".github" / "workflows" / "backend-ci.yml").read_text()
     upload_idx = workflow.index("upload-artifact@")
-    pre_block = workflow[max(0, upload_idx - 200):upload_idx]
+    pre_block = workflow[max(0, upload_idx - 200) : upload_idx]
     assert "always()" in pre_block
 
 
@@ -74,6 +74,11 @@ def test_ci_evidence_terminal_success_assertion() -> None:
     workflow = (PROJECT_ROOT / ".github" / "workflows" / "backend-ci.yml").read_text()
     assert "terminal.json" in workflow
     assert "success" in workflow
+
+
+def test_ci_evidence_acceptance_tests_in_ci() -> None:
+    workflow = (PROJECT_ROOT / ".github" / "workflows" / "backend-ci.yml").read_text()
+    assert "test_ci_evidence_acceptance.py" in workflow
 
 
 def test_ci_evidence_no_shell_terminal_truth() -> None:

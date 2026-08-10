@@ -229,6 +229,40 @@ class TestSuccess:
         _waivers(waivers, [_waiver_entry(PG, "setup_skip")])
         assert _reconcile(evidence, waivers)["state"] == TERMINAL_SUCCESS
 
+    def test_success_with_parametrized_pg_waiver(self, tmp_path: Path) -> None:
+        pg_param = "tests/integration/postgres/test_b.py::test_b[param1]"
+        evidence, waivers = tmp_path / "e", tmp_path / "w.json"
+        evidence.mkdir()
+        _manifest(evidence)
+        _phase_ok(evidence)
+        _collections(evidence, [NPG], [pg_param])
+        _streams(
+            evidence,
+            [NPG],
+            [pg_param],
+            pg_overrides={pg_param: [("setup", "skipped", None)]},
+        )
+        _waivers(waivers, [_waiver_entry(pg_param, "setup_skip")])
+        assert _reconcile(evidence, waivers)["state"] == TERMINAL_SUCCESS
+
+    def test_near_match_waiver_rejected(self, tmp_path: Path) -> None:
+        pg_param = "tests/integration/postgres/test_b.py::test_b[param1]"
+        wrong_waiver = "tests/integration/postgres/test_b.py::test_b[param2]"
+        evidence, waivers = tmp_path / "e", tmp_path / "w.json"
+        evidence.mkdir()
+        _manifest(evidence)
+        _phase_ok(evidence)
+        _collections(evidence, [NPG], [pg_param])
+        _streams(
+            evidence,
+            [NPG],
+            [pg_param],
+            pg_overrides={pg_param: [("setup", "skipped", None)]},
+        )
+        _waivers(waivers, [_waiver_entry(wrong_waiver, "setup_skip")])
+        t = _reconcile(evidence, waivers)
+        assert t["state"] != TERMINAL_SUCCESS
+
 
 class TestPrePytestPhaseFailure:
     def test_lint_failure(self, tmp_path: Path) -> None:
@@ -496,6 +530,94 @@ class TestSkipAndXfail:
         _waivers(waivers)
         t = _reconcile(evidence, waivers)
         assert t["state"] == TERMINAL_TEST_FAILED
+
+
+class TestPhaseOrdering:
+    def test_missing_setup_fails(self, tmp_path: Path) -> None:
+        evidence, waivers = tmp_path / "e", tmp_path / "w.json"
+        evidence.mkdir()
+        _manifest(evidence)
+        _phase_ok(evidence)
+        _collections(evidence, [NPG], [PG])
+        _streams(
+            evidence,
+            [NPG],
+            [PG],
+            npg_overrides={NPG: [("call", "passed", None), ("teardown", "passed", None)]},
+        )
+        _waivers(waivers)
+        t = _reconcile(evidence, waivers)
+        assert t["state"] != TERMINAL_SUCCESS
+
+    def test_missing_teardown_fails(self, tmp_path: Path) -> None:
+        evidence, waivers = tmp_path / "e", tmp_path / "w.json"
+        evidence.mkdir()
+        _manifest(evidence)
+        _phase_ok(evidence)
+        _collections(evidence, [NPG], [PG])
+        _streams(
+            evidence,
+            [NPG],
+            [PG],
+            npg_overrides={NPG: [("setup", "passed", None), ("call", "passed", None)]},
+        )
+        _waivers(waivers)
+        t = _reconcile(evidence, waivers)
+        assert t["state"] != TERMINAL_SUCCESS
+
+    def test_reversed_order_fails(self, tmp_path: Path) -> None:
+        evidence, waivers = tmp_path / "e", tmp_path / "w.json"
+        evidence.mkdir()
+        _manifest(evidence)
+        _phase_ok(evidence)
+        _collections(evidence, [NPG], [PG])
+        _streams(
+            evidence,
+            [NPG],
+            [PG],
+            npg_overrides={
+                NPG: [
+                    ("teardown", "passed", None),
+                    ("call", "passed", None),
+                    ("setup", "passed", None),
+                ],
+            },
+        )
+        _waivers(waivers)
+        t = _reconcile(evidence, waivers)
+        assert t["state"] != TERMINAL_SUCCESS
+
+    def test_only_teardown_fails(self, tmp_path: Path) -> None:
+        evidence, waivers = tmp_path / "e", tmp_path / "w.json"
+        evidence.mkdir()
+        _manifest(evidence)
+        _phase_ok(evidence)
+        _collections(evidence, [NPG], [PG])
+        _streams(
+            evidence,
+            [NPG],
+            [PG],
+            npg_overrides={NPG: [("teardown", "passed", None)]},
+        )
+        _waivers(waivers)
+        t = _reconcile(evidence, waivers)
+        assert t["state"] != TERMINAL_SUCCESS
+
+    def test_pg_only_call_fails(self, tmp_path: Path) -> None:
+        evidence, waivers = tmp_path / "e", tmp_path / "w.json"
+        evidence.mkdir()
+        _manifest(evidence)
+        _phase_ok(evidence)
+        _collections(evidence, [NPG], [PG])
+        _streams(
+            evidence,
+            [NPG],
+            [PG],
+            pg_overrides={PG: [("call", "passed", None)]},
+        )
+        _waivers(waivers)
+        t = _reconcile(evidence, waivers)
+        assert t["state"] != TERMINAL_SUCCESS
 
 
 class TestEventStreamIntegrity:

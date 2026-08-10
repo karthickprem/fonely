@@ -61,43 +61,65 @@ def _validate_manifest(root: TrustedRoot) -> dict[str, Any]:
     return data
 
 
-def _validate_phases(root: TrustedRoot, manifest: dict[str, Any]) -> list[str]:
+def _validate_phases(
+    root: TrustedRoot, manifest: dict[str, Any]
+) -> tuple[list[str], dict[str, int]]:
     errors = []
-    results_path = root.path / PHASE_RESULTS_FILE
-    if not results_path.exists() or results_path.stat().st_size == 0:
+    phase_exits: dict[str, int] = {}
+
+    try:
+        raw = safe_read(root, PHASE_RESULTS_FILE)
+    except EvidenceWriteError:
         required = manifest.get("required_phases", [])
         if required:
             errors.append(f"no phase results but {len(required)} required")
-        return errors
+        return errors, phase_exits
 
-    raw = results_path.read_bytes()
-    seen_phases = []
+    content = raw.decode().strip()
+    if not content:
+        required = manifest.get("required_phases", [])
+        if required:
+            errors.append(f"no phase results but {len(required)} required")
+        return errors, phase_exits
+
+    seen_phases: list[str] = []
     prev_seq = 0
-    for i, line in enumerate(raw.decode().strip().splitlines()):
+    for i, line in enumerate(content.splitlines()):
         try:
             record = json.loads(line)
         except json.JSONDecodeError:
             errors.append(f"malformed phase result line {i + 1}")
             continue
+        if not isinstance(record, dict):
+            errors.append(f"phase result {i + 1} not an object")
+            continue
         if record.get("schema_version") != PHASE_RESULT_SCHEMA:
             errors.append(f"phase result {i + 1} bad schema")
         phase = record.get("phase", "")
+        if not isinstance(phase, str) or not phase:
+            errors.append(f"phase result {i + 1} missing phase name")
+            continue
         if phase in seen_phases:
             errors.append(f"duplicate phase: {phase}")
         seen_phases.append(phase)
         seq = record.get("sequence", 0)
-        if seq != prev_seq + 1:
+        if not isinstance(seq, int) or seq != prev_seq + 1:
             errors.append(f"phase sequence gap at {seq}")
         prev_seq = seq
-        if record.get("exit_code", 0) != 0:
-            errors.append(f"phase {phase} exit={record['exit_code']}")
+        exit_code = record.get("exit_code", 0)
+        if not isinstance(exit_code, int):
+            errors.append(f"phase {phase} non-integer exit_code")
+            continue
+        phase_exits[phase] = exit_code
+        if exit_code != 0:
+            errors.append(f"phase {phase} exit={exit_code}")
 
     required = manifest.get("required_phases", [])
     missing = [p for p in required if p not in seen_phases]
     if missing:
         errors.append(f"missing required phases: {', '.join(missing)}")
 
-    return errors
+    return errors, phase_exits
 
 
 def _validate_collections(
@@ -138,10 +160,16 @@ def _validate_collections(
 
         partitions[partition] = node_set
 
+        rcb = data.get("requires_call_body", {})
         if partition == "pg":
-            rcb = data.get("requires_call_body", {})
             for node in nodes:
-                pg_requires_call[node] = rcb.get(node, True)
+                if not rcb.get(node, True):
+                    errors.append(f"pg node missing requires_call_body: {node}")
+                pg_requires_call[node] = True
+        elif partition == "non_pg":
+            for node in nodes:
+                if rcb.get(node, False):
+                    errors.append(f"non_pg node has requires_call_body: {node}")
 
     all_nodes = partitions.get("all", set())
     npg = partitions.get("non_pg", set())
@@ -160,7 +188,7 @@ def _validate_events(
     manifest: dict[str, Any],
     partition: str,
     expected_nodes: set[str],
-) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
+) -> tuple[dict[str, list[dict[str, Any]]], list[str], int | None]:
     errors = []
     node_events: dict[str, list[dict[str, Any]]] = {}
 
@@ -168,12 +196,12 @@ def _validate_events(
         raw = safe_read(root, event_stream_file(partition))
     except EvidenceWriteError:
         errors.append(f"missing event stream: {partition}")
-        return node_events, errors
+        return node_events, errors, None
 
     lines = raw.decode().strip().splitlines()
     if not lines:
         errors.append(f"empty event stream: {partition}")
-        return node_events, errors
+        return node_events, errors, None
 
     final_line = lines[-1]
     event_lines = lines[:-1]
@@ -182,11 +210,11 @@ def _validate_events(
         final = json.loads(final_line)
     except json.JSONDecodeError:
         errors.append(f"{partition} malformed final record")
-        return node_events, errors
+        return node_events, errors, None
 
     if final.get("record_type") != "final":
         errors.append(f"{partition} missing final record")
-        return node_events, errors
+        return node_events, errors, None
 
     if final.get("source_sha") != manifest["source_sha"]:
         errors.append(f"{partition} final record SHA mismatch")
@@ -245,7 +273,12 @@ def _validate_events(
     if missing:
         errors.append(f"{partition} missing events for {len(missing)} nodes")
 
-    return node_events, errors
+    pytest_exit = final.get("pytest_exit_status")
+    if not isinstance(pytest_exit, int):
+        errors.append(f"{partition} final record missing/invalid pytest_exit_status")
+        pytest_exit = None
+
+    return node_events, errors, pytest_exit
 
 
 def _validate_node_state_machines(
@@ -253,27 +286,78 @@ def _validate_node_state_machines(
     partition: str,
 ) -> list[str]:
     errors = []
+    required_order = ("setup", "call", "teardown")
+
     for node_id, events in node_events.items():
-        phases_seen = []
-        for event in events:
-            phase = event.get("phase", "")
-            outcome = event.get("outcome", "")
-            wasxfail = event.get("wasxfail")
+        phases_seen = [e.get("phase") for e in events]
 
-            if phase in phases_seen:
-                errors.append(f"{partition} duplicate phase {phase}: {node_id}")
-            phases_seen.append(phase)
+        for phase in phases_seen:
+            if phase not in required_order:
+                errors.append(f"{partition} unknown phase {phase}: {node_id}")
 
-            if wasxfail and outcome == "passed":
-                errors.append(f"XPASS: {node_id}")
-            elif wasxfail:
+        if len(phases_seen) != len(set(phases_seen)):
+            errors.append(f"{partition} duplicate phases: {node_id}")
+            continue
+
+        ordered = [p for p in phases_seen if p in required_order]
+        expected_prefix = list(required_order[: len(ordered)])
+        if ordered != expected_prefix:
+            errors.append(f"{partition} invalid phase order {ordered}: {node_id}")
+            continue
+
+        if not phases_seen:
+            errors.append(f"{partition} no phases: {node_id}")
+            continue
+
+        phase_map = {e.get("phase"): e for e in events}
+
+        setup = phase_map.get("setup")
+        call = phase_map.get("call")
+        teardown = phase_map.get("teardown")
+
+        if not setup:
+            errors.append(f"{partition} missing setup: {node_id}")
+            continue
+
+        setup_outcome = setup["outcome"]
+        setup_xfail = setup.get("wasxfail")
+
+        if setup_outcome == "skipped":
+            if setup_xfail:
                 errors.append(f"xfail requires waiver: {node_id}")
-
-            if outcome in ("failed", "error"):
-                errors.append(f"{partition} {outcome}: {node_id}")
-
-            if outcome == "skipped" and not wasxfail and partition == "non_pg":
+            elif partition == "non_pg":
                 errors.append(f"non_pg skip not waivable: {node_id}")
+            if call or teardown:
+                errors.append(f"{partition} phases after setup skip: {node_id}")
+            continue
+
+        if setup_outcome in ("failed", "error"):
+            errors.append(f"{partition} setup {setup_outcome}: {node_id}")
+            continue
+
+        if not call:
+            errors.append(f"{partition} missing call after setup: {node_id}")
+            continue
+
+        call_outcome = call["outcome"]
+        call_xfail = call.get("wasxfail")
+
+        if call_xfail and call_outcome == "passed":
+            errors.append(f"XPASS: {node_id}")
+        elif call_xfail:
+            errors.append(f"xfail requires waiver: {node_id}")
+        elif call_outcome in ("failed", "error"):
+            errors.append(f"{partition} call {call_outcome}: {node_id}")
+        elif call_outcome == "skipped" and partition == "non_pg":
+            errors.append(f"non_pg skip not waivable: {node_id}")
+
+        if not teardown:
+            errors.append(f"{partition} missing teardown: {node_id}")
+            continue
+
+        td_outcome = teardown["outcome"]
+        if td_outcome in ("failed", "error", "skipped"):
+            errors.append(f"{partition} teardown {td_outcome}: {node_id}")
 
     return errors
 
@@ -348,8 +432,8 @@ def _validate_waivers(
             errors.append(f"waiver entry {i} invalid node_id")
             continue
 
-        if "*" in node_id or "?" in node_id or "[" in node_id:
-            errors.append(f"waiver entry {i} pattern not allowed")
+        if "*" in node_id or "?" in node_id:
+            errors.append(f"waiver entry {i} glob pattern not allowed")
             continue
 
         if node_id not in pg_nodes:
@@ -461,13 +545,33 @@ def reconcile(
                 },
             )
 
-        phase_errors = _validate_phases(root, manifest)
+        phase_errors, phase_exits = _validate_phases(root, manifest)
 
         npg_nodes, pg_nodes, collection_errors = _validate_collections(root, manifest)
 
-        npg_events, npg_event_errors = _validate_events(root, manifest, "non_pg", npg_nodes)
-        pg_events, pg_event_errors = _validate_events(root, manifest, "pg", pg_nodes)
+        npg_events, npg_event_errors, npg_pytest_exit = _validate_events(
+            root, manifest, "non_pg", npg_nodes
+        )
+        pg_events, pg_event_errors, pg_pytest_exit = _validate_events(
+            root, manifest, "pg", pg_nodes
+        )
         event_errors = npg_event_errors + pg_event_errors
+
+        for label, pytest_exit, phase_name in [
+            ("non_pg", npg_pytest_exit, "test_non_pg"),
+            ("pg", pg_pytest_exit, "test_pg"),
+        ]:
+            if pytest_exit is not None and pytest_exit != 0:
+                event_errors.append(f"{label} pytest_exit_status={pytest_exit}")
+            if (
+                pytest_exit is not None
+                and phase_name in phase_exits
+                and (pytest_exit == 0) != (phase_exits[phase_name] == 0)
+            ):
+                event_errors.append(
+                    f"{label} pytest_exit_status={pytest_exit} contradicts "
+                    f"phase {phase_name} exit={phase_exits[phase_name]}"
+                )
 
         if not npg_nodes and not pg_nodes:
             is_incomplete = True

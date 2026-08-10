@@ -25,6 +25,7 @@ from ci_evidence.writer import (
     EvidenceWriteError,
     TrustedRoot,
     append_jsonl,
+    exclusive_create_empty,
     exclusive_create_json,
     safe_read,
 )
@@ -39,7 +40,10 @@ def _git_rev(ref: str) -> str:
         check=False,
     )
     if result.returncode != 0:
-        print(f"ERROR: git rev-parse {ref} failed: {result.stderr.strip()}", file=sys.stderr)
+        print(
+            f"ERROR: git rev-parse {ref} failed: {result.stderr.strip()}",
+            file=sys.stderr,
+        )
         raise SystemExit(2)
     value = result.stdout.strip()
     if not value or len(value) != 40 or not all(c in "0123456789abcdef" for c in value):
@@ -51,10 +55,6 @@ def _git_rev(ref: str) -> str:
 def cmd_init(args: argparse.Namespace) -> None:
     root_path = Path(args.evidence_root).resolve()
     root_path.mkdir(parents=True, exist_ok=True)
-
-    if (root_path / RUN_MANIFEST_FILE).exists():
-        print("ERROR: evidence root already initialized", file=sys.stderr)
-        raise SystemExit(2)
 
     source_sha = _git_rev("HEAD")
     source_tree = _git_rev("HEAD^{tree}")
@@ -72,7 +72,7 @@ def cmd_init(args: argparse.Namespace) -> None:
 
     with TrustedRoot(root_path) as root:
         exclusive_create_json(root, RUN_MANIFEST_FILE, manifest)
-        (root.path / PHASE_RESULTS_FILE).touch(mode=0o600)
+        exclusive_create_empty(root, PHASE_RESULTS_FILE)
 
     print(f"Evidence initialized: {source_sha} run={args.run_id}")
 
@@ -93,10 +93,11 @@ def cmd_phase(args: argparse.Namespace) -> None:
             print(f"ERROR: unknown phase: {phase_name}", file=sys.stderr)
             raise SystemExit(2)
 
-        results_path = root.path / PHASE_RESULTS_FILE
+        results_raw = safe_read(root, PHASE_RESULTS_FILE)
         existing_phases = []
-        if results_path.stat().st_size > 0:
-            for line in results_path.read_text().strip().splitlines():
+        content = results_raw.decode().strip()
+        if content:
+            for line in content.splitlines():
                 existing_phases.append(json.loads(line)["phase"])
 
         if phase_name in existing_phases:

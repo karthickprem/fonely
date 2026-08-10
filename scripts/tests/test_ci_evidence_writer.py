@@ -152,10 +152,9 @@ class TestSafeRead:
         with pytest.raises(EvidenceWriteError, match="not found"):
             safe_read(root, "missing.json")
 
-    def test_empty_file(self, root: TrustedRoot) -> None:
+    def test_empty_file_returns_empty_bytes(self, root: TrustedRoot) -> None:
         (root.path / "empty.json").write_bytes(b"")
-        with pytest.raises(EvidenceWriteError, match="invalid file size"):
-            safe_read(root, "empty.json")
+        assert safe_read(root, "empty.json") == b""
 
     def test_symlink_rejected(self, root: TrustedRoot) -> None:
         real = root.path / "real.json"

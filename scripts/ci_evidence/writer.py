@@ -79,6 +79,15 @@ def _fsync_dir(dirpath: Path) -> None:
         os.close(fd)
 
 
+def _write_all(fd: int, data: bytes) -> None:
+    view = memoryview(data)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise EvidenceWriteError("short write: os.write returned 0")
+        view = view[written:]
+
+
 def _serialize(data: dict[str, Any]) -> bytes:
     return (json.dumps(data, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
@@ -95,7 +104,30 @@ def exclusive_create_json(root: TrustedRoot, relpath: str, data: dict[str, Any])
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
             0o600,
         )
-        os.write(fd, content)
+        _write_all(fd, content)
+        os.fsync(fd)
+    except FileExistsError as exc:
+        raise EvidenceWriteError(f"exclusive create failed, already exists: {target}") from exc
+    except OSError as exc:
+        raise EvidenceWriteError(f"exclusive create failed: {exc}") from exc
+    finally:
+        if fd >= 0:
+            os.close(fd)
+    _fsync_dir(target.parent)
+    return target
+
+
+def exclusive_create_empty(root: TrustedRoot, relpath: str) -> Path:
+    target = root.resolve(relpath)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    _check_not_symlink(target, "target")
+    fd = -1
+    try:
+        fd = os.open(
+            str(target),
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
         os.fsync(fd)
     except FileExistsError as exc:
         raise EvidenceWriteError(f"exclusive create failed, already exists: {target}") from exc
@@ -118,7 +150,7 @@ def atomic_replace_json(root: TrustedRoot, relpath: str, data: dict[str, Any]) -
     try:
         fd, tmp_path = tempfile.mkstemp(prefix=f".{target.name}.", dir=str(target.parent))
         os.fchmod(fd, 0o600)
-        os.write(fd, content)
+        _write_all(fd, content)
         os.fsync(fd)
         os.close(fd)
         fd = -1
@@ -144,13 +176,14 @@ def append_jsonl(root: TrustedRoot, relpath: str, record: dict[str, Any]) -> Non
     target.parent.mkdir(parents=True, exist_ok=True)
     _check_not_symlink(target, "target")
     line = json.dumps(record, sort_keys=True) + "\n"
+    data = line.encode("utf-8")
     fd = os.open(
         str(target),
         os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0),
         0o600,
     )
     try:
-        os.write(fd, line.encode("utf-8"))
+        _write_all(fd, data)
         os.fsync(fd)
     finally:
         os.close(fd)
@@ -159,12 +192,32 @@ def append_jsonl(root: TrustedRoot, relpath: str, record: dict[str, Any]) -> Non
 def safe_read(root: TrustedRoot, relpath: str) -> bytes:
     target = root.resolve(relpath)
     _check_not_symlink(target, "read target")
+    fd = -1
     try:
-        st = os.lstat(target)
+        fd = os.open(
+            str(target),
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+        )
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise EvidenceWriteError(f"not a regular file: {target}")
+        if st.st_size < 0 or st.st_size > MAX_READ_BYTES:
+            raise EvidenceWriteError(f"invalid file size ({st.st_size}): {target}")
+        if st.st_size == 0:
+            return b""
+        data = b""
+        while len(data) < st.st_size:
+            chunk = os.read(fd, min(65536, st.st_size - len(data)))
+            if not chunk:
+                break
+            data += chunk
+        return data
     except FileNotFoundError as exc:
         raise EvidenceWriteError(f"file not found: {target}") from exc
-    if not stat.S_ISREG(st.st_mode):
-        raise EvidenceWriteError(f"not a regular file: {target}")
-    if st.st_size <= 0 or st.st_size > MAX_READ_BYTES:
-        raise EvidenceWriteError(f"invalid file size ({st.st_size}): {target}")
-    return target.read_bytes()
+    except EvidenceWriteError:
+        raise
+    except OSError as exc:
+        raise EvidenceWriteError(f"read failed: {exc}") from exc
+    finally:
+        if fd >= 0:
+            os.close(fd)

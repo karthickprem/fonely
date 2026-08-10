@@ -180,14 +180,14 @@ class TestClaimLifecycle:
 
 class TestSchemaGuard:
     async def test_verify_schema_raises_without_column(self) -> None:
-        """Worker._verify_schema must raise SchemaNotReadyError when
-        calls.provider_call_sid column is missing from information_schema."""
+        """Worker._verify_schema raises when COUNT(*)=0 for
+        provider_call_sid in current_schema()."""
         from unittest.mock import AsyncMock, MagicMock
 
         from fonely.workers.exotel_worker import InboundCallEventWorker
 
         mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = None
+        mock_result.scalar_one.return_value = 0
         mock_session = AsyncMock()
         mock_session.execute.return_value = mock_result
 
@@ -196,13 +196,13 @@ class TestSchemaGuard:
             await worker._verify_schema(mock_session)
 
     async def test_verify_schema_passes_with_column(self) -> None:
-        """Worker._verify_schema succeeds when column exists."""
+        """Worker._verify_schema succeeds when COUNT(*)>0."""
         from unittest.mock import AsyncMock, MagicMock
 
         from fonely.workers.exotel_worker import InboundCallEventWorker
 
         mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = 1
+        mock_result.scalar_one.return_value = 1
         mock_session = AsyncMock()
         mock_session.execute.return_value = mock_result
 
@@ -217,7 +217,7 @@ class TestSchemaGuard:
         from fonely.workers.exotel_worker import InboundCallEventWorker
 
         mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = 1
+        mock_result.scalar_one.return_value = 1
         mock_session = AsyncMock()
         mock_session.execute.return_value = mock_result
 

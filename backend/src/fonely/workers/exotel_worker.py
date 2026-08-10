@@ -50,16 +50,22 @@ class InboundCallEventWorker:
         self._schema_verified = False
 
     async def _verify_schema(self, session: AsyncSession) -> None:
-        """Check that required schema exists. Raises SchemaNotReadyError if not."""
+        """Check that required schema exists. Raises SchemaNotReadyError if not.
+
+        Scopes to current_schema() to avoid false positives from other
+        schemas in the same database. Uses COUNT to handle deterministically
+        even if multiple rows match (should not happen, but defensive).
+        """
         if self._schema_verified:
             return
         result = await session.execute(
             text(
-                "SELECT 1 FROM information_schema.columns "
-                "WHERE table_name = 'calls' AND column_name = 'provider_call_sid'"
+                "SELECT COUNT(*) FROM information_schema.columns "
+                "WHERE table_schema = current_schema() "
+                "AND table_name = 'calls' AND column_name = 'provider_call_sid'"
             )
         )
-        if result.scalar_one_or_none() is None:
+        if result.scalar_one() == 0:
             raise SchemaNotReadyError(
                 "calls.provider_call_sid column missing — "
                 "run migration before starting worker"

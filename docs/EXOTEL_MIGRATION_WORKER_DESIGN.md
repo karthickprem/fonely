@@ -16,7 +16,7 @@ assigned only after Dev3's 0015 is integrated and head is known.
 ```sql
 CREATE TABLE exotel_inbound_events (
     id              SERIAL PRIMARY KEY,
-    call_sid        VARCHAR(100) NOT NULL,
+    call_sid        VARCHAR(128) NOT NULL,
     business_id     INTEGER NOT NULL REFERENCES businesses(id),
     event_type      VARCHAR(20) NOT NULL,  -- 'answered' | 'terminal'
     status          VARCHAR(20) NOT NULL,  -- documented Exotel statuses
@@ -144,7 +144,7 @@ identity (currently uses phone-based correlation which can match the
 wrong call):
 
 ```sql
-ALTER TABLE calls ADD COLUMN provider_call_sid VARCHAR(100);
+ALTER TABLE calls ADD COLUMN provider_call_sid VARCHAR(128);
 CREATE UNIQUE INDEX uq_calls_provider_call_sid
     ON calls (business_id, provider_call_sid)
     WHERE provider_call_sid IS NOT NULL;

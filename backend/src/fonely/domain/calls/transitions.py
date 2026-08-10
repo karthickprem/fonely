@@ -1,22 +1,26 @@
-"""Forward-only call status transition validation."""
+"""Forward-only call status transition validation.
+
+Provider-neutral: uses canonical call status strings, not Exotel enums.
+Adapters map provider-specific statuses to these canonical values.
+"""
 
 from __future__ import annotations
 
-from fonely.domain.calls.events import ExotelCallStatus
+QUEUED = "queued"
+IN_PROGRESS = "in-progress"
+COMPLETED = "completed"
+FAILED = "failed"
+BUSY = "busy"
+NO_ANSWER = "no-answer"
 
-_TERMINAL = frozenset(
-    {
-        ExotelCallStatus.COMPLETED,
-        ExotelCallStatus.FAILED,
-        ExotelCallStatus.BUSY,
-        ExotelCallStatus.NO_ANSWER,
-    }
-)
+_TERMINAL = frozenset({COMPLETED, FAILED, BUSY, NO_ANSWER})
+
+_ALL_STATUSES = frozenset({QUEUED, IN_PROGRESS, COMPLETED, FAILED, BUSY, NO_ANSWER})
 
 _ALLOWED_TRANSITIONS: dict[str | None, frozenset[str]] = {
-    None: frozenset(ExotelCallStatus),
-    ExotelCallStatus.QUEUED: frozenset(ExotelCallStatus) - {ExotelCallStatus.QUEUED},
-    ExotelCallStatus.IN_PROGRESS: _TERMINAL,
+    None: _ALL_STATUSES,
+    QUEUED: _ALL_STATUSES - {QUEUED},
+    IN_PROGRESS: _TERMINAL,
 }
 for _t in _TERMINAL:
     _ALLOWED_TRANSITIONS[_t] = frozenset()

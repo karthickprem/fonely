@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fonely.repositories.owner_command_proposals import OwnerCommandProposalRepository
 from fonely.services.model_gateway import ModelResponse
@@ -480,3 +480,179 @@ async def test_cross_tenant_proposal_isolation(
     loaded_correct = await repo.get_by_id(1, proposal_id)
     assert loaded_correct is not None
     assert loaded_correct.business_id == 1
+
+
+# ---------------------------------------------------------------------------
+# Retry identity regression tests
+# ---------------------------------------------------------------------------
+
+
+async def test_multi_generation_failed_retry_succeeds(
+    pg_session_factory: "async_sessionmaker[AsyncSession]",
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Original fail -> attempt-2 fail -> attempt-3 fail -> attempt-4 success."""
+
+    async with pg_session_factory() as setup:
+        await _seed_clinic_with_appointment(setup)
+        await setup.commit()
+
+    from fonely.services import notifications, whatsapp_config
+
+    mappings = '{"phone-1": 1}'
+
+    for attempt in range(3):
+        async with pg_session_factory() as session:
+            monkeypatch.setattr(whatsapp_config.settings, "whatsapp_business_mappings", mappings)
+            monkeypatch.setattr(notifications.settings, "whatsapp_business_mappings", mappings)
+            monkeypatch.setattr(notifications.settings, "whatsapp_phone_number_id", "phone-1")
+            gateway = _mock_gateway(
+                {"command": "doctor_leave", "doctor_name": "Dr. Priya", "date": "tomorrow"}
+            )
+            service = OwnerCommandService(session, gateway)
+            preview = await service.process_command(1, "+914428350001", "Dr. Priya leave tomorrow")
+            assert preview.success is True, (
+                f"attempt {attempt}: preview failed: {preview.response_text}"
+            )
+
+            async def _failing_cancel(*a: object, **kw: object) -> None:
+                raise RuntimeError("injected_fail")
+
+            service._cancel_via_service = _failing_cancel  # type: ignore[assignment]
+            confirm = await service.process_command(1, "+914428350001", "YES")
+            assert confirm.success is False
+            await session.commit()
+
+    async with pg_session_factory() as session:
+        monkeypatch.setattr(whatsapp_config.settings, "whatsapp_business_mappings", mappings)
+        monkeypatch.setattr(notifications.settings, "whatsapp_business_mappings", mappings)
+        monkeypatch.setattr(notifications.settings, "whatsapp_phone_number_id", "phone-1")
+        gateway = _mock_gateway(
+            {"command": "doctor_leave", "doctor_name": "Dr. Priya", "date": "tomorrow"}
+        )
+        service = OwnerCommandService(session, gateway)
+        preview = await service.process_command(1, "+914428350001", "Dr. Priya leave tomorrow")
+        assert preview.success is True
+        confirm = await service.process_command(1, "+914428350001", "YES")
+        assert confirm.success is True
+        await session.commit()
+
+    async with pg_session_factory() as verify:
+        completed = await verify.scalar(
+            text(
+                "SELECT count(*) FROM owner_command_proposals "
+                "WHERE business_id = 1 AND status = 'completed'"
+            )
+        )
+        assert completed == 1
+        failed = await verify.scalar(
+            text(
+                "SELECT count(*) FROM owner_command_proposals "
+                "WHERE business_id = 1 AND status = 'failed'"
+            )
+        )
+        assert failed == 3
+
+
+async def test_completed_retry_replay(
+    pg_session_factory: "async_sessionmaker[AsyncSession]",
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """After fail->retry->completed, same intent replays completed."""
+
+    async with pg_session_factory() as setup:
+        await _seed_clinic_with_appointment(setup)
+        await setup.commit()
+
+    from fonely.services import notifications, whatsapp_config
+
+    mappings = '{"phone-1": 1}'
+
+    async with pg_session_factory() as session:
+        monkeypatch.setattr(whatsapp_config.settings, "whatsapp_business_mappings", mappings)
+        monkeypatch.setattr(notifications.settings, "whatsapp_business_mappings", mappings)
+        monkeypatch.setattr(notifications.settings, "whatsapp_phone_number_id", "phone-1")
+        gateway = _mock_gateway(
+            {"command": "doctor_leave", "doctor_name": "Dr. Priya", "date": "tomorrow"}
+        )
+        service = OwnerCommandService(session, gateway)
+        await service.process_command(1, "+914428350001", "Dr. Priya leave tomorrow")
+
+        async def _fail(*a: object, **kw: object) -> None:
+            raise RuntimeError("first_fail")
+
+        service._cancel_via_service = _fail  # type: ignore[assignment]
+        await service.process_command(1, "+914428350001", "YES")
+        await session.commit()
+
+    async with pg_session_factory() as session:
+        monkeypatch.setattr(whatsapp_config.settings, "whatsapp_business_mappings", mappings)
+        monkeypatch.setattr(notifications.settings, "whatsapp_business_mappings", mappings)
+        monkeypatch.setattr(notifications.settings, "whatsapp_phone_number_id", "phone-1")
+        gateway = _mock_gateway(
+            {"command": "doctor_leave", "doctor_name": "Dr. Priya", "date": "tomorrow"}
+        )
+        service = OwnerCommandService(session, gateway)
+        preview = await service.process_command(1, "+914428350001", "Dr. Priya leave tomorrow")
+        assert preview.success is True
+        confirm = await service.process_command(1, "+914428350001", "YES")
+        assert confirm.success is True
+        await session.commit()
+
+    async with pg_session_factory() as session:
+        gateway = _mock_gateway(
+            {"command": "doctor_leave", "doctor_name": "Dr. Priya", "date": "tomorrow"}
+        )
+        service = OwnerCommandService(session, gateway)
+        replay = await service.process_command(1, "+914428350001", "Dr. Priya leave tomorrow")
+        assert "already" in replay.response_text.lower()
+
+
+async def test_idempotent_savepoint_preserves_outer_transaction(
+    pg_session_factory: "async_sessionmaker[AsyncSession]",
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Losing uniqueness savepoint does not roll back unrelated writes."""
+
+    async with pg_session_factory() as setup:
+        await _seed_clinic_with_appointment(setup)
+        await setup.commit()
+
+    from fonely.services import notifications, whatsapp_config
+
+    mappings = '{"phone-1": 1}'
+
+    async with pg_session_factory() as session:
+        monkeypatch.setattr(whatsapp_config.settings, "whatsapp_business_mappings", mappings)
+        monkeypatch.setattr(notifications.settings, "whatsapp_business_mappings", mappings)
+        monkeypatch.setattr(notifications.settings, "whatsapp_phone_number_id", "phone-1")
+        await session.execute(
+            text(
+                "INSERT INTO business_daily_context "
+                "(business_id, context_date, context_type, content, created_by_phone) "
+                "VALUES (1, CURRENT_DATE, 'note', 'sentinel_write', '+914428350001')"
+            )
+        )
+        await session.flush()
+
+        gateway = _mock_gateway(
+            {"command": "doctor_leave", "doctor_name": "Dr. Priya", "date": "tomorrow"}
+        )
+        service = OwnerCommandService(session, gateway)
+        result = await service.process_command(1, "+914428350001", "Dr. Priya leave tomorrow")
+        assert result.success is True
+
+        result2 = await service.process_command(1, "+914428350001", "Dr. Priya leave tomorrow")
+        assert result2.success is False
+
+        sentinel = await session.scalar(
+            text("SELECT count(*) FROM business_daily_context WHERE content = 'sentinel_write'")
+        )
+        assert sentinel == 1
+        await session.commit()
+
+    async with pg_session_factory() as verify:
+        sentinel = await verify.scalar(
+            text("SELECT count(*) FROM business_daily_context WHERE content = 'sentinel_write'")
+        )
+        assert sentinel == 1

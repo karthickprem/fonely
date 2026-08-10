@@ -25,7 +25,6 @@ from fonely.api.channels.exotel_stream import (
     validate_start_event,
 )
 
-
 # ============================================================================
 # Condition 1: Pinned Pipecat serializer exists
 # ============================================================================
@@ -106,7 +105,7 @@ class TestSampleRateGoldenProbe:
         await serializer.setup(StartFrame(audio_in_sample_rate=16000))
 
         collected_pcm = bytearray()
-        for chunk_idx in range(3):
+        for _chunk_idx in range(3):
             pcm_chunk = _generate_1khz_pcm(rate, 100)
             payload = base64.b64encode(pcm_chunk).decode()
             exotel_msg = json.dumps({
@@ -129,9 +128,15 @@ class TestSampleRateGoldenProbe:
 
     @pytest.mark.parametrize("rate", [8000, 16000, 24000])
     async def test_duration_preserved(self, rate: int) -> None:
-        """300ms of audio at declared rate produces ~300ms at output rate.
+        """1s of audio at declared rate → duration ratio close to 1.0.
 
-        Send 3x100ms chunks to account for resampler buffering.
+        Derived tolerance: soxr stream resampler buffers up to one
+        filter-length of samples (~100ms at 8kHz). Over 1s of input,
+        that's at most 10% loss. A rate mismatch (e.g. declaring 8k
+        but feeding 16k) produces a 2x error = 100% overshoot.
+
+        Tolerance: 0.85-1.15 (15% margin, catches anything >30% error).
+        Smallest detectable rate mismatch: 2x = 100% >> 15%.
         """
         from pipecat.frames.frames import StartFrame
         from pipecat.serializers.exotel import ExotelFrameSerializer
@@ -161,12 +166,52 @@ class TestSampleRateGoldenProbe:
 
         output_samples = len(collected_pcm) // 2
         output_duration_ms = output_samples * 1000 / 16000
-        # Stream resampler buffers ~100ms initially; over 1s of audio
-        # the ratio should be close to 1.0
         ratio = output_duration_ms / total_input_ms
-        assert 0.8 < ratio < 1.2, (
+        assert 0.85 < ratio < 1.15, (
             f"duration ratio {ratio:.2f} at input rate {rate}: "
             f"expected ~{total_input_ms}ms, got {output_duration_ms:.1f}ms"
+        )
+
+    async def test_wrong_rate_detected_by_duration_probe(self) -> None:
+        """NEGATIVE CONTROL: declare 8kHz, feed 16kHz audio → duration
+        probe detects the mismatch.
+
+        If this test ever passes (i.e. the assertion does NOT fire),
+        the positive duration probes above are not detecting the
+        double-speed bug they exist to catch.
+        """
+        from pipecat.frames.frames import StartFrame
+        from pipecat.serializers.exotel import ExotelFrameSerializer
+
+        serializer = ExotelFrameSerializer(
+            stream_sid="MZ_test",
+            params=ExotelFrameSerializer.InputParams(
+                exotel_sample_rate=8000,
+                sample_rate=16000,
+            ),
+        )
+        await serializer.setup(StartFrame(audio_in_sample_rate=16000))
+
+        collected_pcm = bytearray()
+        for _ in range(10):
+            pcm_at_16k = _generate_1khz_pcm(16000, 100)
+            payload = base64.b64encode(pcm_at_16k).decode()
+            exotel_msg = json.dumps({
+                "event": "media",
+                "media": {"payload": payload},
+            })
+            frame = await serializer.deserialize(exotel_msg)
+            if frame is not None:
+                collected_pcm.extend(frame.audio)
+
+        output_samples = len(collected_pcm) // 2
+        output_duration_ms = output_samples * 1000 / 16000
+        ratio = output_duration_ms / 1000.0
+        assert ratio > 1.5 or ratio < 0.6, (
+            f"NEGATIVE CONTROL FAILED: ratio {ratio:.2f} is within "
+            f"normal range — the duration probe cannot detect "
+            f"double-speed. Expected ratio >1.5 or <0.6 for a "
+            f"rate mismatch (declared 8kHz, fed 16kHz)."
         )
 
 
@@ -182,6 +227,9 @@ class TestStartEventValidation:
             "start": {
                 "stream_sid": "MZ_test",
                 "call_sid": "CA_test",
+                "account_sid": "AC_test",
+                "from": "+919000000001",
+                "to": "08012345678",
                 "media_format": {
                     "encoding": "audio/x-raw",
                     "sample_rate": "16000",
@@ -189,10 +237,10 @@ class TestStartEventValidation:
                 },
             },
         }
-        sid, cid, rate = validate_start_event(msg)
-        assert sid == "MZ_test"
-        assert cid == "CA_test"
-        assert rate == 16000
+        metadata = validate_start_event(msg)
+        assert metadata.stream_sid == "MZ_test"
+        assert metadata.call_sid == "CA_test"
+        assert metadata.sample_rate == 16000
 
     def test_missing_start_payload(self) -> None:
         with pytest.raises(ExotelStartValidationError, match="missing"):
@@ -200,9 +248,13 @@ class TestStartEventValidation:
 
     def test_missing_stream_sid(self) -> None:
         msg = {
+            "event": "start",
             "start": {
                 "stream_sid": "",
                 "call_sid": "CA",
+                "account_sid": "AC",
+                "from": "+919000000001",
+                "to": "08012345678",
                 "media_format": {
                     "encoding": "audio/x-raw",
                     "sample_rate": "16000",
@@ -214,9 +266,13 @@ class TestStartEventValidation:
 
     def test_missing_media_format(self) -> None:
         msg = {
+            "event": "start",
             "start": {
                 "stream_sid": "MZ",
                 "call_sid": "CA",
+                "account_sid": "AC",
+                "from": "+919000000001",
+                "to": "08012345678",
             }
         }
         with pytest.raises(ExotelStartValidationError, match="media_format"):
@@ -224,9 +280,13 @@ class TestStartEventValidation:
 
     def test_unsupported_codec(self) -> None:
         msg = {
+            "event": "start",
             "start": {
                 "stream_sid": "MZ",
                 "call_sid": "CA",
+                "account_sid": "AC",
+                "from": "+919000000001",
+                "to": "08012345678",
                 "media_format": {
                     "encoding": "audio/opus",
                     "sample_rate": "16000",
@@ -238,9 +298,13 @@ class TestStartEventValidation:
 
     def test_missing_sample_rate(self) -> None:
         msg = {
+            "event": "start",
             "start": {
                 "stream_sid": "MZ",
                 "call_sid": "CA",
+                "account_sid": "AC",
+                "from": "+919000000001",
+                "to": "08012345678",
                 "media_format": {
                     "encoding": "audio/x-raw",
                 },
@@ -253,9 +317,13 @@ class TestStartEventValidation:
 
     def test_unsupported_sample_rate(self) -> None:
         msg = {
+            "event": "start",
             "start": {
                 "stream_sid": "MZ",
                 "call_sid": "CA",
+                "account_sid": "AC",
+                "from": "+919000000001",
+                "to": "08012345678",
                 "media_format": {
                     "encoding": "audio/x-raw",
                     "sample_rate": "44100",
@@ -263,15 +331,19 @@ class TestStartEventValidation:
             }
         }
         with pytest.raises(
-            ExotelStartValidationError, match="unsupported.*sample_rate"
+            ExotelStartValidationError, match=r"unsupported.*sample_rate"
         ):
             validate_start_event(msg)
 
     def test_malformed_sample_rate(self) -> None:
         msg = {
+            "event": "start",
             "start": {
                 "stream_sid": "MZ",
                 "call_sid": "CA",
+                "account_sid": "AC",
+                "from": "+919000000001",
+                "to": "08012345678",
                 "media_format": {
                     "encoding": "audio/x-raw",
                     "sample_rate": "not_a_number",
@@ -286,17 +358,21 @@ class TestStartEventValidation:
     @pytest.mark.parametrize("rate", [8000, 16000, 24000])
     def test_all_supported_rates_accepted(self, rate: int) -> None:
         msg = {
+            "event": "start",
             "start": {
                 "stream_sid": "MZ",
                 "call_sid": "CA",
+                "account_sid": "AC",
+                "from": "+919000000001",
+                "to": "08012345678",
                 "media_format": {
                     "encoding": "audio/x-raw",
                     "sample_rate": str(rate),
                 },
             }
         }
-        _, _, parsed_rate = validate_start_event(msg)
-        assert parsed_rate == rate
+        metadata = validate_start_event(msg)
+        assert metadata.sample_rate == rate
 
 
 # ============================================================================
@@ -322,36 +398,19 @@ class TestRateDrift:
 
 
 class TestNoDeadCodePath:
-    def test_no_production_import_of_exotel_audio(self) -> None:
-        """No production module imports exotel_audio."""
+    def test_exotel_audio_deleted(self) -> None:
+        """Custom codec path exotel_audio.py is deleted, not retained."""
         import importlib
-        import pkgutil
 
-        import fonely.api.channels as channels_pkg
-        import fonely.domain as domain_pkg
-        import fonely.services as services_pkg
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module("fonely.api.channels.exotel_audio")
 
-        for pkg in [channels_pkg, domain_pkg, services_pkg]:
-            for importer, name, _ispkg in pkgutil.walk_packages(
-                pkg.__path__, prefix=pkg.__name__ + "."
-            ):
-                if "exotel_audio" in name:
-                    continue
-                if "test" in name:
-                    continue
-                try:
-                    mod = importlib.import_module(name)
-                except ImportError:
-                    continue
-                source = getattr(mod, "__file__", "") or ""
-                if "exotel_audio" in source:
-                    continue
-                for attr_name in dir(mod):
-                    obj = getattr(mod, attr_name, None)
-                    obj_module = getattr(obj, "__module__", "")
-                    assert "exotel_audio" not in obj_module, (
-                        f"{name}.{attr_name} imports from exotel_audio"
-                    )
+    def test_media_py_deleted(self) -> None:
+        """Custom media event model media.py is deleted, not retained."""
+        import importlib
+
+        with pytest.raises(ModuleNotFoundError):
+            importlib.import_module("fonely.domain.calls.media")
 
 
 # ============================================================================

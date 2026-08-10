@@ -1,10 +1,12 @@
 """Exotel inbound event worker — claims and processes durable call events.
 
-Follows the InboundWorker pattern. Feature-disabled until migration.
+Follows InboundWorker pattern. Feature-disabled until migration.
+Uses CallSid-based identity and per-(business, call_sid) advisory lock.
 """
 
 from __future__ import annotations
 
+import hashlib
 import logging
 
 from sqlalchemy import text
@@ -18,25 +20,42 @@ logger = logging.getLogger("fonely.workers.exotel_worker")
 
 
 class StaleClaimError(Exception):
-    """Fenced completion returned false — another worker took the claim."""
+    """Fenced completion returned false — lease expired or another worker took the claim."""
+
+
+def _advisory_lock_key(business_id: int, call_sid: str) -> int:
+    """Deterministic advisory lock key for (business_id, call_sid)."""
+    data = f"{business_id}:{call_sid}".encode()
+    digest = hashlib.blake2b(data, digest_size=8).digest()
+    return int.from_bytes(digest, "big", signed=True)
 
 
 class ExotelInboundWorker:
-    """Poll → claim → validate transition → domain mutation → complete/fail."""
+    """Poll → claim → advisory lock → validate → domain mutation → complete/fail."""
 
     def __init__(self, session_factory: async_sessionmaker[AsyncSession]) -> None:
         self._factory = session_factory
 
     async def process_one(self) -> bool:
         """Process one eligible event. Returns True if processed."""
-        async with self._factory() as session:
-            repo = ExotelInboundEventRepository(session)
+        # Claim in its own transaction (separate from domain mutation)
+        async with self._factory() as claim_session:
+            repo = ExotelInboundEventRepository(claim_session)
             claimed = await repo.claim_next_eligible()
             if claimed is None:
                 return False
+            await claim_session.commit()
 
         try:
             async with self._factory() as session:
+                # Advisory lock serializes processing per (business, CallSid)
+                lock_key = _advisory_lock_key(claimed.business_id, claimed.call_sid)
+                await session.execute(
+                    text("SELECT pg_advisory_xact_lock(:key)"),
+                    {"key": lock_key},
+                )
+
+                # Domain mutation and fenced completion in same transaction
                 await self._apply_domain_mutation(session, claimed)
                 repo = ExotelInboundEventRepository(session)
                 ok = await repo.mark_completed(
@@ -44,7 +63,10 @@ class ExotelInboundWorker:
                 )
                 if not ok:
                     await session.rollback()
-                    raise StaleClaimError(f"fenced completion false for event {claimed.id}")
+                    raise StaleClaimError(
+                        f"fenced completion false for event {claimed.id} "
+                        f"(lease expired or claim stolen)"
+                    )
                 await session.commit()
 
             logger.info(
@@ -70,9 +92,10 @@ class ExotelInboundWorker:
                 exc_info=True,
             )
             try:
-                async with self._factory() as session:
-                    repo = ExotelInboundEventRepository(session)
+                async with self._factory() as fail_session:
+                    repo = ExotelInboundEventRepository(fail_session)
                     await repo.mark_failed(claimed.id, claimed.claim_token, claimed.claim_version)
+                    await fail_session.commit()
             except Exception:
                 logger.error("exotel_event_failure_recording_failed", exc_info=True)
             return False
@@ -80,7 +103,13 @@ class ExotelInboundWorker:
     async def _apply_domain_mutation(
         self, session: AsyncSession, claimed: ClaimedCallEvent
     ) -> None:
-        """Apply call state using CallSid identity with forward-only transitions."""
+        """Apply call state using CallSid identity with forward-only transitions.
+
+        Looks up by (business_id, call_sid) — not by latest tenant call.
+        Creates a new call record if no matching CallSid exists.
+        """
+        # NOTE: requires calls.provider_call_sid column (migration blocker).
+        # Until migration, falls back to business_id-only lookup as interim.
         existing = await session.execute(
             text(
                 "SELECT id, "

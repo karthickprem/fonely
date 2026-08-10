@@ -40,16 +40,10 @@ class OwnerCommandProposalRepository:
             .returning(OwnerCommandProposal)
         )
         try:
-            return (await self._session.execute(stmt)).scalar_one_or_none()
+            async with self._session.begin_nested():
+                return (await self._session.execute(stmt)).scalar_one_or_none()
         except IntegrityError as exc:
-            # The idempotency_key unique constraint fired — a terminal
-            # proposal with the same key already exists.
             if "uq_owner_proposal_idempotency" in str(exc):
-                logger.info(
-                    "create_idempotent: idempotency_key conflict for key=%s",
-                    values.get("idempotency_key"),
-                )
-                await self._session.rollback()
                 return None
             raise
 

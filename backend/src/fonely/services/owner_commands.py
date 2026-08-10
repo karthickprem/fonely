@@ -733,6 +733,40 @@ class OwnerCommandService:
         command_type = proposal.command_type
         target_date = date.fromisoformat(payload["target_date"])
 
+        tz_name = await self._get_business_timezone(business_id)
+        today_local = datetime.now(ZoneInfo(tz_name)).date()
+        if target_date < today_local:
+            evidence = OwnerCommandOutcomeEvidence(
+                outcome="drift_abort",
+                command_type=command_type,
+                target_date=target_date.isoformat(),
+                preview_count=0,
+                confirm_count=0,
+                cancelled_count=0,
+                drift_detected=True,
+                drift_details=["Target date is now in the past (midnight crossing)"],
+            )
+            now = datetime.now(UTC)
+            await self._proposals.transition_status(
+                proposal.id,
+                business_id,
+                proposal.expected_version,
+                "failed",
+                result_evidence=evidence.model_dump(mode="json"),
+                failure_code="target_date_past",
+                failure_message="Target date crossed midnight",
+                completed_at=now,
+            )
+            return OwnerCommandResult(
+                command_type=command_type,
+                success=False,
+                response_text=(
+                    "The target date is now in the past. "
+                    "Please send the command again with a current date."
+                ),
+                proposal_id=proposal.id,
+            )
+
         preview_appointments = proposal.preview_snapshot.get("appointments", [])
         preview_schedule_state = proposal.preview_snapshot.get("schedule_state", [])
         preview_count = len(preview_appointments)
@@ -813,18 +847,18 @@ class OwnerCommandService:
         for appt_id in target_ids:
             await self._appointments.lock_appointment(business_id, appt_id)
 
-        # Execute the actual command
+        # Execute using only the authoritative locked target IDs
         if command_type == "doctor_leave":
             cancelled = await self._execute_doctor_leave(
-                business_id, owner.phone, payload, target_date
+                business_id, owner.phone, payload, target_date, target_ids
             )
         elif command_type == "close_clinic":
             cancelled = await self._execute_close_clinic(
-                business_id, owner.phone, payload, target_date
+                business_id, owner.phone, payload, target_date, target_ids
             )
         elif command_type == "close_early":
             cancelled = await self._execute_close_early(
-                business_id, owner.phone, payload, target_date
+                business_id, owner.phone, payload, target_date, target_ids
             )
         else:
             cancelled = []
@@ -1052,6 +1086,7 @@ class OwnerCommandService:
         owner_phone: str,
         payload: dict[str, Any],
         target_date: date,
+        target_ids: list[int],
     ) -> list[dict[str, str]]:
         resource_id: int = payload["resource_id"]
         reason: str = payload.get("reason", "Leave")
@@ -1066,8 +1101,8 @@ class OwnerCommandService:
             reason=reason,
         )
 
-        return await self._cancel_appointments_for_resource(
-            business_id, resource_id, target_date, owner_phone
+        return await self._cancel_target_appointments(
+            business_id, target_ids, owner_phone, "owner_leave"
         )
 
     async def _execute_close_clinic(
@@ -1076,6 +1111,7 @@ class OwnerCommandService:
         owner_phone: str,
         payload: dict[str, Any],
         target_date: date,
+        target_ids: list[int],
     ) -> list[dict[str, str]]:
         reason: str = payload.get("reason", "Closed")
 
@@ -1089,7 +1125,9 @@ class OwnerCommandService:
             reason=reason,
         )
 
-        return await self._cancel_all_appointments(business_id, target_date, owner_phone)
+        return await self._cancel_target_appointments(
+            business_id, target_ids, owner_phone, "owner_closure"
+        )
 
     async def _execute_close_early(
         self,
@@ -1097,6 +1135,7 @@ class OwnerCommandService:
         owner_phone: str,
         payload: dict[str, Any],
         target_date: date,
+        target_ids: list[int],
     ) -> list[dict[str, str]]:
         from fonely.models.schema import OperatingSchedule
 
@@ -1149,8 +1188,8 @@ class OwnerCommandService:
                 reason=reason,
             )
 
-        return await self._cancel_appointments_after_time(
-            business_id, target_date, new_close, owner_phone
+        return await self._cancel_target_appointments(
+            business_id, target_ids, owner_phone, "owner_close_early"
         )
 
     # -----------------------------------------------------------------------
@@ -1587,6 +1626,37 @@ class OwnerCommandService:
     # Cancellation helpers
     # -----------------------------------------------------------------------
 
+    async def _cancel_target_appointments(
+        self,
+        business_id: int,
+        target_ids: list[int],
+        owner_phone: str,
+        reason_code: str,
+    ) -> list[dict[str, str]]:
+        """Cancel only the authoritative locked target appointments by ID."""
+        tz_name = await self._get_business_timezone(business_id)
+        tz = ZoneInfo(tz_name)
+        cancelled: list[dict[str, str]] = []
+        for appt_id in sorted(target_ids):
+            appt = await self._session.get(Appointment, appt_id)
+            if appt is None or appt.business_id != business_id:
+                continue
+            if appt.status != "confirmed":
+                continue
+            await self._cancel_via_service(
+                business_id, appt.id, appt.version, owner_phone, reason_code
+            )
+            cancelled.append(
+                {
+                    "appointment_id": str(appt.id),
+                    "time": appt.start_at.astimezone(tz).strftime("%-I:%M %p"),
+                    "patient": appt.customer_name or "Patient",
+                    "service": appt.service_name_snapshot,
+                    "phone": appt.customer_phone,
+                }
+            )
+        return cancelled
+
     async def _cancel_appointments_for_resource(
         self,
         business_id: int,
@@ -1610,9 +1680,12 @@ class OwnerCommandService:
             .all()
         )
 
+        now_utc = datetime.now(UTC)
         cancelled: list[dict[str, str]] = []
         for appt in appointments:
             if appt.start_at.astimezone(tz).date() != target_date:
+                continue
+            if (appt.effective_end_at or appt.end_at) <= now_utc:
                 continue
             await self._cancel_via_service(
                 business_id, appt.id, appt.version, owner_phone, "owner_leave"
@@ -1650,9 +1723,12 @@ class OwnerCommandService:
             .all()
         )
 
+        now_utc = datetime.now(UTC)
         cancelled: list[dict[str, str]] = []
         for appt in appointments:
             if appt.start_at.astimezone(tz).date() != target_date:
+                continue
+            if (appt.effective_end_at or appt.end_at) <= now_utc:
                 continue
             await self._cancel_via_service(
                 business_id, appt.id, appt.version, owner_phone, "owner_closure"
@@ -1688,12 +1764,16 @@ class OwnerCommandService:
             .scalars()
             .all()
         )
+        now_utc = datetime.now(UTC)
         cancelled: list[dict[str, str]] = []
         for appt in appointments:
             local = appt.start_at.astimezone(tz)
             if local.date() != target_date:
                 continue
-            effective_end = (appt.effective_end_at or appt.end_at).astimezone(tz)
+            effective_end_utc = appt.effective_end_at or appt.end_at
+            if effective_end_utc <= now_utc:
+                continue
+            effective_end = effective_end_utc.astimezone(tz)
             starts_after = local.time() >= after_time
             end_extends_past = effective_end.time() > after_time
             if not starts_after and not end_extends_past:

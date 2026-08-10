@@ -36,6 +36,8 @@ _TIME_PATTERN = re.compile(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", re.IGNORECA
 
 class OfferSelectionStatus(StrEnum):
     SELECTED = "selected"
+    REJECTED = "rejected"
+    SCOPE_CHANGE = "scope_change"
     AMBIGUOUS = "ambiguous"
     NO_MATCH = "no_match"
     EXPIRED = "expired"
@@ -319,6 +321,13 @@ def select_from_offer(
 
     raw_selection = user_text.strip()
     normalized = " ".join(raw_selection.casefold().split())
+    rejection_terms = ("doesn't work", "does not work", "don't want", "do not want", "வேண்டாம்")
+    correction_terms = ("instead", "make it", "change", "not ")
+    time_matches = list(_TIME_PATTERN.finditer(normalized))
+    if any(term in normalized for term in correction_terms) or len(time_matches) > 1:
+        return OfferSelection(OfferSelectionStatus.SCOPE_CHANGE)
+    if any(term in normalized for term in rejection_terms):
+        return OfferSelection(OfferSelectionStatus.REJECTED)
     token_matches = [
         slot for slot in offer.slots if secrets.compare_digest(slot.slot_token, raw_selection)
     ]

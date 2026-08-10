@@ -336,6 +336,18 @@ class ConversationService:
                 safety,
                 ["start_at"],
             )
+        if selection.status == OfferSelectionStatus.REJECTED:
+            return self._fact_turn(
+                ctx,
+                user_message,
+                "Okay, I won't use that slot. Please choose another offered time or a new date.",
+                safety,
+                ["start_at"],
+            )
+        if selection.status == OfferSelectionStatus.SCOPE_CHANGE:
+            self._clear_availability_offer(ctx)
+            ctx.collected_facts.pop("start_at", None)
+            return None
         if selection.status == OfferSelectionStatus.AMBIGUOUS:
             return self._fact_turn(
                 ctx,

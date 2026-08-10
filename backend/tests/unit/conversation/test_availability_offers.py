@@ -86,6 +86,26 @@ def test_duplicate_wall_time_requires_ordinal_selection() -> None:
     assert selection.slot.resource_id == 8
 
 
+@pytest.mark.parametrize(
+    ("utterance", "status"),
+    [
+        ("5 PM doesn't work; anything else?", OfferSelectionStatus.REJECTED),
+        ("not 5 PM, make it 6 PM", OfferSelectionStatus.SCOPE_CHANGE),
+        ("August 11 at 11 AM", OfferSelectionStatus.SCOPE_CHANGE),
+        ("option 2 at 5 PM", OfferSelectionStatus.SCOPE_CHANGE),
+    ],
+)
+def test_whole_utterance_does_not_select_first_time(
+    utterance: str, status: OfferSelectionStatus
+) -> None:
+    offer = _offer(_slot(5), _slot(6))
+
+    selection = select_from_offer(offer, utterance, now=_NOW)
+
+    assert selection.status == status
+    assert selection.slot is None
+
+
 def test_offer_rejects_wrong_parent_identity() -> None:
     offer = _offer(_slot(5))
     value = offer.serialize()

@@ -346,17 +346,23 @@ class OwnerCommandService:
         """Load pending proposal FOR UPDATE, execute in savepoint, CAS to completed."""
         proposal = await self._repo.get_by_id(business_id, proposal_id)
         if proposal is None:
-            return {"error": "proposal_not_found"}
+            return {"error": "proposal_not_found", "message": "No pending command found."}
 
         if proposal.status != "pending_confirmation":
-            return {"error": "invalid_status", "current_status": proposal.status}
+            return {
+                "error": "invalid_status",
+                "message": f"Command is already {proposal.status}.",
+            }
 
         now = utcnow()
         if proposal.expires_at <= now:
             await self._repo.transition_status(
                 proposal.id, business_id, proposal.expected_version, "expired"
             )
-            return {"error": "proposal_expired"}
+            return {
+                "error": "proposal_expired",
+                "message": "Command expired. Please send the command again.",
+            }
 
         # Execute command inside savepoint — both the domain mutation and
         # the CAS transition live in the same savepoint so they commit or
@@ -400,10 +406,13 @@ class OwnerCommandService:
         """CAS pending -> rejected."""
         proposal = await self._repo.get_by_id(business_id, proposal_id)
         if proposal is None:
-            return {"error": "proposal_not_found"}
+            return {"error": "proposal_not_found", "message": "No pending command found."}
 
         if proposal.status != "pending_confirmation":
-            return {"error": "invalid_status", "current_status": proposal.status}
+            return {
+                "error": "invalid_status",
+                "message": f"Command is already {proposal.status}.",
+            }
 
         updated = await self._repo.transition_status(
             proposal.id, business_id, proposal.expected_version, "rejected"

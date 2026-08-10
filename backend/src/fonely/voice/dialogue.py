@@ -168,6 +168,9 @@ def extract_booking_time(text: str) -> time | None:
 
 def _match_offered_time(candidate: time, offered: set[time]) -> time | None:
     if candidate in offered:
+        complement = time((candidate.hour + 12) % 24, candidate.minute)
+        if complement in offered:
+            return None
         return candidate
     matches = {
         value

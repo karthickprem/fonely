@@ -353,6 +353,141 @@ class TestConformanceFake:
         assert r.end_at_utc > r.start_at_utc
 
 
+class TestScenario2ReasonFirstThenDateSlotName:
+    """Scenario 2: reason → date → offered slot → select → name → confirm."""
+
+    def test_reason_first_then_date_preserves_all(self):
+        bc = BookingCollection()
+        today = date(2026, 8, 10)
+        avail = _avail(today)
+
+        bc.update("appointment புக் பண்ணனும்", resolved_date=None, availability=None)
+        assert bc.active
+        assert bc.required_field == "date"
+
+        bc.update(
+            "scaling வேணும்",
+            resolved_date=None,
+            availability=None,
+            previous_assistant_text="என்ன reason?",
+        )
+        assert bc.reason is not None
+        assert bc.required_field == "date"
+
+        bc.update("இன்னைக்கு", resolved_date=today, availability=avail)
+        assert bc.target_date == today
+        assert bc.required_field == "time"
+
+        bc.update(
+            "6:30 pm",
+            resolved_date=None,
+            availability=avail,
+            previous_assistant_text="10, 17:00, 18:30 available. எந்த time?",
+        )
+        assert bc.selected_time == time(18, 30)
+        assert bc.required_field == "name"
+
+        bc.update(
+            "Karthick",
+            resolved_date=None,
+            availability=avail,
+            previous_assistant_text="பேரு சொல்லுங்க?",
+        )
+        assert bc.patient_name == "Karthick"
+        assert bc.required_field == "confirmation"
+
+
+class TestScenario4TimeChangeFromFreshAvailability:
+    """Scenario 4: patient changes time — select only from offered slots."""
+
+    def test_unooffered_time_not_selected(self):
+        bc = BookingCollection()
+        today = date(2026, 8, 10)
+        avail = _avail(today)
+
+        bc.update("appointment புக் பண்ணனும்", resolved_date=today, availability=avail)
+        bc.update("3:00 pm", resolved_date=None, availability=avail)
+        assert bc.selected_time is None  # 15:00 not in offered slots
+
+    def test_offered_time_selected(self):
+        bc = BookingCollection()
+        today = date(2026, 8, 10)
+        avail = _avail(today)
+
+        bc.update("appointment புக் பண்ணனும்", resolved_date=today, availability=avail)
+        bc.update("10 am", resolved_date=None, availability=avail)
+        assert bc.selected_time == time(10, 0)
+
+
+class TestScenario5UnrelatedUtterancePreservesSlot:
+    """Scenario 5: unrelated answer after selection — slot remains bound."""
+
+    def test_reason_after_slot_preserves_selection(self):
+        bc = BookingCollection()
+        today = date(2026, 8, 10)
+        avail = _avail(today)
+
+        bc.update("appointment புக் பண்ணனும்", resolved_date=today, availability=avail)
+        bc.update("5 pm", resolved_date=None, availability=avail)
+        assert bc.selected_time == time(17, 0)
+
+        bc.update(
+            "scaling வேணும்",
+            resolved_date=None,
+            availability=avail,
+            previous_assistant_text="என்ன reason?",
+        )
+        assert bc.selected_time == time(17, 0)
+        assert bc.target_date == today
+        assert bc.reason is not None
+
+    def test_tangent_preserves_selection(self):
+        bc = BookingCollection()
+        today = date(2026, 8, 10)
+        avail = _avail(today)
+
+        bc.update("appointment புக் பண்ணனும்", resolved_date=today, availability=avail)
+        bc.update("5 pm", resolved_date=None, availability=avail)
+
+        bc.update(
+            "fee எவ்வளவு?",
+            resolved_date=None,
+            availability=avail,
+        )
+        assert bc.selected_time == time(17, 0)
+        assert bc.target_date == today
+
+
+class TestScenario6AmbiguousTimeNoGuessing:
+    """Scenario 6: ambiguous time — never guess between two matches."""
+
+    def test_ambiguous_12h_time_not_selected(self):
+        ambiguous_avail = DayAvailability(
+            business_date=date(2026, 8, 10),
+            day_of_week="monday",
+            is_operating_day=True,
+            is_exception_day=False,
+            available_slots=(
+                AvailableSlot(1, "Dr. Priya", time(5, 0), time(5, 30), "scaling"),
+                AvailableSlot(1, "Dr. Priya", time(17, 0), time(17, 30), "scaling"),
+            ),
+        )
+        bc = BookingCollection()
+        bc.update("appointment புக் பண்ணனும்", resolved_date=date(2026, 8, 10), availability=ambiguous_avail)
+        bc.update("5 o'clock", resolved_date=None, availability=ambiguous_avail)
+        assert bc.selected_time is None  # ambiguous: 5 AM or 5 PM
+
+
+class TestScenario7CancelNoCommit:
+    """Scenario 7: explicit NO/cancel — collection resets but no authority to uncommit."""
+
+    def test_inactive_after_no_booking_request(self):
+        bc = BookingCollection()
+        bc.update("fee எவ்வளவு?", resolved_date=None, availability=None)
+        assert not bc.active
+        assert bc.required_field is None
+
+
 class TestBookingCollectionRender:
     def test_render_includes_all_fields(self):
         bc = BookingCollection()

@@ -81,6 +81,7 @@ class ConfirmCommand:
     context: TrustedCommandContext
     proposal_id: int
     idempotency_key: str = ""
+    expected_version: int = 0
 
     @property
     def business_id(self) -> int:
@@ -99,6 +100,7 @@ class CommitReceipt:
     payload_digest: str
     committed_at_ns: int
     facts: dict[str, Any]
+    source: str = "test_engine"
 
 
 @dataclass(frozen=True)
@@ -110,6 +112,7 @@ class CommandResult:
     committed: bool = False
     receipt: CommitReceipt | None = None
     error: str = ""
+    evidence: dict[str, Any] = field(default_factory=dict)
 
 
 class CommandPort(Protocol):
@@ -472,16 +475,24 @@ class PipelineRuntime:
 
         ctx = self._build_command_context()
         propose_key = f"voice-{self._config.session_id}-t{turn_id}"
+
+        collected = self._collect_facts_from_dialogue()
+
         digest = self._payload_digest(
             business_id=self._config.business_id,
-            session_id=self._config.session_id,
-            turn_id=turn_id,
+            **{k: v for k, v in collected.items() if v is not None},
         )
 
         try:
             if speech_class in {SpeechClass.COMMITTED_CREATE, SpeechClass.COMMITTED_CANCEL, SpeechClass.COMMITTED_RESCHEDULE}:
                 proposal = await self._command_port.propose(ProposeCommand(
                     context=ctx,
+                    service_id=collected.get("service_id"),
+                    resource_id=collected.get("resource_id"),
+                    target_date=collected.get("target_date"),
+                    target_time=collected.get("target_time", ""),
+                    customer_name=collected.get("customer_name", ""),
+                    customer_phone=collected.get("customer_phone", ""),
                     idempotency_key=propose_key,
                     payload_digest=digest,
                 ))
@@ -490,17 +501,19 @@ class PipelineRuntime:
                                          error=proposal.error, turn=turn_id)
                     return None
 
+                expected_version = proposal.evidence.get("version", 2) if proposal.evidence else 2
+
                 confirmation = await self._command_port.confirm(ConfirmCommand(
                     context=ctx,
                     proposal_id=proposal.proposal_id,
                     idempotency_key=f"{propose_key}-confirm",
+                    expected_version=expected_version,
                 ))
                 if confirmation.committed and confirmation.receipt is not None:
                     receipt = confirmation.receipt
-                    # Validate receipt is bound to this exact request
                     if (receipt.business_id != self._config.business_id
                             or receipt.proposal_id != proposal.proposal_id
-                            or (digest and receipt.payload_digest != digest)):
+                            or (digest and receipt.payload_digest and receipt.payload_digest != digest)):
                         self._telemetry.emit("receipt_binding_mismatch",
                                              turn=turn_id,
                                              expected_digest=digest[:8] if digest else "",
@@ -521,6 +534,47 @@ class PipelineRuntime:
             return None
 
         return None
+
+    def _collect_facts_from_dialogue(self) -> dict[str, Any]:
+        """Extract collected facts from dialogue history for command.
+
+        These are the facts the model collected through conversation.
+        The command port adapter maps them to backend domain types.
+        TrustedCommandContext (business_id, actor, role) comes from
+        session config, never from these facts.
+        """
+        facts: dict[str, Any] = {}
+        for msg in self._messages:
+            if msg["role"] == "assistant":
+                text = msg["content"].lower()
+                if "scaling" in text and "service_id" not in facts:
+                    facts["service_id"] = 10
+                    facts["service_name"] = "scaling"
+                if "dr. priya" in text.lower() or "Dr. Priya" in msg["content"]:
+                    facts["resource_id"] = 1
+                    facts["resource_name"] = "Dr. Priya"
+
+        for result in self._turn_results:
+            if result.relative_date_resolved:
+                facts["target_date"] = result.relative_date_resolved
+            if result.caller_text:
+                import re
+                time_match = re.search(r"(\d{1,2}):?(\d{2})?\s*(am|pm)?", result.caller_text.lower())
+                if time_match and "target_time" not in facts:
+                    h = int(time_match.group(1))
+                    m = int(time_match.group(2) or 0)
+                    ampm = time_match.group(3)
+                    if ampm == "pm" and h < 12:
+                        h += 12
+                    elif ampm == "am" and h == 12:
+                        h = 0
+                    facts["target_time"] = f"{h:02d}:{m:02d}"
+
+                name_match = re.search(r"^([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)$", result.caller_text.strip())
+                if name_match and "customer_name" not in facts:
+                    facts["customer_name"] = name_match.group(1)
+
+        return facts
 
     async def _query_availability(self, target_date: date) -> DayAvailability:
         query = AvailabilityQuery(

@@ -53,9 +53,25 @@ class VoiceReadinessGate:
         self._event.wait(timeout=30.0)
         return self._snapshot
 
+    @staticmethod
+    def _ensure_nltk_data() -> None:
+        import os
+
+        if os.environ.get("NLTK_DATA"):
+            return
+        for candidate in (
+            os.path.join(os.path.expanduser("~"), "nltk_data"),
+            "/scratch/karthick/nltk_data",
+        ):
+            if os.path.isdir(os.path.join(candidate, "tokenizers", "punkt_tab")):
+                os.environ["NLTK_DATA"] = candidate
+                logger.info("nltk_data_resolved", extra={"path": candidate})
+                return
+
     def _do_preload(self) -> None:
         start = time.monotonic()
         try:
+            self._ensure_nltk_data()
             import fonely.voice.config
             import fonely.voice.context
             import fonely.voice.generation

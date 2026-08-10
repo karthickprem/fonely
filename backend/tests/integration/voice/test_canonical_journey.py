@@ -2,7 +2,7 @@
 
 Proves: admission → audio frames → STT utterance → date resolve →
 availability via canonical adapter → LLM → typed propose/confirm
-via ConversationServiceAdapter → commit evidence → response audio
+via CommandPort → commit evidence → response audio
 in TurnResult → MediaPort.send_audio once → terminal → admission
 release → all resources closed.
 """
@@ -15,10 +15,6 @@ from typing import Any
 import pytest
 
 from fonely.voice.admission import AdmissionController
-from fonely.voice.backend_ports import (
-    AvailabilityServiceAdapter,
-    ConversationServiceAdapter,
-)
 from fonely.voice.config import SessionLimits, SpeechClass, VoiceSessionConfig
 from fonely.voice.context import (
     AvailabilityQuery,

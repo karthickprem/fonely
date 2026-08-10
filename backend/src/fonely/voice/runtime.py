@@ -23,7 +23,13 @@ from .context import (
     TrustedClock,
     resolve_relative_date,
 )
-from .dialogue import DialogueState, count_questions, detect_filler, get_terminal_response
+from .dialogue import (
+    BookingCollection,
+    DialogueState,
+    count_questions,
+    detect_filler,
+    get_terminal_response,
+)
 from .generation import GenerationClock
 from .lifecycle import VoiceSessionSupervisor
 from .prompts import build_system_prompt, format_availability
@@ -181,8 +187,10 @@ class PipelineRuntime:
         self._gen_clock = GenerationClock(config.session_id)
         self._telemetry = VoiceTelemetryExporter(config.session_id)
         self._dialogue = DialogueState(max_turns=config.limits.max_turns)
+        self._booking = BookingCollection()
         self._messages: list[dict[str, str]] = []
         self._system_prompt = ""
+        self._last_availability: DayAvailability | None = None
         self._closed = False
         self._turn_results: list[TurnResult] = []
         self._total_tts_bytes = 0
@@ -209,6 +217,10 @@ class PipelineRuntime:
     @property
     def telemetry(self) -> VoiceTelemetryExporter:
         return self._telemetry
+
+    @property
+    def booking_collection(self) -> BookingCollection:
+        return self._booking
 
     @property
     def generation_clock(self) -> GenerationClock:
@@ -284,8 +296,8 @@ class PipelineRuntime:
         if resolved is not None:
             resolved_date = resolved
             availability = await self._query_availability(resolved)
+            self._last_availability = availability
             availability_queried = True
-            # 4. UPDATE system prompt with fresh availability data
             self._system_prompt = build_system_prompt(
                 clock=self._clock,
                 clinic_name=self._business_name,
@@ -296,6 +308,15 @@ class PipelineRuntime:
             self._telemetry.emit("availability_queried",
                                  date=str(resolved),
                                  turn=token.turn_id)
+
+        # 4. Update non-authoritative booking collection
+        prev_assistant = self._messages[-1]["content"] if self._messages and self._messages[-1]["role"] == "assistant" else ""
+        self._booking.update(
+            caller_text,
+            resolved_date=resolved_date,
+            availability=self._last_availability,
+            previous_assistant_text=prev_assistant,
+        )
 
         # 5. LLM with updated prompt containing availability
         self._messages.append({"role": "user", "content": caller_text})

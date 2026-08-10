@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from datetime import date, time
+
+from .context import DayAvailability
 
 
 @dataclass
@@ -45,6 +48,138 @@ class DialogueState:
     def set_terminal(self, reason: str) -> None:
         self.terminal = True
         self.terminal_reason = reason
+
+
+_BOOKING_REQUEST = re.compile(
+    r"(?:appointment|அப்பாயிண்ட்மெண்ட்).*(?:book|புக்|வேணும்|வேண்டும்|பண்ணனும்)"
+    r"|(?:book|புக்).*(?:appointment|அப்பாயிண்ட்மெண்ட்)",
+    re.IGNORECASE,
+)
+_TIME = re.compile(
+    r"(?<!\d)(?P<hour>\d{1,2})(?:[:.](?P<minute>[0-5]\d))?\s*"
+    r"(?P<meridiem>am|pm)?\s*(?:மணி(?:க்கு)?)?(?=\s|[.,!?]|$)",
+    re.IGNORECASE,
+)
+_VISIT_REASON = re.compile(
+    r"வலி|வலிக்க|சொத்தை|pain|scaling|cleaning|checkup|root canal|consultation|treatment|filling",
+    re.IGNORECASE,
+)
+_NAME = re.compile(r"(?:[A-Za-z][A-Za-z .'-]{0,79}|[஀-௿][஀-௿ .'-]{0,79})$")
+
+
+@dataclass
+class BookingCollection:
+    """Non-authoritative caller candidates for one booking conversation.
+
+    Date/time are retained only after matching caller input against the most
+    recent typed availability result. They are candidates for the application
+    seam, never authorization to propose or commit.
+    """
+
+    active: bool = False
+    reason: str | None = None
+    target_date: date | None = None
+    selected_time: time | None = None
+    patient_name: str | None = None
+
+    @property
+    def required_field(self) -> str | None:
+        if not self.active:
+            return None
+        if self.target_date is None:
+            return "date"
+        if self.selected_time is None:
+            return "time"
+        if self.reason is None:
+            return "reason"
+        if self.patient_name is None:
+            return "name"
+        return "confirmation"
+
+    def update(
+        self,
+        caller_text: str,
+        *,
+        resolved_date: date | None,
+        availability: DayAvailability | None,
+        previous_assistant_text: str = "",
+    ) -> None:
+        normalized = " ".join(caller_text.casefold().split())
+        if _BOOKING_REQUEST.search(normalized):
+            self.active = True
+
+        if resolved_date is not None and resolved_date != self.target_date:
+            self.target_date = resolved_date
+            self.selected_time = None
+
+        candidate_time = extract_booking_time(caller_text)
+        if candidate_time is not None and availability is not None:
+            offered = {
+                slot.start_time
+                for slot in availability.available_slots
+                if slot.status.value == "available"
+            }
+            selected = _match_offered_time(candidate_time, offered)
+            if selected is not None:
+                self.selected_time = selected
+
+        if self.active and self.reason is None and _VISIT_REASON.search(normalized):
+            self.reason = caller_text.strip()
+
+        if (
+            self.active
+            and self.patient_name is None
+            and _assistant_asks_name(previous_assistant_text)
+            and _NAME.fullmatch(caller_text.strip())
+            and not _VISIT_REASON.search(normalized)
+        ):
+            self.patient_name = caller_text.strip()
+
+    def render(self) -> str:
+        selected = self.selected_time.strftime("%H:%M") if self.selected_time else "missing"
+        return (
+            "<booking_collection>\n"
+            f"active: {str(self.active).lower()}\n"
+            f"reason: {self.reason or 'missing'}\n"
+            f"target_date: {self.target_date.isoformat() if self.target_date else 'missing'}\n"
+            f"selected_time: {selected}\n"
+            f"patient_name: {self.patient_name or 'missing'}\n"
+            f"required_field: {self.required_field or 'none'}\n"
+            "Caller candidates only; this state cannot authorize availability, proposal, or commit.\n"
+            "</booking_collection>"
+        )
+
+
+def extract_booking_time(text: str) -> time | None:
+    match = _TIME.search(text)
+    if match is None:
+        return None
+    hour = int(match.group("hour"))
+    minute = int(match.group("minute") or 0)
+    meridiem = (match.group("meridiem") or "").casefold()
+    if hour > 23 or (meridiem and hour > 12):
+        return None
+    if meridiem == "pm" and hour < 12:
+        hour += 12
+    elif meridiem == "am" and hour == 12:
+        hour = 0
+    return time(hour, minute)
+
+
+def _match_offered_time(candidate: time, offered: set[time]) -> time | None:
+    if candidate in offered:
+        return candidate
+    matches = {
+        value
+        for value in offered
+        if value.minute == candidate.minute and value.hour % 12 == candidate.hour % 12
+    }
+    return next(iter(matches)) if len(matches) == 1 else None
+
+
+def _assistant_asks_name(text: str) -> bool:
+    lower = text.casefold()
+    return any(term in lower for term in ("name", "பேரு", "பெயர்", "நேம்"))
 
 
 TERMINAL_RESPONSES = {

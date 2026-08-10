@@ -488,6 +488,69 @@ class TestScenario7CancelNoCommit:
         assert bc.required_field is None
 
 
+class TestD4NaalaikkuNotName:
+    """D4: 'Naalaikku' (tomorrow) must not be captured as patient name."""
+
+    def test_naalaikku_not_captured_as_name(self):
+        bc = BookingCollection()
+        today = date(2026, 8, 10)
+        avail = _avail(today)
+
+        bc.update("appointment புக் பண்ணனும்", resolved_date=today, availability=avail)
+        bc.update("Scaling", resolved_date=None, availability=avail)
+        bc.update(
+            "Naalaikku",
+            resolved_date=None,
+            availability=avail,
+            previous_assistant_text="உங்க பேரு சொல்லுங்க?",
+        )
+        assert bc.patient_name is None, f"'Naalaikku' should not be a name, got {bc.patient_name}"
+
+    def test_tomorrow_not_captured_as_name(self):
+        bc = BookingCollection()
+        bc.update("appointment புக் பண்ணனும்", resolved_date=date(2026, 8, 10), availability=_avail(date(2026, 8, 10)))
+        bc.update(
+            "tomorrow",
+            resolved_date=None,
+            availability=_avail(date(2026, 8, 10)),
+            previous_assistant_text="உங்க பேரு சொல்லுங்க?",
+        )
+        assert bc.patient_name is None
+
+    def test_innaikku_not_captured_as_name(self):
+        bc = BookingCollection()
+        bc.update("appointment புக் பண்ணனும்", resolved_date=date(2026, 8, 10), availability=_avail(date(2026, 8, 10)))
+        bc.update(
+            "innaikku",
+            resolved_date=None,
+            availability=_avail(date(2026, 8, 10)),
+            previous_assistant_text="பேரு சொல்லுங்க?",
+        )
+        assert bc.patient_name is None
+
+    def test_real_name_still_captured(self):
+        bc = BookingCollection()
+        bc.update("appointment புக் பண்ணனும்", resolved_date=date(2026, 8, 10), availability=_avail(date(2026, 8, 10)))
+        bc.update(
+            "Karthick",
+            resolved_date=None,
+            availability=_avail(date(2026, 8, 10)),
+            previous_assistant_text="உங்க பேரு சொல்லுங்க?",
+        )
+        assert bc.patient_name == "Karthick"
+
+    def test_time_word_not_captured_as_name(self):
+        bc = BookingCollection()
+        bc.update("appointment புக் பண்ணனும்", resolved_date=date(2026, 8, 10), availability=_avail(date(2026, 8, 10)))
+        bc.update(
+            "morning",
+            resolved_date=None,
+            availability=_avail(date(2026, 8, 10)),
+            previous_assistant_text="பேரு சொல்லுங்க?",
+        )
+        assert bc.patient_name is None
+
+
 class TestBookingCollectionRender:
     def test_render_includes_all_fields(self):
         bc = BookingCollection()

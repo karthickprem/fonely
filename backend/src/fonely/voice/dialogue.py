@@ -134,6 +134,7 @@ class BookingCollection:
             and _assistant_asks_name(previous_assistant_text)
             and _NAME.fullmatch(caller_text.strip())
             and not _VISIT_REASON.search(normalized)
+            and not _is_date_or_time_word(normalized)
         ):
             self.patient_name = caller_text.strip()
 
@@ -201,6 +202,19 @@ def _match_offered_time(candidate: time, offered: set[time]) -> time | None:
         if value.minute == candidate.minute and value.hour % 12 == candidate.hour % 12
     }
     return next(iter(matches)) if len(matches) == 1 else None
+
+
+_DATE_TIME_WORDS = frozenset({
+    "today", "tomorrow", "innaikku", "innaiku", "naalaikku", "naalai",
+    "இன்று", "இன்னைக்கு", "இன்னைக்கே", "நாளை", "நாளைக்கு",
+    "morning", "evening", "காலை", "மாலை", "சாயங்காலம்",
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
+    "திங்கள்", "செவ்வாய்", "புதன்", "வியாழன்", "வெள்ளி", "சனி", "ஞாயிறு",
+})
+
+
+def _is_date_or_time_word(normalized: str) -> bool:
+    return normalized.strip() in _DATE_TIME_WORDS or extract_booking_time(normalized) is not None
 
 
 def _assistant_asks_name(text: str) -> bool:

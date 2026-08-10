@@ -123,15 +123,24 @@ def _validate_phases(
 
         if failure_class == "not_run":
             cause = record.get("cause_phase")
+            cause_seq = record.get("cause_sequence")
             if not isinstance(cause, str) or not cause:
                 evidence.append(f"phase {phase} not_run missing cause_phase")
+            elif cause not in phase_exits:
+                evidence.append(f"phase {phase} not_run cause {cause} not recorded")
+            elif phase_exits.get(cause, 0) == 0:
+                evidence.append(f"phase {phase} not_run cause {cause} did not fail")
+            if not isinstance(cause_seq, int) or cause_seq >= seq:
+                evidence.append(f"phase {phase} not_run invalid cause_sequence")
             continue
 
         if not isinstance(exit_code, int):
             evidence.append(f"phase {phase} non-integer exit_code")
             continue
         phase_exits[phase] = exit_code
-        if exit_code != 0:
+        if failure_class == "tree_drift":
+            evidence.append(f"phase {phase} tree drift detected")
+        elif exit_code != 0:
             test_fail.append(f"phase {phase} exit={exit_code}")
 
     required = manifest.get("required_phases", [])

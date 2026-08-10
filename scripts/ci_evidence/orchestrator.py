@@ -145,8 +145,15 @@ def cmd_phase(args: argparse.Namespace) -> None:
 
         end_utc = datetime.now(UTC).isoformat()
 
+        post_sha = _git_rev("HEAD")
+        post_tree = _git_rev("HEAD^{tree}")
+        tree_drifted = post_sha != manifest["source_sha"] or post_tree != manifest["source_tree"]
+
         if exit_code < 0:
             failure_class = f"signal_{-exit_code}"
+        elif tree_drifted:
+            failure_class = "tree_drift"
+            exit_code = 2
         elif exit_code == 0:
             failure_class = None
         elif exit_code == 127:

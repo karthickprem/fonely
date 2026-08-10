@@ -26,11 +26,41 @@ registering → active → closed_grace → expired
 
 ### Transitions
 
-- `registering → active`: runtime factory returns successfully (not exception)
-- `registering → failed`: runtime factory raises or stream aborts before first frame
+- `registering → active`: runtime factory signals startup acceptance (transport initialized, processing ready) via an explicit readiness callback BEFORE the session loop begins
+- `registering → failed`: runtime startup timeout, transport init failure, or runtime raises before signalling readiness
 - `active → closed_grace`: normal provider stop/disconnect, runtime completes
 - `active → failed`: runtime error during active call
 - `closed_grace → expired`: grace TTL elapses (configurable, default 5 minutes)
+
+### Startup readiness handshake
+
+The runtime factory does NOT run to completion before `active` — that would be call end. Instead, the factory signals readiness through a callback after transport initialization succeeds:
+
+```python
+class ExotelRuntimeFactory(Protocol):
+    async def __call__(
+        self,
+        transport: FastAPIWebsocketTransport,
+        session: ExotelStreamSession,
+        on_ready: Callable[[], Awaitable[None]],  # signals registering → active
+    ) -> None: ...
+```
+
+The stream handler provides `on_ready`:
+```python
+async def _activate_correlation():
+    await correlation.activate(provider, call_id)  # registering → active
+
+await runtime_factory(transport, session, on_ready=_activate_correlation)
+```
+
+The runtime factory calls `on_ready()` after transport is initialized and the session loop is about to begin. If `on_ready` is never called (startup failure/timeout), the binding stays `registering` and the finally block marks it `failed`.
+
+### Timing guarantee
+
+- Callbacks arriving BEFORE `on_ready()` → binding is `registering` → PENDING (quarantined)
+- Callbacks arriving AFTER `on_ready()` but before runtime return → binding is `active` → MATCHED
+- Callbacks arriving AFTER runtime return (normal close) → binding is `closed_grace` → MATCHED within grace
 
 ### Implementation on `call_correlation_bindings`
 
@@ -46,11 +76,11 @@ grace_expires_at TIMESTAMPTZ,
 
 Stream handler:
 1. INSERT with `correlation_status = 'registering'`
-2. After `runtime_factory(transport, session)` returns normally:
+2. Runtime factory calls `on_ready()` after transport init:
    `UPDATE SET correlation_status = 'active', activated_at = NOW()`
-3. On runtime exception:
-   `UPDATE SET correlation_status = 'failed', closed_at = NOW()`
-4. On normal close:
+3. On startup failure (on_ready never called):
+   `UPDATE SET correlation_status = 'failed', closed_at = NOW()` (in finally)
+4. On normal runtime return:
    `UPDATE SET correlation_status = 'closed_grace', closed_at = NOW(), grace_expires_at = NOW() + interval`
 
 Grace expiry sweep:
@@ -359,10 +389,11 @@ if is_terminal(claimed.status):
 ### Downgrade procedure
 
 ```sql
--- 1. Acquire exclusive lock on both tables
+-- 1. Acquire exclusive locks (dependency order, then calls for column removal)
 LOCK TABLE inbound_call_events IN ACCESS EXCLUSIVE MODE;
 LOCK TABLE call_correlation_bindings IN ACCESS EXCLUSIVE MODE;
 LOCK TABLE inbound_call_event_conflicts IN ACCESS EXCLUSIVE MODE;
+LOCK TABLE calls IN ACCESS EXCLUSIVE MODE;
 
 -- 2. Check for non-expired evidence
 DO $$
@@ -413,7 +444,10 @@ DROP TABLE inbound_call_events;
 ### Lock ordering
 
 ACCESS EXCLUSIVE prevents concurrent INSERT between preflight check and DROP.
-Tables locked in dependency order (events → bindings → conflicts) to prevent deadlock.
+Tables locked in dependency order (events → bindings → conflicts → calls).
+`calls` is locked last because its columns are dropped last, and concurrent
+provider workers writing to `calls.provider_call_id` must be blocked before
+column removal.
 
 ---
 
@@ -559,6 +593,8 @@ truthfully.
 | Callback after normal close within grace | closed_grace | callback arrives | MATCHED → intake |
 | Callback after grace expiry | expired | callback arrives | PENDING quarantine |
 | Callback after startup failure | failed | callback arrives | PENDING quarantine |
+| Callback after readiness, before runtime return | active | callback arrives | MATCHED → intake |
+| Callback before readiness (registering) | registering | callback arrives | PENDING quarantine |
 
 ### Event identity / enrichment
 

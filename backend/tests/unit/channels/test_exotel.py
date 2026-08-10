@@ -13,6 +13,7 @@ from fonely.core.config import settings
 from fonely.domain.calls.events import ExotelCallbackParseError, parse_exotel_callback
 from fonely.domain.calls.transitions import (
     InvalidCallTransitionError,
+    LateCallEventError,
     validate_transition,
 )
 from fonely.services.exotel_config import ExotelNumberMapping
@@ -158,8 +159,8 @@ class TestCallStatusTransitions:
         with pytest.raises(InvalidCallTransitionError):
             validate_transition("completed", "failed")
 
-    def test_terminal_to_non_terminal_raises(self) -> None:
-        with pytest.raises(InvalidCallTransitionError):
+    def test_terminal_to_non_terminal_is_harmless_noop(self) -> None:
+        with pytest.raises(LateCallEventError):
             validate_transition("completed", "in-progress")
 
 
@@ -561,6 +562,20 @@ class TestSemanticIdempotency:
         digests = {e.payload_digest for e in intake.events}
         assert len(digests) == 2
 
+    def test_late_answered_after_completed_is_harmless_200(self) -> None:
+        """Late lower-state after terminal is a harmless no-op, not 500."""
+        app, intake = _create_app()
+        client = TestClient(app)
+        client.post(
+            "/webhooks/exotel/call-status", json=COMPLETED_OUTBOUND, headers=_auth_headers()
+        )
+        late_answered = {**ANSWERED_OUTBOUND, "CallSid": COMPLETED_OUTBOUND["CallSid"]}
+        response = client.post(
+            "/webhooks/exotel/call-status", json=late_answered, headers=_auth_headers()
+        )
+        assert response.status_code == 200
+        assert len(intake.events) == 1
+
 
 # ============================================================================
 # Domain: Transition matrix exhaustive
@@ -591,8 +606,8 @@ class TestTransitionMatrixExhaustive:
         with pytest.raises(InvalidCallTransitionError):
             validate_transition("busy", "no-answer")
 
-    def test_no_answer_to_in_progress_raises(self) -> None:
-        with pytest.raises(InvalidCallTransitionError):
+    def test_no_answer_to_in_progress_is_harmless_noop(self) -> None:
+        with pytest.raises(LateCallEventError):
             validate_transition("no-answer", "in-progress")
 
     def test_every_terminal_is_idempotent(self) -> None:

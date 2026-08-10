@@ -29,16 +29,34 @@ class InvalidCallTransitionError(Exception):
         super().__init__(f"invalid call transition: {current!r} -> {attempted!r}")
 
 
+class LateCallEventError(Exception):
+    """A lower-state event arrived after a terminal status.
+
+    This is a harmless acknowledged no-op: the terminal status wins.
+    The caller should log the anomaly and continue, not 500 or dead-letter.
+    """
+
+    def __init__(self, current: str, attempted: str) -> None:
+        self.current = current
+        self.attempted = attempted
+        super().__init__(f"late event after terminal: {current!r} ignored {attempted!r}")
+
+
 def validate_transition(current_status: str | None, new_status: str) -> str:
     """Return the new status if the transition is valid.
 
-    A terminal status cannot be overwritten. A duplicate terminal
-    callback for the same status is an idempotent no-op (returns
-    the current status unchanged). A different terminal status
-    after an existing terminal is rejected.
+    - Same status: idempotent no-op, returns current.
+    - Terminal → lower state: raises LateCallEventError (harmless).
+    - Terminal → different terminal: raises InvalidCallTransitionError.
+    - Forward transition: returns new status.
     """
     if current_status is not None and current_status == new_status:
         return current_status
+
+    if current_status in _TERMINAL:
+        if new_status not in _TERMINAL:
+            raise LateCallEventError(current_status, new_status)
+        raise InvalidCallTransitionError(current_status, new_status)
 
     allowed = _ALLOWED_TRANSITIONS.get(current_status)
     if allowed is None or new_status not in allowed:

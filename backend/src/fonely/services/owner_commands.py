@@ -19,21 +19,17 @@ from datetime import time as dt_time
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from fonely.core.validators import utcnow
-from fonely.models.enums import (
-    AppointmentStatus,
-    ResourceAllocationStatus,
-)
+from fonely.models.enums import AppointmentStatus
 from fonely.models.schema import (
     Appointment,
     Business,
     BusinessDailyContext,
     BusinessUser,
     Resource,
-    ResourceAllocation,
     ScheduleException,
 )
 from fonely.repositories.owner_command_proposals import OwnerCommandProposalRepository
@@ -172,14 +168,19 @@ class OwnerCommandService:
                 )
             proposal = pending[0]
             result = await self.confirm_command(business_id, proposal.id)
+            if "error" in result:
+                return OwnerCommandResult(
+                    command_type=proposal.command_type,
+                    success=False,
+                    response_text=result.get("message", "Command failed."),
+                    proposal_id=result.get("proposal_id"),
+                )
             summary = result.get("result_summary") or {}
             affected = (proposal.command_payload or {}).get("affected_summary", {})
-            msg = self._format_confirm_message(
-                proposal.command_type, summary, affected, result.get("status") == "completed"
-            )
+            msg = self._format_confirm_message(proposal.command_type, summary, affected, True)
             return OwnerCommandResult(
                 command_type=summary.get("action", proposal.command_type),
-                success=result.get("status") == "completed",
+                success=True,
                 response_text=msg,
                 affected_appointments=summary.get("cancelled_count", 0),
                 proposal_id=result.get("proposal_id"),
@@ -376,8 +377,13 @@ class OwnerCommandService:
                 )
                 if updated is None:
                     raise RuntimeError("CAS_failed_inside_savepoint")
+        except ValueError as ve:
+            logger.warning("command_precondition_failed: %s", ve)
+            return {
+                "error": "command_precondition_failed",
+                "message": str(ve),
+            }
         except Exception:
-            # Savepoint rolled back — proposal stays pending, caller can retry
             logger.warning("command_savepoint_failed", exc_info=True)
             return {
                 "error": "command_failed",
@@ -762,7 +768,12 @@ class OwnerCommandService:
                 )
             )
         ).first()
-        open_time = sched.open_time if sched else dt_time(9, 0)
+        if sched is None or sched.open_time is None:
+            raise ValueError(
+                f"Cannot close early: no operating schedule found for "
+                f"{target_date.strftime('%A')}. Please set business hours first."
+            )
+        open_time = sched.open_time
 
         await self._upsert_schedule_exception(
             business_id=business_id,
@@ -995,66 +1006,75 @@ class OwnerCommandService:
         return cancelled_ids
 
     async def _cancel_single_appointment(self, appointment: Appointment, reason: str) -> None:
-        """Cancel a single appointment and its active resource allocation.
+        """Cancel via AppointmentService to satisfy commit-provenance trigger."""
+        import uuid as _uuid
 
-        Also creates cancellation notifications via the NotificationService.
-        """
+        from fonely.api.internal.validation import InternalValidationPort
+        from fonely.domain.appointments.commands import (
+            ConfirmPendingAppointmentCancellationCommand,
+            CreatePendingAppointmentCancellationCommand,
+        )
+        from fonely.domain.appointments.errors import (
+            AppointmentDomainError,
+            AppointmentErrorCode,
+        )
+        from fonely.domain.pending_actions.commands import ActorContext
+        from fonely.models.enums import CallerRole
+        from fonely.services.appointments import AppointmentService
+
+        biz = await self._session.scalar(
+            select(Business).where(Business.id == appointment.business_id)
+        )
+        owner_phone = biz.primary_contact_phone if biz else "+910000000000"
+        actor = ActorContext(
+            business_id=appointment.business_id,
+            normalized_phone=owner_phone,
+            verified_role=CallerRole.OWNER,
+        )
         now = utcnow()
-
-        # Update appointment status
-        stmt = (
-            update(Appointment)
-            .where(
-                Appointment.id == appointment.id,
-                Appointment.business_id == appointment.business_id,
-                Appointment.status == AppointmentStatus.CONFIRMED.value,
-            )
-            .values(
-                status=AppointmentStatus.CANCELLED.value,
-                cancelled_at=now,
-                reason=reason,
-                version=appointment.version + 1,
-            )
+        key = f"owner-cancel-{appointment.id}-{_uuid.uuid4().hex[:8]}"
+        appt_service = AppointmentService(
+            self._session, validation=InternalValidationPort(self._session)
         )
-        await self._session.execute(stmt)
-
-        # Cancel active resource allocation
-        stmt = (
-            update(ResourceAllocation)
-            .where(
-                ResourceAllocation.appointment_id == appointment.id,
-                ResourceAllocation.business_id == appointment.business_id,
-                ResourceAllocation.status == ResourceAllocationStatus.ACTIVE.value,
-            )
-            .values(
-                status=ResourceAllocationStatus.CANCELLED.value,
-                version=ResourceAllocation.version + 1,
-            )
-        )
-        await self._session.execute(stmt)
-
-        # Create cancellation notifications
         try:
-            from fonely.services.notifications import NotificationService
-
-            notif_service = NotificationService(self._session)
-            await notif_service.create_cancellation_notifications(
-                business_id=appointment.business_id,
-                appointment_id=appointment.id,
-                customer_phone=appointment.customer_phone,
-                customer_name=appointment.customer_name,
-                service_name=appointment.service_name_snapshot,
-                resource_name=appointment.resource_name_snapshot,
-                start_at=appointment.start_at,
-                business_timezone=appointment.business_timezone_snapshot,
-                reason=reason,
+            proposal = await appt_service.create_cancellation_proposal(
+                CreatePendingAppointmentCancellationCommand(
+                    actor=actor,
+                    appointment_id=appointment.id,
+                    expected_appointment_version=appointment.version,
+                    reason_code="owner_command",
+                    expires_at=now + timedelta(minutes=5),
+                    idempotency_key=key,
+                )
             )
-        except Exception:
+            await appt_service.confirm_cancellation(
+                ConfirmPendingAppointmentCancellationCommand(
+                    actor=actor,
+                    pending_action_id=proposal.pending_action_id,
+                    expected_version=proposal.version,
+                )
+            )
+        except AppointmentDomainError as exc:
+            if exc.code in (
+                AppointmentErrorCode.INVALID_STATE,
+                AppointmentErrorCode.STALE_VERSION,
+            ):
+                reloaded = (
+                    await self._session.scalars(
+                        select(Appointment).where(
+                            Appointment.id == appointment.id,
+                            Appointment.business_id == appointment.business_id,
+                        )
+                    )
+                ).first()
+                if reloaded is not None and reloaded.status == "cancelled":
+                    return
             logger.warning(
-                "cancellation_notification_failed: appointment_id=%d",
+                "cancellation_via_service_failed: appointment_id=%d",
                 appointment.id,
                 exc_info=True,
             )
+            raise
 
     # ===================================================================
     # Internal — resource resolution

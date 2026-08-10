@@ -204,3 +204,35 @@ async def test_unknown_command_returns_help(pg_session: AsyncSession) -> None:
     assert result.command_type == "unknown"
     assert result.success is False
     assert "Dr. Priya leave" in result.response_text
+
+
+async def test_close_early_no_schedule_returns_clear_error(
+    pg_session: AsyncSession,
+) -> None:
+    await pg_session.execute(
+        text(
+            "INSERT INTO businesses "
+            "(id, name, category, primary_contact_phone, timezone, subscription) "
+            "VALUES (1, 'Smile Dental', 'clinic', '+914428350001', "
+            "'Asia/Kolkata', 'trial')"
+        )
+    )
+    await pg_session.execute(
+        text(
+            "INSERT INTO business_users (business_id, phone, role, is_active) "
+            "VALUES (1, '+914428350001', 'owner', true)"
+        )
+    )
+    await pg_session.flush()
+
+    service = OwnerCommandService(pg_session)
+    preview = await service.process_command(1, "+914428350001", "close early at 5 PM tomorrow")
+    assert preview.success is True
+    assert preview.proposal_id is not None
+
+    confirm = await service.process_command(1, "+914428350001", "YES")
+    assert confirm.success is False
+    assert "no operating schedule" in confirm.response_text.lower()
+
+    exc_count = await pg_session.scalar(text("SELECT count(*) FROM schedule_exceptions"))
+    assert exc_count == 0

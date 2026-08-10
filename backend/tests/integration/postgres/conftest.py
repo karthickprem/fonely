@@ -88,7 +88,11 @@ async def pg_engine(
     postgres_database_url: str,
     migrated_postgres: None,
 ) -> AsyncGenerator[AsyncEngine, None]:
-    engine = create_async_engine(postgres_database_url, pool_pre_ping=True)
+    engine = create_async_engine(
+        postgres_database_url,
+        pool_pre_ping=True,
+        connect_args={"prepared_statement_cache_size": 0},
+    )
     yield engine
     await engine.dispose()
 

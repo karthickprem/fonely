@@ -117,13 +117,84 @@ _GET_SUMMARY_RE = re.compile(
 # ---------------------------------------------------------------------------
 
 
+_YES_TOKENS = frozenset({"yes", "y", "confirm", "ok", "proceed", "aama", "aam", "sari"})
+_NO_TOKENS = frozenset({"no", "n", "cancel", "reject", "stop", "venda", "vendam"})
+
+
 class OwnerCommandService:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, model: Any = None) -> None:
         self._session = session
         self._repo = OwnerCommandProposalRepository(session)
+        self._model = model
+
+    async def process_command(
+        self, business_id: int, owner_phone: str, message: str
+    ) -> OwnerCommandResult:
+        """Unified entry point for message-driven callers (WhatsApp worker).
+
+        Resolves YES/NO/new-command from message text and pending state.
+        Dispatches to preview_command, confirm_command, or reject_command.
+        """
+        owner = await self._resolve_owner(business_id, owner_phone)
+        if owner is None:
+            return OwnerCommandResult(
+                command_type="error",
+                success=False,
+                response_text="You are not registered as an active owner.",
+            )
+
+        normalised = message.strip().lower()
+
+        if normalised in _YES_TOKENS:
+            pending = await self._repo.get_latest_for_owner(business_id, owner.id)
+            if pending is None:
+                return OwnerCommandResult(
+                    command_type="confirm",
+                    success=False,
+                    response_text="No pending command to confirm.",
+                )
+            result = await self.confirm_command(business_id, pending.id)
+            return OwnerCommandResult(
+                command_type=result.get("command_type", "confirm"),
+                success=result.get("status") == "completed",
+                response_text=result.get("message", str(result)),
+                affected_appointments=result.get("cancelled_count", 0),
+                proposal_id=result.get("proposal_id"),
+            )
+
+        if normalised in _NO_TOKENS:
+            pending = await self._repo.get_latest_for_owner(business_id, owner.id)
+            if pending is None:
+                return OwnerCommandResult(
+                    command_type="reject",
+                    success=False,
+                    response_text="No pending command to cancel.",
+                )
+            result = await self.reject_command(business_id, pending.id)
+            return OwnerCommandResult(
+                command_type="reject",
+                success=result.get("status") == "rejected",
+                response_text=result.get("message", "Command cancelled."),
+                proposal_id=result.get("proposal_id"),
+            )
+
+        result = await self.preview_command(business_id, owner_phone, message)
+        if "error" in result:
+            return OwnerCommandResult(
+                command_type=result.get("command_type", "unknown"),
+                success=False,
+                response_text=result.get("message", result.get("error", _UNKNOWN_RESPONSE)),
+            )
+        return OwnerCommandResult(
+            command_type=result.get("command_type", "preview"),
+            success=True,
+            response_text=result.get("message", "Reply YES to confirm or NO to cancel."),
+            affected_appointments=result.get("affected_count", 0),
+            proposal_id=result.get("proposal_id"),
+        )
 
     # ===================================================================
-    # Public API
+    # Split API (core logic)
     # ===================================================================
 
     async def preview_command(

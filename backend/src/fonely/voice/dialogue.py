@@ -51,8 +51,10 @@ class DialogueState:
 
 
 _BOOKING_REQUEST = re.compile(
-    r"(?:appointment|அப்பாயிண்ட்மெண்ட்).*(?:book|புக்|வேணும்|வேண்டும்|பண்ணனும்)"
-    r"|(?:book|புக்).*(?:appointment|அப்பாயிண்ட்மெண்ட்)",
+    r"(?:appointment|அப்பாயிண்ட்மெண்ட்).*(?:book|புக்|வேணும்|வேண்டும்|பண்ணனும்|venum|pannanum)"
+    r"|(?:book|புக்|pannanum).*(?:appointment|அப்பாயிண்ட்மெண்ட்)"
+    r"|(?:doctor|டாக்டர்).*(?:பாக்கணும்|paakkanum)"
+    r"|(?:scaling|cleaning|checkup|root canal|extraction|consultation).*(?:வேணும்|venum)",
     re.IGNORECASE,
 )
 _TIME = re.compile(

@@ -99,8 +99,14 @@ def build_llm(config: LLMConfig, *, evidence_sink: Any = None) -> Any:
         headers["user"] = gateway_user
 
     base_url = os.environ.get("ANTHROPIC_BASE_URL")
-    if base_url and "api.anthropic.com" not in base_url and not headers:
-        raise RuntimeError("configured Anthropic gateway requires approved custom headers")
+    if base_url:
+        from urllib.parse import urlparse
+        parsed = urlparse(base_url)
+        if parsed.scheme not in ("https",):
+            raise RuntimeError("ANTHROPIC_BASE_URL must use HTTPS")
+        approved_hosts = {"api.anthropic.com"}
+        if parsed.hostname not in approved_hosts and not headers:
+            raise RuntimeError("non-approved Anthropic gateway requires custom headers")
 
     http_client = DefaultAsyncHttpxClient()
     client = AsyncAnthropic(

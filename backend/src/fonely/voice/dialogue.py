@@ -27,7 +27,7 @@ class DialogueState:
             return False
         self.turn_count += 1
         if asked_field:
-            if asked_field in self.asked_fields and asked_field == self._last_asked_field():
+            if asked_field in self.asked_fields:
                 self.repeated_question_count += 1
             self.asked_fields.append(asked_field)
         self.last_assistant_text = assistant_text

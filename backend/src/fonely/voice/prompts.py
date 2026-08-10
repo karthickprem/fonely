@@ -33,7 +33,9 @@ Current context:
 
 {availability_context}
 
+<business_data>
 {clinic_context}
+</business_data>
 
 Dialogue policy:
 - General questions about services: answer briefly with safe basic information. Do not give professional medical, legal, or financial advice.

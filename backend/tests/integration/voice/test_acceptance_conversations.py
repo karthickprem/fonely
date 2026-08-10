@@ -90,8 +90,8 @@ AC007 = ScriptedConversation(
         ConversationTurn("Appointment book பண்ணனும்", "என்ன reason-க்காக visit?", asked_field="reason"),
         ConversationTurn("Cleaning", "எந்த date-ல வரணும்?", asked_field="date"),
         ConversationTurn("நாளைக்கு", "18:30 available. Time சரியா?", asked_field="time"),
-        ConversationTurn("No, root canal-க்கு change பண்ணுங்க", "Root canal-க்கு மாத்திட்டேன். எந்த date?", asked_field="date"),
-        ConversationTurn("நாளைக்கே", "18:30 available. Time?", asked_field="time"),
+        ConversationTurn("No, root canal-க்கு change பண்ணுங்க", "Root canal-க்கு மாத்திட்டேன். எந்த date?", asked_field="corrected_date"),
+        ConversationTurn("நாளைக்கே", "18:30 available. Time?", asked_field="corrected_time"),
         ConversationTurn("6:30", "பேரு சொல்லுங்க?", asked_field="name"),
     ],
 )

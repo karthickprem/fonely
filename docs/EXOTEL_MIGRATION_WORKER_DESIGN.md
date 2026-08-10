@@ -89,7 +89,7 @@ worker processing.
 
 ---
 
-## Worker: ExotelInboundWorker
+## Worker: InboundCallEventWorker
 
 Follows the InboundWorker pattern (workers/inbound_worker.py).
 
@@ -156,8 +156,8 @@ This is included in the same migration as the inbound events table.
 
 ## Integration with accepted Dev2 infrastructure
 
-The ExotelInboundWorker reuses:
-- `deterministic_lock_key(business_id, caller_phone)` for advisory locks
+The InboundCallEventWorker reuses:
+- `_advisory_lock_key(business_id, call_sid)` for per-CallSid advisory locks
 - Same polling/claiming/backoff pattern as InboundEventRepository
 - Same lease/claim_token/claim_version semantics
 - Same dead_letter lifecycle

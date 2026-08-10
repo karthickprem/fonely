@@ -100,7 +100,9 @@ class TestHappyPath:
         assert result.commit_receipt is not None
         assert result.commit_receipt.business_id == 1
         assert result.commit_receipt.committed_at_ns > 0
-        assert not result.allowed  # Fail-closed stub
+        assert result.allowed  # Receipt-validated → ALLOW
+        assert result.terminal  # Booking committed → terminal
+        assert result.terminal_reason == "booking_committed"
         await rt.close()
 
 

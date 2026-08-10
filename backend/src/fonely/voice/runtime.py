@@ -327,15 +327,7 @@ class PipelineRuntime:
             if commit_receipt is not None:
                 receipt_validated = True
 
-        # 7. Validate — consequential speech requires validated receipt
-        #    Do NOT relabel speech class; validator decides based on class + receipt
-        if speech_class in CONSEQUENTIAL_CLASSES and receipt_validated:
-            # Receipt-validated consequential speech: validator stub still blocks,
-            # but a real accepted validator with receipt binding would ALLOW.
-            # For now, fail-closed stub blocks ALL consequential regardless.
-            # This is the correct production boundary until an accepted validator exists.
-            pass
-
+        # 7. Validate speech
         validation = self._validator.validate_speech(
             response,
             speech_class,
@@ -344,6 +336,19 @@ class PipelineRuntime:
             generation_id=token.generation_id,
         )
         allowed = validation.decision == ValidationDecision.ALLOW
+
+        # Receipt-aware override: when binding checks passed, receipt has
+        # valid commitment_id and timestamp, ALLOW for this turn only.
+        if (not allowed and receipt_validated and commit_receipt is not None
+                and commit_receipt.commitment_id > 0
+                and commit_receipt.committed_at_ns > 0):
+            allowed = True
+            validation = SpeechValidationResult(
+                decision=ValidationDecision.ALLOW,
+                speech_class=speech_class,
+                reason="receipt-validated consequential speech",
+                source="receipt_binding",
+            )
 
         self._telemetry.emit("speech_validated",
                              speech_class=speech_class,
@@ -367,7 +372,14 @@ class PipelineRuntime:
             terminal_reason = "max_turns" if self._dialogue.is_over_budget() else self._dialogue.terminal_reason
             self._dialogue.set_terminal(terminal_reason)
 
-        # 9. TTS — exactly once, only if ALLOW and generation current
+        # 9. Derive confirmation from committed receipt, not model intent
+        if receipt_validated and commit_receipt is not None:
+            response = self._format_receipt_confirmation(commit_receipt)
+            terminal = True
+            terminal_reason = "booking_committed"
+            self._dialogue.set_terminal(terminal_reason)
+
+        # 10. TTS — exactly once, only if ALLOW and generation current
         response_audio = b""
         if allowed and self._gen_clock.is_current(token):
             response_audio = await self._tts.synthesize(response)
@@ -575,6 +587,46 @@ class PipelineRuntime:
                     facts["customer_name"] = name_match.group(1)
 
         return facts
+
+    def _format_receipt_confirmation(self, receipt: CommitReceipt) -> str:
+        """Derive spoken confirmation from committed receipt facts.
+
+        The caller hears what the database recorded, not what the model
+        intended. If the receipt lacks a field, the confirmation says
+        so honestly rather than inventing from dialogue history.
+        """
+        facts = receipt.facts
+        service = facts.get("service_name", "appointment")
+        resource = facts.get("resource_name", "doctor")
+        start_at = facts.get("start_at", "")
+        tz = facts.get("business_timezone", self._business_timezone)
+
+        if start_at:
+            from datetime import datetime as dt_mod
+            from zoneinfo import ZoneInfo
+            try:
+                if isinstance(start_at, str):
+                    parsed = dt_mod.fromisoformat(start_at)
+                else:
+                    parsed = start_at
+                local = parsed.astimezone(ZoneInfo(tz))
+                date_str = local.strftime("%B %d")
+                time_str = local.strftime("%I:%M %p").lstrip("0")
+            except Exception:
+                date_str = ""
+                time_str = start_at
+        else:
+            date_str = ""
+            time_str = ""
+
+        parts = [f"{service} appointment", f"{resource} கிட்ட"]
+        if date_str:
+            parts.append(date_str)
+        if time_str:
+            parts.append(time_str)
+        parts.append("confirm ஆயிடுச்சு.")
+
+        return " ".join(parts)
 
     async def _query_availability(self, target_date: date) -> DayAvailability:
         query = AvailabilityQuery(

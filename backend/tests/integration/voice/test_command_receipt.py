@@ -105,8 +105,10 @@ class TestRuntimeToEngineReceipt:
         assert isinstance(result.commit_receipt, CommitReceipt)
         assert result.commit_receipt.business_id == 1
 
-        # Speech still BLOCKED by fail-closed stub
-        assert not result.allowed
+        # Receipt-validated → ALLOW
+        assert result.allowed
+        assert result.terminal
+        assert result.terminal_reason == "booking_committed"
 
         await rt.close()
 

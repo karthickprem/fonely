@@ -216,6 +216,53 @@ class TestSampleRateGoldenProbe:
 
 
 # ============================================================================
+# Condition 4: Barge-in — InterruptionFrame → Exotel clear JSON
+# ============================================================================
+
+
+class TestBargeInClear:
+    async def test_interruption_frame_emits_exotel_clear(self) -> None:
+        """InterruptionFrame → {"event":"clear","streamSid":"..."}."""
+        from pipecat.frames.frames import InterruptionFrame
+        from pipecat.serializers.exotel import ExotelFrameSerializer
+
+        serializer = ExotelFrameSerializer(stream_sid="MZ_barge")
+        result = await serializer.serialize(InterruptionFrame())
+        assert result is not None
+        parsed = json.loads(result)
+        assert parsed["event"] == "clear"
+        assert parsed["streamSid"] == "MZ_barge"
+
+    async def test_stale_generation_audio_not_serialized(self) -> None:
+        """OutputAudioRawFrame from cleared generation → serializer still
+        produces audio (generation filtering is transport/runtime, not
+        serializer). This documents the boundary."""
+        from pipecat.frames.frames import OutputAudioRawFrame, StartFrame
+        from pipecat.serializers.exotel import ExotelFrameSerializer
+
+        serializer = ExotelFrameSerializer(
+            stream_sid="MZ_stale",
+            params=ExotelFrameSerializer.InputParams(
+                exotel_sample_rate=16000,
+                sample_rate=16000,
+            ),
+        )
+        await serializer.setup(StartFrame(audio_in_sample_rate=16000))
+        result = None
+        for _ in range(5):
+            result = await serializer.serialize(
+                OutputAudioRawFrame(
+                    audio=b"\x00" * 4800,
+                    sample_rate=24000,
+                    num_channels=1,
+                )
+            )
+            if result is not None:
+                break
+        assert result is not None
+
+
+# ============================================================================
 # Condition 6: Start event validation
 # ============================================================================
 

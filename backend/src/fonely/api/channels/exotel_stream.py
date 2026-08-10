@@ -257,6 +257,7 @@ async def exotel_media_websocket(websocket: WebSocket) -> None:
                 provisioning_drift=provisioning_drift,
             ),
         )
+        await websocket.close(code=1000)
     except ExotelStartValidationError as exc:
         logger.warning("exotel_stream_protocol_error", extra={"error": str(exc)})
         await websocket.close(code=4400, reason="protocol error")

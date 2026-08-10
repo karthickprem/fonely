@@ -304,7 +304,7 @@ async def test_tampered_persisted_offer_is_not_restored(
             text(
                 "UPDATE conversations "
                 "SET collected_facts = jsonb_set(collected_facts, "
-                "'{_availability_offer,business_id}', '2'::jsonb) "
+                "'{_availability_selection,offer,business_id}', '2'::jsonb) "
                 "WHERE id = :id"
             ),
             {"id": conversation_id},

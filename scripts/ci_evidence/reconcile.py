@@ -537,128 +537,141 @@ def reconcile(
     environment: str,
 ) -> dict[str, Any]:
     root_path = Path(evidence_root).resolve()
-    is_incomplete = False
 
     with TrustedRoot(root_path) as root:
         try:
-            manifest = _validate_manifest(root)
-        except (ReconcileError, EvidenceWriteError) as exc:
-            return _write_terminal(
-                root,
-                {
-                    "state": TERMINAL_INCOMPLETE,
-                    "errors": [str(exc)],
-                },
+            return _reconcile_inner(root, waivers_path, environment)
+        except (
+            ReconcileError,
+            EvidenceWriteError,
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            state = TERMINAL_EVIDENCE_FAILED
+            if isinstance(exc, EvidenceWriteError) and "not found" in str(exc):
+                state = TERMINAL_INCOMPLETE
+            try:
+                return _write_terminal(
+                    root,
+                    {"state": state, "errors": [f"{type(exc).__name__}: {exc}"]},
+                )
+            except EvidenceWriteError:
+                return {"state": state, "errors": [f"{type(exc).__name__}: {exc}"]}
+
+
+def _reconcile_inner(
+    root: TrustedRoot,
+    waivers_path: str,
+    environment: str,
+) -> dict[str, Any]:
+    is_incomplete = False
+
+    manifest = _validate_manifest(root)
+
+    phase_errors, phase_exits = _validate_phases(root, manifest)
+
+    npg_nodes, pg_nodes, collection_errors = _validate_collections(root, manifest)
+
+    npg_events, npg_event_errors, npg_pytest_exit = _validate_events(
+        root, manifest, "non_pg", npg_nodes
+    )
+    pg_events, pg_event_errors, pg_pytest_exit = _validate_events(root, manifest, "pg", pg_nodes)
+    event_errors = npg_event_errors + pg_event_errors
+
+    for label, pytest_exit, phase_name in [
+        ("non_pg", npg_pytest_exit, "test_non_pg"),
+        ("pg", pg_pytest_exit, "test_pg"),
+    ]:
+        if pytest_exit is not None and pytest_exit != 0:
+            event_errors.append(f"{label} pytest_exit_status={pytest_exit}")
+        if (
+            pytest_exit is not None
+            and phase_name in phase_exits
+            and (pytest_exit == 0) != (phase_exits[phase_name] == 0)
+        ):
+            event_errors.append(
+                f"{label} pytest_exit_status={pytest_exit} contradicts "
+                f"phase {phase_name} exit={phase_exits[phase_name]}"
             )
 
-        phase_errors, phase_exits = _validate_phases(root, manifest)
+    if not npg_nodes and not pg_nodes:
+        is_incomplete = True
 
-        npg_nodes, pg_nodes, collection_errors = _validate_collections(root, manifest)
+    npg_state_errors = _validate_node_state_machines(npg_events, "non_pg")
+    pg_state_errors = _validate_node_state_machines(pg_events, "pg")
+    state_errors = npg_state_errors + pg_state_errors
 
-        npg_events, npg_event_errors, npg_pytest_exit = _validate_events(
-            root, manifest, "non_pg", npg_nodes
-        )
-        pg_events, pg_event_errors, pg_pytest_exit = _validate_events(
-            root, manifest, "pg", pg_nodes
-        )
-        event_errors = npg_event_errors + pg_event_errors
+    now = datetime.now(UTC)
+    waived, waiver_errors = _validate_waivers(
+        Path(waivers_path),
+        environment,
+        pg_nodes,
+        now,
+    )
 
-        for label, pytest_exit, phase_name in [
-            ("non_pg", npg_pytest_exit, "test_non_pg"),
-            ("pg", pg_pytest_exit, "test_pg"),
-        ]:
-            if pytest_exit is not None and pytest_exit != 0:
-                event_errors.append(f"{label} pytest_exit_status={pytest_exit}")
-            if (
-                pytest_exit is not None
-                and phase_name in phase_exits
-                and (pytest_exit == 0) != (phase_exits[phase_name] == 0)
-            ):
-                event_errors.append(
-                    f"{label} pytest_exit_status={pytest_exit} contradicts "
-                    f"phase {phase_name} exit={phase_exits[phase_name]}"
-                )
+    pg_errors = _validate_pg_proof(pg_events, pg_nodes, waived)
 
-        if not npg_nodes and not pg_nodes:
-            is_incomplete = True
+    for wnode in waived:
+        events = pg_events.get(wnode, [])
+        call_events = [e for e in events if e.get("phase") == "call"]
+        call_passed = call_events and call_events[0]["outcome"] == "passed"
+        if call_passed and not call_events[0].get("wasxfail"):
+            waiver_errors.append(f"unused waiver (node passed): {wnode}")
 
-        npg_state_errors = _validate_node_state_machines(npg_events, "non_pg")
-        pg_state_errors = _validate_node_state_machines(pg_events, "pg")
-        state_errors = npg_state_errors + pg_state_errors
+    has_test_failure = any("failed" in e or "error" in e or "XPASS" in e for e in state_errors)
+    has_test_failure = has_test_failure or any("exit=" in e for e in phase_errors)
 
-        now = datetime.now(UTC)
-        waived, waiver_errors = _validate_waivers(
-            Path(waivers_path),
-            environment,
-            pg_nodes,
-            now,
-        )
+    terminal_state = _classify_terminal(
+        phase_errors,
+        collection_errors,
+        event_errors,
+        state_errors,
+        pg_errors,
+        waiver_errors,
+        has_test_failure,
+        is_incomplete,
+    )
 
-        pg_errors = _validate_pg_proof(pg_events, pg_nodes, waived)
+    all_errors = (
+        phase_errors + collection_errors + event_errors + state_errors + pg_errors + waiver_errors
+    )
 
-        for wnode in waived:
-            events = pg_events.get(wnode, [])
-            call_events = [e for e in events if e.get("phase") == "call"]
-            call_passed = call_events and call_events[0]["outcome"] == "passed"
-            if call_passed and not call_events[0].get("wasxfail"):
-                waiver_errors.append(f"unused waiver (node passed): {wnode}")
+    artifact_hashes = {}
+    for relpath in [
+        RUN_MANIFEST_FILE,
+        PHASE_RESULTS_FILE,
+        collection_manifest_file("all"),
+        collection_manifest_file("non_pg"),
+        collection_manifest_file("pg"),
+        event_stream_file("non_pg"),
+        event_stream_file("pg"),
+    ]:
+        try:
+            raw = safe_read(root, relpath)
+            artifact_hashes[relpath] = digest_bytes(raw)
+        except EvidenceWriteError:
+            artifact_hashes[relpath] = None
 
-        has_test_failure = any("failed" in e or "error" in e or "XPASS" in e for e in state_errors)
-        has_test_failure = has_test_failure or any("exit=" in e for e in phase_errors)
+    terminal = {
+        "schema_version": TERMINAL_SCHEMA,
+        "state": terminal_state,
+        "source_sha": manifest.get("source_sha"),
+        "workflow_run_id": manifest.get("workflow_run_id"),
+        "environment": environment,
+        "errors": all_errors,
+        "counts": {
+            "non_pg_selected": len(npg_nodes),
+            "pg_selected": len(pg_nodes),
+            "pg_waived": len(waived),
+        },
+        "artifact_hashes": artifact_hashes,
+        "reconciled_at_utc": now.isoformat(),
+    }
 
-        terminal_state = _classify_terminal(
-            phase_errors,
-            collection_errors,
-            event_errors,
-            state_errors,
-            pg_errors,
-            waiver_errors,
-            has_test_failure,
-            is_incomplete,
-        )
-
-        all_errors = (
-            phase_errors
-            + collection_errors
-            + event_errors
-            + state_errors
-            + pg_errors
-            + waiver_errors
-        )
-
-        artifact_hashes = {}
-        for relpath in [
-            RUN_MANIFEST_FILE,
-            PHASE_RESULTS_FILE,
-            collection_manifest_file("all"),
-            collection_manifest_file("non_pg"),
-            collection_manifest_file("pg"),
-            event_stream_file("non_pg"),
-            event_stream_file("pg"),
-        ]:
-            try:
-                raw = safe_read(root, relpath)
-                artifact_hashes[relpath] = digest_bytes(raw)
-            except EvidenceWriteError:
-                artifact_hashes[relpath] = None
-
-        terminal = {
-            "schema_version": TERMINAL_SCHEMA,
-            "state": terminal_state,
-            "source_sha": manifest.get("source_sha"),
-            "workflow_run_id": manifest.get("workflow_run_id"),
-            "environment": environment,
-            "errors": all_errors,
-            "counts": {
-                "non_pg_selected": len(npg_nodes),
-                "pg_selected": len(pg_nodes),
-                "pg_waived": len(waived),
-            },
-            "artifact_hashes": artifact_hashes,
-            "reconciled_at_utc": now.isoformat(),
-        }
-
-        return _write_terminal(root, terminal)
+    return _write_terminal(root, terminal)
 
 
 def _write_terminal(root: TrustedRoot, terminal: dict[str, Any]) -> dict[str, Any]:

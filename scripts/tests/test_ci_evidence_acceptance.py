@@ -1053,6 +1053,58 @@ class TestJUnitDiagnostic:
         assert t["state"] == TERMINAL_SUCCESS
 
 
+class TestMalformedArtifacts:
+    def test_malformed_json_manifest(self, tmp_path: Path) -> None:
+        evidence, waivers = tmp_path / "e", tmp_path / "w.json"
+        evidence.mkdir()
+        _waivers(waivers)
+        (evidence / RUN_MANIFEST_FILE).write_text("not json{{{")
+        (evidence / PHASE_RESULTS_FILE).write_bytes(b"")
+        t = reconcile(str(evidence), str(waivers), "ci")
+        assert t["state"] in (TERMINAL_EVIDENCE_FAILED, TERMINAL_INCOMPLETE)
+        assert (evidence / TERMINAL_FILE).exists()
+
+    def test_non_object_manifest(self, tmp_path: Path) -> None:
+        evidence, waivers = tmp_path / "e", tmp_path / "w.json"
+        evidence.mkdir()
+        _waivers(waivers)
+        (evidence / RUN_MANIFEST_FILE).write_text('"just a string"')
+        (evidence / PHASE_RESULTS_FILE).write_bytes(b"")
+        t = reconcile(str(evidence), str(waivers), "ci")
+        assert t["state"] in (TERMINAL_EVIDENCE_FAILED, TERMINAL_INCOMPLETE)
+        assert (evidence / TERMINAL_FILE).exists()
+
+    def test_malformed_utf8_manifest(self, tmp_path: Path) -> None:
+        evidence, waivers = tmp_path / "e", tmp_path / "w.json"
+        evidence.mkdir()
+        _waivers(waivers)
+        (evidence / RUN_MANIFEST_FILE).write_bytes(b"\xff\xfe not utf8")
+        (evidence / PHASE_RESULTS_FILE).write_bytes(b"")
+        t = reconcile(str(evidence), str(waivers), "ci")
+        assert t["state"] in (TERMINAL_EVIDENCE_FAILED, TERMINAL_INCOMPLETE)
+        assert (evidence / TERMINAL_FILE).exists()
+
+    def test_malformed_event_stream(self, tmp_path: Path) -> None:
+        evidence, waivers = tmp_path / "e", tmp_path / "w.json"
+        evidence.mkdir()
+        _full(evidence, waivers)
+        (evidence / TERMINAL_FILE).unlink(missing_ok=True)
+        (evidence / event_stream_file("non_pg")).write_bytes(b"\xff\xfe bad")
+        t = _reconcile(evidence, waivers)
+        assert t["state"] != TERMINAL_SUCCESS
+        assert (evidence / TERMINAL_FILE).exists()
+
+    def test_malformed_collection_manifest(self, tmp_path: Path) -> None:
+        evidence, waivers = tmp_path / "e", tmp_path / "w.json"
+        evidence.mkdir()
+        _full(evidence, waivers)
+        (evidence / TERMINAL_FILE).unlink(missing_ok=True)
+        (evidence / collection_manifest_file("non_pg")).write_text("not json")
+        t = _reconcile(evidence, waivers)
+        assert t["state"] != TERMINAL_SUCCESS
+        assert (evidence / TERMINAL_FILE).exists()
+
+
 class TestTerminalEvidence:
     def test_missing_terminal(self, tmp_path: Path) -> None:
         evidence = tmp_path / "e"
@@ -1071,9 +1123,10 @@ class TestTerminalEvidence:
         evidence, waivers = tmp_path / "e", tmp_path / "w.json"
         evidence.mkdir()
         _full(evidence, waivers)
-        reconcile(str(evidence), str(waivers), "ci")
-        with pytest.raises(EvidenceWriteError, match="already exists"):
-            reconcile(str(evidence), str(waivers), "ci")
+        t1 = reconcile(str(evidence), str(waivers), "ci")
+        assert t1["state"] == TERMINAL_SUCCESS
+        t2 = reconcile(str(evidence), str(waivers), "ci")
+        assert t2["state"] in (TERMINAL_EVIDENCE_FAILED, TERMINAL_INCOMPLETE)
 
     def test_completeness_hash_mismatch(self, tmp_path: Path) -> None:
         evidence, waivers = tmp_path / "e", tmp_path / "w.json"

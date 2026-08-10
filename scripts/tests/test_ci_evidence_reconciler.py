@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 from ci_evidence.reconcile import reconcile
 from ci_evidence.schemas import (
     PHASE_RESULTS_FILE,
@@ -20,7 +19,7 @@ from ci_evidence.schemas import (
     digest_nodes,
     event_stream_file,
 )
-from ci_evidence.writer import EvidenceWriteError, TrustedRoot, exclusive_create_json
+from ci_evidence.writer import TrustedRoot, exclusive_create_json
 
 
 def _setup_full_evidence(evidence: Path, waivers: Path) -> None:
@@ -135,14 +134,15 @@ class TestSuccess:
 
 
 class TestDoubleFinalization:
-    def test_second_reconcile_fails(self, tmp_path: Path) -> None:
+    def test_second_reconcile_returns_failure(self, tmp_path: Path) -> None:
         evidence = tmp_path / "evidence"
         evidence.mkdir()
         waivers = tmp_path / "waivers.json"
         _setup_full_evidence(evidence, waivers)
-        reconcile(str(evidence), str(waivers), "ci")
-        with pytest.raises(EvidenceWriteError, match="already exists"):
-            reconcile(str(evidence), str(waivers), "ci")
+        t1 = reconcile(str(evidence), str(waivers), "ci")
+        assert t1["state"] == TERMINAL_SUCCESS
+        t2 = reconcile(str(evidence), str(waivers), "ci")
+        assert t2["state"] in (TERMINAL_EVIDENCE_FAILED, TERMINAL_INCOMPLETE)
 
 
 class TestIncomplete:

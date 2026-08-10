@@ -274,6 +274,16 @@ class PipelineRuntime:
         # 6. Classify speech — DEFAULT CONSEQUENTIAL for unknown
         speech_class = self._classify_speech(response)
 
+        # 6b. If consequential and command port available, attempt authoritative command
+        commit_evidence: dict[str, Any] | None = None
+        if speech_class in CONSEQUENTIAL_CLASSES and self._command_port is not None:
+            commit_evidence = await self._try_authoritative_command(
+                speech_class, caller_text, response, token.turn_id
+            )
+            # Only committed evidence can authorize confirmation speech
+            if commit_evidence is not None:
+                speech_class = SpeechClass.NON_CONSEQUENTIAL  # Receipt-backed; safe to speak
+
         # 7. Validate — only explicit ALLOW passes
         validation = self._validator.validate_speech(
             response,
@@ -287,7 +297,8 @@ class PipelineRuntime:
         self._telemetry.emit("speech_validated",
                              speech_class=speech_class,
                              decision=validation.decision,
-                             source=validation.source)
+                             source=validation.source,
+                             has_commit_evidence=commit_evidence is not None)
 
         # 8. Record dialogue state BEFORE TTS (terminal set before synthesis)
         has_filler = detect_filler(response)
@@ -333,6 +344,7 @@ class PipelineRuntime:
             terminal=terminal,
             terminal_reason=terminal_reason,
             elapsed_ms=elapsed,
+            commit_evidence=commit_evidence,
         )
         self._turn_results.append(result)
         return result
@@ -362,6 +374,56 @@ class PipelineRuntime:
             "total_tts_bytes": self._total_tts_bytes,
             "close_errors": errors,
         }
+
+    async def _try_authoritative_command(
+        self,
+        speech_class: SpeechClass,
+        caller_text: str,
+        response: str,
+        turn_id: int,
+    ) -> dict[str, Any] | None:
+        """Attempt authoritative propose/confirm through CommandPort.
+
+        Only returns evidence if the command port confirms committed state.
+        Never fabricates receipts. Returns None if no command is applicable.
+        """
+        if self._command_port is None:
+            return None
+
+        try:
+            if speech_class in {SpeechClass.COMMITTED_CREATE, SpeechClass.COMMITTED_CANCEL, SpeechClass.COMMITTED_RESCHEDULE}:
+                # First propose
+                proposal = await self._command_port.propose(ProposeCommand(
+                    business_id=self._config.business_id,
+                    idempotency_key=f"voice-{self._config.session_id}-t{turn_id}",
+                ))
+                if not proposal.success or proposal.proposal_id is None:
+                    self._telemetry.emit("command_proposal_failed",
+                                         error=proposal.error, turn=turn_id)
+                    return None
+
+                # Then confirm
+                confirmation = await self._command_port.confirm(ConfirmCommand(
+                    business_id=self._config.business_id,
+                    proposal_id=proposal.proposal_id,
+                    idempotency_key=f"voice-{self._config.session_id}-t{turn_id}-confirm",
+                ))
+                if confirmation.committed and confirmation.evidence:
+                    self._telemetry.emit("command_committed",
+                                         proposal_id=proposal.proposal_id,
+                                         evidence_keys=list(confirmation.evidence.keys()),
+                                         turn=turn_id)
+                    return confirmation.evidence
+                else:
+                    self._telemetry.emit("command_confirm_failed",
+                                         error=confirmation.error, turn=turn_id)
+                    return None
+        except Exception as exc:
+            self._telemetry.emit("command_error",
+                                 error=type(exc).__name__, turn=turn_id)
+            return None
+
+        return None
 
     async def _query_availability(self, target_date: date) -> DayAvailability:
         query = AvailabilityQuery(

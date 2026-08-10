@@ -11,8 +11,11 @@ MEDICAL_PATTERNS = [
     re.compile(r"\b(symptom|medicine|medication|dosage|x-?ray|diagnosis|prescription|side effect|after surgery|is this normal|infection)\b", re.I),
     re.compile(r"\bwhat (medicine|tablet|pill|drug)\b", re.I),
     re.compile(r"\bshould i take\b", re.I),
+    re.compile(r"\bshould i (get|choose|go for)\b.*\bor\b", re.I),
     re.compile(r"\bis it (cancer|serious|dangerous)\b", re.I),
-    re.compile(r"(மருந்து|normal-ஆ இருக்கா|என்ன நோய்)"),
+    re.compile(r"\b(how many|எத்தனை)\s*(mg|ml|tablet|pill|dose|மாத்திரை)\b", re.I),
+    re.compile(r"\bshould i get\b.*\bor\b", re.I),
+    re.compile(r"(மருந்து|normal-ஆ இருக்கா|என்ன நோய்|எத்தனை mg|tablet எடுக்க)"),
 ]
 
 URGENT_RESPONSE_TA = (

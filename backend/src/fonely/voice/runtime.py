@@ -276,15 +276,32 @@ class PipelineRuntime:
 
         # 6b. If consequential and command port available, attempt authoritative command
         commit_evidence: dict[str, Any] | None = None
+        receipt_validated = False
         if speech_class in CONSEQUENTIAL_CLASSES and self._command_port is not None:
             commit_evidence = await self._try_authoritative_command(
                 speech_class, caller_text, response, token.turn_id
             )
-            # Only committed evidence can authorize confirmation speech
+            # Validate receipt: must have matching business_id, proposal_id, committed status
             if commit_evidence is not None:
-                speech_class = SpeechClass.NON_CONSEQUENTIAL  # Receipt-backed; safe to speak
+                receipt_validated = (
+                    commit_evidence.get("business_id") == self._config.business_id
+                    and commit_evidence.get("proposal_id") is not None
+                    and commit_evidence.get("committed_at_ns") is not None
+                )
+                if not receipt_validated:
+                    self._telemetry.emit("receipt_validation_failed",
+                                         evidence_keys=list(commit_evidence.keys()))
+                    commit_evidence = None  # Discard invalid receipt
 
-        # 7. Validate — only explicit ALLOW passes
+        # 7. Validate — consequential speech requires validated receipt
+        #    Do NOT relabel speech class; validator decides based on class + receipt
+        if speech_class in CONSEQUENTIAL_CLASSES and receipt_validated:
+            # Receipt-validated consequential speech: validator stub still blocks,
+            # but a real accepted validator with receipt binding would ALLOW.
+            # For now, fail-closed stub blocks ALL consequential regardless.
+            # This is the correct production boundary until an accepted validator exists.
+            pass
+
         validation = self._validator.validate_speech(
             response,
             speech_class,
@@ -298,7 +315,8 @@ class PipelineRuntime:
                              speech_class=speech_class,
                              decision=validation.decision,
                              source=validation.source,
-                             has_commit_evidence=commit_evidence is not None)
+                             has_commit_evidence=commit_evidence is not None,
+                             receipt_validated=receipt_validated)
 
         # 8. Record dialogue state BEFORE TTS (terminal set before synthesis)
         has_filler = detect_filler(response)

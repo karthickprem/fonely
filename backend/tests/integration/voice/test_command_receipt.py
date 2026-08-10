@@ -34,9 +34,10 @@ def _clock():
 
 
 class TrackingCommandPort:
-    def __init__(self):
+    def __init__(self, business_id: int = 1):
         self.proposals: list[ProposeCommand] = []
         self.confirmations: list[ConfirmCommand] = []
+        self._business_id = business_id
 
     async def propose(self, cmd: ProposeCommand) -> CommandResult:
         self.proposals.append(cmd)
@@ -44,10 +45,17 @@ class TrackingCommandPort:
 
     async def confirm(self, cmd: ConfirmCommand) -> CommandResult:
         self.confirmations.append(cmd)
+        import time
         return CommandResult(
             success=True, operation="create", proposal_id=1,
             committed=True,
-            evidence={"appointment_id": 42, "pending_action_id": 1},
+            evidence={
+                "appointment_id": 42,
+                "pending_action_id": 1,
+                "business_id": self._business_id,
+                "proposal_id": cmd.proposal_id,
+                "committed_at_ns": time.monotonic_ns(),
+            },
         )
 
 
@@ -80,8 +88,12 @@ class SimpleAvail:
 
 class TestCommandReceiptAllowsConsequentialSpeech:
     @pytest.mark.asyncio
-    async def test_committed_evidence_allows_confirmation(self):
-        """With CommandPort: consequential response + committed receipt → ALLOW."""
+    async def test_committed_receipt_obtained_and_validated(self):
+        """With CommandPort: propose → confirm → receipt obtained.
+
+        Speech remains BLOCKED by fail-closed stub even with receipt.
+        An accepted validator (future) would ALLOW receipt-backed speech.
+        """
         cmd_port = TrackingCommandPort()
         tts = SimpleTTS()
 
@@ -100,19 +112,20 @@ class TestCommandReceiptAllowsConsequentialSpeech:
         await rt.initialize()
         result = await rt.process_turn(b"Confirm booking")
 
-        # Command port was invoked
+        # Command port was invoked with idempotency
         assert len(cmd_port.proposals) == 1
         assert len(cmd_port.confirmations) == 1
         assert cmd_port.proposals[0].idempotency_key.startswith("voice-cmd-1-")
 
-        # Committed evidence returned
+        # Receipt obtained with verifiable facts
         assert result.commit_evidence is not None
         assert result.commit_evidence["appointment_id"] == 42
+        assert result.commit_evidence["pending_action_id"] == 1
 
-        # Speech was allowed (receipt-backed)
-        assert result.allowed
-        assert result.response_audio != b""
-        assert tts.calls >= 1
+        # Fail-closed stub BLOCKS consequential speech even with receipt
+        # This is correct: stub cannot verify receipt authenticity
+        assert not result.allowed
+        assert result.speech_class == SpeechClass.COMMITTED_CREATE
 
         await rt.close()
 

@@ -163,7 +163,7 @@ class AppointmentService:
             command.pending_action_id,
         )
         if existing is not None:
-            return self._replay_result(existing, action.version)
+            return await self._replay_result(existing, action.version)
 
         context = CommitResultContext(
             business_id=command.actor.business_id,
@@ -263,22 +263,19 @@ class AppointmentService:
                     _restore_deferred_sql(APPOINTMENT_CREATE_POST_COMPLETION_CONSTRAINTS)
                 )
 
-                try:
-                    from fonely.services.notifications import NotificationService
+                from fonely.services.notifications import NotificationService
 
-                    await NotificationService(self._session).create_appointment_notifications(
-                        business_id=command.actor.business_id,
-                        appointment_id=appointment.id,
-                        customer_phone=data.customer_phone,
-                        customer_name=data.customer_name,
-                        service_name=facts.service_name,
-                        resource_name=facts.resource_name,
-                        start_at=facts.start_at,
-                        price=facts.price,
-                        business_timezone=facts.business_timezone,
-                    )
-                except Exception:
-                    logger.warning("notification_outbox_insert_failed", exc_info=True)
+                await NotificationService(self._session).create_appointment_notifications(
+                    business_id=command.actor.business_id,
+                    appointment_id=appointment.id,
+                    customer_phone=data.customer_phone,
+                    customer_name=data.customer_name,
+                    service_name=facts.service_name,
+                    resource_name=facts.resource_name,
+                    start_at=facts.start_at,
+                    price=facts.price,
+                    business_timezone=facts.business_timezone,
+                )
         except IntegrityError as exc:
             if (
                 getattr(exc.orig, "sqlstate", None) == _OVERLAP_SQLSTATE
@@ -404,7 +401,7 @@ class AppointmentService:
             command.actor.business_id, command.pending_action_id
         )
         if existing_commit is not None:
-            return self._replay_cancellation(existing_commit, data)
+            return await self._replay_cancellation(existing_commit, data)
 
         context = CommitResultContext(
             business_id=command.actor.business_id,
@@ -505,22 +502,19 @@ class AppointmentService:
                 _restore_deferred_sql(APPOINTMENT_CANCEL_POST_COMPLETION_CONSTRAINTS)
             )
 
-            try:
-                from fonely.services.notifications import NotificationService
+            from fonely.services.notifications import NotificationService
 
-                await NotificationService(self._session).create_cancellation_notifications(
-                    business_id=command.actor.business_id,
-                    appointment_id=appointment.id,
-                    customer_phone=appointment.customer_phone,
-                    customer_name=appointment.customer_name,
-                    service_name=appointment.service_name_snapshot,
-                    resource_name=appointment.resource_name_snapshot,
-                    start_at=appointment.start_at,
-                    business_timezone=appointment.business_timezone_snapshot,
-                    reason=data.reason_code,
-                )
-            except Exception:
-                logger.warning("cancellation_notification_failed", exc_info=True)
+            await NotificationService(self._session).create_cancellation_notifications(
+                business_id=command.actor.business_id,
+                appointment_id=appointment.id,
+                customer_phone=appointment.customer_phone,
+                customer_name=appointment.customer_name,
+                service_name=appointment.service_name_snapshot,
+                resource_name=appointment.resource_name_snapshot,
+                start_at=appointment.start_at,
+                business_timezone=appointment.business_timezone_snapshot,
+                reason=data.reason_code,
+            )
 
         return AppointmentCancellationResult(
             appointment_id=data.target_appointment_id,
@@ -632,7 +626,7 @@ class AppointmentService:
             command.actor.business_id, command.pending_action_id
         )
         if existing_commit is not None:
-            return self._replay_reschedule(existing_commit, data)
+            return await self._replay_reschedule(existing_commit, data)
         new_facts = data.new_facts
 
         context = CommitResultContext(
@@ -681,7 +675,7 @@ class AppointmentService:
             command.actor.business_id, command.pending_action_id
         )
         if existing_commit is not None:
-            return self._replay_reschedule(existing_commit, data)
+            return await self._replay_reschedule(existing_commit, data)
 
         begin_result = await self._pa_service.begin_commit(BeginCommitCommand(context=context))
         committing_context = CommitResultContext(
@@ -790,6 +784,21 @@ class AppointmentService:
                 )
                 await self._repo.force_constraints(
                     _restore_deferred_sql(APPOINTMENT_RESCHEDULE_POST_COMPLETION_CONSTRAINTS)
+                )
+
+                from fonely.services.notifications import NotificationService
+
+                await NotificationService(self._session).create_reschedule_notifications(
+                    business_id=command.actor.business_id,
+                    appointment_id=data.target_appointment_id,
+                    pending_action_id=command.pending_action_id,
+                    customer_phone=appointment.customer_phone,
+                    customer_name=appointment.customer_name,
+                    service_name=new_facts.service_name,
+                    resource_name=new_facts.resource_name,
+                    old_start_at=appointment.start_at,
+                    new_start_at=new_facts.start_at,
+                    business_timezone=new_facts.business_timezone,
                 )
         except IntegrityError as exc:
             if (
@@ -1009,7 +1018,7 @@ class AppointmentService:
             confirmation_facts=self._operation_facts_from_envelope(envelope),
         )
 
-    def _replay_cancellation(
+    async def _replay_cancellation(
         self, commit: object, data: CancelAppointmentData
     ) -> AppointmentCancellationResult:
         if (
@@ -1019,6 +1028,12 @@ class AppointmentService:
             raise PendingActionIdempotencyConflictError(
                 "Committed cancellation evidence does not match pending action"
             )
+        from fonely.services.notifications import NotificationService
+
+        await NotificationService(self._session).verify_cancellation_notifications(
+            business_id=commit.business_id,  # type: ignore[attr-defined]
+            appointment_id=data.target_appointment_id,
+        )
         after = commit.after_snapshot  # type: ignore[attr-defined]
         cancelled_at = datetime.fromisoformat(str(after["cancelled_at"]).replace("Z", "+00:00"))
         return AppointmentCancellationResult(
@@ -1027,7 +1042,7 @@ class AppointmentService:
             cancelled_at=cancelled_at,
         )
 
-    def _replay_reschedule(
+    async def _replay_reschedule(
         self, commit: object, data: RescheduleAppointmentData
     ) -> AppointmentRescheduleResult:
         if (
@@ -1037,6 +1052,12 @@ class AppointmentService:
             raise PendingActionIdempotencyConflictError(
                 "Committed reschedule evidence does not match pending action"
             )
+        from fonely.services.notifications import NotificationService
+
+        await NotificationService(self._session).verify_reschedule_notifications(
+            business_id=commit.business_id,  # type: ignore[attr-defined]
+            appointment_id=data.target_appointment_id,
+        )
         after = commit.after_snapshot  # type: ignore[attr-defined]
         return AppointmentRescheduleResult(
             appointment_id=data.target_appointment_id,
@@ -1112,11 +1133,17 @@ class AppointmentService:
             business_timezone=facts.business_timezone,
         )
 
-    def _replay_result(
+    async def _replay_result(
         self,
         appointment: object,
         authoritative_version: int,
     ) -> PreCommitAppointmentSuccess:
+        from fonely.services.notifications import NotificationService
+
+        await NotificationService(self._session).verify_appointment_notifications(
+            business_id=appointment.business_id,  # type: ignore[attr-defined]
+            appointment_id=appointment.id,  # type: ignore[attr-defined]
+        )
         return PreCommitAppointmentSuccess(
             appointment=AppointmentConfirmationResult(
                 appointment_id=appointment.id,  # type: ignore[attr-defined]

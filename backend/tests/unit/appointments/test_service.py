@@ -2,7 +2,7 @@
 
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fonely.domain.appointments.commands import (
     ConfirmPendingAppointmentCommand,
@@ -178,13 +178,21 @@ async def test_proposal_validates_once() -> None:
     assert validation.validate_for_actor.call_count == 1
 
 
-async def test_confirm_replay_returns_authoritative_version() -> None:
+@patch(
+    "fonely.services.notifications.NotificationService.verify_appointment_notifications",
+    new_callable=AsyncMock,
+    return_value=[1, 2],
+)
+async def test_confirm_replay_returns_authoritative_version(
+    _mock_verify: AsyncMock,
+) -> None:
     session = AsyncMock()
     validation = _mock_validation()
     service = AppointmentService(session, validation=validation)
 
     existing = MagicMock()
     existing.id = 42
+    existing.business_id = 1
     existing.pending_action_id = 10
     existing.service_id = 1
     existing.service_name_snapshot = "Haircut"
@@ -220,7 +228,12 @@ async def test_confirm_replay_returns_authoritative_version() -> None:
     session.commit.assert_not_called()
 
 
-async def test_confirm_does_not_call_outer_commit() -> None:
+@patch(
+    "fonely.services.notifications.NotificationService.create_appointment_notifications",
+    new_callable=AsyncMock,
+    return_value=[1, 2],
+)
+async def test_confirm_does_not_call_outer_commit(_mock_notify: AsyncMock) -> None:
     session = AsyncMock(spec=[])
     session.commit = AsyncMock()
     session.rollback = AsyncMock()

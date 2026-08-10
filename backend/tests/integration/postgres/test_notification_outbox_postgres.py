@@ -20,13 +20,12 @@ NOW = datetime(2026, 8, 12, 13, 30, tzinfo=UTC)
 
 @pytest.fixture(autouse=True)
 def _whatsapp_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
-    from fonely.services import whatsapp_config
+    from fonely.services import notifications, whatsapp_config
 
-    monkeypatch.setattr(
-        whatsapp_config.settings,
-        "whatsapp_business_mappings",
-        '{"phone-1": 1}',
-    )
+    mappings = '{"phone-1": 1}'
+    monkeypatch.setattr(whatsapp_config.settings, "whatsapp_business_mappings", mappings)
+    monkeypatch.setattr(notifications.settings, "whatsapp_business_mappings", mappings)
+    monkeypatch.setattr(notifications.settings, "whatsapp_phone_number_id", "phone-1")
 
 
 async def _seed_clinic(session: AsyncSession) -> None:
@@ -82,16 +81,18 @@ async def test_appointment_notifications_created_in_same_transaction(
     assert patient[2] == "patient"
     assert patient[3] == "+919123456789"
     assert patient[4] == "pending"
-    assert patient[5] == "appt-confirm-patient-42"
+    assert patient[5].startswith("notif-create-patient-42")
     assert patient[6]["clinic_name"] == "Smile Dental"
     assert patient[6]["service"] == "General Consultation"
     assert patient[6]["doctor"] == "Dr. Priya"
     assert patient[6]["appointment_id"] == 42
+    assert "equivalence_snapshot" in patient[6]
+    assert "equivalence_digest" in patient[6]
 
     owner = events[1]
     assert owner[2] == "owner"
     assert owner[3] == "+914428350001"
-    assert owner[5] == "appt-confirm-owner-42"
+    assert owner[5].startswith("notif-create-owner-42-bu")
     assert owner[6]["patient_name"] == "Karthick"
 
 

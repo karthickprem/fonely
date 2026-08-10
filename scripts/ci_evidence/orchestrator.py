@@ -88,6 +88,14 @@ def cmd_phase(args: argparse.Namespace) -> None:
             print("ERROR: invalid run manifest schema", file=sys.stderr)
             raise SystemExit(2)
 
+        current_sha = _git_rev("HEAD")
+        if current_sha != manifest["source_sha"]:
+            print(
+                f"ERROR: HEAD {current_sha} != manifest {manifest['source_sha']}",
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
+
         phase_name = args.phase
         if phase_name not in VALID_PHASES:
             print(f"ERROR: unknown phase: {phase_name}", file=sys.stderr)

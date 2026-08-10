@@ -24,7 +24,13 @@ from ci_evidence.schemas import (
     event_stream_file,
     execution_manifest_file,
 )
-from ci_evidence.writer import TrustedRoot, append_jsonl, atomic_replace_json, safe_read
+from ci_evidence.writer import (
+    TrustedRoot,
+    append_jsonl,
+    atomic_replace_json,
+    exclusive_create_json,
+    safe_read,
+)
 
 
 class _EvidenceState:
@@ -99,12 +105,10 @@ def pytest_collection_finish(session: pytest.Session) -> None:
         "nodes_digest": digest_nodes(nodes),
     }
 
-    target_file = (
-        execution_manifest_file(_state.partition)
-        if not _state.collect_only
-        else collection_manifest_file(_state.partition)
-    )
-    atomic_replace_json(_state.root, target_file, collection)
+    if _state.collect_only:
+        exclusive_create_json(_state.root, collection_manifest_file(_state.partition), collection)
+    else:
+        atomic_replace_json(_state.root, execution_manifest_file(_state.partition), collection)
 
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:

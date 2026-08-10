@@ -143,8 +143,9 @@ def _validate_phases(
 def _validate_collections(
     root: TrustedRoot,
     manifest: dict[str, Any],
-) -> tuple[set[str], set[str], list[str]]:
-    errors = []
+) -> tuple[set[str], set[str], list[str], list[str]]:
+    errors: list[str] = []
+    inc_errors: list[str] = []
     partitions: dict[str, set[str]] = {}
     pg_requires_call: dict[str, bool] = {}
 
@@ -152,7 +153,7 @@ def _validate_collections(
         try:
             data, _ = _load_json(root, collection_manifest_file(partition))
         except EvidenceWriteError:
-            errors.append(f"missing collection manifest: {partition}")
+            inc_errors.append(f"missing collection manifest: {partition}")
             partitions[partition] = set()
             continue
 
@@ -221,7 +222,7 @@ def _validate_collections(
     if npg | pg != all_nodes:
         errors.append("non_pg union pg != all")
 
-    return npg, pg, errors
+    return npg, pg, errors, inc_errors
 
 
 def _validate_events(
@@ -559,14 +560,18 @@ def _classify_terminal(
     evidence_errors: list[str],
     test_errors: list[str],
 ) -> str:
-    if incomplete_errors:
+    has_test = bool(test_errors or phase_errors)
+    has_evidence = bool(collection_errors or evidence_errors)
+    has_incomplete = bool(incomplete_errors)
+
+    if has_test:
+        return TERMINAL_TEST_FAILED
+
+    if has_incomplete:
         return TERMINAL_INCOMPLETE
 
-    if collection_errors or evidence_errors:
+    if has_evidence:
         return TERMINAL_EVIDENCE_FAILED
-
-    if test_errors or phase_errors:
-        return TERMINAL_TEST_FAILED
 
     return TERMINAL_SUCCESS
 
@@ -636,7 +641,7 @@ def _reconcile_inner(
 
     phase_inc, phase_ev, phase_test, phase_exits = _validate_phases(root, manifest)
 
-    npg_nodes, pg_nodes, collection_errors = _validate_collections(root, manifest)
+    npg_nodes, pg_nodes, collection_errors, collection_inc = _validate_collections(root, manifest)
 
     npg_events, npg_ev_errors, npg_inc_errors, npg_pytest_exit = _validate_events(
         root, manifest, "non_pg", npg_nodes
@@ -645,7 +650,7 @@ def _reconcile_inner(
         root, manifest, "pg", pg_nodes
     )
     evidence_errors = npg_ev_errors + pg_ev_errors
-    incomplete_errors = npg_inc_errors + pg_inc_errors
+    incomplete_errors = collection_inc + npg_inc_errors + pg_inc_errors
 
     test_errors: list[str] = []
     for label, pytest_exit, phase_name in [

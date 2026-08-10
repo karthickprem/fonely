@@ -917,6 +917,50 @@ class TestInterruptAndIncomplete:
         assert t["state"] == TERMINAL_INCOMPLETE
 
 
+class TestFailFastClassification:
+    def test_phase_failure_with_missing_later_phases_is_test_failed(self, tmp_path: Path) -> None:
+        """Fail-fast: lint fails, later phases never run → test_failed not incomplete."""
+        evidence, waivers = tmp_path / "e", tmp_path / "w.json"
+        evidence.mkdir()
+        _manifest(evidence)
+        lines = []
+        for i, p in enumerate(ALL_PHASES):
+            if p == "lint":
+                lines.append(
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "phase": p,
+                            "sequence": i + 1,
+                            "exit_code": 1,
+                            "failure_class": "nonzero_exit",
+                            "start_utc": "T",
+                            "end_utc": "T",
+                        }
+                    )
+                )
+                break
+            lines.append(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "phase": p,
+                        "sequence": i + 1,
+                        "exit_code": 0,
+                        "failure_class": None,
+                        "start_utc": "T",
+                        "end_utc": "T",
+                    }
+                )
+            )
+        (evidence / PHASE_RESULTS_FILE).write_text("\n".join(lines) + "\n")
+        _collections(evidence, [NPG], [PG])
+        _streams(evidence, [NPG], [PG])
+        _waivers(waivers)
+        t = _reconcile(evidence, waivers)
+        assert t["state"] == TERMINAL_TEST_FAILED
+
+
 class TestWaiverGovernance:
     def test_waiver_wrong_schema(self, tmp_path: Path) -> None:
         evidence, waivers = tmp_path / "e", tmp_path / "w.json"

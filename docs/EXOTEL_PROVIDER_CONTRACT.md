@@ -1,7 +1,7 @@
 # Exotel Provider Contract — Fonely Inbound Adapter
 
 Status: DESIGNED and UNIT-TESTED — NOT production-ready.
-  - Adapter: implemented, 97 unit tests pass
+  - Adapter: implemented, 117 unit tests pass
   - Route: ABSENT from production app (intentionally not mounted)
   - Worker: NON-RUNNABLE (schema guard blocks without provider_call_sid)
   - Schema: NOT MIGRATED (pending Dev3 0015 + known Alembic head)

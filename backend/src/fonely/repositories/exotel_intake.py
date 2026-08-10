@@ -106,7 +106,10 @@ class ExotelInboundEventRepository:
         )
 
     async def claim_next_eligible(self) -> ClaimedCallEvent | None:
-        """Claim one eligible event. Caller commits after this returns."""
+        """Claim one eligible event across all tenants. Caller commits.
+
+        The UPDATE is tenant-scoped via business_id from the SELECTed row.
+        """
         result = await self._session.execute(
             text(
                 "SELECT id, call_sid, business_id, event_type, status, "
@@ -127,6 +130,7 @@ class ExotelInboundEventRepository:
         if row is None:
             return None
 
+        row_business_id = row[2]
         claim_token = str(uuid.uuid4())
         new_version = row[9] + 1
         await self._session.execute(
@@ -138,9 +142,16 @@ class ExotelInboundEventRepository:
                 "  claimed_at = NOW(), "
                 "  lease_expires_at = NOW() + INTERVAL '5 minutes', "
                 "  attempts = attempts + 1 "
-                "WHERE id = :eid AND claim_version = :old_version"
+                "WHERE id = :eid AND business_id = :bid "
+                "  AND claim_version = :old_version"
             ),
-            {"token": claim_token, "version": new_version, "eid": row[0], "old_version": row[9]},
+            {
+                "token": claim_token,
+                "version": new_version,
+                "eid": row[0],
+                "bid": row_business_id,
+                "old_version": row[9],
+            },
         )
         await self._session.flush()
 
@@ -158,7 +169,9 @@ class ExotelInboundEventRepository:
             claim_version=new_version,
         )
 
-    async def mark_completed(self, event_id: int, claim_token: str, claim_version: int) -> bool:
+    async def mark_completed(
+        self, event_id: int, business_id: int, claim_token: str, claim_version: int
+    ) -> bool:
         """Mark completed. Returns False if claim is stale. Caller commits."""
         result = await self._session.execute(
             text(
@@ -166,17 +179,23 @@ class ExotelInboundEventRepository:
                 "  intake_status = 'completed', "
                 "  completed_at = NOW(), "
                 "  claim_token = NULL, claimed_at = NULL, lease_expires_at = NULL "
-                "WHERE id = :eid AND claim_token = :token "
+                "WHERE id = :eid AND business_id = :bid "
+                "  AND claim_token = :token "
                 "  AND claim_version = :version AND intake_status = 'processing' "
                 "  AND lease_expires_at >= NOW()"
             ),
-            {"eid": event_id, "token": claim_token, "version": claim_version},
+            {"eid": event_id, "bid": business_id, "token": claim_token, "version": claim_version},
         )
         await self._session.flush()
         return result.rowcount > 0  # type: ignore[union-attr]
 
-    async def mark_failed(self, event_id: int, claim_token: str, claim_version: int) -> bool:
-        """Mark failed with attempt-indexed backoff. Dead-letter after max. Caller commits."""
+    async def mark_failed(
+        self, event_id: int, business_id: int, claim_token: str, claim_version: int
+    ) -> bool:
+        """Mark failed with attempt-indexed backoff. Dead-letter after max. Caller commits.
+
+        Requires unexpired lease (same fencing as mark_completed).
+        """
         result = await self._session.execute(
             text(
                 "UPDATE exotel_inbound_events SET "
@@ -190,10 +209,12 @@ class ExotelInboundEventRepository:
                 "  dead_lettered_at = CASE "
                 "    WHEN attempts >= max_attempts THEN NOW() ELSE NULL END, "
                 "  claim_token = NULL, claimed_at = NULL, lease_expires_at = NULL "
-                "WHERE id = :eid AND claim_token = :token "
-                "  AND claim_version = :version AND intake_status = 'processing'"
+                "WHERE id = :eid AND business_id = :bid "
+                "  AND claim_token = :token "
+                "  AND claim_version = :version AND intake_status = 'processing' "
+                "  AND lease_expires_at >= NOW()"
             ),
-            {"eid": event_id, "token": claim_token, "version": claim_version},
+            {"eid": event_id, "bid": business_id, "token": claim_token, "version": claim_version},
         )
         await self._session.flush()
         return result.rowcount > 0  # type: ignore[union-attr]

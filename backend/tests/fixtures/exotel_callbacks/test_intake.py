@@ -115,9 +115,13 @@ class InMemoryCallEventIntake:
                 )
         return None
 
-    async def mark_completed(self, event_id: int, claim_token: str, claim_version: int) -> bool:
+    async def mark_completed(
+        self, event_id: int, business_id: int, claim_token: str, claim_version: int
+    ) -> bool:
         es = self._state.get(event_id)
         if es is None or es.claim_token != claim_token or es.claim_version != claim_version:
+            return False
+        if es.record.business_id != business_id:
             return False
         if es.intake_status != "processing":
             return False
@@ -125,9 +129,13 @@ class InMemoryCallEventIntake:
         es.claim_token = ""
         return True
 
-    async def mark_failed(self, event_id: int, claim_token: str, claim_version: int) -> bool:
+    async def mark_failed(
+        self, event_id: int, business_id: int, claim_token: str, claim_version: int
+    ) -> bool:
         es = self._state.get(event_id)
         if es is None or es.claim_token != claim_token or es.claim_version != claim_version:
+            return False
+        if es.record.business_id != business_id:
             return False
         if es.intake_status != "processing":
             return False

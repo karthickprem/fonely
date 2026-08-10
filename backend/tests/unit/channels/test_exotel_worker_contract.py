@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from fonely.api.channels.exotel import router
 from fonely.core.config import settings
 from fonely.domain.calls.events import parse_exotel_callback
-from fonely.domain.calls.intake import InboundCallEvent
+from fonely.domain.calls.intake import ClaimedCallEvent, InboundCallEvent
 from fonely.services.exotel_config import ExotelNumberMapping
 from fonely.workers.exotel_worker import SchemaNotReadyError
 from tests.fixtures.exotel_callbacks.fixtures import (
@@ -50,6 +50,18 @@ def _configure_secret():
 
 def _auth_headers() -> dict[str, str]:
     return {"X-Exotel-Webhook-Secret": _TEST_SECRET}
+
+
+async def _complete(intake: InMemoryCallEventIntake, c: ClaimedCallEvent) -> bool:
+    return await intake.mark_completed(
+        c.id, c.business_id, c.claim_token, c.claim_version,
+    )
+
+
+async def _fail(intake: InMemoryCallEventIntake, c: ClaimedCallEvent) -> bool:
+    return await intake.mark_failed(
+        c.id, c.business_id, c.claim_token, c.claim_version,
+    )
 
 
 # ============================================================================
@@ -90,7 +102,7 @@ class TestClaimLifecycle:
         await intake.persist(1, event)
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
-        ok = await intake.mark_completed(claimed.id, claimed.claim_token, claimed.claim_version)
+        ok = await _complete(intake, claimed)
         assert ok
         assert intake.get_intake_status(1) == "completed"
 
@@ -100,7 +112,7 @@ class TestClaimLifecycle:
         await intake.persist(1, event)
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
-        ok = await intake.mark_failed(claimed.id, claimed.claim_token, claimed.claim_version)
+        ok = await _fail(intake, claimed)
         assert ok
         assert intake.get_intake_status(1) == "failed"
 
@@ -110,7 +122,7 @@ class TestClaimLifecycle:
         await intake.persist(1, event)
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
-        await intake.mark_failed(claimed.id, claimed.claim_token, claimed.claim_version)
+        await _fail(intake, claimed)
         reclaimed = await intake.claim_next_eligible()
         assert reclaimed is not None
         assert reclaimed.id == claimed.id
@@ -121,7 +133,9 @@ class TestClaimLifecycle:
         await intake.persist(1, event)
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
-        ok = await intake.mark_completed(claimed.id, "wrong-token", claimed.claim_version)
+        ok = await intake.mark_completed(
+            claimed.id, claimed.business_id, "wrong-token", claimed.claim_version,
+        )
         assert not ok
         assert intake.get_intake_status(1) == "processing"
 
@@ -131,7 +145,9 @@ class TestClaimLifecycle:
         await intake.persist(1, event)
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
-        ok = await intake.mark_completed(claimed.id, claimed.claim_token, 999)
+        ok = await intake.mark_completed(
+            claimed.id, claimed.business_id, claimed.claim_token, 999,
+        )
         assert not ok
 
     async def test_dead_letter_after_max_attempts(self) -> None:
@@ -142,7 +158,7 @@ class TestClaimLifecycle:
             claimed = await intake.claim_next_eligible()
             if claimed is None:
                 break
-            await intake.mark_failed(claimed.id, claimed.claim_token, claimed.claim_version)
+            await _fail(intake, claimed)
         assert intake.get_intake_status(record.id) == "dead_letter"
 
     async def test_dead_letter_not_reclaimable(self) -> None:
@@ -153,7 +169,7 @@ class TestClaimLifecycle:
             claimed = await intake.claim_next_eligible()
             if claimed is None:
                 break
-            await intake.mark_failed(claimed.id, claimed.claim_token, claimed.claim_version)
+            await _fail(intake, claimed)
         assert await intake.claim_next_eligible() is None
 
 
@@ -163,10 +179,53 @@ class TestClaimLifecycle:
 
 
 class TestSchemaGuard:
-    def test_schema_not_ready_error_importable(self) -> None:
-        assert SchemaNotReadyError is not None
-        err = SchemaNotReadyError("test")
-        assert "test" in str(err)
+    async def test_verify_schema_raises_without_column(self) -> None:
+        """Worker._verify_schema must raise SchemaNotReadyError when
+        calls.provider_call_sid column is missing from information_schema."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from fonely.workers.exotel_worker import InboundCallEventWorker
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = None
+        mock_session = AsyncMock()
+        mock_session.execute.return_value = mock_result
+
+        worker = InboundCallEventWorker(AsyncMock())
+        with pytest.raises(SchemaNotReadyError, match="provider_call_sid"):
+            await worker._verify_schema(mock_session)
+
+    async def test_verify_schema_passes_with_column(self) -> None:
+        """Worker._verify_schema succeeds when column exists."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from fonely.workers.exotel_worker import InboundCallEventWorker
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = 1
+        mock_session = AsyncMock()
+        mock_session.execute.return_value = mock_result
+
+        worker = InboundCallEventWorker(AsyncMock())
+        await worker._verify_schema(mock_session)
+        assert worker._schema_verified is True
+
+    async def test_verify_schema_caches_after_first_success(self) -> None:
+        """Schema check is cached — second call skips DB query."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from fonely.workers.exotel_worker import InboundCallEventWorker
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = 1
+        mock_session = AsyncMock()
+        mock_session.execute.return_value = mock_result
+
+        worker = InboundCallEventWorker(AsyncMock())
+        await worker._verify_schema(mock_session)
+        mock_session.execute.reset_mock()
+        await worker._verify_schema(mock_session)
+        mock_session.execute.assert_not_called()
 
 
 # ============================================================================
@@ -190,12 +249,12 @@ class TestAdapterIntakeWorkerProof:
         claimed1 = await intake.claim_next_eligible()
         assert claimed1 is not None
         assert claimed1.status == "in-progress"
-        await intake.mark_completed(claimed1.id, claimed1.claim_token, claimed1.claim_version)
+        await _complete(intake, claimed1)
 
         claimed2 = await intake.claim_next_eligible()
         assert claimed2 is not None
         assert claimed2.status == "completed"
-        await intake.mark_completed(claimed2.id, claimed2.claim_token, claimed2.claim_version)
+        await _complete(intake, claimed2)
 
         assert await intake.claim_next_eligible() is None
         assert intake.get_intake_status(1) == "completed"
@@ -211,7 +270,7 @@ class TestAdapterIntakeWorkerProof:
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
         assert claimed.status == "failed"
-        await intake.mark_completed(claimed.id, claimed.claim_token, claimed.claim_version)
+        await _complete(intake, claimed)
         assert intake.get_intake_status(1) == "completed"
 
     async def test_full_vertical_worker_failure_retries(self) -> None:
@@ -223,14 +282,14 @@ class TestAdapterIntakeWorkerProof:
 
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
-        await intake.mark_failed(claimed.id, claimed.claim_token, claimed.claim_version)
+        await _fail(intake, claimed)
         assert intake.get_intake_status(1) == "failed"
         assert intake.get_attempts(1) == 1
 
         reclaimed = await intake.claim_next_eligible()
         assert reclaimed is not None
         assert reclaimed.id == claimed.id
-        await intake.mark_completed(reclaimed.id, reclaimed.claim_token, reclaimed.claim_version)
+        await _complete(intake, reclaimed)
         assert intake.get_intake_status(1) == "completed"
 
     async def test_full_vertical_duplicate_callbacks_single_event(self) -> None:
@@ -251,8 +310,38 @@ class TestAdapterIntakeWorkerProof:
 
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
-        await intake.mark_completed(claimed.id, claimed.claim_token, claimed.claim_version)
+        await _complete(intake, claimed)
         assert await intake.claim_next_eligible() is None
+
+    async def test_worker_ooo_late_event_completes_as_noop(self) -> None:
+        """Late answered event after terminal: intake stores both; worker
+        completes the late event as a no-op (no domain mutation crash)."""
+        app, intake = _create_app()
+        client = TestClient(app)
+
+        client.post(
+            "/webhooks/exotel/call-status", json=COMPLETED_OUTBOUND, headers=_auth_headers()
+        )
+        late_answered = {**ANSWERED_OUTBOUND, "CallSid": COMPLETED_OUTBOUND["CallSid"]}
+        client.post(
+            "/webhooks/exotel/call-status", json=late_answered, headers=_auth_headers()
+        )
+        assert len(intake.events) == 2
+
+        # First claim: terminal — normal processing
+        c1 = await intake.claim_next_eligible()
+        assert c1 is not None
+        assert c1.status == "completed"
+        await _complete(intake, c1)
+
+        # Second claim: late answered — worker would catch LateCallEventError
+        # and still mark_completed (no-op domain mutation)
+        c2 = await intake.claim_next_eligible()
+        assert c2 is not None
+        assert c2.event_type == "answered"
+        assert c2.status == "in-progress"
+        await _complete(intake, c2)
+        assert intake.get_intake_status(c2.id) == "completed"
 
     async def test_late_event_persisted_and_claimable(self) -> None:
         """Late lower-state event is persisted by intake (worker handles no-op)."""
@@ -271,9 +360,154 @@ class TestAdapterIntakeWorkerProof:
 
         claimed1 = await intake.claim_next_eligible()
         assert claimed1 is not None
-        await intake.mark_completed(claimed1.id, claimed1.claim_token, claimed1.claim_version)
+        await _complete(intake, claimed1)
 
         claimed2 = await intake.claim_next_eligible()
         assert claimed2 is not None
         assert claimed2.event_type == "answered"
-        await intake.mark_completed(claimed2.id, claimed2.claim_token, claimed2.claim_version)
+        await _complete(intake, claimed2)
+
+
+# ============================================================================
+# Tenant isolation
+# ============================================================================
+
+
+class TestTenantIsolation:
+    async def test_mark_completed_rejects_wrong_business_id(self) -> None:
+        """mark_completed must reject if business_id doesn't match."""
+        intake = InMemoryCallEventIntake()
+        event = _to_inbound(ANSWERED_OUTBOUND)
+        await intake.persist(1, event)
+        claimed = await intake.claim_next_eligible()
+        assert claimed is not None
+        ok = await intake.mark_completed(
+            claimed.id, 999, claimed.claim_token, claimed.claim_version,
+        )
+        assert not ok
+        assert intake.get_intake_status(1) == "processing"
+
+    async def test_mark_failed_rejects_wrong_business_id(self) -> None:
+        """mark_failed must reject if business_id doesn't match."""
+        intake = InMemoryCallEventIntake()
+        event = _to_inbound(ANSWERED_OUTBOUND)
+        await intake.persist(1, event)
+        claimed = await intake.claim_next_eligible()
+        assert claimed is not None
+        ok = await intake.mark_failed(
+            claimed.id, 999, claimed.claim_token, claimed.claim_version,
+        )
+        assert not ok
+        assert intake.get_intake_status(1) == "processing"
+
+    async def test_different_tenants_independent_events(self) -> None:
+        """Events for different business_ids are fully independent."""
+        intake = InMemoryCallEventIntake()
+        event = _to_inbound(ANSWERED_OUTBOUND)
+        r1 = await intake.persist(1, event)
+        r2 = await intake.persist(2, event)
+        assert r1.business_id == 1
+        assert r2.business_id == 2
+        assert r1.id != r2.id
+
+
+# ============================================================================
+# SQL contract patterns (provable without PG, demonstrating the SQL shapes)
+# ============================================================================
+
+
+class TestSQLContractPatterns:
+    async def test_on_conflict_duplicate_detection(self) -> None:
+        """Same dedup key, same digest → DuplicateCallEventError."""
+        intake = InMemoryCallEventIntake()
+        event = _to_inbound(COMPLETED_OUTBOUND)
+        await intake.persist(1, event)
+        from fonely.domain.calls.intake import DuplicateCallEventError
+
+        with pytest.raises(DuplicateCallEventError):
+            await intake.persist(1, event)
+
+    async def test_on_conflict_conflict_detection(self) -> None:
+        """Same dedup key, different digest → ConflictingCallEventError."""
+        intake = InMemoryCallEventIntake()
+        event = _to_inbound(COMPLETED_OUTBOUND)
+        await intake.persist(1, event)
+        modified = InboundCallEvent(
+            call_sid=event.call_sid,
+            event_type=event.event_type,
+            status=event.status,
+            caller_phone=event.caller_phone,
+            called_number=event.called_number,
+            duration=999,
+            conversation_duration=None,
+            direction=event.direction,
+            custom_field=event.custom_field,
+        )
+        from fonely.domain.calls.intake import ConflictingCallEventError
+
+        with pytest.raises(ConflictingCallEventError):
+            await intake.persist(1, modified)
+
+    async def test_claim_fence_stale_token(self) -> None:
+        """Stale claim_token must be rejected by mark_completed."""
+        intake = InMemoryCallEventIntake()
+        event = _to_inbound(ANSWERED_OUTBOUND)
+        await intake.persist(1, event)
+        claimed = await intake.claim_next_eligible()
+        assert claimed is not None
+        ok = await intake.mark_completed(
+            claimed.id, claimed.business_id, "stale-token", claimed.claim_version
+        )
+        assert not ok
+
+    async def test_claim_fence_stale_version(self) -> None:
+        """Stale claim_version must be rejected by mark_completed."""
+        intake = InMemoryCallEventIntake()
+        event = _to_inbound(ANSWERED_OUTBOUND)
+        await intake.persist(1, event)
+        claimed = await intake.claim_next_eligible()
+        assert claimed is not None
+        ok = await intake.mark_completed(
+            claimed.id, claimed.business_id, claimed.claim_token, claimed.claim_version + 100
+        )
+        assert not ok
+
+    async def test_backoff_retry_cycle(self) -> None:
+        """Failed events are re-claimable; attempt count increments."""
+        intake = InMemoryCallEventIntake()
+        event = _to_inbound(ANSWERED_OUTBOUND)
+        record = await intake.persist(1, event)
+        for i in range(3):
+            claimed = await intake.claim_next_eligible()
+            assert claimed is not None
+            assert intake.get_attempts(record.id) == i + 1
+            await intake.mark_failed(
+                claimed.id, claimed.business_id, claimed.claim_token, claimed.claim_version
+            )
+            assert intake.get_intake_status(record.id) == "failed"
+
+    async def test_max_attempts_dead_letter(self) -> None:
+        """After max_attempts (5), event goes to dead_letter, not failed."""
+        intake = InMemoryCallEventIntake()
+        event = _to_inbound(ANSWERED_OUTBOUND)
+        record = await intake.persist(1, event)
+        for i in range(5):
+            claimed = await intake.claim_next_eligible()
+            assert claimed is not None, f"should be claimable on attempt {i + 1}"
+            await intake.mark_failed(
+                claimed.id, claimed.business_id, claimed.claim_token, claimed.claim_version
+            )
+        assert intake.get_intake_status(record.id) == "dead_letter"
+        assert await intake.claim_next_eligible() is None
+
+    async def test_completed_event_not_reclaimable(self) -> None:
+        """Once completed, an event cannot be claimed again."""
+        intake = InMemoryCallEventIntake()
+        event = _to_inbound(ANSWERED_OUTBOUND)
+        await intake.persist(1, event)
+        claimed = await intake.claim_next_eligible()
+        assert claimed is not None
+        await intake.mark_completed(
+            claimed.id, claimed.business_id, claimed.claim_token, claimed.claim_version
+        )
+        assert await intake.claim_next_eligible() is None

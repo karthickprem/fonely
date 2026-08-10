@@ -97,7 +97,8 @@ class InboundCallEventWorker:
                     )
                 repo = ExotelInboundEventRepository(session)
                 ok = await repo.mark_completed(
-                    claimed.id, claimed.claim_token, claimed.claim_version
+                    claimed.id, claimed.business_id,
+                    claimed.claim_token, claimed.claim_version,
                 )
                 if not ok:
                     await session.rollback()
@@ -132,7 +133,10 @@ class InboundCallEventWorker:
             try:
                 async with self._factory() as fail_session:
                     repo = ExotelInboundEventRepository(fail_session)
-                    await repo.mark_failed(claimed.id, claimed.claim_token, claimed.claim_version)
+                    await repo.mark_failed(
+                        claimed.id, claimed.business_id,
+                        claimed.claim_token, claimed.claim_version,
+                    )
                     await fail_session.commit()
             except Exception:
                 logger.error("call_event_failure_recording_failed", exc_info=True)

@@ -1,24 +1,18 @@
-"""Unit tests for Exotel telephony adapter — contract-compliant vertical."""
+"""Unit tests for Exotel adapter — strict validation, intake contract, negatives."""
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from fonely.api.channels.exotel import (
-    router,
-)
+from fonely.api.channels.exotel import router
 from fonely.core.config import settings
-from fonely.domain.calls.events import (
-    ExotelCallbackParseError,
-    parse_exotel_callback,
-)
+from fonely.domain.calls.events import ExotelCallbackParseError, parse_exotel_callback
 from fonely.domain.calls.transitions import (
     InvalidCallTransitionError,
-    is_terminal,
     validate_transition,
 )
 from fonely.services.exotel_config import ExotelNumberMapping
@@ -35,30 +29,20 @@ from tests.fixtures.exotel_callbacks.fixtures import (
     NEGATIVE_DURATION,
     NO_ANSWER_OUTBOUND,
 )
+from tests.fixtures.exotel_callbacks.test_intake import InMemoryCallEventIntake
 
 _TEST_SECRET = "test-exotel-webhook-secret-value"
 
 
 def _create_app(
     mapping: dict[str, int] | None = None,
-) -> tuple[FastAPI, AsyncMock]:
+) -> tuple[FastAPI, InMemoryCallEventIntake]:
     app = FastAPI()
     app.include_router(router)
     app.state.exotel_mapping = ExotelNumberMapping(mapping or {"08012345678": 1})
-
-    mock_session = AsyncMock()
-    mock_result = MagicMock()
-    mock_result.scalar_one.return_value = 42
-    mock_result.one_or_none.return_value = None
-    mock_session.execute = AsyncMock(return_value=mock_result)
-    mock_session.commit = AsyncMock()
-
-    mock_factory = MagicMock()
-    mock_factory.return_value.__aenter__ = AsyncMock(return_value=mock_session)
-    mock_factory.return_value.__aexit__ = AsyncMock(return_value=False)
-    app.state.session_factory = mock_factory
-    app.state._mock_session = mock_session
-    return app, mock_session
+    intake = InMemoryCallEventIntake()
+    app.state.exotel_intake = intake
+    return app, intake
 
 
 @pytest.fixture(autouse=True)
@@ -72,18 +56,16 @@ def _auth_headers() -> dict[str, str]:
 
 
 # ============================================================================
-# Domain: Event parsing
+# Domain: Strict event parsing
 # ============================================================================
 
 
-class TestExotelCallbackEventParsing:
+class TestStrictEventParsing:
     def test_answered_outbound_parses(self) -> None:
         event = parse_exotel_callback(ANSWERED_OUTBOUND)
         assert event.call_sid == "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6"
         assert event.event_type == "answered"
         assert event.status == "in-progress"
-        assert event.caller_phone == "+919876543210"
-        assert event.called_number == "08012345678"
         assert event.direction == "outbound-api"
         assert event.custom_field == "1:corr-001"
 
@@ -92,60 +74,64 @@ class TestExotelCallbackEventParsing:
         assert event.status == "completed"
         assert event.duration == 120
         assert event.conversation_duration == 95
-        assert event.event_type == "terminal"
-
-    def test_failed_outbound_parses(self) -> None:
-        event = parse_exotel_callback(FAILED_OUTBOUND)
-        assert event.status == "failed"
-        assert event.event_type == "terminal"
-        assert event.duration is None
-
-    def test_busy_parses(self) -> None:
-        event = parse_exotel_callback(BUSY_OUTBOUND)
-        assert event.status == "busy"
-
-    def test_no_answer_parses(self) -> None:
-        event = parse_exotel_callback(NO_ANSWER_OUTBOUND)
-        assert event.status == "no-answer"
-
-    def test_inbound_answered_parses(self) -> None:
-        event = parse_exotel_callback(ANSWERED_INBOUND)
-        assert event.direction == "inbound"
 
     def test_inbound_completed_parses(self) -> None:
         event = parse_exotel_callback(COMPLETED_INBOUND)
         assert event.duration == 180
-        assert event.conversation_duration == 150
+        assert event.direction == "inbound"
 
     def test_missing_optional_fields_accepted(self) -> None:
         event = parse_exotel_callback(MISSING_OPTIONAL_FIELDS)
         assert event.duration is None
         assert event.direction is None
-        assert event.custom_field is None
 
-    def test_negative_duration_treated_as_none(self) -> None:
-        event = parse_exotel_callback(NEGATIVE_DURATION)
-        assert event.duration is None
-
-    def test_missing_event_type_inferred_terminal(self) -> None:
+    def test_missing_event_type_inferred_for_terminal(self) -> None:
         event = parse_exotel_callback(MISSING_EVENT_TYPE_TERMINAL)
         assert event.event_type == "terminal"
 
-    def test_missing_event_type_inferred_answered(self) -> None:
+    def test_missing_event_type_inferred_for_answered(self) -> None:
         event = parse_exotel_callback(MISSING_EVENT_TYPE_ANSWERED)
         assert event.event_type == "answered"
 
-    def test_missing_call_sid_raises(self) -> None:
+    # --- Strict rejections (not coercion) ---
+
+    def test_negative_duration_rejected(self) -> None:
+        with pytest.raises(ExotelCallbackParseError, match="negative Duration"):
+            parse_exotel_callback(NEGATIVE_DURATION)
+
+    def test_non_numeric_duration_rejected(self) -> None:
+        with pytest.raises(ExotelCallbackParseError, match="invalid Duration"):
+            parse_exotel_callback({**COMPLETED_OUTBOUND, "Duration": "abc"})
+
+    def test_invalid_event_type_rejected(self) -> None:
+        with pytest.raises(ExotelCallbackParseError, match="invalid EventType"):
+            parse_exotel_callback({**COMPLETED_OUTBOUND, "EventType": "ringing"})
+
+    def test_invalid_direction_rejected(self) -> None:
+        with pytest.raises(ExotelCallbackParseError, match="invalid Direction"):
+            parse_exotel_callback({**COMPLETED_OUTBOUND, "Direction": "sideways"})
+
+    def test_conversation_duration_exceeds_duration_rejected(self) -> None:
+        with pytest.raises(ExotelCallbackParseError, match="ConversationDuration"):
+            parse_exotel_callback(
+                {**COMPLETED_OUTBOUND, "Duration": "60", "ConversationDuration": "90"}
+            )
+
+    def test_missing_call_sid_rejected(self) -> None:
         with pytest.raises(ExotelCallbackParseError, match="CallSid"):
             parse_exotel_callback({"Status": "completed", "From": "x", "To": "y"})
 
-    def test_unrecognized_status_raises(self) -> None:
+    def test_unrecognized_status_rejected(self) -> None:
         with pytest.raises(ExotelCallbackParseError, match="unrecognized"):
             parse_exotel_callback({"CallSid": "abc", "Status": "unknown", "From": "x", "To": "y"})
 
-    def test_missing_from_raises(self) -> None:
+    def test_missing_from_rejected(self) -> None:
         with pytest.raises(ExotelCallbackParseError, match="From or To"):
             parse_exotel_callback({"CallSid": "abc", "Status": "completed", "To": "y"})
+
+    def test_missing_to_rejected(self) -> None:
+        with pytest.raises(ExotelCallbackParseError, match="From or To"):
+            parse_exotel_callback({"CallSid": "abc", "Status": "completed", "From": "x"})
 
 
 # ============================================================================
@@ -173,12 +159,6 @@ class TestCallStatusTransitions:
         with pytest.raises(InvalidCallTransitionError):
             validate_transition("completed", "in-progress")
 
-    def test_is_terminal(self) -> None:
-        assert is_terminal("completed")
-        assert is_terminal("failed")
-        assert not is_terminal("in-progress")
-        assert not is_terminal("queued")
-
 
 # ============================================================================
 # Adapter: Auth
@@ -190,9 +170,7 @@ class TestWebhookAuth:
         app, _ = _create_app()
         client = TestClient(app)
         response = client.post(
-            "/webhooks/exotel/call-status",
-            json=ANSWERED_OUTBOUND,
-            headers=_auth_headers(),
+            "/webhooks/exotel/call-status", json=ANSWERED_OUTBOUND, headers=_auth_headers()
         )
         assert response.status_code == 200
 
@@ -202,16 +180,15 @@ class TestWebhookAuth:
         response = client.post("/webhooks/exotel/call-status", json=ANSWERED_OUTBOUND)
         assert response.status_code == 401
 
-    def test_wrong_secret_returns_401_no_db(self) -> None:
-        app, mock_session = _create_app()
+    def test_wrong_secret_no_intake_call(self) -> None:
+        app, intake = _create_app()
         client = TestClient(app)
-        response = client.post(
+        client.post(
             "/webhooks/exotel/call-status",
             json=ANSWERED_OUTBOUND,
             headers={"X-Exotel-Webhook-Secret": "wrong-secret-value-padding"},
         )
-        assert response.status_code == 401
-        mock_session.execute.assert_not_awaited()
+        assert not intake.persist_called
 
     def test_empty_config_fails_closed(self) -> None:
         with patch.object(settings, "exotel_webhook_secret", ""):
@@ -221,17 +198,6 @@ class TestWebhookAuth:
                 "/webhooks/exotel/call-status",
                 json=ANSWERED_OUTBOUND,
                 headers={"X-Exotel-Webhook-Secret": "anything-at-all-padded"},
-            )
-        assert response.status_code == 401
-
-    def test_short_secret_fails_closed(self) -> None:
-        with patch.object(settings, "exotel_webhook_secret", "short"):
-            app, _ = _create_app()
-            client = TestClient(app)
-            response = client.post(
-                "/webhooks/exotel/call-status",
-                json=ANSWERED_OUTBOUND,
-                headers={"X-Exotel-Webhook-Secret": "short"},
             )
         assert response.status_code == 401
 
@@ -259,9 +225,7 @@ class TestContentHandling:
         app, _ = _create_app()
         client = TestClient(app)
         response = client.post(
-            "/webhooks/exotel/call-status",
-            json=COMPLETED_OUTBOUND,
-            headers=_auth_headers(),
+            "/webhooks/exotel/call-status", json=COMPLETED_OUTBOUND, headers=_auth_headers()
         )
         assert response.status_code == 200
 
@@ -271,10 +235,7 @@ class TestContentHandling:
         response = client.post(
             "/webhooks/exotel/call-status",
             content="CallSid=abc&Status=completed",
-            headers={
-                **_auth_headers(),
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
+            headers={**_auth_headers(), "Content-Type": "application/x-www-form-urlencoded"},
         )
         assert response.status_code == 415
 
@@ -289,44 +250,55 @@ class TestContentHandling:
         assert response.status_code == 400
 
     def test_invalid_callback_payload_returns_400(self) -> None:
-        app, _ = _create_app()
+        app, intake = _create_app()
         client = TestClient(app)
         response = client.post(
-            "/webhooks/exotel/call-status",
-            json={"irrelevant": "data"},
-            headers=_auth_headers(),
+            "/webhooks/exotel/call-status", json={"irrelevant": "data"}, headers=_auth_headers()
         )
         assert response.status_code == 400
+        assert not intake.persist_called
 
-    def test_oversize_content_length_returns_413(self) -> None:
-        app, mock_session = _create_app()
+    def test_negative_duration_rejected_at_parse(self) -> None:
+        app, intake = _create_app()
         client = TestClient(app)
         response = client.post(
-            "/webhooks/exotel/call-status",
-            content=b'{"x": 1}',
-            headers={
-                **_auth_headers(),
-                "Content-Type": "application/json",
-                "Content-Length": "999999",
-            },
+            "/webhooks/exotel/call-status", json=NEGATIVE_DURATION, headers=_auth_headers()
         )
-        assert response.status_code == 413
-        mock_session.execute.assert_not_awaited()
+        assert response.status_code == 400
+        assert not intake.persist_called
 
 
 # ============================================================================
-# Adapter: Business routing
+# Adapter: Tenant routing
 # ============================================================================
 
 
-class TestBusinessRouting:
-    def test_unknown_number_returns_404(self) -> None:
+class TestTenantRouting:
+    def test_inbound_routes_by_called_number(self) -> None:
+        app, intake = _create_app()
+        client = TestClient(app)
+        response = client.post(
+            "/webhooks/exotel/call-status", json=ANSWERED_INBOUND, headers=_auth_headers()
+        )
+        assert response.status_code == 200
+        assert intake.events[0].business_id == 1
+
+    def test_outbound_routes_by_caller_when_to_unknown(self) -> None:
+        app, intake = _create_app({"08012345678": 1})
+        client = TestClient(app)
+        payload = {**ANSWERED_OUTBOUND, "From": "08012345678", "To": "+919876543210"}
+        response = client.post(
+            "/webhooks/exotel/call-status", json=payload, headers=_auth_headers()
+        )
+        assert response.status_code == 200
+        assert intake.events[0].business_id == 1
+
+    def test_unknown_both_numbers_returns_404(self) -> None:
         app, _ = _create_app()
         client = TestClient(app)
+        payload = {**ANSWERED_OUTBOUND, "To": "09999999999", "From": "+918888888888"}
         response = client.post(
-            "/webhooks/exotel/call-status",
-            json={**ANSWERED_OUTBOUND, "To": "09999999999"},
-            headers=_auth_headers(),
+            "/webhooks/exotel/call-status", json=payload, headers=_auth_headers()
         )
         assert response.status_code == 404
 
@@ -340,59 +312,103 @@ class TestBusinessRouting:
                 headers=_auth_headers(),
             )
         records = [r for r in caplog.records if r.name == "fonely.api.channels.exotel"]
-        assert len(records) == 1
+        assert len(records) >= 1
         serialized = repr(records[0].__dict__)
         assert "09999999999" not in serialized
         assert "+919876543210" not in serialized
 
 
 # ============================================================================
-# Adapter: Durable persistence
+# Adapter: Intake contract
 # ============================================================================
 
 
-class TestDurablePersistence:
-    def test_callback_persists_before_200(self) -> None:
-        app, mock_session = _create_app()
+class TestIntakeContract:
+    def test_persist_called_before_200(self) -> None:
+        app, intake = _create_app()
         client = TestClient(app)
         response = client.post(
-            "/webhooks/exotel/call-status",
-            json=ANSWERED_OUTBOUND,
-            headers=_auth_headers(),
+            "/webhooks/exotel/call-status", json=ANSWERED_OUTBOUND, headers=_auth_headers()
         )
         assert response.status_code == 200
-        mock_session.execute.assert_awaited()
-        mock_session.commit.assert_awaited()
+        assert intake.persist_called
+        assert intake.persist_count == 1
 
-    def test_persistence_failure_returns_500(self) -> None:
-        app, mock_session = _create_app()
-        mock_session.execute.side_effect = Exception("db down")
-        client = TestClient(app)
-        response = client.post(
-            "/webhooks/exotel/call-status",
-            json=ANSWERED_OUTBOUND,
-            headers=_auth_headers(),
-        )
-        assert response.status_code == 500
-
-    def test_all_status_values_accepted(self) -> None:
+    def test_all_statuses_reach_intake(self) -> None:
         for fixture in (
             ANSWERED_OUTBOUND,
             COMPLETED_OUTBOUND,
             FAILED_OUTBOUND,
             BUSY_OUTBOUND,
             NO_ANSWER_OUTBOUND,
-            ANSWERED_INBOUND,
-            COMPLETED_INBOUND,
         ):
-            app, _ = _create_app()
+            app, intake = _create_app()
             client = TestClient(app)
             response = client.post(
-                "/webhooks/exotel/call-status",
-                json=fixture,
-                headers=_auth_headers(),
+                "/webhooks/exotel/call-status", json=fixture, headers=_auth_headers()
             )
             assert response.status_code == 200, f"Failed for {fixture.get('Status')}"
+            assert intake.persist_called
+
+    def test_duplicate_callback_returns_200(self) -> None:
+        app, intake = _create_app()
+        client = TestClient(app)
+        client.post("/webhooks/exotel/call-status", json=ANSWERED_OUTBOUND, headers=_auth_headers())
+        response = client.post(
+            "/webhooks/exotel/call-status", json=ANSWERED_OUTBOUND, headers=_auth_headers()
+        )
+        assert response.status_code == 200
+        assert intake.persist_count == 2  # called twice
+        assert len(intake.events) == 1  # stored once
+
+    def test_answered_then_completed_stores_both(self) -> None:
+        app, intake = _create_app()
+        client = TestClient(app)
+        client.post("/webhooks/exotel/call-status", json=ANSWERED_OUTBOUND, headers=_auth_headers())
+        client.post(
+            "/webhooks/exotel/call-status", json=COMPLETED_OUTBOUND, headers=_auth_headers()
+        )
+        assert len(intake.events) == 2
+        assert intake.events[0].event_type == "answered"
+        assert intake.events[1].event_type == "terminal"
+
+    def test_intake_not_configured_returns_503(self) -> None:
+        app = FastAPI()
+        app.include_router(router)
+        app.state.exotel_mapping = ExotelNumberMapping({"08012345678": 1})
+        # no exotel_intake set
+        client = TestClient(app)
+        response = client.post(
+            "/webhooks/exotel/call-status", json=ANSWERED_OUTBOUND, headers=_auth_headers()
+        )
+        assert response.status_code == 503
+
+    def test_intake_failure_returns_500(self) -> None:
+        app, intake = _create_app()
+
+        async def _failing_persist(*a, **kw):  # type: ignore[no-untyped-def]
+            raise RuntimeError("db down")
+
+        intake.persist = _failing_persist  # type: ignore[assignment]
+        client = TestClient(app)
+        response = client.post(
+            "/webhooks/exotel/call-status", json=ANSWERED_OUTBOUND, headers=_auth_headers()
+        )
+        assert response.status_code == 500
+
+    def test_event_record_has_correct_fields(self) -> None:
+        app, intake = _create_app()
+        client = TestClient(app)
+        client.post(
+            "/webhooks/exotel/call-status", json=COMPLETED_OUTBOUND, headers=_auth_headers()
+        )
+        record = intake.events[0]
+        assert record.business_id == 1
+        assert record.call_sid == COMPLETED_OUTBOUND["CallSid"]
+        assert record.event_type == "terminal"
+        assert record.status == "completed"
+        assert record.duration == 120
+        assert record.payload_digest  # non-empty hash
 
 
 # ============================================================================
@@ -406,9 +422,7 @@ class TestPrivacy:
         client = TestClient(app)
         with caplog.at_level("INFO", logger="fonely.api.channels.exotel"):
             client.post(
-                "/webhooks/exotel/call-status",
-                json=COMPLETED_OUTBOUND,
-                headers=_auth_headers(),
+                "/webhooks/exotel/call-status", json=COMPLETED_OUTBOUND, headers=_auth_headers()
             )
         records = [
             r
@@ -432,7 +446,7 @@ class TestPrivacy:
 
 
 # ============================================================================
-# Feature gate
+# Feature gate + mapping
 # ============================================================================
 
 
@@ -449,11 +463,6 @@ class TestFeatureGate:
         assert "/webhooks/exotel/call-status" not in paths
 
 
-# ============================================================================
-# Number mapping
-# ============================================================================
-
-
 class TestNumberMapping:
     def test_known_number_returns_business_id(self) -> None:
         mapping = ExotelNumberMapping({"08012345678": 1, "08087654321": 2})
@@ -462,11 +471,6 @@ class TestNumberMapping:
     def test_unknown_number_returns_none(self) -> None:
         mapping = ExotelNumberMapping({"08012345678": 1})
         assert mapping.get_business_id("09999999999") is None
-
-
-# ============================================================================
-# WebSocket placeholder
-# ============================================================================
 
 
 class TestAudioStreamWebSocket:

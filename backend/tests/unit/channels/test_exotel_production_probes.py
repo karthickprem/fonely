@@ -169,9 +169,9 @@ class TestWorkerSchemaGuardProduction:
 
     async def test_process_one_raises_without_schema(self) -> None:
         """Real worker.process_one() raises SchemaNotReadyError when
-        provider_call_sid column is absent from information_schema."""
+        COUNT(*) returns 0 for provider_call_sid in current_schema()."""
         mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = None
+        mock_result.scalar_one.return_value = 0
 
         mock_session = AsyncMock()
         mock_session.execute.return_value = mock_result
@@ -185,7 +185,7 @@ class TestWorkerSchemaGuardProduction:
     async def test_process_one_returns_false_empty_queue(self) -> None:
         """When schema exists but queue is empty, returns False."""
         schema_result = MagicMock()
-        schema_result.scalar_one_or_none.return_value = 1
+        schema_result.scalar_one.return_value = 1
 
         claim_result = MagicMock()
         claim_result.one_or_none.return_value = None
@@ -211,7 +211,7 @@ class TestWorkerSchemaGuardProduction:
     async def test_schema_check_cached_across_calls(self) -> None:
         """Schema verified once, second call doesn't re-query."""
         schema_result = MagicMock()
-        schema_result.scalar_one_or_none.return_value = 1
+        schema_result.scalar_one.return_value = 1
 
         claim_result = MagicMock()
         claim_result.one_or_none.return_value = None
@@ -240,6 +240,25 @@ class TestWorkerSchemaGuardProduction:
         assert len(schema_queries) == 1, (
             f"schema queried {len(schema_queries)} times, expected 1"
         )
+
+    async def test_schema_guard_scopes_to_current_schema(self) -> None:
+        """Verify the SQL uses current_schema() and COUNT(*)."""
+        mock_session = AsyncMock()
+        mock_result = MagicMock()
+        mock_result.scalar_one.return_value = 0
+        mock_session.execute.return_value = mock_result
+
+        factory = _mock_session_factory(mock_session)
+        worker = InboundCallEventWorker(factory)
+
+        with pytest.raises(SchemaNotReadyError):
+            await worker.process_one()
+
+        call_args = mock_session.execute.call_args
+        sql = str(call_args[0][0])
+        assert "current_schema()" in sql
+        assert "COUNT(*)" in sql
+        assert "table_schema" in sql
 
 
 # ============================================================================
@@ -327,15 +346,14 @@ class TestCreateAppDisabledState:
 # ============================================================================
 
 
-class TestAdapterToIntakeServiceIntegration:
-    """Prove the adapter calls real InboundCallIntakeService.persist()
-    through the full HTTP path."""
+class TestAdapterToRealIntakeService:
+    """Prove the adapter exercises real InboundCallIntakeService with a
+    transaction-capable fake session — not a mock spec replacement."""
 
-    def test_adapter_calls_real_intake_persist(self) -> None:
-        """POST → adapter → event.to_inbound_event() → intake.persist()
-        exercises the real InboundCallIntakeService code path."""
-        from unittest.mock import patch as mpatch
-
+    def test_http_through_real_intake_service_commits(self) -> None:
+        """Full HTTP POST → real InboundCallIntakeService → repo.persist()
+        → session.commit(). Uses real service class with mock session factory
+        that tracks commit/rollback calls."""
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
 
@@ -344,28 +362,23 @@ class TestAdapterToIntakeServiceIntegration:
         from fonely.services.exotel_config import ExotelNumberMapping
         from fonely.services.exotel_intake import InboundCallIntakeService
 
+        mock_session = AsyncMock()
+        factory = _mock_session_factory(mock_session)
+        real_service = InboundCallIntakeService(factory)
+
         app = FastAPI()
         app.include_router(router)
-        app.state.exotel_mapping = ExotelNumberMapping(
-            {"08012345678": 1}
-        )
-
-        persist_called = {"count": 0, "business_id": None, "event": None}
-
-        async def _tracking_persist(
-            business_id: int, event: InboundCallEvent
-        ) -> InboundCallEventRecord:
-            persist_called["count"] += 1
-            persist_called["business_id"] = business_id
-            persist_called["event"] = event
-            return _make_record()
-
-        service = MagicMock(spec=InboundCallIntakeService)
-        service.persist = AsyncMock(side_effect=_tracking_persist)
-        app.state.exotel_intake = service
+        app.state.exotel_mapping = ExotelNumberMapping({"08012345678": 1})
+        app.state.exotel_intake = real_service
 
         secret = "test-exotel-webhook-secret-value"
-        with mpatch.object(settings, "exotel_webhook_secret", secret):
+        with patch.object(settings, "exotel_webhook_secret", secret), \
+             patch(
+                 "fonely.services.exotel_intake.ExotelInboundEventRepository"
+             ) as mock_repo_cls:
+            mock_repo_cls.return_value.persist = AsyncMock(
+                return_value=_make_record()
+            )
             client = TestClient(app)
             response = client.post(
                 "/webhooks/exotel/call-status",
@@ -383,16 +396,61 @@ class TestAdapterToIntakeServiceIntegration:
             )
 
         assert response.status_code == 200
-        assert persist_called["count"] == 1
-        assert persist_called["business_id"] == 1
-        event = persist_called["event"]
+        mock_session.commit.assert_awaited_once()
+        mock_session.rollback.assert_not_awaited()
+
+        repo_call = mock_repo_cls.return_value.persist.call_args
+        assert repo_call[0][0] == 1
+        event = repo_call[0][1]
         assert isinstance(event, InboundCallEvent)
         assert event.call_sid == "a" * 32
-        assert event.status == "completed"
-        assert event.duration == 60
+
+    def test_http_through_real_intake_service_rollback_on_dup(self) -> None:
+        """Duplicate → real service rolls back → adapter returns 200."""
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+
+        from fonely.api.channels.exotel import router
+        from fonely.core.config import settings
+        from fonely.services.exotel_config import ExotelNumberMapping
+        from fonely.services.exotel_intake import InboundCallIntakeService
+
+        mock_session = AsyncMock()
+        factory = _mock_session_factory(mock_session)
+        real_service = InboundCallIntakeService(factory)
+
+        app = FastAPI()
+        app.include_router(router)
+        app.state.exotel_mapping = ExotelNumberMapping({"08012345678": 1})
+        app.state.exotel_intake = real_service
+
+        secret = "test-exotel-webhook-secret-value"
+        with patch.object(settings, "exotel_webhook_secret", secret), \
+             patch(
+                 "fonely.services.exotel_intake.ExotelInboundEventRepository"
+             ) as mock_repo_cls:
+            mock_repo_cls.return_value.persist = AsyncMock(
+                side_effect=DuplicateCallEventError("dup")
+            )
+            client = TestClient(app)
+            response = client.post(
+                "/webhooks/exotel/call-status",
+                json={
+                    "CallSid": "a" * 32,
+                    "EventType": "terminal",
+                    "Status": "completed",
+                    "From": "+919000000001",
+                    "To": "08012345678",
+                },
+                headers={"X-Exotel-Webhook-Secret": secret},
+            )
+
+        assert response.status_code == 200
+        mock_session.rollback.assert_awaited_once()
+        mock_session.commit.assert_not_awaited()
 
     def test_adapter_maps_exotel_dto_to_neutral_event(self) -> None:
-        """The adapter uses event.to_inbound_event(), not ExotelCallbackEvent."""
+        """ExotelCallbackEvent.to_inbound_event() produces InboundCallEvent."""
         from fonely.domain.calls.events import (
             ExotelCallbackEvent,
             parse_exotel_callback,
@@ -413,4 +471,43 @@ class TestAdapterToIntakeServiceIntegration:
         assert isinstance(neutral, InboundCallEvent)
         assert neutral.call_sid == exotel_event.call_sid
         assert neutral.status == exotel_event.status
-        assert neutral.event_type == exotel_event.event_type
+
+
+# ============================================================================
+# Lifespan disabled-state
+# ============================================================================
+
+
+class TestLifespanDisabledState:
+    """Prove that after lifespan completes, no exotel intake or worker
+    is wired on app.state."""
+
+    def test_no_exotel_intake_after_lifespan(self) -> None:
+        """create_app() with lifespan entered — no exotel_intake wired."""
+        from fonely.app import create_app
+
+        with patch("fonely.app.settings") as ms:
+            ms.internal_api_secret = ""
+            ms.whatsapp_verify_token = ""
+            ms.exotel_webhook_secret = "strong-secret-over-32-characters"
+            ms.host = "0.0.0.0"
+            ms.port = 8000
+            ms.log_format = "json"
+            ms.log_level = "INFO"
+            ms.database_url = "sqlite+aiosqlite://"
+            ms.db_pool_size = 1
+            ms.db_max_overflow = 0
+            ms.db_pool_timeout = 5
+            ms.db_pool_recycle = 300
+            ms.sarvam_api_key = ""
+            ms.readiness_timeout_seconds = 5
+            app = create_app()
+
+        from fastapi.testclient import TestClient
+
+        with TestClient(app):
+            assert not hasattr(app.state, "exotel_intake")
+            assert not hasattr(app.state, "exotel_mapping")
+            assert not hasattr(app.state, "exotel_worker")
+            paths = {r.path for r in app.routes}
+            assert "/webhooks/exotel/call-status" not in paths

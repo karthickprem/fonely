@@ -240,6 +240,23 @@ async def test_concurrent_repair_converges_to_one_row(
         assert patient_count == 1
         assert owner_count == 1
 
+        # Verify both rows have v1 evidence and matching digests
+        rows = (
+            await final.execute(
+                text("SELECT payload FROM notification_outbox WHERE entity_id = :eid ORDER BY id"),
+                {"eid": appt_id},
+            )
+        ).all()
+        assert len(rows) == 2
+        digests = set()
+        for (payload,) in rows:
+            assert isinstance(payload, dict)
+            assert "equivalence_snapshot" in payload
+            assert "equivalence_digest" in payload
+            assert payload.get("schema_version") == 1
+            digests.add(payload["equivalence_digest"])
+        assert len(digests) == 1
+
 
 @pytest.mark.parametrize("operation", ["create", "cancel", "reschedule"])
 async def test_third_replay_after_repair_is_noop(
@@ -320,18 +337,46 @@ async def test_savepoint_rollback_on_second_insert_failure(
         service = NotificationService(session)
         service._repo = real_repo
 
-        with pytest.raises(RuntimeError, match="injected_second_insert_failure"):
-            await service.create_appointment_notifications(
+        async def _do_create() -> list[int]:
+            if operation == "create":
+                return await service.create_appointment_notifications(
+                    business_id=1,
+                    appointment_id=appt_id,
+                    customer_phone="+919123456789",
+                    customer_name="Patient",
+                    service_name="Consultation",
+                    resource_name="Dr. Priya",
+                    start_at=NOW,
+                    price=300,
+                    business_timezone="Asia/Kolkata",
+                )
+            if operation == "cancel":
+                return await service.create_cancellation_notifications(
+                    business_id=1,
+                    appointment_id=appt_id,
+                    customer_phone="+919123456789",
+                    customer_name="Patient",
+                    service_name="Consultation",
+                    resource_name="Dr. Priya",
+                    start_at=NOW,
+                    business_timezone="Asia/Kolkata",
+                    reason="Requested",
+                )
+            return await service.create_reschedule_notifications(
                 business_id=1,
                 appointment_id=appt_id,
+                pending_action_id=44,
                 customer_phone="+919123456789",
                 customer_name="Patient",
                 service_name="Consultation",
                 resource_name="Dr. Priya",
-                start_at=NOW,
-                price=300,
+                old_start_at=NOW,
+                new_start_at=NOW + timedelta(hours=2),
                 business_timezone="Asia/Kolkata",
             )
+
+        with pytest.raises(RuntimeError, match="injected_second_insert_failure"):
+            await _do_create()
 
         pair_count = await session.scalar(
             text("SELECT count(*) FROM notification_outbox WHERE entity_id = :eid"),

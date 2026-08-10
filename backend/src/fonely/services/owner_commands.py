@@ -139,10 +139,28 @@ class OwnerCommandService:
 
         # Check for bare YES/NO against a pending proposal
         if normalised in _YES_TOKENS:
-            return await self._handle_confirm(business_id, owner)
+            pending = await self._proposals.get_latest_for_owner(
+                business_id, owner.id, statuses=("pending_confirmation",)
+            )
+            if pending is None:
+                return OwnerCommandResult(
+                    command_type="confirm",
+                    success=False,
+                    response_text="No pending command to confirm.",
+                )
+            return await self._handle_confirm(business_id, owner, pending)
 
         if normalised in _NO_TOKENS:
-            return await self._handle_reject(business_id, owner)
+            pending = await self._proposals.get_latest_for_owner(
+                business_id, owner.id, statuses=("pending_confirmation",)
+            )
+            if pending is None:
+                return OwnerCommandResult(
+                    command_type="reject",
+                    success=False,
+                    response_text="No pending command to cancel.",
+                )
+            return await self._handle_reject(business_id, owner, pending)
 
         # Parse the message as a new command
         doctor_names = await self._get_doctor_names(business_id)
@@ -413,8 +431,9 @@ class OwnerCommandService:
         affected: list[dict[str, str]],
         target_date: date,
     ) -> OwnerCommandResult:
-        digest = self._compute_payload_digest(payload)
-        idem_key = f"owner-v1-{business_id}-{owner.id}-{digest[:40]}"
+        bound = {"command_payload": payload, "preview_snapshot": preview}
+        digest = self._compute_payload_digest(bound)
+        idem_key = f"owner-v1-{business_id}-{owner.id}-{self._compute_payload_digest(payload)[:40]}"
         now = datetime.now(UTC)
 
         proposal = await self._proposals.create_idempotent(
@@ -435,7 +454,28 @@ class OwnerCommandService:
         )
 
         if proposal is None:
-            # A pending proposal already exists for this owner
+            # Check if a terminal proposal with the same idempotency key
+            # already exists — replay its result for identical intent
+            terminal = await self._proposals.get_by_idempotency_key(business_id, idem_key)
+            if terminal is not None and terminal.status in (
+                "completed",
+                "rejected",
+                "expired",
+                "failed",
+            ):
+                evidence = terminal.result_evidence or {}
+                outcome = evidence.get("outcome", terminal.status)
+                return OwnerCommandResult(
+                    command_type=command_type,
+                    success=terminal.status == "completed",
+                    response_text=(
+                        f"This command was already processed ({outcome}). "
+                        "Send a new command if you need to take action."
+                    ),
+                    proposal_id=terminal.id,
+                )
+
+            # Otherwise a pending proposal already exists for this owner
             existing = await self._proposals.get_latest_for_owner(business_id, owner.id)
             if existing is not None:
                 return OwnerCommandResult(
@@ -505,17 +545,13 @@ class OwnerCommandService:
     # Phase 2 — Confirm
     # -----------------------------------------------------------------------
 
-    async def _handle_confirm(self, business_id: int, owner: BusinessUser) -> OwnerCommandResult:
+    async def _handle_confirm(
+        self,
+        business_id: int,
+        owner: BusinessUser,
+        proposal: Any,
+    ) -> OwnerCommandResult:
         now = datetime.now(UTC)
-        proposal = await self._proposals.get_latest_for_owner(
-            business_id, owner.id, statuses=("pending_confirmation",)
-        )
-        if proposal is None:
-            return OwnerCommandResult(
-                command_type="confirm",
-                success=False,
-                response_text="No pending command to confirm.",
-            )
 
         if proposal.expires_at <= now:
             await self._proposals.transition_status(
@@ -549,9 +585,13 @@ class OwnerCommandService:
                 ),
             )
 
-        # Verify stored payload digest matches the immutable command payload
+        # Verify stored digest binds both command payload and preview
         stored_digest = executing.payload_digest
-        recomputed_digest = self._compute_payload_digest(executing.command_payload)
+        bound = {
+            "command_payload": executing.command_payload,
+            "preview_snapshot": executing.preview_snapshot,
+        }
+        recomputed_digest = self._compute_payload_digest(bound)
         if stored_digest != recomputed_digest:
             await self._proposals.transition_status(
                 proposal.id,
@@ -610,30 +650,29 @@ class OwnerCommandService:
 
         preview_appointments = proposal.preview_snapshot.get("appointments", [])
         preview_count = len(preview_appointments)
-        preview_ids = {
-            str(a.get("appointment_id", ""))
-            for a in preview_appointments
-            if a.get("appointment_id")
-        }
 
         # Recompute targets under fresh locks
         current_targets = await self._targets_at_confirmation(business_id, command_type, payload)
-        current_ids = {
-            str(a.get("appointment_id", "")) for a in current_targets if a.get("appointment_id")
-        }
 
-        # Detect drift — any change requires abort + re-preview
-        added = current_ids - preview_ids if preview_ids else set()
-        removed = preview_ids - current_ids if preview_ids else set()
+        # Detect drift by comparing canonical target facts digest.
+        # Any fact change (ID, time, patient, service, resource, count)
+        # requires abort + re-preview.
+        def _targets_digest(targets: list[dict[str, str]]) -> str:
+            canonical = json.dumps(
+                sorted(targets, key=lambda a: a.get("appointment_id", "")),
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            return hashlib.sha256(canonical.encode()).hexdigest()
 
-        if added or removed or len(current_targets) != preview_count:
-            drift_details: list[str] = []
-            if added:
-                drift_details.append(f"New appointments: {len(added)}")
-            if removed:
-                drift_details.append(f"Removed appointments: {len(removed)}")
-            if len(current_targets) != preview_count:
-                drift_details.append(f"Count changed: {preview_count} → {len(current_targets)}")
+        preview_digest = _targets_digest(preview_appointments)
+        current_digest = _targets_digest(current_targets)
+
+        if preview_digest != current_digest:
+            drift_details = [
+                f"Target facts changed between preview and confirmation "
+                f"(preview: {preview_count} targets, current: {len(current_targets)})"
+            ]
             evidence = OwnerCommandOutcomeEvidence(
                 outcome="drift_abort",
                 command_type=command_type,
@@ -690,6 +729,7 @@ class OwnerCommandService:
             preview_count=preview_count,
             confirm_count=len(current_targets),
             cancelled_count=len(cancelled),
+            cancelled_appointments=cancelled,
         )
 
         now = datetime.now(UTC)
@@ -765,17 +805,12 @@ class OwnerCommandService:
     # Phase 2 — Reject
     # -----------------------------------------------------------------------
 
-    async def _handle_reject(self, business_id: int, owner: BusinessUser) -> OwnerCommandResult:
-        proposal = await self._proposals.get_latest_for_owner(
-            business_id, owner.id, statuses=("pending_confirmation",)
-        )
-        if proposal is None:
-            return OwnerCommandResult(
-                command_type="reject",
-                success=False,
-                response_text="No pending command to cancel.",
-            )
-
+    async def _handle_reject(
+        self,
+        business_id: int,
+        owner: BusinessUser,
+        proposal: Any,
+    ) -> OwnerCommandResult:
         rejected = await self._proposals.transition_status(
             proposal.id,
             business_id,
@@ -1115,7 +1150,12 @@ class OwnerCommandService:
         target_date: date,
         after_time: dt_time,
     ) -> list[dict[str, str]]:
-        """Query confirmed appointments starting at or after a local time."""
+        """Query confirmed appointments affected by closing at after_time.
+
+        An appointment is affected if it starts at or after the close time,
+        OR if its effective end extends past the close time (i.e. the
+        appointment hasn't fully completed by the proposed close).
+        """
         tz_name = await self._get_business_timezone(business_id)
         tz = ZoneInfo(tz_name)
         appointments = (
@@ -1132,15 +1172,19 @@ class OwnerCommandService:
         )
         result: list[dict[str, str]] = []
         for appt in appointments:
-            local = appt.start_at.astimezone(tz)
-            if local.date() != target_date:
+            local_start = appt.start_at.astimezone(tz)
+            if local_start.date() != target_date:
                 continue
-            if local.time() < after_time:
+            effective_end = (appt.effective_end_at or appt.end_at).astimezone(tz)
+            # Skip only if the appointment fully ends at or before close time
+            starts_after = local_start.time() >= after_time
+            end_extends_past = effective_end.time() > after_time
+            if not starts_after and not end_extends_past:
                 continue
             result.append(
                 {
                     "appointment_id": str(appt.id),
-                    "time": local.strftime("%-I:%M %p"),
+                    "time": local_start.strftime("%-I:%M %p"),
                     "patient": appt.customer_name or "Patient",
                     "service": appt.service_name_snapshot,
                     "phone": appt.customer_phone,
@@ -1355,6 +1399,7 @@ class OwnerCommandService:
             local_time = appt.start_at.astimezone(tz).strftime("%-I:%M %p")
             cancelled.append(
                 {
+                    "appointment_id": str(appt.id),
                     "time": local_time,
                     "patient": appt.customer_name or "Patient",
                     "service": appt.service_name_snapshot,
@@ -1393,6 +1438,7 @@ class OwnerCommandService:
             )
             cancelled.append(
                 {
+                    "appointment_id": str(appt.id),
                     "time": appt.start_at.astimezone(tz).strftime("%-I:%M %p"),
                     "patient": appt.customer_name or "Patient",
                     "service": appt.service_name_snapshot,
@@ -1426,13 +1472,17 @@ class OwnerCommandService:
             local = appt.start_at.astimezone(tz)
             if local.date() != target_date:
                 continue
-            if local.time() < after_time:
+            effective_end = (appt.effective_end_at or appt.end_at).astimezone(tz)
+            starts_after = local.time() >= after_time
+            end_extends_past = effective_end.time() > after_time
+            if not starts_after and not end_extends_past:
                 continue
             await self._cancel_via_service(
                 business_id, appt.id, appt.version, owner_phone, "owner_close_early"
             )
             cancelled.append(
                 {
+                    "appointment_id": str(appt.id),
                     "time": local.strftime("%-I:%M %p"),
                     "patient": appt.customer_name or "Patient",
                     "service": appt.service_name_snapshot,
@@ -1493,6 +1543,7 @@ class OwnerCommandService:
             )
             cancelled.append(
                 {
+                    "appointment_id": str(appointment.id),
                     "time": local_start.strftime("%-I:%M %p"),
                     "patient": appointment.customer_name or "Patient",
                     "service": appointment.service_name_snapshot,

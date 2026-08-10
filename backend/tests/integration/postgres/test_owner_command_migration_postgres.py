@@ -175,10 +175,10 @@ class TestMigration0015:
         finally:
             _run_alembic(postgres_database_url, "upgrade", "head", check=False)
 
-    async def test_0015_populated_downgrade_guard(
+    async def test_0015_populated_downgrade_guard_with_evidence(
         self, pg_engine: AsyncEngine, postgres_database_url: str
     ) -> None:
-        """Insert a proposal with result_evidence, downgrade must be blocked."""
+        """Downgrade blocked when a completed proposal with evidence exists."""
         await _seed_business(pg_engine)
 
         async with pg_engine.begin() as conn:
@@ -205,9 +205,8 @@ class TestMigration0015:
         try:
             result = _run_alembic(postgres_database_url, "downgrade", "0014", check=False)
             assert result.returncode != 0
-            assert "result_evidence" in result.stderr
+            assert "owner_command_proposals" in result.stderr
 
-            # Verify we are still at 0015
             async with pg_engine.connect() as conn:
                 rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
                 assert rev == "0015"
@@ -215,5 +214,46 @@ class TestMigration0015:
             async with pg_engine.begin() as conn:
                 await conn.execute(
                     text("DELETE FROM owner_command_proposals WHERE id = 'mig-test-guard-001'")
+                )
+            _run_alembic(postgres_database_url, "upgrade", "head", check=False)
+
+    async def test_0015_populated_downgrade_guard_pending_row(
+        self, pg_engine: AsyncEngine, postgres_database_url: str
+    ) -> None:
+        """Downgrade blocked even for a pending proposal with NO result_evidence."""
+        await _seed_business(pg_engine)
+
+        async with pg_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO owner_command_proposals "
+                    "(id, business_id, owner_user_id, owner_phone_snapshot, "
+                    " command_type, command_payload, preview_snapshot, "
+                    " payload_digest, status, "
+                    " expected_version, idempotency_key, expires_at) "
+                    "VALUES ("
+                    " 'mig-test-guard-002', 950, 950, '+919500000000', "
+                    " 'close_clinic', "
+                    ' \'{"target_date": "2026-08-12"}\'::jsonb, '
+                    " '{\"affected_count\": 0}'::jsonb, "
+                    " 'bbbb1111cccc2222dddd3333eeee4444ffff5555aaaa6666bbbb7777cccc8888', "
+                    " 'pending_confirmation', "
+                    " 1, 'mig-guard-idem-002', :exp)"
+                ),
+                {"exp": NOW},
+            )
+
+        try:
+            result = _run_alembic(postgres_database_url, "downgrade", "0014", check=False)
+            assert result.returncode != 0
+            assert "owner_command_proposals" in result.stderr
+
+            async with pg_engine.connect() as conn:
+                rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
+                assert rev == "0015"
+        finally:
+            async with pg_engine.begin() as conn:
+                await conn.execute(
+                    text("DELETE FROM owner_command_proposals WHERE id = 'mig-test-guard-002'")
                 )
             _run_alembic(postgres_database_url, "upgrade", "head", check=False)

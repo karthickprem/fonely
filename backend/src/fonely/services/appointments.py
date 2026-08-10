@@ -180,25 +180,23 @@ class AppointmentService:
             proposed_data.facts.resource_id,
         )
 
+        begin_result = await self._pa_service.begin_commit(BeginCommitCommand(context=context))
+        committing_version = begin_result.version
+        committing_context = CommitResultContext(
+            business_id=context.business_id,
+            pending_action_id=context.pending_action_id,
+            expected_version=committing_version,
+            engine="appointment_engine",
+        )
+
+        envelope = PendingAppointmentEnvelope.model_validate(begin_result.payload)
+        data = envelope.data
+        assert isinstance(data, CreateAppointmentData)
+        facts = data.facts
+
         overlap_exc: IntegrityError | None = None
         try:
             async with self._session.begin_nested():
-                begin_result = await self._pa_service.begin_commit(
-                    BeginCommitCommand(context=context)
-                )
-                committing_version = begin_result.version
-                committing_context = CommitResultContext(
-                    business_id=context.business_id,
-                    pending_action_id=context.pending_action_id,
-                    expected_version=committing_version,
-                    engine="appointment_engine",
-                )
-
-                envelope = PendingAppointmentEnvelope.model_validate(begin_result.payload)
-                data = envelope.data
-                assert isinstance(data, CreateAppointmentData)
-                facts = data.facts
-
                 appointment = await self._repo.insert(
                     {
                         "business_id": command.actor.business_id,
@@ -288,20 +286,12 @@ class AppointmentService:
                 raise
 
         if overlap_exc is not None:
-            # Savepoint rolled back begin_commit; PA is back at
-            # awaiting_confirmation with original version. Re-read to get
-            # the authoritative post-rollback state for fail_commit.
-            action_after_rollback = await self._pa_service._require_action(
-                context.business_id, context.pending_action_id
-            )
+            # begin_commit ran outside the savepoint so PA is still in
+            # 'committing' with committing_version. fail_commit uses
+            # this authoritative state directly.
             fail_result = await self._pa_service.fail_commit(
                 FailCommitCommand(
-                    context=CommitResultContext(
-                        business_id=context.business_id,
-                        pending_action_id=context.pending_action_id,
-                        expected_version=action_after_rollback.version,
-                        engine="appointment_engine",
-                    ),
+                    context=committing_context,
                     error_code="resource_unavailable",
                     retryable=True,
                 )
@@ -450,15 +440,15 @@ class AppointmentService:
             data.target_appointment_id, command.actor.business_id
         )
 
-        async with self._session.begin_nested():
-            begin_result = await self._pa_service.begin_commit(BeginCommitCommand(context=context))
-            committing_context = CommitResultContext(
-                business_id=context.business_id,
-                pending_action_id=context.pending_action_id,
-                expected_version=begin_result.version,
-                engine="appointment_engine",
-            )
+        begin_result = await self._pa_service.begin_commit(BeginCommitCommand(context=context))
+        committing_context = CommitResultContext(
+            business_id=context.business_id,
+            pending_action_id=context.pending_action_id,
+            expected_version=begin_result.version,
+            engine="appointment_engine",
+        )
 
+        async with self._session.begin_nested():
             await self._repo.update_allocation_status(
                 command.actor.business_id,
                 data.target_appointment_id,
@@ -703,23 +693,21 @@ class AppointmentService:
             data.target_appointment_id, command.actor.business_id
         )
 
+        begin_result = await self._pa_service.begin_commit(BeginCommitCommand(context=context))
+        committing_context = CommitResultContext(
+            business_id=context.business_id,
+            pending_action_id=context.pending_action_id,
+            expected_version=begin_result.version,
+            engine="appointment_engine",
+        )
+        revalidated = PendingAppointmentEnvelope.model_validate(begin_result.payload)
+        revalidated_data = revalidated.data
+        assert isinstance(revalidated_data, RescheduleAppointmentData)
+        new_facts = revalidated_data.new_facts
+
         overlap_exc: IntegrityError | None = None
         try:
             async with self._session.begin_nested():
-                begin_result = await self._pa_service.begin_commit(
-                    BeginCommitCommand(context=context)
-                )
-                committing_context = CommitResultContext(
-                    business_id=context.business_id,
-                    pending_action_id=context.pending_action_id,
-                    expected_version=begin_result.version,
-                    engine="appointment_engine",
-                )
-                revalidated = PendingAppointmentEnvelope.model_validate(begin_result.payload)
-                revalidated_data = revalidated.data
-                assert isinstance(revalidated_data, RescheduleAppointmentData)
-                new_facts = revalidated_data.new_facts
-
                 await self._repo.update_allocation_status(
                     command.actor.business_id,
                     data.target_appointment_id,
@@ -834,17 +822,9 @@ class AppointmentService:
                 raise
 
         if overlap_exc is not None:
-            action_after_rollback = await self._pa_service._require_action(
-                context.business_id, context.pending_action_id
-            )
             await self._pa_service.fail_commit(
                 FailCommitCommand(
-                    context=CommitResultContext(
-                        business_id=context.business_id,
-                        pending_action_id=context.pending_action_id,
-                        expected_version=action_after_rollback.version,
-                        engine="appointment_engine",
-                    ),
+                    context=committing_context,
                     error_code="resource_unavailable",
                     retryable=True,
                 )

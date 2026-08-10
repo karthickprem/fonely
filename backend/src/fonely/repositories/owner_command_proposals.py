@@ -39,6 +39,15 @@ class OwnerCommandProposalRepository:
         )
         return (await self._session.scalars(stmt)).first()
 
+    async def get_by_idempotency_key(
+        self, business_id: int, idempotency_key: str
+    ) -> OwnerCommandProposal | None:
+        stmt = select(OwnerCommandProposal).where(
+            OwnerCommandProposal.business_id == business_id,
+            OwnerCommandProposal.idempotency_key == idempotency_key,
+        )
+        return (await self._session.scalars(stmt)).first()
+
     async def get_latest_for_owner(
         self,
         business_id: int,

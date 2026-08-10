@@ -522,9 +522,6 @@ class NotificationService:
             locked_owner = await self._repo.get_event_by_idempotency_key(
                 business_id, keys[1], lock=True
             )
-            if locked_patient is not None and locked_owner is not None:
-                self._emit_metric(operation, "v1", "exact_existing")
-                return [locked_patient.id, locked_owner.id]
             for locked, expected in zip(
                 (locked_patient, locked_owner), expected_values, strict=True
             ):
@@ -533,6 +530,9 @@ class NotificationService:
                     raise NotificationIdempotencyConflictError(
                         "Committed notification member changed during repair"
                     )
+            if locked_patient is not None and locked_owner is not None:
+                self._emit_metric(operation, "v1", "exact_existing")
+                return [locked_patient.id, locked_owner.id]
             ids = []
             for locked, expected in zip(
                 (locked_patient, locked_owner), expected_values, strict=True

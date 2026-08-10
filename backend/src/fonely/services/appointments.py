@@ -693,6 +693,10 @@ class AppointmentService:
         before_snapshot = await self._authoritative_snapshot(
             data.target_appointment_id, command.actor.business_id
         )
+        assert isinstance(before_snapshot, dict)
+        old_start_at = datetime.fromisoformat(
+            str(before_snapshot["start_at"]).replace("Z", "+00:00")
+        )
 
         overlap_exc: IntegrityError | None = None
         try:
@@ -796,7 +800,7 @@ class AppointmentService:
                     customer_name=appointment.customer_name,
                     service_name=new_facts.service_name,
                     resource_name=new_facts.resource_name,
-                    old_start_at=appointment.start_at,
+                    old_start_at=old_start_at,
                     new_start_at=new_facts.start_at,
                     business_timezone=new_facts.business_timezone,
                 )

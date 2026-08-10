@@ -611,6 +611,35 @@ async def test_reschedule_replays_from_fresh_session_without_second_mutation(
                 expected_version=proposal.version,
             )
         )
+        original_notifications = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT id, payload FROM notification_outbox "
+                        "WHERE entity_id = :id AND event_type = 'appointment_rescheduled' "
+                        "ORDER BY recipient_type"
+                    ),
+                    {"id": appointment_id},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        assert len(original_notifications) == 2
+        for row in original_notifications:
+            snapshot = row["payload"]["equivalence_snapshot"]
+            old_snapshot = datetime.fromisoformat(
+                snapshot["old_start_at"].replace("Z", "+00:00")
+            )
+            new_snapshot = datetime.fromisoformat(
+                snapshot["new_start_at"].replace("Z", "+00:00")
+            )
+            assert old_snapshot == confirmed.appointment.start_at
+            assert new_snapshot == new_start
+            assert row["payload"]["old_time"] == "10:00 AM"
+            assert row["payload"]["new_time"] == "12:00 PM"
+        original_ids = [row["id"] for row in original_notifications]
+        original_payloads = [row["payload"] for row in original_notifications]
         await session.commit()
 
     async with pg_session_factory() as session:
@@ -660,6 +689,23 @@ async def test_reschedule_replays_from_fresh_session_without_second_mutation(
             )
             == 1
         )
+        replay_notifications = (
+            (
+                await session.execute(
+                    text(
+                        "SELECT id, payload FROM notification_outbox "
+                        "WHERE entity_id = :id AND event_type = 'appointment_rescheduled' "
+                        "ORDER BY recipient_type"
+                    ),
+                    {"id": appointment_id},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        assert [row["id"] for row in replay_notifications] == original_ids
+        assert [row["payload"] for row in replay_notifications] == original_payloads
+        assert len(replay_notifications) == 2
         await session.rollback()
 
 

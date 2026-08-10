@@ -314,7 +314,7 @@ class NotificationService:
     async def _insert_or_verify(
         self,
         values: dict[str, Any],
-    ) -> NotificationOutboxEvent:
+    ) -> tuple[NotificationOutboxEvent, bool]:
         """Insert a new outbox event or verify idempotent equivalence.
 
         Uses the repository's ``insert_event_idempotent`` (ON CONFLICT DO
@@ -323,7 +323,7 @@ class NotificationService:
         """
         event = await self._repo.insert_event_idempotent(values)
         if event is not None:
-            return event
+            return event, True
 
         # Already existed — load and verify
         existing = await self._repo.get_event_by_idempotency_key(
@@ -339,7 +339,7 @@ class NotificationService:
                 "Existing notification event is not equivalent to expected values"
             )
 
-        return existing
+        return existing, False
 
     # -- snapshot fact assertion ---------------------------------------------
 
@@ -411,14 +411,17 @@ class NotificationService:
         event_ids: list[int] = []
 
         async with self._session.begin_nested():
-            patient_event = await self._insert_or_verify(patient_values)
-            event_ids.append(patient_event.id)
+            patient_event, patient_inserted = await self._insert_or_verify(patient_values)
+            if patient_inserted:
+                event_ids.append(patient_event.id)
 
         async with self._session.begin_nested():
-            owner_event = await self._insert_or_verify(owner_values)
-            event_ids.append(owner_event.id)
+            owner_event, owner_inserted = await self._insert_or_verify(owner_values)
+            if owner_inserted:
+                event_ids.append(owner_event.id)
 
-        self._emit_metric("fresh_insert", snapshot.operation)
+        if patient_inserted or owner_inserted:
+            self._emit_metric("fresh_insert", snapshot.operation)
         return event_ids
 
     # -- pair verification (locked reread + validate) -----------------------
@@ -485,7 +488,7 @@ class NotificationService:
                     )
 
                 async with self._session.begin_nested():
-                    repaired = await self._insert_or_verify(values)
+                    repaired, _ = await self._insert_or_verify(values)
                     event_ids.append(repaired.id)
 
                 self._emit_metric("repaired_missing", snapshot.operation)

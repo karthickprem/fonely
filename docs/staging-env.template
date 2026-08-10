@@ -2,22 +2,44 @@
 # Copy to .env.staging and fill in real values before deployment.
 # NEVER commit real secrets.
 
+# PostgreSQL — single source of truth for DB password
 POSTGRES_PASSWORD=changeme-generate-a-real-password
-# Construct DATABASE_URL from your actual credentials:
-# DATABASE_URL=postgresql+asyncpg://<user>:<password>@<host>:5432/<database>
-DATABASE_URL=
+
+# Database connection components (URL constructed at runtime via SQLAlchemy)
+# DB_HOST, DB_USER, DB_NAME, DB_PORT have safe defaults in settings;
+# override only if diverging from Compose topology.
+# DB_HOST=postgres
+# DB_USER=fonely
+# DB_NAME=fonely
+# DB_PORT=5432
+
+# API
 INTERNAL_API_SECRET=changeme-generate-a-real-secret
 
-# Logging (no FONELY_ prefix — Settings reads these directly)
+# Inbound worker (required — worker fails closed without these)
+SARVAM_API_KEY=changeme-your-sarvam-key
+
+# Notification worker (required — worker fails closed without these)
+WHATSAPP_ACCESS_TOKEN=changeme-your-whatsapp-token
+# Mapping: phone_number_id (string key) -> business_id (integer value)
+WHATSAPP_BUSINESS_MAPPINGS={"your_phone_number_id": 1}
+
+# Webhook security (required — API fails closed for inbound webhooks)
+WHATSAPP_VERIFY_TOKEN=changeme-your-verify-token
+WHATSAPP_APP_SECRET=changeme-your-app-secret
+
+# Optional — single-business convenience, not authority
+# WHATSAPP_PHONE_NUMBER_ID=your-phone-number-id
+
+# Logging
 LOG_FORMAT=json
 LOG_LEVEL=INFO
 
-# Connection pool (defaults are suitable for 1–5 clinics)
+# Connection pool (defaults are suitable for 1-5 clinics)
 # DB_POOL_SIZE=5
 # DB_MAX_OVERFLOW=5
 # DB_POOL_TIMEOUT=30
 # DB_POOL_RECYCLE=1800
 
-# Server
-# HOST=0.0.0.0
-# PORT=8000
+# Worker shutdown drain deadline (seconds, default 10)
+# SHUTDOWN_TIMEOUT_SECONDS=10

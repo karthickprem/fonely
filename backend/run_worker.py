@@ -1,8 +1,15 @@
-"""Notification worker entrypoint with trusted WhatsApp channel routing."""
+"""Notification worker entrypoint with trusted WhatsApp channel routing.
+
+Cooperative shutdown: SIGTERM sets stop event, worker finishes current
+unit (no new claims), then exits. Force cancel after configured timeout.
+"""
 
 import asyncio
+import contextlib
 import json
 import logging
+import signal
+import sys
 
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -13,7 +20,6 @@ from fonely.workers.notification_worker import (
     run_notification_worker,
 )
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("fonely.workers.main")
 
 
@@ -45,14 +51,59 @@ def _create_sender() -> NotificationSender:
 
 async def main() -> None:
     configure_logging(settings.log_format, settings.log_level)
-    engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+    engine = create_async_engine(
+        settings.database_url,
+        pool_pre_ping=True,
+        pool_size=settings.db_pool_size,
+        max_overflow=settings.db_max_overflow,
+        pool_timeout=settings.db_pool_timeout,
+        pool_recycle=settings.db_pool_recycle,
+    )
     factory = async_sessionmaker(engine, expire_on_commit=False)
     sender = _create_sender()
+
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, stop.set)
+
+    logger.info("notification_worker_starting")
+    task = loop.create_task(run_notification_worker(factory, sender, stop=stop))
+    stop_task = loop.create_task(stop.wait())
+
     try:
-        await run_notification_worker(factory, sender)
+        done, _ = await asyncio.wait(
+            [task, stop_task],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if stop.is_set():
+            logger.info("notification_worker_draining")
+            if task not in done:
+                try:
+                    await asyncio.wait_for(task, timeout=settings.shutdown_timeout_seconds)
+                except TimeoutError:
+                    logger.warning("notification_worker_drain_timeout")
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+        elif task in done:
+            exc = task.exception()
+            if exc:
+                logger.error("notification_worker_crashed", exc_info=exc)
+                raise exc
+            logger.error("notification_worker_unexpected_exit")
+            sys.exit(1)
     finally:
+        stop_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await stop_task
         await engine.dispose()
+        logger.info("notification_worker_stopped")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except Exception:
+        logger.error("notification_worker_fatal", exc_info=True)
+        sys.exit(1)

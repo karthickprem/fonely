@@ -15,29 +15,42 @@ services:
       timeout: 5s
       retries: 10
       start_period: 10s
+    restart: unless-stopped
 
   migrate:
-    build:
-      context: backend
+    image: fonely-backend:local
     environment:
-      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: fonely
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      DB_NAME: fonely
     command: [".venv/bin/alembic", "upgrade", "head"]
     depends_on:
       postgres:
         condition: service_healthy
+    restart: "no"
 
   backend:
     build:
       context: backend
+    image: fonely-backend:local
     environment:
-      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: fonely
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      DB_NAME: fonely
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?Set INTERNAL_API_SECRET}
       SARVAM_API_KEY: ${SARVAM_API_KEY:-}
       WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN:?Set WHATSAPP_VERIFY_TOKEN}
-      WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:?Set WHATSAPP_ACCESS_TOKEN}
-      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:?Set WHATSAPP_PHONE_NUMBER_ID}
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
       WHATSAPP_BUSINESS_MAPPINGS: ${WHATSAPP_BUSINESS_MAPPINGS:?Set WHATSAPP_BUSINESS_MAPPINGS}
       WHATSAPP_APP_SECRET: ${WHATSAPP_APP_SECRET:?Set WHATSAPP_APP_SECRET}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-5}
+      DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-30}
+      DB_POOL_RECYCLE: ${DB_POOL_RECYCLE:-1800}
       LOG_FORMAT: ${LOG_FORMAT:-json}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     ports:
@@ -46,46 +59,64 @@ services:
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready')"]
       interval: 10s
       timeout: 5s
       retries: 3
       start_period: 5s
+    restart: unless-stopped
+    stop_grace_period: 35s
 
   inbound-worker:
-    build:
-      context: backend
+    image: fonely-backend:local
     command: [".venv/bin/python", "run_inbound_worker.py"]
     environment:
-      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: fonely
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      DB_NAME: fonely
       SARVAM_API_KEY: ${SARVAM_API_KEY:?Set SARVAM_API_KEY}
-      WHATSAPP_BUSINESS_MAPPINGS: ${WHATSAPP_BUSINESS_MAPPINGS:?Set WHATSAPP_BUSINESS_MAPPINGS}
-      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:?Set WHATSAPP_PHONE_NUMBER_ID}
+      SHUTDOWN_TIMEOUT_SECONDS: ${SHUTDOWN_TIMEOUT_SECONDS:-10}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-5}
+      DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-30}
+      DB_POOL_RECYCLE: ${DB_POOL_RECYCLE:-1800}
       LOG_FORMAT: ${LOG_FORMAT:-json}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     healthcheck:
       disable: true
-    restart: unless-stopped
     depends_on:
       migrate:
         condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: 15s
 
   notification-worker:
-    build:
-      context: backend
+    image: fonely-backend:local
     command: [".venv/bin/python", "run_worker.py"]
     environment:
-      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: fonely
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      DB_NAME: fonely
       WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:?Set WHATSAPP_ACCESS_TOKEN}
       WHATSAPP_BUSINESS_MAPPINGS: ${WHATSAPP_BUSINESS_MAPPINGS:?Set WHATSAPP_BUSINESS_MAPPINGS}
+      SHUTDOWN_TIMEOUT_SECONDS: ${SHUTDOWN_TIMEOUT_SECONDS:-10}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-5}
+      DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-30}
+      DB_POOL_RECYCLE: ${DB_POOL_RECYCLE:-1800}
       LOG_FORMAT: ${LOG_FORMAT:-json}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     healthcheck:
       disable: true
-    restart: unless-stopped
     depends_on:
       migrate:
         condition: service_completed_successfully
+    restart: unless-stopped
+    stop_grace_period: 15s
 
 volumes:
   fonely_pgdata:

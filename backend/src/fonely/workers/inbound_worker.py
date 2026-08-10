@@ -11,6 +11,7 @@ mutation, conversation turn, outboxes and inbound state atomically.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import uuid
 from dataclasses import dataclass
@@ -109,19 +110,36 @@ async def run_inbound_worker(
     *,
     poll_interval: float = 2.0,
     max_iterations: int | None = None,
+    stop: asyncio.Event | None = None,
 ) -> None:
     iterations = 0
     consecutive_failures = 0
 
-    while max_iterations is None or iterations < max_iterations:
+    def _should_continue() -> bool:
+        if stop is not None and stop.is_set():
+            return False
+        return not (max_iterations is not None and iterations >= max_iterations)
+
+    async def _interruptible_sleep(seconds: float) -> None:
+        if stop is not None:
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(stop.wait(), timeout=seconds)
+        else:
+            await asyncio.sleep(seconds)
+
+    while _should_continue():
         iterations += 1
         try:
             claimed = await _claim(session_factory)
             if claimed is None:
                 consecutive_failures = 0
                 if max_iterations is None:
-                    await asyncio.sleep(poll_interval)
+                    await _interruptible_sleep(poll_interval)
                 continue
+
+            if stop is not None and stop.is_set():
+                await _release_claim(session_factory, claimed)
+                break
 
             await _process_claimed(session_factory, claimed, model_gateway)
             consecutive_failures = 0
@@ -135,7 +153,7 @@ async def run_inbound_worker(
                 extra={"consecutive_failures": consecutive_failures},
             )
             if max_iterations is None:
-                await asyncio.sleep(min(30.0, 2.0**consecutive_failures))
+                await _interruptible_sleep(min(30.0, 2.0**consecutive_failures))
 
 
 async def _claim(
@@ -354,6 +372,33 @@ async def _record_failure(
             "terminal": terminal,
         },
     )
+
+
+async def _release_claim(
+    session_factory: async_sessionmaker[AsyncSession],
+    claimed: ClaimedEvent,
+) -> None:
+    try:
+        async with session_factory() as session:
+            repo = InboundEventRepository(session)
+            await repo.mark_failed(
+                claimed.business_id,
+                claimed.event_id,
+                claimed.claim_token,
+                claimed.claim_version,
+                "shutdown_release",
+            )
+            await session.commit()
+        logger.info(
+            "inbound_claim_released_on_shutdown",
+            extra={"event_id": claimed.event_id},
+        )
+    except Exception:
+        logger.warning(
+            "inbound_claim_release_failed",
+            exc_info=True,
+            extra={"event_id": claimed.event_id},
+        )
 
 
 async def _is_owner(business_id: int, phone: str, session: AsyncSession) -> bool:

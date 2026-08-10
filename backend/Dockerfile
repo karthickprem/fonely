@@ -8,12 +8,12 @@ WORKDIR /app
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-editable
+RUN uv sync --locked --no-dev --no-editable
 
 COPY src/ src/
 COPY migrations/ migrations/
 COPY alembic.ini ./
-COPY run.py run_worker.py run_inbound_worker.py ./
+COPY run.py run_worker.py run_inbound_worker.py run_retention_worker.py ./
 
 RUN uv pip install --no-deps -e .
 
@@ -21,6 +21,6 @@ USER fonely
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live')" || exit 1
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live')"]
 
 CMD [".venv/bin/python", "run.py"]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import uuid
 from dataclasses import dataclass
@@ -73,19 +74,35 @@ async def run_notification_worker(
     poll_interval: float = 5.0,
     batch_size: int = 10,
     max_iterations: int | None = None,
+    stop: asyncio.Event | None = None,
 ) -> None:
     iterations = 0
-    while max_iterations is None or iterations < max_iterations:
+
+    def _should_continue() -> bool:
+        if stop is not None and stop.is_set():
+            return False
+        return not (max_iterations is not None and iterations >= max_iterations)
+
+    while _should_continue():
         iterations += 1
         processed = 0
         for _ in range(batch_size):
+            if stop is not None and stop.is_set():
+                break
             claimed = await _claim_one(session_factory)
             if claimed is None:
+                break
+            if stop is not None and stop.is_set():
+                await _release_notification_claim(session_factory, claimed)
                 break
             await _deliver_claimed(session_factory, sender, claimed)
             processed += 1
         if processed == 0 and max_iterations is None:
-            await asyncio.sleep(poll_interval)
+            if stop is not None:
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(stop.wait(), timeout=poll_interval)
+            else:
+                await asyncio.sleep(poll_interval)
 
 
 async def _deliver_claimed(
@@ -183,6 +200,32 @@ async def _claim_one(
         )
         await session.commit()
         return claimed
+
+
+async def _release_notification_claim(
+    session_factory: async_sessionmaker[AsyncSession],
+    claimed: ClaimedNotification,
+) -> None:
+    try:
+        async with session_factory() as session:
+            from fonely.repositories.inbound_events import _next_attempt_at
+
+            await NotificationRepository(session).mark_failed(
+                claimed.event_id,
+                "shutdown_release",
+                _next_attempt_at(claimed.attempts + 1),
+            )
+            await session.commit()
+        logger.info(
+            "notification_claim_released_on_shutdown",
+            extra={"event_id": claimed.event_id},
+        )
+    except Exception:
+        logger.warning(
+            "notification_claim_release_failed",
+            exc_info=True,
+            extra={"event_id": claimed.event_id},
+        )
 
 
 def _snapshot_to_model(claimed: ClaimedNotification) -> NotificationOutboxEvent:

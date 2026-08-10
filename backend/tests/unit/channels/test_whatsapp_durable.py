@@ -249,10 +249,10 @@ class TestDeploymentConfiguration:
         assert "inbound-worker:" in compose
         assert "notification-worker:" in compose
         assert compose.count("restart: unless-stopped") >= 2
-        assert compose.count("disable: true") >= 2
         assert "SARVAM_API_KEY: ${SARVAM_API_KEY:?" in compose
         assert "WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:?" in compose
-        assert "WHATSAPP_BUSINESS_MAPPINGS: ${WHATSAPP_BUSINESS_MAPPINGS:?" in compose
+        assert compose.count("disable: true") >= 2
+        assert "fonely-backend:local" in compose
 
 
 class TestBackoff:

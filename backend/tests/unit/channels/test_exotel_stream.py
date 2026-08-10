@@ -84,9 +84,7 @@ class TestSampleRateGoldenProbe:
     """
 
     @pytest.mark.parametrize("rate", [8000, 16000, 24000])
-    async def test_1khz_survives_serializer_roundtrip(
-        self, rate: int
-    ) -> None:
+    async def test_1khz_survives_serializer_roundtrip(self, rate: int) -> None:
         """1kHz tone at declared rate → serialize → deserialize → frequency preserved.
 
         Stream resamplers buffer the first chunk, so we send 3 chunks
@@ -108,23 +106,21 @@ class TestSampleRateGoldenProbe:
         for _chunk_idx in range(3):
             pcm_chunk = _generate_1khz_pcm(rate, 100)
             payload = base64.b64encode(pcm_chunk).decode()
-            exotel_msg = json.dumps({
-                "event": "media",
-                "media": {"payload": payload},
-            })
+            exotel_msg = json.dumps(
+                {
+                    "event": "media",
+                    "media": {"payload": payload},
+                }
+            )
             frame = await serializer.deserialize(exotel_msg)
             if frame is not None:
                 assert frame.sample_rate == 16000
                 collected_pcm.extend(frame.audio)
 
-        assert len(collected_pcm) >= 640, (
-            f"expected output audio, got {len(collected_pcm)} bytes"
-        )
+        assert len(collected_pcm) >= 640, f"expected output audio, got {len(collected_pcm)} bytes"
 
         freq = _measure_dominant_frequency(bytes(collected_pcm), 16000)
-        assert 800 < freq < 1200, (
-            f"expected ~1000Hz, got {freq:.0f}Hz at input rate {rate}"
-        )
+        assert 800 < freq < 1200, f"expected ~1000Hz, got {freq:.0f}Hz at input rate {rate}"
 
     @pytest.mark.parametrize("rate", [8000, 16000, 24000])
     async def test_duration_preserved(self, rate: int) -> None:
@@ -156,10 +152,12 @@ class TestSampleRateGoldenProbe:
         for _ in range(num_chunks):
             pcm_chunk = _generate_1khz_pcm(rate, 100)
             payload = base64.b64encode(pcm_chunk).decode()
-            exotel_msg = json.dumps({
-                "event": "media",
-                "media": {"payload": payload},
-            })
+            exotel_msg = json.dumps(
+                {
+                    "event": "media",
+                    "media": {"payload": payload},
+                }
+            )
             frame = await serializer.deserialize(exotel_msg)
             if frame is not None:
                 collected_pcm.extend(frame.audio)
@@ -196,10 +194,12 @@ class TestSampleRateGoldenProbe:
         for _ in range(10):
             pcm_at_16k = _generate_1khz_pcm(16000, 100)
             payload = base64.b64encode(pcm_at_16k).decode()
-            exotel_msg = json.dumps({
-                "event": "media",
-                "media": {"payload": payload},
-            })
+            exotel_msg = json.dumps(
+                {
+                    "event": "media",
+                    "media": {"payload": payload},
+                }
+            )
             frame = await serializer.deserialize(exotel_msg)
             if frame is not None:
                 collected_pcm.extend(frame.audio)
@@ -306,7 +306,7 @@ class TestStartEventValidation:
                     "encoding": "audio/x-raw",
                     "sample_rate": "16000",
                 },
-            }
+            },
         }
         with pytest.raises(ExotelStartValidationError, match="stream_sid"):
             validate_start_event(msg)
@@ -320,7 +320,7 @@ class TestStartEventValidation:
                 "account_sid": "AC",
                 "from": "+919000000001",
                 "to": "08012345678",
-            }
+            },
         }
         with pytest.raises(ExotelStartValidationError, match="media_format"):
             validate_start_event(msg)
@@ -338,7 +338,7 @@ class TestStartEventValidation:
                     "encoding": "audio/opus",
                     "sample_rate": "16000",
                 },
-            }
+            },
         }
         with pytest.raises(ExotelStartValidationError, match="codec"):
             validate_start_event(msg)
@@ -355,11 +355,9 @@ class TestStartEventValidation:
                 "media_format": {
                     "encoding": "audio/x-raw",
                 },
-            }
+            },
         }
-        with pytest.raises(
-            ExotelStartValidationError, match="sample_rate"
-        ):
+        with pytest.raises(ExotelStartValidationError, match="sample_rate"):
             validate_start_event(msg)
 
     def test_unsupported_sample_rate(self) -> None:
@@ -375,11 +373,9 @@ class TestStartEventValidation:
                     "encoding": "audio/x-raw",
                     "sample_rate": "44100",
                 },
-            }
+            },
         }
-        with pytest.raises(
-            ExotelStartValidationError, match=r"unsupported.*sample_rate"
-        ):
+        with pytest.raises(ExotelStartValidationError, match=r"unsupported.*sample_rate"):
             validate_start_event(msg)
 
     def test_malformed_sample_rate(self) -> None:
@@ -395,11 +391,9 @@ class TestStartEventValidation:
                     "encoding": "audio/x-raw",
                     "sample_rate": "not_a_number",
                 },
-            }
+            },
         }
-        with pytest.raises(
-            ExotelStartValidationError, match="malformed"
-        ):
+        with pytest.raises(ExotelStartValidationError, match="malformed"):
             validate_start_event(msg)
 
     @pytest.mark.parametrize("rate", [8000, 16000, 24000])
@@ -416,7 +410,7 @@ class TestStartEventValidation:
                     "encoding": "audio/x-raw",
                     "sample_rate": str(rate),
                 },
-            }
+            },
         }
         metadata = validate_start_event(msg)
         assert metadata.sample_rate == rate
@@ -479,7 +473,5 @@ class TestWSMessageParsing:
             parse_ws_start_message("not json")
 
     def test_non_object_rejected(self) -> None:
-        with pytest.raises(
-            ExotelStartValidationError, match="expected JSON"
-        ):
+        with pytest.raises(ExotelStartValidationError, match="expected JSON"):
             parse_ws_start_message("[1,2]")

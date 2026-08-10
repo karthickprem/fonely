@@ -107,13 +107,9 @@ class TestC4BargeInLoopback:
             )
         )
 
-        await output.process_frame(
-            InterruptionFrame(), FrameDirection.DOWNSTREAM
-        )
+        await output.process_frame(InterruptionFrame(), FrameDirection.DOWNSTREAM)
 
-        clear_messages = [
-            m for m in fake_ws.sent if '"clear"' in m
-        ]
+        clear_messages = [m for m in fake_ws.sent if '"clear"' in m]
         assert len(clear_messages) >= 1
 
         parsed = json.loads(clear_messages[0])

@@ -202,7 +202,8 @@ async def call_status_webhook(request: Request) -> Response:
     if correlation is not None:
         provider_account = getattr(
             getattr(request.app, "state", None),
-            "exotel_account_id", "",
+            "exotel_account_id",
+            "",
         )
         result = await correlation.correlate(
             provider=EXOTEL_PROVIDER,

@@ -58,9 +58,7 @@ class RuntimeFixture:
         self.calls.append(session)
         serializer = transport._params.serializer
         assert serializer is not None
-        await serializer.setup(
-            StartFrame(audio_in_sample_rate=16000, audio_out_sample_rate=24000)
-        )
+        await serializer.setup(StartFrame(audio_in_sample_rate=16000, audio_out_sample_rate=24000))
         provider_json = None
         for _ in range(12):
             provider_json = await serializer.serialize(
@@ -116,10 +114,13 @@ class TestMountedStream:
     def test_authenticated_stream_binds_and_emits_provider_json(self) -> None:
         runtime = RuntimeFixture()
         app = _app_with_prerequisites(runtime)
-        with TestClient(app) as client, client.websocket_connect(
-            "/webhooks/exotel/media",
-            headers={"X-Exotel-Webhook-Secret": _SECRET},
-        ) as ws:
+        with (
+            TestClient(app) as client,
+            client.websocket_connect(
+                "/webhooks/exotel/media",
+                headers={"X-Exotel-Webhook-Secret": _SECRET},
+            ) as ws,
+        ):
             ws.send_json(_start_message())
             provider_message = ws.receive_json()
 
@@ -173,7 +174,6 @@ class TestMountedStream:
         assert exc_info.value.code == 4400
         assert runtime.calls == []
         assert app.state.exotel_admission.counts() == (0, 0)
-
 
 
 def _correlate(app, session):

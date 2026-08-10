@@ -41,9 +41,7 @@ class CorrelationResult:
 class CallCorrelationStore(Protocol):
     """Interface for correlation record storage."""
 
-    async def register_admitted_call(
-        self, record: CorrelationRecord
-    ) -> None:
+    async def register_admitted_call(self, record: CorrelationRecord) -> None:
         """Register a call-session record from an authenticated start."""
         ...
 
@@ -81,9 +79,7 @@ class InMemoryCorrelationStore:
     def __init__(self) -> None:
         self._records: dict[tuple[str, str], CorrelationRecord] = {}
 
-    async def register_admitted_call(
-        self, record: CorrelationRecord
-    ) -> None:
+    async def register_admitted_call(self, record: CorrelationRecord) -> None:
         key = (record.provider, record.provider_call_id)
         self._records[key] = record
 
@@ -100,22 +96,16 @@ class InMemoryCorrelationStore:
         record = self._records.get(key)
 
         if record is None:
-            return CorrelationResult(
-                outcome=CorrelationOutcome.PENDING, record=None
-            )
+            return CorrelationResult(outcome=CorrelationOutcome.PENDING, record=None)
 
         if (
             record.provider_account_id != provider_account_id
             or record.called_number != called_number
             or record.business_id != business_id
         ):
-            return CorrelationResult(
-                outcome=CorrelationOutcome.CONFLICT, record=record
-            )
+            return CorrelationResult(outcome=CorrelationOutcome.CONFLICT, record=record)
 
-        return CorrelationResult(
-            outcome=CorrelationOutcome.MATCHED, record=record
-        )
+        return CorrelationResult(outcome=CorrelationOutcome.MATCHED, record=record)
 
     async def reconcile_pending(
         self,

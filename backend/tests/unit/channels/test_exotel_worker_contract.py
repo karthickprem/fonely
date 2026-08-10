@@ -54,13 +54,19 @@ def _auth_headers() -> dict[str, str]:
 
 async def _complete(intake: InMemoryCallEventIntake, c: ClaimedCallEvent) -> bool:
     return await intake.mark_completed(
-        c.id, c.business_id, c.claim_token, c.claim_version,
+        c.id,
+        c.business_id,
+        c.claim_token,
+        c.claim_version,
     )
 
 
 async def _fail(intake: InMemoryCallEventIntake, c: ClaimedCallEvent) -> bool:
     return await intake.mark_failed(
-        c.id, c.business_id, c.claim_token, c.claim_version,
+        c.id,
+        c.business_id,
+        c.claim_token,
+        c.claim_version,
     )
 
 
@@ -134,7 +140,10 @@ class TestClaimLifecycle:
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
         ok = await intake.mark_completed(
-            claimed.id, claimed.business_id, "wrong-token", claimed.claim_version,
+            claimed.id,
+            claimed.business_id,
+            "wrong-token",
+            claimed.claim_version,
         )
         assert not ok
         assert intake.get_intake_status(1) == "processing"
@@ -146,7 +155,10 @@ class TestClaimLifecycle:
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
         ok = await intake.mark_completed(
-            claimed.id, claimed.business_id, claimed.claim_token, 999,
+            claimed.id,
+            claimed.business_id,
+            claimed.claim_token,
+            999,
         )
         assert not ok
 
@@ -323,9 +335,7 @@ class TestAdapterIntakeWorkerProof:
             "/webhooks/exotel/call-status", json=COMPLETED_OUTBOUND, headers=_auth_headers()
         )
         late_answered = {**ANSWERED_OUTBOUND, "CallSid": COMPLETED_OUTBOUND["CallSid"]}
-        client.post(
-            "/webhooks/exotel/call-status", json=late_answered, headers=_auth_headers()
-        )
+        client.post("/webhooks/exotel/call-status", json=late_answered, headers=_auth_headers())
         assert len(intake.events) == 2
 
         # First claim: terminal — normal processing
@@ -382,7 +392,10 @@ class TestTenantIsolation:
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
         ok = await intake.mark_completed(
-            claimed.id, 999, claimed.claim_token, claimed.claim_version,
+            claimed.id,
+            999,
+            claimed.claim_token,
+            claimed.claim_version,
         )
         assert not ok
         assert intake.get_intake_status(1) == "processing"
@@ -395,7 +408,10 @@ class TestTenantIsolation:
         claimed = await intake.claim_next_eligible()
         assert claimed is not None
         ok = await intake.mark_failed(
-            claimed.id, 999, claimed.claim_token, claimed.claim_version,
+            claimed.id,
+            999,
+            claimed.claim_token,
+            claimed.claim_version,
         )
         assert not ok
         assert intake.get_intake_status(1) == "processing"

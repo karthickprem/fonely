@@ -90,12 +90,8 @@ class TestIntakeServiceTransactionContract:
         factory = _mock_session_factory(mock_session)
         service = InboundCallIntakeService(factory)
 
-        with patch(
-            "fonely.services.exotel_intake.InboundCallEventRepository"
-        ) as mock_repo_cls:
-            mock_repo_cls.return_value.persist = AsyncMock(
-                return_value=_make_record()
-            )
+        with patch("fonely.services.exotel_intake.InboundCallEventRepository") as mock_repo_cls:
+            mock_repo_cls.return_value.persist = AsyncMock(return_value=_make_record())
             result = await service.persist(1, _make_event())
 
         assert result == _make_record()
@@ -110,9 +106,7 @@ class TestIntakeServiceTransactionContract:
         factory = _mock_session_factory(mock_session)
         service = InboundCallIntakeService(factory)
 
-        with patch(
-            "fonely.services.exotel_intake.InboundCallEventRepository"
-        ) as mock_repo_cls:
+        with patch("fonely.services.exotel_intake.InboundCallEventRepository") as mock_repo_cls:
             mock_repo_cls.return_value.persist = AsyncMock(
                 side_effect=DuplicateCallEventError("dup")
             )
@@ -130,9 +124,7 @@ class TestIntakeServiceTransactionContract:
         factory = _mock_session_factory(mock_session)
         service = InboundCallIntakeService(factory)
 
-        with patch(
-            "fonely.services.exotel_intake.InboundCallEventRepository"
-        ) as mock_repo_cls:
+        with patch("fonely.services.exotel_intake.InboundCallEventRepository") as mock_repo_cls:
             mock_repo_cls.return_value.persist = AsyncMock(
                 side_effect=ConflictingCallEventError("conflict")
             )
@@ -149,12 +141,8 @@ class TestIntakeServiceTransactionContract:
         factory = _mock_session_factory(mock_session)
         service = InboundCallIntakeService(factory)
 
-        with patch(
-            "fonely.services.exotel_intake.InboundCallEventRepository"
-        ) as mock_repo_cls:
-            mock_repo_cls.return_value.persist = AsyncMock(
-                side_effect=RuntimeError("db exploded")
-            )
+        with patch("fonely.services.exotel_intake.InboundCallEventRepository") as mock_repo_cls:
+            mock_repo_cls.return_value.persist = AsyncMock(side_effect=RuntimeError("db exploded"))
             with pytest.raises(RuntimeError, match="db exploded"):
                 await service.persist(1, _make_event())
 
@@ -201,9 +189,7 @@ class TestWorkerSchemaGuardProduction:
                 return schema_result
             return claim_result
 
-        mock_session.execute = AsyncMock(
-            side_effect=_execute_side_effect
-        )
+        mock_session.execute = AsyncMock(side_effect=_execute_side_effect)
 
         factory = _mock_session_factory(mock_session)
         worker = InboundCallEventWorker(factory)
@@ -236,12 +222,8 @@ class TestWorkerSchemaGuardProduction:
         await worker.process_one()
         await worker.process_one()
 
-        schema_queries = [
-            c for c in execute_calls if "information_schema" in c
-        ]
-        assert len(schema_queries) == 1, (
-            f"schema queried {len(schema_queries)} times, expected 1"
-        )
+        schema_queries = [c for c in execute_calls if "information_schema" in c]
+        assert len(schema_queries) == 1, f"schema queried {len(schema_queries)} times, expected 1"
 
     async def test_schema_guard_scopes_to_current_schema(self) -> None:
         """Verify the SQL uses current_schema() and COUNT(*)."""
@@ -278,9 +260,7 @@ class TestCreateAppDisabledState:
         with patch("fonely.app.settings") as ms:
             ms.internal_api_secret = ""
             ms.whatsapp_verify_token = ""
-            ms.exotel_webhook_secret = (
-                "a-very-strong-secret-over-32-chars"
-            )
+            ms.exotel_webhook_secret = "a-very-strong-secret-over-32-chars"
             ms.host = "0.0.0.0"
             ms.port = 8000
             ms.log_format = "json"
@@ -314,9 +294,7 @@ class TestCreateAppDisabledState:
         with patch("fonely.app.settings") as ms:
             ms.internal_api_secret = ""
             ms.whatsapp_verify_token = ""
-            ms.exotel_webhook_secret = (
-                "a-very-strong-secret-over-32-chars"
-            )
+            ms.exotel_webhook_secret = "a-very-strong-secret-over-32-chars"
             ms.host = "0.0.0.0"
             ms.port = 8000
             ms.log_format = "json"
@@ -374,13 +352,11 @@ class TestAdapterToRealIntakeService:
         app.state.exotel_intake = real_service
 
         secret = "test-exotel-webhook-secret-value"
-        with patch.object(settings, "exotel_webhook_secret", secret), \
-             patch(
-                 "fonely.services.exotel_intake.InboundCallEventRepository"
-             ) as mock_repo_cls:
-            mock_repo_cls.return_value.persist = AsyncMock(
-                return_value=_make_record()
-            )
+        with (
+            patch.object(settings, "exotel_webhook_secret", secret),
+            patch("fonely.services.exotel_intake.InboundCallEventRepository") as mock_repo_cls,
+        ):
+            mock_repo_cls.return_value.persist = AsyncMock(return_value=_make_record())
             client = TestClient(app)
             response = client.post(
                 "/webhooks/exotel/call-status",
@@ -427,10 +403,10 @@ class TestAdapterToRealIntakeService:
         app.state.exotel_intake = real_service
 
         secret = "test-exotel-webhook-secret-value"
-        with patch.object(settings, "exotel_webhook_secret", secret), \
-             patch(
-                 "fonely.services.exotel_intake.InboundCallEventRepository"
-             ) as mock_repo_cls:
+        with (
+            patch.object(settings, "exotel_webhook_secret", secret),
+            patch("fonely.services.exotel_intake.InboundCallEventRepository") as mock_repo_cls,
+        ):
             mock_repo_cls.return_value.persist = AsyncMock(
                 side_effect=DuplicateCallEventError("dup")
             )

@@ -259,7 +259,9 @@ def contains_medical_advice(text: str) -> bool:
 
 
 _BOOKING_SUCCESS = re.compile(
-    r"(?:book(?:ing)?|appointment).*(?:confirm|confirmed|booked|saved|fixed|scheduled|ஆயிடுச்சு|உறுதி|பதிவு|aayiduchu|aagiduchu|panniten|pannitten)",
+    r"(?:book(?:ing)?|appointment).*(?:confirm|confirmed|booked|saved|fixed|scheduled|ஆயிடுச்சு|உறுதி|பதிவு|aayiduchu|aagiduchu|panniten|pannitten)"
+    r"|(?:confirm|confirmed|saved|fixed|scheduled|booked).*(?:book(?:ing)?|appointment)"
+    r"|(?:confirm|confirmed|booked|saved) ஆயிடுச்சு",
     re.IGNORECASE,
 )
 

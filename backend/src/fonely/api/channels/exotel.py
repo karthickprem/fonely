@@ -141,7 +141,8 @@ def _parse_multipart_fields(raw: bytes, content_type: str) -> dict[str, str]:
 @router.post("/call-status")
 async def call_status_webhook(request: Request) -> Response:
     """Gateway auth → parse → validate → correlate → persist → 200."""
-    if not verify_gateway_secret(request.headers, settings.exotel_webhook_secret):
+    secret = getattr(getattr(request.app, "state", None), "exotel_gateway_secret", "")
+    if not verify_gateway_secret(request.headers, secret):
         return Response(status_code=401, content="unauthorized")
 
     content_type = (request.headers.get("content-type") or "").lower().split(";")[0].strip()

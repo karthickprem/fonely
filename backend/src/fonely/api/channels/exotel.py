@@ -124,7 +124,7 @@ def _parse_multipart_fields(raw: bytes, content_type: str) -> dict[str, str]:
         if name in fields:
             continue
         payload = part.get_payload(decode=True)
-        if payload is None:
+        if not isinstance(payload, bytes):
             continue
         try:
             fields[str(name)] = payload.decode("utf-8")

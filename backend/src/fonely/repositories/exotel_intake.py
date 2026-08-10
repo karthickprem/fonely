@@ -167,7 +167,7 @@ class InboundCallEventRepository:
     async def mark_completed(
         self, event_id: int, business_id: int, claim_token: str, claim_version: int
     ) -> bool:
-        result = await self._session.execute(
+        raw_result = await self._session.execute(
             text(
                 "UPDATE inbound_call_events SET "
                 "  intake_status = 'completed', "
@@ -181,12 +181,12 @@ class InboundCallEventRepository:
             {"eid": event_id, "bid": business_id, "token": claim_token, "version": claim_version},
         )
         await self._session.flush()
-        return result.rowcount > 0  # type: ignore[union-attr]
+        return int(raw_result.rowcount) > 0  # type: ignore[attr-defined]
 
     async def mark_failed(
         self, event_id: int, business_id: int, claim_token: str, claim_version: int
     ) -> bool:
-        result = await self._session.execute(
+        raw_result = await self._session.execute(
             text(
                 "UPDATE inbound_call_events SET "
                 "  intake_status = CASE "
@@ -207,4 +207,4 @@ class InboundCallEventRepository:
             {"eid": event_id, "bid": business_id, "token": claim_token, "version": claim_version},
         )
         await self._session.flush()
-        return result.rowcount > 0  # type: ignore[union-attr]
+        return int(raw_result.rowcount) > 0  # type: ignore[attr-defined]

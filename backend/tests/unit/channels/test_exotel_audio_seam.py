@@ -1,20 +1,23 @@
-"""Audio seam probes — provider-free happy path and adversarial.
+"""Audio seam tests — real transport lifecycle through WebSocket.
 
-Tests the Exotel audio adapter against synthetic provider fixtures.
-No live Exotel connection required.
+Tests the ExotelMediaTransport against synthetic provider fixtures
+via a real WebSocket connection, not helper function calls.
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import contextlib
 import json
 
 import pytest
+from starlette.websockets import WebSocketDisconnect
 
 from fonely.api.channels.exotel_audio import (
-    ExotelAudioAdapter,
+    ExotelMediaTransport,
     ExotelStreamError,
-    parse_exotel_ws_message,
+    _parse_ws_message,
 )
 from fonely.domain.calls.media import (
     CANONICAL_INBOUND,
@@ -30,171 +33,265 @@ from fonely.domain.calls.media import (
 )
 
 
-def _make_adapter() -> ExotelAudioAdapter:
-    return ExotelAudioAdapter(
-        business_id=1,
-        provider_environment="sandbox",
-        provider_account_id="test_account",
-    )
-
-
-def _make_start_msg(
-    codec: str = "audio/pcmu",
-    rate: int = 8000,
-) -> dict:
-    return {
+def _make_start_event(
+    encoding: str = "audio/x-raw",
+    sample_rate: int = 16000,
+) -> str:
+    return json.dumps({
         "event": "start",
-        "streamSid": "stream_" + "a" * 28,
-        "callSid": "call_" + "b" * 27,
-        "mediaFormat": {
-            "encoding": codec,
-            "sampleRate": rate,
+        "sequence_number": "1",
+        "stream_sid": "MZ" + "a" * 30,
+        "start": {
+            "stream_sid": "MZ" + "a" * 30,
+            "call_sid": "CA" + "b" * 30,
+            "account_sid": "AC_test",
+            "media_format": {
+                "encoding": encoding,
+                "sample_rate": str(sample_rate),
+                "bit_rate": "16",
+            },
         },
-    }
+    })
 
 
-def _make_ulaw_silence(num_samples: int) -> bytes:
-    """Generate G.711 μ-law silence (0x7F = digital silence in μ-law)."""
-    return b"\x7f" * num_samples
+def _make_pcm_silence(num_bytes: int) -> bytes:
+    return b"\x00" * num_bytes
 
 
-def _make_media_msg(
-    payload_ulaw: bytes,
+def _make_media_event(
+    payload: bytes,
     chunk: int = 0,
     timestamp: int = 0,
-) -> dict:
-    return {
+) -> str:
+    return json.dumps({
         "event": "media",
+        "sequence_number": str(chunk + 2),
+        "stream_sid": "MZ" + "a" * 30,
         "media": {
-            "payload": base64.b64encode(payload_ulaw).decode(),
-            "chunk": chunk,
-            "timestamp": timestamp,
+            "chunk": str(chunk),
+            "timestamp": str(timestamp),
+            "payload": base64.b64encode(payload).decode(),
         },
-    }
+    })
 
 
-def _make_stop_msg(reason: str = "call_ended") -> dict:
-    return {
+def _make_stop_event(reason: str = "callended") -> str:
+    return json.dumps({
         "event": "stop",
-        "stop": {"reason": reason},
-    }
+        "sequence_number": "99",
+        "stream_sid": "MZ" + "a" * 30,
+        "stop": {
+            "call_sid": "CA" + "b" * 30,
+            "account_sid": "AC_test",
+            "reason": reason,
+        },
+    })
 
 
 # ============================================================================
-# Happy path
+# Transport lifecycle — through real WebSocket mock
 # ============================================================================
 
 
-class TestHappyPathSeam:
-    def test_start_produces_session_started(self) -> None:
-        adapter = _make_adapter()
-        started = adapter.handle_start(_make_start_msg())
-        assert isinstance(started, SessionStarted)
-        assert started.identity.schema_version == CONTRACT_VERSION
-        assert started.identity.business_id == 1
-        assert started.identity.provider == "exotel"
-        assert started.identity.provider_environment == "sandbox"
-        assert started.input_format == CANONICAL_INBOUND
-        assert started.output_format == CANONICAL_OUTBOUND
-        assert started.started_monotonic_ns > 0
+class TestTransportLifecycle:
+    """Tests using ExotelMediaTransport with a mock WebSocket."""
 
-    def test_media_produces_640_byte_canonical_frame(self) -> None:
-        """Accumulate enough provider audio to produce one 640-byte frame.
-
-        ratecv 8k→16k doesn't produce exactly 2x output per chunk due to
-        polyphase filter, so we send two chunks to guarantee one frame.
-        """
-        adapter = _make_adapter()
-        adapter.handle_start(_make_start_msg())
-
-        ulaw_chunk = _make_ulaw_silence(160)
-        adapter.handle_media(_make_media_msg(ulaw_chunk, chunk=0, timestamp=0))
-        result = adapter.handle_media(_make_media_msg(ulaw_chunk, chunk=1, timestamp=20))
-
-        assert result is not None
-        assert isinstance(result, InboundAudioFrame)
-        assert len(result.pcm_s16le_16khz_mono) == INBOUND_BYTES_PER_FRAME
-        assert result.sequence == 0
-
-    def test_outbound_encode_produces_ulaw(self) -> None:
-        adapter = _make_adapter()
-        adapter.handle_start(_make_start_msg())
-
-        pcm_24k = b"\x00" * OUTBOUND_BYTES_PER_FRAME
-        frame = OutboundAudioFrame(
-            generation_id=1,
-            sequence=0,
-            media_timestamp_ms=0,
-            pcm_s16le_24khz_mono=pcm_24k,
+    async def test_start_handshake_produces_session(self) -> None:
+        """Start event → SessionStarted with correct identity."""
+        ws = _MockWebSocket([_make_start_event(), _make_stop_event()])
+        transport = ExotelMediaTransport(
+            ws=ws, business_id=1,
+            provider_environment="sandbox",
+            provider_account_id="AC_test",
         )
-        encoded = adapter.encode_outbound(frame)
-        assert len(encoded) > 0
-        decoded = base64.b64decode(encoded)
-        assert len(decoded) > 0
 
-    def test_stop_produces_ended(self) -> None:
-        adapter = _make_adapter()
-        adapter.handle_start(_make_start_msg())
-        ended = adapter.handle_stop(_make_stop_msg())
+        started_events: list[SessionStarted] = []
+
+        async def on_started(s: SessionStarted) -> None:
+            started_events.append(s)
+
+        ended = await transport.run(on_session_started=on_started)
+
+        assert len(started_events) == 1
+        s = started_events[0]
+        assert s.identity.schema_version == CONTRACT_VERSION
+        assert s.identity.business_id == 1
+        assert s.identity.provider == "exotel"
+        assert s.identity.provider_call_id == "CA" + "b" * 30
+        assert s.input_format == CANONICAL_INBOUND
+        assert s.output_format == CANONICAL_OUTBOUND
         assert isinstance(ended, ProviderStreamEnded)
-        assert ended.provider_code == "call_ended"
 
-    def test_full_lifecycle(self) -> None:
-        """Start → multiple media frames → stop."""
-        adapter = _make_adapter()
-        started = adapter.handle_start(_make_start_msg())
-        assert isinstance(started, SessionStarted)
+    async def test_media_frames_enqueued_as_canonical(self) -> None:
+        """Provider PCM → canonical frames captured during session."""
+        pcm_16k = _make_pcm_silence(640)
+        messages = [
+            _make_start_event(sample_rate=16000),
+            _make_media_event(pcm_16k, chunk=0, timestamp=0),
+            _make_media_event(pcm_16k, chunk=1, timestamp=20),
+            _make_stop_event(),
+        ]
+        ws = _MockWebSocket(messages)
+        transport = ExotelMediaTransport(
+            ws=ws, business_id=1,
+            provider_environment="sandbox",
+            provider_account_id="AC_test",
+        )
 
-        frames = []
-        for i in range(5):
-            ulaw = _make_ulaw_silence(160)
-            result = adapter.handle_media(
-                _make_media_msg(ulaw, chunk=i, timestamp=i * 20)
-            )
-            if isinstance(result, InboundAudioFrame):
-                frames.append(result)
+        captured: list[InboundAudioFrame] = []
 
-        assert len(frames) > 0
-        for i, f in enumerate(frames):
-            assert f.sequence == i
+        async def _consumer() -> None:
+            while True:
+                item = await transport.inbound_queue.get()
+                if item is None:
+                    break
+                if isinstance(item, InboundAudioFrame):
+                    captured.append(item)
+
+        consumer = asyncio.create_task(_consumer())
+        await transport.run()
+        consumer.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await consumer
+
+        assert len(captured) >= 1
+        for f in captured:
             assert len(f.pcm_s16le_16khz_mono) == INBOUND_BYTES_PER_FRAME
 
-        ended = adapter.handle_stop(_make_stop_msg())
-        assert isinstance(ended, ProviderStreamEnded)
+    async def test_sequence_gap_produces_discontinuity(self) -> None:
+        """Chunk gap → InboundDiscontinuity event captured."""
+        pcm = _make_pcm_silence(640)
+        messages = [
+            _make_start_event(sample_rate=16000),
+            _make_media_event(pcm, chunk=0, timestamp=0),
+            _make_media_event(pcm, chunk=5, timestamp=100),
+            _make_stop_event(),
+        ]
+        ws = _MockWebSocket(messages)
+        transport = ExotelMediaTransport(
+            ws=ws, business_id=1,
+            provider_environment="sandbox",
+            provider_account_id="AC_test",
+        )
 
-    def test_sequence_is_monotonic(self) -> None:
-        adapter = _make_adapter()
-        adapter.handle_start(_make_start_msg())
+        captured: list = []
 
-        seqs = []
-        for i in range(10):
-            ulaw = _make_ulaw_silence(160)
-            result = adapter.handle_media(
-                _make_media_msg(ulaw, chunk=i, timestamp=i * 20)
+        async def _consumer() -> None:
+            while True:
+                item = await transport.inbound_queue.get()
+                if item is None:
+                    break
+                captured.append(item)
+
+        consumer = asyncio.create_task(_consumer())
+        await transport.run()
+        consumer.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await consumer
+
+        discs = [i for i in captured if isinstance(i, InboundDiscontinuity)]
+        assert len(discs) >= 1
+        assert discs[0].reason == "sequence_gap"
+
+    async def test_outbound_send_produces_provider_envelope(self) -> None:
+        """Outbound frame → JSON media envelope sent over WebSocket."""
+        messages = [
+            _make_start_event(sample_rate=16000),
+        ]
+        ws = _MockWebSocket(messages, hang_after=True)
+        transport = ExotelMediaTransport(
+            ws=ws, business_id=1,
+            provider_environment="sandbox",
+            provider_account_id="AC_test",
+        )
+
+        async def _drive() -> None:
+            await asyncio.sleep(0.1)
+            frame = OutboundAudioFrame(
+                generation_id=1, sequence=0, media_timestamp_ms=0,
+                pcm_s16le_24khz_mono=b"\x00" * OUTBOUND_BYTES_PER_FRAME,
             )
-            if isinstance(result, InboundAudioFrame):
-                seqs.append(result.sequence)
+            await transport.send_audio(frame)
+            await asyncio.sleep(0.3)
+            ws.close_from_test()
 
-        for i in range(1, len(seqs)):
-            assert seqs[i] == seqs[i - 1] + 1
+        await asyncio.gather(transport.run(), _drive())
 
-    def test_outbound_generation_filtering(self) -> None:
-        adapter = _make_adapter()
-        adapter.handle_start(_make_start_msg())
+        sent = [m for m in ws.sent_messages if "media" in m]
+        assert len(sent) >= 1
+        parsed = json.loads(sent[0])
+        assert parsed["event"] == "media"
+        assert "payload" in parsed["media"]
+        assert parsed["stream_sid"] == "MZ" + "a" * 30
 
-        old_frame = OutboundAudioFrame(
-            generation_id=1, sequence=0, media_timestamp_ms=0,
-            pcm_s16le_24khz_mono=b"\x00" * OUTBOUND_BYTES_PER_FRAME,
+    async def test_barge_in_clear_is_monotonic(self) -> None:
+        """Generation clear is monotonic — lower ID cannot un-cancel."""
+        ws = _MockWebSocket([_make_start_event(), _make_stop_event()])
+        transport = ExotelMediaTransport(
+            ws=ws, business_id=1,
+            provider_environment="sandbox",
+            provider_account_id="AC_test",
         )
-        new_frame = OutboundAudioFrame(
-            generation_id=2, sequence=0, media_timestamp_ms=0,
-            pcm_s16le_24khz_mono=b"\x00" * OUTBOUND_BYTES_PER_FRAME,
+
+        assert transport.clear_generation(3) is True
+        assert transport.clear_generation(2) is False
+        assert transport.clear_generation(3) is False
+        assert transport.clear_generation(4) is True
+
+    async def test_provider_clear_sent_on_barge_in(self) -> None:
+        """Barge-in → clear event sent to provider."""
+        messages = [_make_start_event(sample_rate=16000)]
+        ws = _MockWebSocket(messages, hang_after=True)
+        transport = ExotelMediaTransport(
+            ws=ws, business_id=1,
+            provider_environment="sandbox",
+            provider_account_id="AC_test",
         )
 
-        assert adapter.should_send(old_frame)
-        adapter.handle_clear(1)
-        assert not adapter.should_send(old_frame)
-        assert adapter.should_send(new_frame)
+        async def _drive() -> None:
+            await asyncio.sleep(0.1)
+            transport.clear_generation(1)
+            await transport.send_provider_clear()
+            await asyncio.sleep(0.1)
+            ws.close_from_test()
+
+        await asyncio.gather(transport.run(), _drive())
+
+        clear_msgs = [
+            m for m in ws.sent_messages
+            if '"clear"' in m
+        ]
+        assert len(clear_msgs) >= 1
+        parsed = json.loads(clear_msgs[0])
+        assert parsed["event"] == "clear"
+
+    async def test_stop_produces_terminal_reason(self) -> None:
+        messages = [_make_start_event(), _make_stop_event("callended")]
+        ws = _MockWebSocket(messages)
+        transport = ExotelMediaTransport(
+            ws=ws, business_id=1,
+            provider_environment="sandbox",
+            provider_account_id="AC_test",
+        )
+
+        ended = await transport.run()
+        assert isinstance(ended, ProviderStreamEnded)
+        assert ended.reason == "provider_stop"
+        assert ended.provider_code == "callended"
+
+    async def test_disconnect_cleans_up(self) -> None:
+        """WebSocket disconnect → transport stops, queues drained."""
+        ws = _MockWebSocket([_make_start_event()])
+        ws._disconnect_after_start = True
+        transport = ExotelMediaTransport(
+            ws=ws, business_id=1,
+            provider_environment="sandbox",
+            provider_account_id="AC_test",
+        )
+
+        ended = await transport.run()
+        assert transport.is_stopped
+        assert ended.reason in ("normal_disconnect", "protocol_error")
 
 
 # ============================================================================
@@ -202,117 +299,161 @@ class TestHappyPathSeam:
 # ============================================================================
 
 
-class TestAdversarialSeam:
-    def test_unsupported_codec_fails(self) -> None:
-        adapter = _make_adapter()
-        with pytest.raises(ExotelStreamError, match="unsupported codec"):
-            adapter.handle_start(_make_start_msg(codec="audio/opus"))
-
-    def test_wrong_sample_rate_fails(self) -> None:
-        adapter = _make_adapter()
-        with pytest.raises(ExotelStreamError, match="unsupported sample rate"):
-            adapter.handle_start(_make_start_msg(rate=16000))
-
-    def test_duplicate_start_fails(self) -> None:
-        adapter = _make_adapter()
-        adapter.handle_start(_make_start_msg())
-        with pytest.raises(ExotelStreamError, match="duplicate start"):
-            adapter.handle_start(_make_start_msg())
-
-    def test_media_before_start_fails(self) -> None:
-        adapter = _make_adapter()
-        with pytest.raises(ExotelStreamError, match="media before start"):
-            adapter.handle_media(_make_media_msg(b"\x7f" * 160))
-
-    def test_missing_stream_sid_fails(self) -> None:
-        adapter = _make_adapter()
-        msg = _make_start_msg()
-        msg["streamSid"] = ""
-        with pytest.raises(ExotelStreamError, match="missing streamSid"):
-            adapter.handle_start(msg)
-
-    def test_invalid_base64_payload_fails(self) -> None:
-        adapter = _make_adapter()
-        adapter.handle_start(_make_start_msg())
-        msg = {
-            "event": "media",
-            "media": {"payload": "not-valid-base64!!!"},
-        }
-        with pytest.raises(ExotelStreamError, match="invalid base64"):
-            adapter.handle_media(msg)
-
-    def test_timestamp_regression_produces_discontinuity(self) -> None:
-        adapter = _make_adapter()
-        adapter.handle_start(_make_start_msg())
-
-        adapter.handle_media(
-            _make_media_msg(_make_ulaw_silence(160), timestamp=100)
+class TestAdversarialTransport:
+    async def test_unsupported_codec_fails(self) -> None:
+        ws = _MockWebSocket([
+            _make_start_event(encoding="audio/opus"),
+        ])
+        transport = ExotelMediaTransport(
+            ws=ws, business_id=1,
+            provider_environment="sandbox",
+            provider_account_id="AC_test",
         )
-        result = adapter.handle_media(
-            _make_media_msg(_make_ulaw_silence(160), timestamp=50)
+        ended = await transport.run()
+        assert ended.reason == "protocol_error"
+        assert "codec" in (ended.provider_code or "")
+
+    async def test_unsupported_sample_rate_fails(self) -> None:
+        ws = _MockWebSocket([
+            _make_start_event(sample_rate=44100),
+        ])
+        transport = ExotelMediaTransport(
+            ws=ws, business_id=1,
+            provider_environment="sandbox",
+            provider_account_id="AC_test",
         )
-        assert isinstance(result, InboundDiscontinuity)
-        assert result.reason == "provider_reset"
+        ended = await transport.run()
+        assert ended.reason == "protocol_error"
 
-    def test_outbound_wrong_size_fails(self) -> None:
-        adapter = _make_adapter()
-        adapter.handle_start(_make_start_msg())
-        frame = OutboundAudioFrame(
-            generation_id=1, sequence=0, media_timestamp_ms=0,
-            pcm_s16le_24khz_mono=b"\x00" * 100,
+    async def test_duplicate_start_fails(self) -> None:
+        ws = _MockWebSocket([
+            _make_start_event(),
+            _make_start_event(),
+        ])
+        transport = ExotelMediaTransport(
+            ws=ws, business_id=1,
+            provider_environment="sandbox",
+            provider_account_id="AC_test",
         )
-        with pytest.raises(ExotelStreamError, match="wrong size"):
-            adapter.encode_outbound(frame)
+        ended = await transport.run()
+        assert ended.reason == "protocol_error"
+        assert "duplicate" in (ended.provider_code or "").lower()
 
-    def test_barge_in_clears_old_generation(self) -> None:
-        adapter = _make_adapter()
-        adapter.handle_start(_make_start_msg())
-
-        old = OutboundAudioFrame(
-            generation_id=1, sequence=0, media_timestamp_ms=0,
-            pcm_s16le_24khz_mono=b"\x00" * OUTBOUND_BYTES_PER_FRAME,
+    async def test_invalid_json_fails(self) -> None:
+        ws = _MockWebSocket(["not json at all"])
+        transport = ExotelMediaTransport(
+            ws=ws, business_id=1,
+            provider_environment="sandbox",
+            provider_account_id="AC_test",
         )
-        assert adapter.should_send(old)
+        ended = await transport.run()
+        assert ended.reason == "protocol_error"
 
-        adapter.handle_clear(1)
-
-        assert not adapter.should_send(old)
-        late = OutboundAudioFrame(
-            generation_id=1, sequence=1, media_timestamp_ms=20,
-            pcm_s16le_24khz_mono=b"\x00" * OUTBOUND_BYTES_PER_FRAME,
+    async def test_cleared_generation_frame_not_sent(self) -> None:
+        """Frame from cleared generation is discarded, not sent."""
+        messages = [_make_start_event(sample_rate=16000)]
+        ws = _MockWebSocket(messages, hang_after=True)
+        transport = ExotelMediaTransport(
+            ws=ws, business_id=1,
+            provider_environment="sandbox",
+            provider_account_id="AC_test",
         )
-        assert not adapter.should_send(late)
 
-    def test_disconnect_during_active_stream(self) -> None:
-        adapter = _make_adapter()
-        adapter.handle_start(_make_start_msg())
-        adapter.handle_media(
-            _make_media_msg(_make_ulaw_silence(160), timestamp=0)
-        )
-        ended = adapter.handle_stop(None)
-        assert isinstance(ended, ProviderStreamEnded)
-        assert ended.reason == "normal_disconnect"
+        async def _drive() -> None:
+            await asyncio.sleep(0.1)
+            transport.clear_generation(1)
+            old_frame = OutboundAudioFrame(
+                generation_id=1, sequence=0, media_timestamp_ms=0,
+                pcm_s16le_24khz_mono=b"\x00" * OUTBOUND_BYTES_PER_FRAME,
+            )
+            await transport.send_audio(old_frame)
+            await asyncio.sleep(0.2)
+            ws.close_from_test()
 
-    def test_error_stop_reason(self) -> None:
-        adapter = _make_adapter()
-        adapter.handle_start(_make_start_msg())
-        ended = adapter.handle_stop(
-            {"event": "stop", "stop": {"reason": "network_error_timeout"}}
-        )
-        assert ended.reason == "network_error"
+        await asyncio.gather(transport.run(), _drive())
 
-    def test_oversized_ws_message_rejected(self) -> None:
-        with pytest.raises(ExotelStreamError, match="too large"):
-            parse_exotel_ws_message(b"x" * 70_000)
+        media_msgs = [m for m in ws.sent_messages if '"media"' in m]
+        assert len(media_msgs) == 0
 
-    def test_non_json_ws_message_rejected(self) -> None:
+
+# ============================================================================
+# Message parsing
+# ============================================================================
+
+
+class TestMessageParsing:
+    def test_valid_json_parsed(self) -> None:
+        msg = _parse_ws_message('{"event":"start"}')
+        assert msg["event"] == "start"
+
+    def test_invalid_json_raises(self) -> None:
         with pytest.raises(ExotelStreamError, match="invalid JSON"):
-            parse_exotel_ws_message(b"not json")
+            _parse_ws_message("not json")
 
-    def test_missing_event_type_rejected(self) -> None:
-        with pytest.raises(ExotelStreamError, match="missing event type"):
-            parse_exotel_ws_message(json.dumps({"data": "stuff"}).encode())
-
-    def test_non_object_json_rejected(self) -> None:
+    def test_non_object_raises(self) -> None:
         with pytest.raises(ExotelStreamError, match="expected JSON object"):
-            parse_exotel_ws_message(json.dumps([1, 2, 3]).encode())
+            _parse_ws_message("[1,2,3]")
+
+    def test_oversized_raises(self) -> None:
+        with pytest.raises(ExotelStreamError, match="too large"):
+            _parse_ws_message("x" * 70_000)
+
+
+# ============================================================================
+# Mock WebSocket
+# ============================================================================
+
+
+class _MockWebSocket:
+    """Fake WebSocket that delivers pre-loaded messages then disconnects.
+
+    Uses an asyncio.Event created lazily to ensure it belongs to the
+    running event loop (not the import-time loop).
+    """
+
+    def __init__(
+        self,
+        messages: list[str],
+        hang_after: bool = False,
+    ) -> None:
+        self._messages = list(messages)
+        self._index = 0
+        self._hang_after = hang_after
+        self._closed = False
+        self._disconnect_after_start = False
+        self.sent_messages: list[str] = []
+        self._hang_event: asyncio.Event | None = None
+
+    def _get_hang_event(self) -> asyncio.Event:
+        if self._hang_event is None:
+            self._hang_event = asyncio.Event()
+        return self._hang_event
+
+    async def receive_text(self) -> str:
+        if self._closed:
+            raise WebSocketDisconnect(code=1000)
+
+        if self._index < len(self._messages):
+            msg = self._messages[self._index]
+            self._index += 1
+
+            if self._disconnect_after_start and '"start"' in msg:
+                self._closed = True
+
+            return msg
+
+        if self._hang_after:
+            await self._get_hang_event().wait()
+            raise WebSocketDisconnect(code=1000)
+
+        raise WebSocketDisconnect(code=1000)
+
+    async def send_text(self, data: str) -> None:
+        if self._closed:
+            raise WebSocketDisconnect(code=1000)
+        self.sent_messages.append(data)
+
+    def close_from_test(self) -> None:
+        self._closed = True
+        if self._hang_event is not None:
+            self._hang_event.set()

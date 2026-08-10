@@ -64,15 +64,8 @@ jobs:
           restore-keys: |
             uv-${{ runner.os }}-py3.12-
 
-      - name: Require lockfile
-        run: |
-          if [ ! -f uv.lock ]; then
-            echo "ERROR: backend/uv.lock not found. Run 'uv lock' locally and commit the lockfile."
-            exit 1
-          fi
-
-      - name: Install dependencies
-        run: uv sync --frozen --all-extras
+      - name: Install dependencies (lockfile must agree with pyproject.toml)
+        run: uv sync --locked --all-extras
 
       - name: Validate evaluation corpus and tool contracts
         working-directory: .

@@ -15,14 +15,14 @@ from datetime import UTC, datetime
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from fonely.domain.calls.events import ExotelCallbackEvent, canonical_payload_digest
 from fonely.domain.calls.intake import (
     ClaimedCallEvent,
     ConflictingCallEventError,
     DuplicateCallEventError,
+    InboundCallEvent,
     InboundCallEventRecord,
+    canonical_event_digest,
 )
-from fonely.domain.calls.transitions import validate_transition
 
 BACKOFF_SECONDS = (30, 60, 120, 300, 600)
 
@@ -36,39 +36,15 @@ class ExotelInboundEventRepository:
     async def persist(
         self,
         business_id: int,
-        event: ExotelCallbackEvent,
+        event: InboundCallEvent,
     ) -> InboundCallEventRecord:
-        digest = canonical_payload_digest(event)
+        digest = canonical_event_digest(event)
+        now = datetime.now(UTC)
 
-        # Check for existing event with same dedup key
-        existing = await self._session.execute(
-            text(
-                "SELECT id, payload_digest, status FROM exotel_inbound_events "
-                "WHERE business_id = :bid AND call_sid = :sid AND event_type = :etype "
-                "FOR UPDATE"
-            ),
-            {"bid": business_id, "sid": event.call_sid, "etype": event.event_type},
-        )
-        row = existing.one_or_none()
-        if row is not None:
-            if row[1] == digest:
-                raise DuplicateCallEventError(
-                    f"exact duplicate: {event.call_sid}/{event.event_type}"
-                )
-            raise ConflictingCallEventError(f"conflicting: {event.call_sid}/{event.event_type}")
-
-        # Validate forward-only transition (same as test double)
-        current_row = await self._session.execute(
-            text(
-                "SELECT status FROM exotel_inbound_events "
-                "WHERE business_id = :bid AND call_sid = :sid "
-                "ORDER BY received_at DESC LIMIT 1"
-            ),
-            {"bid": business_id, "sid": event.call_sid},
-        )
-        current_status_row = current_row.scalar_one_or_none()
-        validate_transition(current_status_row, event.status)
-
+        # Concurrency-safe: INSERT with ON CONFLICT on the unique constraint
+        # (business_id, call_sid, event_type). The DB is the arbiter — no
+        # SELECT-then-INSERT race. On conflict, returns the existing row's
+        # digest for duplicate vs conflict classification.
         result = await self._session.execute(
             text(
                 "INSERT INTO exotel_inbound_events "
@@ -79,7 +55,11 @@ class ExotelInboundEventRepository:
                 "VALUES (:call_sid, :bid, :etype, :status, "
                 " :caller, :called, :dur, :conv_dur, :dir, "
                 " :custom, :digest, :now) "
-                "RETURNING id"
+                "ON CONFLICT (business_id, call_sid, event_type) "
+                "DO UPDATE SET id = exotel_inbound_events.id "
+                "RETURNING id, "
+                "  (xmax = 0) AS inserted, "
+                "  payload_digest"
             ),
             {
                 "call_sid": event.call_sid,
@@ -93,10 +73,21 @@ class ExotelInboundEventRepository:
                 "dir": event.direction,
                 "custom": event.custom_field,
                 "digest": digest,
-                "now": datetime.now(UTC),
+                "now": now,
             },
         )
-        row_id = result.scalar_one()
+        row = result.one()
+        row_id, inserted, existing_digest = row[0], row[1], row[2]
+
+        if not inserted:
+            if existing_digest == digest:
+                raise DuplicateCallEventError(
+                    f"exact duplicate: {event.call_sid}/{event.event_type}"
+                )
+            raise ConflictingCallEventError(
+                f"conflicting: {event.call_sid}/{event.event_type}"
+            )
+
         await self._session.flush()
 
         return InboundCallEventRecord(

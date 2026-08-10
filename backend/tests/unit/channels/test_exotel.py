@@ -455,13 +455,18 @@ class TestPrivacy:
 
 
 class TestFeatureGate:
-    def test_empty_secret_does_not_mount_route(self) -> None:
+    def test_route_not_mounted_in_production_app(self) -> None:
+        """Exotel route is intentionally absent until migration + intake wiring."""
         from fonely.app import create_app
 
         with patch("fonely.app.settings") as mock_settings:
             mock_settings.internal_api_secret = ""
             mock_settings.whatsapp_verify_token = ""
-            mock_settings.exotel_webhook_secret = ""
+            mock_settings.exotel_webhook_secret = "strong-secret-value-for-testing-gate"
+            mock_settings.host = "0.0.0.0"
+            mock_settings.port = 8000
+            mock_settings.log_format = "json"
+            mock_settings.log_level = "INFO"
             app = create_app()
         paths = {route.path for route in app.routes}
         assert "/webhooks/exotel/call-status" not in paths
@@ -483,8 +488,8 @@ class TestNumberMapping:
 
 
 class TestSemanticIdempotency:
-    def test_terminal_before_answered_stores_terminal_only(self) -> None:
-        """OOO: terminal arrives first (answered lost or delayed)."""
+    def test_terminal_before_answered_stores_terminal(self) -> None:
+        """OOO: terminal arrives first — persisted durably."""
         app, intake = _create_app()
         client = TestClient(app)
         response = client.post(
@@ -562,8 +567,8 @@ class TestSemanticIdempotency:
         digests = {e.payload_digest for e in intake.events}
         assert len(digests) == 2
 
-    def test_late_answered_after_completed_is_harmless_200(self) -> None:
-        """Late lower-state after terminal is a harmless no-op, not 500."""
+    def test_late_answered_after_completed_persisted_durably(self) -> None:
+        """Late lower-state after terminal is persisted (worker handles no-op)."""
         app, intake = _create_app()
         client = TestClient(app)
         client.post(
@@ -574,7 +579,9 @@ class TestSemanticIdempotency:
             "/webhooks/exotel/call-status", json=late_answered, headers=_auth_headers()
         )
         assert response.status_code == 200
-        assert len(intake.events) == 1
+        assert len(intake.events) == 2
+        assert intake.events[0].event_type == "terminal"
+        assert intake.events[1].event_type == "answered"
 
 
 # ============================================================================
@@ -678,6 +685,61 @@ class TestConflictDetection:
         )
         assert response.status_code == 409
         assert len(intake.events) == 1
+
+
+class TestPIISafeExceptions:
+    def test_duplicate_error_has_no_phone(self) -> None:
+        from fonely.domain.calls.intake import DuplicateCallEventError
+
+        try:
+            raise DuplicateCallEventError(
+                f"exact duplicate: {ANSWERED_OUTBOUND['CallSid']}/answered"
+            )
+        except DuplicateCallEventError as exc:
+            msg = str(exc)
+            assert "+919876543210" not in msg
+            assert "08012345678" not in msg
+
+    def test_conflict_error_has_no_phone(self) -> None:
+        from fonely.domain.calls.intake import ConflictingCallEventError
+
+        try:
+            raise ConflictingCallEventError("conflicting: abc123/terminal digest x != y")
+        except ConflictingCallEventError as exc:
+            msg = str(exc)
+            assert "+91" not in msg
+
+    def test_parse_error_has_no_phone(self) -> None:
+        from fonely.domain.calls.events import ExotelCallbackParseError
+
+        try:
+            raise ExotelCallbackParseError("invalid CallSid format: 'short'")
+        except ExotelCallbackParseError as exc:
+            msg = str(exc)
+            assert "+91" not in msg
+
+    def test_adapter_error_log_has_no_phone(self, caplog) -> None:  # type: ignore[no-untyped-def]
+        """Persistence failure log must not contain phone numbers."""
+        app, intake = _create_app()
+
+        async def _failing_persist(*a, **kw):  # type: ignore[no-untyped-def]
+            raise RuntimeError("db down")
+
+        intake.persist = _failing_persist  # type: ignore[assignment]
+        client = TestClient(app)
+        with caplog.at_level("WARNING", logger="fonely.api.channels.exotel"):
+            client.post(
+                "/webhooks/exotel/call-status", json=COMPLETED_OUTBOUND, headers=_auth_headers()
+            )
+        records = [
+            r
+            for r in caplog.records
+            if r.name == "fonely.api.channels.exotel" and "failed" in r.getMessage()
+        ]
+        for rec in records:
+            serialized = repr(rec.__dict__)
+            assert "+919876543210" not in serialized
+            assert "08012345678" not in serialized
 
 
 class TestAmbiguityAwareRouting:

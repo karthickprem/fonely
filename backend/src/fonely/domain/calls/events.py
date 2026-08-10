@@ -1,12 +1,17 @@
-"""Typed Exotel callback event model and strict validation."""
+"""Exotel-specific callback event model and strict validation.
+
+This is the adapter-side DTO. The provider-neutral InboundCallEvent
+lives in fonely.domain.calls.intake — adapters map into it before
+calling the intake protocol.
+"""
 
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 from enum import StrEnum
 from typing import Any
+
+from fonely.domain.calls.intake import InboundCallEvent
 
 
 class ExotelEventType(StrEnum):
@@ -46,7 +51,7 @@ class ExotelCallbackParseError(ValueError):
 
 
 class ExotelCallbackEvent:
-    """Canonical typed representation of an Exotel status callback."""
+    """Exotel-specific typed callback. Adapter maps to InboundCallEvent."""
 
     __slots__ = (
         "call_sid",
@@ -83,28 +88,19 @@ class ExotelCallbackEvent:
         self.direction = direction
         self.custom_field = custom_field
 
-
-def canonical_payload_digest(event: ExotelCallbackEvent) -> str:
-    """Canonical SHA-256 digest of the immutable event payload.
-
-    Shared between test double and production repository.
-    """
-    payload = json.dumps(
-        {
-            "call_sid": event.call_sid,
-            "called_number": event.called_number,
-            "caller_phone": event.caller_phone,
-            "conversation_duration": event.conversation_duration,
-            "custom_field": event.custom_field,
-            "direction": event.direction,
-            "duration": event.duration,
-            "event_type": event.event_type,
-            "status": event.status,
-        },
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(payload.encode()).hexdigest()[:32]
+    def to_inbound_event(self) -> InboundCallEvent:
+        """Map Exotel DTO to provider-neutral InboundCallEvent."""
+        return InboundCallEvent(
+            call_sid=self.call_sid,
+            called_number=self.called_number,
+            caller_phone=self.caller_phone,
+            conversation_duration=self.conversation_duration,
+            custom_field=self.custom_field,
+            direction=self.direction,
+            duration=self.duration,
+            event_type=self.event_type,
+            status=self.status,
+        )
 
 
 def _strict_nonneg_int(value: Any, field: str) -> int | None:

@@ -90,21 +90,10 @@ def create_app() -> FastAPI:
 
         app.include_router(whatsapp_router)
 
-    exotel_secret = settings.exotel_webhook_secret
-    if exotel_secret:
-        from fonely.api.channels.exotel import (
-            is_interim_webhook_secret_strong,
-        )
-        from fonely.api.channels.exotel import (
-            router as exotel_router,
-        )
-        from fonely.services.exotel_config import ExotelNumberMapping
-
-        if is_interim_webhook_secret_strong(exotel_secret):
-            app.state.exotel_mapping = ExotelNumberMapping()
-            app.include_router(exotel_router)
-        else:
-            logger.warning("exotel_weak_secret_route_not_mounted")
+    # Exotel webhook route is intentionally NOT mounted.
+    # Requires: migration (exotel_inbound_events table), ExotelIntakeService
+    # wiring, gateway IP allowlist, and sandbox-verified fixtures.
+    # See docs/EXOTEL_PROVIDER_CONTRACT.md §14 for the full gate checklist.
 
     @app.get("/metrics")
     async def metrics_endpoint(request: Request) -> Response:

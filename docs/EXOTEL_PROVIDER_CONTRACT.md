@@ -1,8 +1,13 @@
 # Exotel Provider Contract — Fonely Inbound Adapter
 
-Status: DRAFT — pending sandbox verification and independent review.
-Owner: Dev1. Route remains disabled/feature-gated until full acceptance.
-Base: authoritative main 4c765c6.
+Status: DESIGNED and UNIT-TESTED — NOT production-ready.
+  - Adapter: implemented, 97 unit tests pass
+  - Route: ABSENT from production app (intentionally not mounted)
+  - Worker: NON-RUNNABLE (schema guard blocks without provider_call_sid)
+  - Schema: NOT MIGRATED (pending Dev3 0015 + known Alembic head)
+  - Intake: NOT WIRED to production session factory
+  - Sandbox: NOT VERIFIED (OQ-1 through OQ-8 unresolved)
+Owner: Dev1. Base: authoritative main 4c765c6.
 
 ---
 

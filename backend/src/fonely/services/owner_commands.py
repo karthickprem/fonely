@@ -542,6 +542,16 @@ class OwnerCommandService:
         )
 
         if proposal is None:
+            from sqlalchemy import text as sa_text
+
+            family_lock_key = (
+                hash(f"owner-proposal-family-{business_id}-{idem_key}") & 0x7FFFFFFFFFFFFFFF
+            )
+            await self._session.execute(
+                sa_text("SELECT pg_advisory_xact_lock(:key)"),
+                {"key": family_lock_key},
+            )
+
             terminal = await self._proposals.get_by_idempotency_key(business_id, idem_key)
             if terminal is not None:
                 if terminal.status in ("completed", "rejected", "expired"):

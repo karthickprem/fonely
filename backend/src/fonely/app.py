@@ -64,6 +64,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
         docs_url=None,
         redoc_url=None,
+        openapi_url=settings.openapi_url or None,
     )
 
     @app.middleware("http")

@@ -69,6 +69,13 @@ class Settings(BaseSettings):
     whatsapp_business_mappings: str = ""
     whatsapp_app_secret: str = ""
 
+    # Sensitive paths exposed only when explicitly listed (comma-separated).
+    # /metrics and /health/alerts are blocked by default; set this to expose them.
+    expose_sensitive_paths: str = ""
+
+    # OpenAPI
+    openapi_url: str = "/openapi.json"
+
     # Shutdown
     shutdown_timeout_seconds: float = 10.0
 

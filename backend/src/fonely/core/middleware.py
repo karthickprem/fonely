@@ -175,7 +175,32 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         return response
 
 
+_SENSITIVE_PATHS = ("/metrics", "/health/alerts")
+
+
+class SensitivePathMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app: Any, allowed: frozenset[str]) -> None:
+        super().__init__(app)
+        self.allowed = allowed
+
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
+        path = request.url.path
+        for sensitive in _SENSITIVE_PATHS:
+            if path == sensitive or path.startswith(sensitive + "/"):
+                if sensitive not in self.allowed:
+                    return Response(status_code=404, content="Not Found")
+        return await call_next(request)
+
+
 def apply_hardening(app: FastAPI) -> None:
+    exposed = frozenset(
+        p.strip()
+        for p in settings.expose_sensitive_paths.split(",")
+        if p.strip()
+    )
+    app.add_middleware(SensitivePathMiddleware, allowed=exposed)
     app.add_middleware(MetricsMiddleware)
     app.add_middleware(StructuredErrorMiddleware)
     app.add_middleware(SecurityHeadersMiddleware)

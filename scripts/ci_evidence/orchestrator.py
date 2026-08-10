@@ -149,11 +149,18 @@ def cmd_phase(args: argparse.Namespace) -> None:
         post_tree = _git_rev("HEAD^{tree}")
         tree_drifted = post_sha != manifest["source_sha"] or post_tree != manifest["source_tree"]
 
+        if manifest.get("environment") == "ci":
+            post_dirty = subprocess.run(
+                ["git", "diff", "--quiet", "HEAD", "--"],
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+            if post_dirty.returncode != 0:
+                tree_drifted = True
+
         if exit_code < 0:
             failure_class = f"signal_{-exit_code}"
-        elif tree_drifted:
-            failure_class = "tree_drift"
-            exit_code = 2
         elif exit_code == 0:
             failure_class = None
         elif exit_code == 127:
@@ -167,6 +174,7 @@ def cmd_phase(args: argparse.Namespace) -> None:
             "sequence": sequence,
             "exit_code": exit_code,
             "failure_class": failure_class,
+            "tree_drifted": tree_drifted,
             "start_utc": start_utc,
             "end_utc": end_utc,
         }

@@ -95,6 +95,7 @@ def _validate_phases(
         return incomplete, evidence, test_fail, phase_exits
 
     seen_phases: list[str] = []
+    phase_sequences: dict[str, int] = {}
     prev_seq = 0
     for i, line in enumerate(content.splitlines()):
         try:
@@ -118,6 +119,7 @@ def _validate_phases(
         if not isinstance(seq, int) or seq != prev_seq + 1:
             evidence.append(f"phase sequence gap at {seq}")
         prev_seq = seq
+        phase_sequences[phase] = seq
         failure_class = record.get("failure_class")
         exit_code = record.get("exit_code")
 
@@ -130,17 +132,22 @@ def _validate_phases(
                 evidence.append(f"phase {phase} not_run cause {cause} not recorded")
             elif phase_exits.get(cause, 0) == 0:
                 evidence.append(f"phase {phase} not_run cause {cause} did not fail")
+            elif cause_seq != phase_sequences.get(cause):
+                evidence.append(
+                    f"phase {phase} not_run cause_sequence {cause_seq} "
+                    f"!= recorded {phase_sequences.get(cause)}"
+                )
             if not isinstance(cause_seq, int) or cause_seq >= seq:
-                evidence.append(f"phase {phase} not_run invalid cause_sequence")
+                evidence.append(f"phase {phase} not_run cause_sequence not prior")
             continue
 
         if not isinstance(exit_code, int):
             evidence.append(f"phase {phase} non-integer exit_code")
             continue
         phase_exits[phase] = exit_code
-        if failure_class == "tree_drift":
+        if record.get("tree_drifted"):
             evidence.append(f"phase {phase} tree drift detected")
-        elif exit_code != 0:
+        if exit_code != 0:
             test_fail.append(f"phase {phase} exit={exit_code}")
 
     required = manifest.get("required_phases", [])

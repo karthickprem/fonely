@@ -2,7 +2,7 @@
 
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fonely.domain.appointments.commands import (
     ConfirmPendingAppointmentCommand,
@@ -178,13 +178,17 @@ async def test_proposal_validates_once() -> None:
     assert validation.validate_for_actor.call_count == 1
 
 
-async def test_confirm_replay_returns_authoritative_version() -> None:
+@patch("fonely.services.notifications.NotificationService")
+async def test_confirm_replay_returns_authoritative_version(mock_notif_cls: MagicMock) -> None:
+    mock_notif_cls.return_value = AsyncMock()
+
     session = AsyncMock()
     validation = _mock_validation()
     service = AppointmentService(session, validation=validation)
 
     existing = MagicMock()
     existing.id = 42
+    existing.business_id = 1
     existing.pending_action_id = 10
     existing.service_id = 1
     existing.service_name_snapshot = "Haircut"
@@ -192,6 +196,8 @@ async def test_confirm_replay_returns_authoritative_version() -> None:
     existing.resource_name_snapshot = "Priya"
     existing.start_at = START
     existing.end_at = END
+    existing.customer_phone = "+919123456789"
+    existing.customer_name = None
     existing.price_snapshot = None
     existing.business_timezone_snapshot = "Asia/Kolkata"
 
@@ -220,12 +226,17 @@ async def test_confirm_replay_returns_authoritative_version() -> None:
     session.commit.assert_not_called()
 
 
-async def test_confirm_does_not_call_outer_commit() -> None:
+@patch("fonely.services.notifications.NotificationService")
+async def test_confirm_does_not_call_outer_commit(mock_notif_cls: MagicMock) -> None:
+    mock_notif_cls.return_value = AsyncMock()
+
     session = AsyncMock(spec=[])
     session.commit = AsyncMock()
     session.rollback = AsyncMock()
     session.flush = AsyncMock()
     session.execute = AsyncMock()
+    session.scalar = AsyncMock()
+    session.scalars = AsyncMock()
     session.add = MagicMock()
     validation = _mock_validation()
     service = AppointmentService(session, validation=validation)

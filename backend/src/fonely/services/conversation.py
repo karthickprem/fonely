@@ -966,6 +966,7 @@ class ConversationService:
             ConfirmPendingAppointmentRescheduleCommand,
         )
         from fonely.domain.appointments.errors import AppointmentDomainError
+        from fonely.domain.appointments.results import PreCommitAppointmentFailure
 
         assert ctx.proposal_id is not None
         try:
@@ -986,6 +987,20 @@ class ConversationService:
                 ctx,
                 user_message,
                 "That slot isn't available. Would you like to try another time?",
+                safety,
+                ["start_at"],
+            )
+
+        if isinstance(result, PreCommitAppointmentFailure):
+            ctx.state = ConversationState.FACT_COLLECTION
+            ctx.booking_attempt += 1
+            ctx.collected_facts.pop("start_at", None)
+            ctx.proposal_id = None
+            ctx.proposal_version = None
+            return self._fact_turn(
+                ctx,
+                user_message,
+                "That slot is no longer available. Would you like to try another time?",
                 safety,
                 ["start_at"],
             )

@@ -218,7 +218,10 @@ class BusinessUser(Base):
     """Sole authority for owner/manager authorization."""
 
     __tablename__ = "business_users"
-    __table_args__ = (UniqueConstraint("business_id", "phone"),)
+    __table_args__ = (
+        UniqueConstraint("business_id", "phone"),
+        UniqueConstraint("business_id", "id", name="uq_business_users_business_id"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
@@ -1378,3 +1381,53 @@ class BusinessDailyContext(Base):
     created_by_phone: Mapped[str | None] = mapped_column(String(20))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# =============================================================================
+# Owner Command Proposals
+# =============================================================================
+
+
+class OwnerCommandProposal(Base):
+    __tablename__ = "owner_command_proposals"
+    __table_args__ = (
+        UniqueConstraint("business_id", "idempotency_key", name="uq_owner_proposal_idempotency"),
+        ForeignKeyConstraint(
+            ["business_id", "owner_user_id"],
+            ["business_users.business_id", "business_users.id"],
+            name="fk_owner_proposal_business_user",
+        ),
+        CheckConstraint(
+            "status IN ('pending_confirmation', 'rejected', 'expired', 'completed')",
+            name="ck_owner_proposal_status",
+        ),
+        Index(
+            "ix_owner_proposal_pending",
+            "business_id",
+            "owner_user_id",
+            unique=True,
+            postgresql_where="status = 'pending_confirmation'",
+        ),
+        Index(
+            "ix_owner_proposal_expiry",
+            "status",
+            "expires_at",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    owner_user_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    command_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    command_payload: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    expected_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1"
+    )
+    result_summary: Mapped[Any | None] = mapped_column(JSONB, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

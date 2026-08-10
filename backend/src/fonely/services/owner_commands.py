@@ -1,42 +1,57 @@
-"""Owner command execution service."""
+"""Durable owner command service — simplified two-phase confirmation.
 
+Flow:
+  1. preview_command  -> parse, validate, create proposal (pending_confirmation)
+  2. confirm_command  -> load FOR UPDATE, check expiry, execute in savepoint,
+                         CAS pending -> completed (atomically inside savepoint)
+  3. reject_command   -> CAS pending -> rejected
+
+No executing/failed intermediate states. If the savepoint fails, the proposal
+stays pending and the caller can retry.
+"""
+
+import logging
+import re
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import date, datetime, timedelta
 from datetime import time as dt_time
+from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from fonely.domain.appointments.availability import (
-    LocalShift,
-    TimeWindow,
-    can_encode_as_single_interval,
-    fits_one_shift,
-    normalize_local_shifts,
-    schedule_weekday,
-    truncate_shifts_at,
+from fonely.core.validators import utcnow
+from fonely.models.enums import (
+    AppointmentStatus,
+    ResourceAllocationStatus,
 )
-from fonely.models.enums import CallerRole, DailyContextType
 from fonely.models.schema import (
     Appointment,
     Business,
     BusinessDailyContext,
+    BusinessUser,
     Resource,
+    ResourceAllocation,
     ScheduleException,
 )
-from fonely.repositories.appointments import AppointmentRepository
-from fonely.services.model_gateway import ModelGateway
-from fonely.services.owner_command_parser import OwnerCommandParser, ParsedOwnerCommand
+from fonely.repositories.owner_command_proposals import OwnerCommandProposalRepository
+
+logger = logging.getLogger("fonely.services.owner_commands")
 
 _UNKNOWN_RESPONSE = (
     "Sorry, I didn't understand that command. You can say things like:\n"
-    "- 'Dr. Priya leave tomorrow'\n"
-    "- 'Close clinic early at 5'\n"
+    "- 'Close tomorrow'\n"
+    "- 'Cancel all appointments tomorrow'\n"
     "- 'Show tomorrow appointments'\n"
-    "- 'This week consultation free'"
+    "- 'Dr. Priya leave tomorrow'"
 )
+
+
+# ---------------------------------------------------------------------------
+# Result dataclass (kept for backward compatibility with existing callers)
+# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -44,590 +59,15 @@ class OwnerCommandResult:
     command_type: str
     success: bool
     response_text: str
+    proposal_id: str | None = None
     affected_appointments: int = 0
     affected_patients: int = 0
     details: list[str] = field(default_factory=list)
 
 
-class OwnerCommandService:
-    def __init__(self, session: AsyncSession, model: ModelGateway) -> None:
-        self._session = session
-        self._parser = OwnerCommandParser(model)
-        self._appointments = AppointmentRepository(session)
-
-    async def process_command(
-        self, business_id: int, owner_phone: str, message: str
-    ) -> OwnerCommandResult:
-        doctor_names = await self._get_doctor_names(business_id)
-        parsed = await self._parser.parse(message, doctor_names)
-
-        if parsed.command == "doctor_leave":
-            return await self._handle_doctor_leave(business_id, owner_phone, parsed)
-        if parsed.command == "close_clinic":
-            return await self._handle_close_clinic(business_id, owner_phone, parsed)
-        if parsed.command == "get_summary":
-            return await self._handle_get_summary(business_id, parsed)
-        if parsed.command == "add_offer":
-            return await self._handle_add_context(
-                business_id, owner_phone, parsed, DailyContextType.OFFER
-            )
-        if parsed.command == "add_note":
-            return await self._handle_add_context(
-                business_id, owner_phone, parsed, DailyContextType.NOTE
-            )
-        if parsed.command == "close_early":
-            return await self._handle_close_early(business_id, owner_phone, parsed)
-
-        return OwnerCommandResult(
-            command_type="unknown",
-            success=False,
-            response_text=_UNKNOWN_RESPONSE,
-        )
-
-    async def _handle_doctor_leave(
-        self, business_id: int, owner_phone: str, parsed: ParsedOwnerCommand
-    ) -> OwnerCommandResult:
-        resource = await self._resolve_resource(business_id, parsed.doctor_name)
-        if resource is None:
-            return OwnerCommandResult(
-                command_type="doctor_leave",
-                success=False,
-                response_text=f"Could not find doctor '{parsed.doctor_name}'. "
-                f"Available: {', '.join(await self._get_doctor_names(business_id))}",
-            )
-
-        target_date = await self._resolve_date(business_id, parsed.date)
-        reason = parsed.reason or "Leave"
-        await self._appointments.lock_resource_schedule(business_id, resource.id)
-
-        exc = ScheduleException(
-            business_id=business_id,
-            resource_id=resource.id,
-            exception_date=target_date,
-            is_closed=True,
-            reason=reason,
-        )
-        self._session.add(exc)
-        await self._session.flush()
-
-        cancelled = await self._cancel_appointments_for_resource(
-            business_id, resource.id, target_date, owner_phone
-        )
-
-        date_str = target_date.strftime("%b %d")
-        lines = [f"Done. {resource.name} marked on leave for {date_str}."]
-        if cancelled:
-            lines.append(f"{len(cancelled)} appointment(s) cancelled:")
-            for appt in cancelled:
-                lines.append(f"  - {appt['time']} {appt['patient']} ({appt['service']}) — notified")
-            lines.append(f"{resource.name} will not be booked for {date_str}.")
-        else:
-            lines.append(f"No appointments to cancel. {resource.name} will not be booked.")
-
-        return OwnerCommandResult(
-            command_type="doctor_leave",
-            success=True,
-            response_text="\n".join(lines),
-            affected_appointments=len(cancelled),
-            affected_patients=len(cancelled),
-            details=[c["patient"] for c in cancelled],
-        )
-
-    async def _handle_close_clinic(
-        self, business_id: int, owner_phone: str, parsed: ParsedOwnerCommand
-    ) -> OwnerCommandResult:
-        target_date = await self._resolve_date(business_id, parsed.date)
-        reason = parsed.reason or "Closed"
-        await self._lock_business_resources(business_id)
-
-        exc = ScheduleException(
-            business_id=business_id,
-            resource_id=None,
-            exception_date=target_date,
-            is_closed=True,
-            reason=reason,
-        )
-        self._session.add(exc)
-        await self._session.flush()
-
-        cancelled = await self._cancel_all_appointments(business_id, target_date, owner_phone)
-        date_str = target_date.strftime("%b %d")
-
-        lines = [f"Clinic closed on {date_str}. {reason}."]
-        if cancelled:
-            lines.append(f"{len(cancelled)} appointment(s) cancelled and patients notified.")
-        return OwnerCommandResult(
-            command_type="close_clinic",
-            success=True,
-            response_text="\n".join(lines),
-            affected_appointments=len(cancelled),
-            affected_patients=len(cancelled),
-        )
-
-    async def _handle_close_early(
-        self, business_id: int, owner_phone: str, parsed: ParsedOwnerCommand
-    ) -> OwnerCommandResult:
-        from fonely.models.schema import OperatingSchedule
-
-        target_date = await self._resolve_date(business_id, parsed.date)
-
-        if not parsed.close_time:
-            return OwnerCommandResult(
-                command_type="close_early",
-                success=False,
-                response_text="Please specify a close time, e.g. 'Close early at 6 PM'.",
-            )
-
-        try:
-            parts = parsed.close_time.split(":")
-            new_close = dt_time(int(parts[0]), int(parts[1]) if len(parts) > 1 else 0)
-        except (ValueError, IndexError):
-            return OwnerCommandResult(
-                command_type="close_early",
-                success=False,
-                response_text=f"Could not understand the time '{parsed.close_time}'.",
-            )
-
-        await self._lock_business_resources(business_id)
-
-        day_of_week = schedule_weekday(target_date)
-        schedules = (
-            (
-                await self._session.execute(
-                    select(OperatingSchedule).where(
-                        OperatingSchedule.business_id == business_id,
-                        OperatingSchedule.day_of_week == day_of_week,
-                        OperatingSchedule.is_active.is_(True),
-                        OperatingSchedule.resource_id.is_(None),
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-
-        weekly_shifts = normalize_local_shifts(
-            tuple(LocalShift(s.open_time, s.close_time) for s in schedules)
-        )
-        if not weekly_shifts:
-            return OwnerCommandResult(
-                command_type="close_early",
-                success=False,
-                response_text="No schedule found for this day.",
-            )
-
-        earliest_open = weekly_shifts[0].open_time
-        latest_close = weekly_shifts[-1].close_time
-
-        if new_close <= earliest_open:
-            return OwnerCommandResult(
-                command_type="close_early",
-                success=False,
-                response_text="Close time must be after the opening time.",
-            )
-        if new_close >= latest_close:
-            return OwnerCommandResult(
-                command_type="close_early",
-                success=False,
-                response_text="Close time must be before the current closing time.",
-            )
-
-        truncated = truncate_shifts_at(weekly_shifts, new_close)
-        if not can_encode_as_single_interval(truncated):
-            return OwnerCommandResult(
-                command_type="close_early",
-                success=False,
-                response_text=(
-                    "Cannot close early at this time because the schedule has "
-                    "multiple shifts with gaps. Please close at a time that "
-                    "does not span a gap, or close the clinic entirely."
-                ),
-            )
-
-        reason = parsed.reason or "Closing early"
-        if truncated:
-            effective = truncated[0]
-            exc = ScheduleException(
-                business_id=business_id,
-                resource_id=None,
-                exception_date=target_date,
-                is_closed=False,
-                open_time=effective.open_time,
-                close_time=effective.close_time,
-                reason=reason,
-            )
-        else:
-            exc = ScheduleException(
-                business_id=business_id,
-                resource_id=None,
-                exception_date=target_date,
-                is_closed=True,
-                reason=reason,
-            )
-        self._session.add(exc)
-        await self._session.flush()
-
-        cancelled = await self._cancel_appointments_outside_schedule(
-            business_id, target_date, owner_phone
-        )
-
-        date_str = target_date.strftime("%b %d")
-        close_str = new_close.strftime("%-I:%M %p")
-        lines = [f"Clinic closing early at {close_str} on {date_str}."]
-        if cancelled:
-            lines.append(f"{len(cancelled)} appointment(s) after {close_str} cancelled:")
-            for appt_info in cancelled:
-                lines.append(f"  - {appt_info['time']} {appt_info['patient']} — notified")
-        else:
-            lines.append("No appointments affected.")
-
-        return OwnerCommandResult(
-            command_type="close_early",
-            success=True,
-            response_text="\n".join(lines),
-            affected_appointments=len(cancelled),
-            affected_patients=len(cancelled),
-        )
-
-    async def _cancel_appointments_outside_schedule(
-        self,
-        business_id: int,
-        target_date: date,
-        owner_phone: str,
-    ) -> list[dict[str, str]]:
-        from fonely.services.availability import AvailabilityService
-
-        timezone = await self._get_business_timezone(business_id)
-        zone = ZoneInfo(timezone)
-        svc = AvailabilityService(self._session)
-        shift_windows = await svc._get_shift_windows(business_id, 0, target_date, timezone)
-        all_resource_ids = await self._appointments.list_active_resource_ids(business_id)
-        resource_shift_cache: dict[int, list[TimeWindow]] = {}
-        for rid in all_resource_ids:
-            resource_shift_cache[rid] = await svc._get_shift_windows(
-                business_id, rid, target_date, timezone
-            )
-
-        appointments = (
-            (
-                await self._session.execute(
-                    select(Appointment).where(
-                        Appointment.business_id == business_id,
-                        Appointment.status == "confirmed",
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-
-        cancelled: list[dict[str, str]] = []
-        for appointment in appointments:
-            local_start = appointment.start_at.astimezone(zone)
-            if local_start.date() != target_date:
-                continue
-            effective = TimeWindow(
-                appointment.effective_start_at or appointment.start_at,
-                appointment.effective_end_at or appointment.end_at,
-            )
-            resource_windows = resource_shift_cache.get(appointment.resource_id, shift_windows)
-            if fits_one_shift(effective, tuple(resource_windows)):
-                continue
-            await self._cancel_via_service(
-                business_id,
-                appointment.id,
-                appointment.version,
-                owner_phone,
-                "owner_close_early",
-            )
-            cancelled.append(
-                {
-                    "time": local_start.strftime("%-I:%M %p"),
-                    "patient": appointment.customer_name or "Patient",
-                    "service": appointment.service_name_snapshot,
-                }
-            )
-        return cancelled
-
-    async def _handle_get_summary(
-        self, business_id: int, parsed: ParsedOwnerCommand
-    ) -> OwnerCommandResult:
-        target_date = await self._resolve_date(business_id, parsed.date)
-        date_str = target_date.strftime("%A, %b %d")
-
-        appointments = (
-            (
-                await self._session.execute(
-                    select(Appointment)
-                    .where(
-                        Appointment.business_id == business_id,
-                        Appointment.status == "confirmed",
-                    )
-                    .order_by(Appointment.start_at)
-                )
-            )
-            .scalars()
-            .all()
-        )
-
-        tz_name = await self._get_business_timezone(business_id)
-        tz = ZoneInfo(tz_name)
-        day_appts = [a for a in appointments if a.start_at.astimezone(tz).date() == target_date]
-
-        if not day_appts:
-            return OwnerCommandResult(
-                command_type="get_summary",
-                success=True,
-                response_text=f"No appointments for {date_str}.",
-            )
-
-        lines = [f"Appointments for {date_str}:"]
-        for appt in day_appts:
-            local_time = appt.start_at.astimezone(tz).strftime("%-I:%M %p")
-            name = appt.customer_name or "Patient"
-            service = appt.service_name_snapshot
-            doctor = appt.resource_name_snapshot
-            lines.append(f"  {local_time} — {name}, {service}, {doctor}")
-        lines.append(f"Total: {len(day_appts)} appointment(s)")
-
-        return OwnerCommandResult(
-            command_type="get_summary",
-            success=True,
-            response_text="\n".join(lines),
-            affected_appointments=len(day_appts),
-        )
-
-    async def _handle_add_context(
-        self,
-        business_id: int,
-        owner_phone: str,
-        parsed: ParsedOwnerCommand,
-        context_type: DailyContextType,
-    ) -> OwnerCommandResult:
-        content = parsed.description or parsed.note or ""
-        if not content:
-            return OwnerCommandResult(
-                command_type=parsed.command,
-                success=False,
-                response_text="Please provide the content for the note/offer.",
-            )
-
-        target_date = await self._resolve_date(business_id, parsed.for_date or parsed.valid_until)
-        ctx = BusinessDailyContext(
-            business_id=business_id,
-            context_date=target_date,
-            context_type=context_type.value,
-            content=content,
-            created_by_phone=owner_phone,
-        )
-        self._session.add(ctx)
-        await self._session.flush()
-
-        label = "Offer" if context_type == DailyContextType.OFFER else "Note"
-        return OwnerCommandResult(
-            command_type=parsed.command,
-            success=True,
-            response_text=f"{label} noted. Patients will be informed: {content}",
-        )
-
-    async def _get_doctor_names(self, business_id: int) -> list[str]:
-        resources = (
-            (
-                await self._session.execute(
-                    select(Resource).where(
-                        Resource.business_id == business_id,
-                        Resource.is_active.is_(True),
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        return [r.name for r in resources]
-
-    async def _resolve_resource(self, business_id: int, name: str | None) -> Resource | None:
-        if not name:
-            return None
-        name_lower = name.lower()
-        resources = (
-            (
-                await self._session.execute(
-                    select(Resource).where(
-                        Resource.business_id == business_id,
-                        Resource.is_active.is_(True),
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        for r in resources:
-            if r.name.lower() == name_lower or name_lower in r.name.lower():
-                return r
-        return None
-
-    async def _lock_business_resources(self, business_id: int) -> None:
-        await self._appointments.lock_business_schedule(business_id)
-        resource_ids = await self._appointments.list_active_resource_ids(business_id)
-        await self._appointments.lock_resource_schedules(business_id, resource_ids)
-
-    async def _resolve_date(self, business_id: int, expr: str | None) -> date:
-        timezone = await self._get_business_timezone(business_id)
-        today = datetime.now(ZoneInfo(timezone)).date()
-        if not expr:
-            return today
-        expr_lower = expr.lower().strip()
-        if expr_lower in ("today", "innikku", "இன்று"):
-            return today
-        if expr_lower in ("tomorrow", "naalaikku", "நாளை"):
-            return today + timedelta(days=1)
-        try:
-            return date.fromisoformat(expr_lower)
-        except ValueError:
-            return today
-
-    async def _get_business_timezone(self, business_id: int) -> str:
-        biz = await self._session.scalar(select(Business).where(Business.id == business_id))
-        return biz.timezone if biz else "Asia/Kolkata"
-
-    async def _cancel_appointments_for_resource(
-        self,
-        business_id: int,
-        resource_id: int,
-        target_date: date,
-        owner_phone: str,
-    ) -> list[dict[str, str]]:
-        tz_name = await self._get_business_timezone(business_id)
-        tz = ZoneInfo(tz_name)
-        appointments = (
-            (
-                await self._session.execute(
-                    select(Appointment).where(
-                        Appointment.business_id == business_id,
-                        Appointment.resource_id == resource_id,
-                        Appointment.status == "confirmed",
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-
-        cancelled: list[dict[str, str]] = []
-        for appt in appointments:
-            if appt.start_at.astimezone(tz).date() != target_date:
-                continue
-            await self._cancel_via_service(
-                business_id, appt.id, appt.version, owner_phone, "owner_leave"
-            )
-            local_time = appt.start_at.astimezone(tz).strftime("%-I:%M %p")
-            cancelled.append(
-                {
-                    "time": local_time,
-                    "patient": appt.customer_name or "Patient",
-                    "service": appt.service_name_snapshot,
-                    "phone": appt.customer_phone,
-                }
-            )
-        return cancelled
-
-    async def _cancel_all_appointments(
-        self,
-        business_id: int,
-        target_date: date,
-        owner_phone: str,
-    ) -> list[dict[str, str]]:
-        tz_name = await self._get_business_timezone(business_id)
-        tz = ZoneInfo(tz_name)
-        appointments = (
-            (
-                await self._session.execute(
-                    select(Appointment).where(
-                        Appointment.business_id == business_id,
-                        Appointment.status == "confirmed",
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-
-        cancelled: list[dict[str, str]] = []
-        for appt in appointments:
-            if appt.start_at.astimezone(tz).date() != target_date:
-                continue
-            await self._cancel_via_service(
-                business_id, appt.id, appt.version, owner_phone, "owner_closure"
-            )
-            cancelled.append(
-                {
-                    "time": appt.start_at.astimezone(tz).strftime("%-I:%M %p"),
-                    "patient": appt.customer_name or "Patient",
-                    "service": appt.service_name_snapshot,
-                }
-            )
-        return cancelled
-
-    async def _cancel_via_service(
-        self,
-        business_id: int,
-        appointment_id: int,
-        appointment_version: int,
-        owner_phone: str,
-        reason_code: str,
-    ) -> None:
-        from fonely.api.internal.validation import InternalValidationPort
-        from fonely.domain.appointments.commands import (
-            ConfirmPendingAppointmentCancellationCommand,
-            CreatePendingAppointmentCancellationCommand,
-        )
-        from fonely.domain.appointments.errors import (
-            AppointmentDomainError,
-            AppointmentErrorCode,
-        )
-        from fonely.domain.pending_actions.commands import ActorContext
-        from fonely.services.appointments import AppointmentService
-
-        validation = InternalValidationPort(self._session)
-        appt_service = AppointmentService(self._session, validation=validation)
-        actor = ActorContext(
-            business_id=business_id,
-            normalized_phone=owner_phone,
-            verified_role=CallerRole.OWNER,
-            session_id=None,
-        )
-
-        now = datetime.now(UTC)
-        key = f"owner-cancel-{appointment_id}-{uuid.uuid4().hex[:8]}"
-        try:
-            proposal = await appt_service.create_cancellation_proposal(
-                CreatePendingAppointmentCancellationCommand(
-                    actor=actor,
-                    appointment_id=appointment_id,
-                    expected_appointment_version=appointment_version,
-                    reason_code=reason_code,
-                    expires_at=now + timedelta(minutes=5),
-                    idempotency_key=key,
-                )
-            )
-            await appt_service.confirm_cancellation(
-                ConfirmPendingAppointmentCancellationCommand(
-                    actor=actor,
-                    pending_action_id=proposal.pending_action_id,
-                    expected_version=proposal.version,
-                )
-            )
-        except AppointmentDomainError as exc:
-            if exc.code in (
-                AppointmentErrorCode.INVALID_STATE,
-                AppointmentErrorCode.STALE_VERSION,
-            ):
-                reloaded = await self._appointments.get_by_business_and_id(
-                    business_id, appointment_id
-                )
-                if reloaded is not None and reloaded.status == "cancelled":
-                    return
-            raise
+# ---------------------------------------------------------------------------
+# Standalone daily context query
+# ---------------------------------------------------------------------------
 
 
 async def get_daily_context(
@@ -641,3 +81,683 @@ async def get_daily_context(
         )
     )
     return list(result.scalars().all())
+
+
+# ---------------------------------------------------------------------------
+# Command patterns for regex-based parsing
+# ---------------------------------------------------------------------------
+
+_DATE_PATTERNS: dict[str, str] = {
+    "today": "today",
+    "innikku": "today",
+    "tomorrow": "tomorrow",
+    "naalaikku": "tomorrow",
+}
+
+_CLOSE_RE = re.compile(
+    r"(?:close|shutdown|bandh)\s+(?:the\s+)?(?:clinic\s+)?(?:on\s+)?(.+)",
+    re.IGNORECASE,
+)
+_CANCEL_ALL_RE = re.compile(
+    r"(?:cancel)\s+(?:all\s+)?(?:appointments?\s+)?(?:on\s+|for\s+)?(.+)",
+    re.IGNORECASE,
+)
+_DOCTOR_LEAVE_RE = re.compile(
+    r"(?:dr\.?\s*|doctor\s+)(\w+)\s+(?:leave|off|absent)\s*(?:on\s+|for\s+)?(.+)?",
+    re.IGNORECASE,
+)
+_GET_SUMMARY_RE = re.compile(
+    r"(?:show|list|get|view)\s+(?:(?:tomorrow|today)\s+)?(?:appointments?|summary|schedule)",
+    re.IGNORECASE,
+)
+
+
+# ---------------------------------------------------------------------------
+# Service
+# ---------------------------------------------------------------------------
+
+
+class OwnerCommandService:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+        self._repo = OwnerCommandProposalRepository(session)
+
+    # ===================================================================
+    # Public API
+    # ===================================================================
+
+    async def preview_command(
+        self, business_id: int, owner_phone: str, raw_text: str
+    ) -> dict[str, Any]:
+        """Parse a command, validate, and create a pending proposal."""
+        # 1. Resolve owner
+        owner = await self._resolve_owner(business_id, owner_phone)
+        if owner is None:
+            return {"error": "owner_not_found"}
+
+        # 2. Expire any stale pending proposal
+        await self._expire_stale(business_id, owner.id)
+
+        # 3. Parse command
+        parsed = self._parse_command(raw_text, business_id)
+        if parsed is None:
+            return {"error": "unrecognized_command", "message": _UNKNOWN_RESPONSE}
+
+        # 4. Build snapshot of affected entities
+        affected = await self._query_affected(business_id, parsed)
+
+        # 5. Build idempotency key
+        idem_key = f"owner-cmd-{parsed['command_type']}-{parsed.get('target_date', 'none')}"
+
+        # 6. Check for completed replay
+        completed = await self._repo.find_completed_by_key_prefix(business_id, idem_key)
+        if completed is not None:
+            return {
+                "status": "already_completed",
+                "proposal_id": completed.id,
+                "result_summary": completed.result_summary,
+            }
+
+        # 7. Create proposal
+        proposal_id = str(uuid.uuid4())
+        proposal = await self._repo.create_idempotent(
+            {
+                "id": proposal_id,
+                "business_id": business_id,
+                "owner_user_id": owner.id,
+                "command_type": parsed["command_type"],
+                "command_payload": {**parsed, "affected_summary": affected},
+                "status": "pending_confirmation",
+                "idempotency_key": idem_key,
+                "expires_at": utcnow() + timedelta(minutes=10),
+            }
+        )
+
+        if proposal is None:
+            # Partial unique conflict — pending already exists for this owner
+            existing = await self._repo.get_latest_for_owner(business_id, owner.id)
+            if existing is not None:
+                return {
+                    "status": "pending_confirmation",
+                    "proposal_id": existing.id,
+                    "command_type": existing.command_type,
+                    "command_payload": existing.command_payload,
+                    "expires_at": existing.expires_at.isoformat(),
+                }
+            return {"error": "proposal_conflict"}
+
+        return {
+            "status": "pending_confirmation",
+            "proposal_id": proposal.id,
+            "command_type": proposal.command_type,
+            "command_payload": proposal.command_payload,
+            "expires_at": proposal.expires_at.isoformat(),
+        }
+
+    async def confirm_command(self, business_id: int, proposal_id: str) -> dict[str, Any]:
+        """Load pending proposal FOR UPDATE, execute in savepoint, CAS to completed."""
+        proposal = await self._repo.get_by_id(business_id, proposal_id)
+        if proposal is None:
+            return {"error": "proposal_not_found"}
+
+        if proposal.status != "pending_confirmation":
+            return {"error": "invalid_status", "current_status": proposal.status}
+
+        now = utcnow()
+        if proposal.expires_at <= now:
+            await self._repo.transition_status(
+                proposal.id, business_id, proposal.expected_version, "expired"
+            )
+            return {"error": "proposal_expired"}
+
+        # Execute command inside savepoint — both the domain mutation and
+        # the CAS transition live in the same savepoint so they commit or
+        # roll back atomically.
+        result_summary: dict[str, Any] = {}
+        try:
+            async with self._session.begin_nested():
+                result_summary = await self._execute_command(
+                    business_id, proposal.command_type, proposal.command_payload
+                )
+                # CAS pending -> completed LAST inside savepoint
+                updated = await self._repo.transition_status(
+                    proposal.id,
+                    business_id,
+                    proposal.expected_version,
+                    "completed",
+                    result_summary=result_summary,
+                )
+                if updated is None:
+                    raise RuntimeError("CAS_failed_inside_savepoint")
+        except Exception:
+            # Savepoint rolled back — proposal stays pending, caller can retry
+            logger.warning("command_savepoint_failed", exc_info=True)
+            return {
+                "error": "command_failed",
+                "message": "Command execution failed, please retry.",
+            }
+
+        return {
+            "status": "completed",
+            "proposal_id": proposal.id,
+            "result_summary": result_summary,
+        }
+
+    async def reject_command(self, business_id: int, proposal_id: str) -> dict[str, Any]:
+        """CAS pending -> rejected."""
+        proposal = await self._repo.get_by_id(business_id, proposal_id)
+        if proposal is None:
+            return {"error": "proposal_not_found"}
+
+        if proposal.status != "pending_confirmation":
+            return {"error": "invalid_status", "current_status": proposal.status}
+
+        updated = await self._repo.transition_status(
+            proposal.id, business_id, proposal.expected_version, "rejected"
+        )
+        if updated is None:
+            return {"error": "transition_failed"}
+
+        return {"status": "rejected", "proposal_id": proposal.id}
+
+    # ===================================================================
+    # Internal — owner resolution
+    # ===================================================================
+
+    async def _resolve_owner(self, business_id: int, owner_phone: str) -> BusinessUser | None:
+        stmt = select(BusinessUser).where(
+            BusinessUser.business_id == business_id,
+            BusinessUser.phone == owner_phone,
+            BusinessUser.role == "owner",
+            BusinessUser.is_active.is_(True),
+        )
+        return (await self._session.scalars(stmt)).first()
+
+    # ===================================================================
+    # Internal — stale expiry
+    # ===================================================================
+
+    async def _expire_stale(self, business_id: int, owner_user_id: int) -> None:
+        """Transition any expired pending proposals so the owner can create new ones."""
+        now = utcnow()
+        pending = await self._repo.get_latest_for_owner(
+            business_id, owner_user_id, statuses=("pending_confirmation",)
+        )
+        if pending is not None and pending.expires_at <= now:
+            await self._repo.transition_status(
+                pending.id, business_id, pending.expected_version, "expired"
+            )
+
+    # ===================================================================
+    # Internal — command parsing (regex-based, no LLM)
+    # ===================================================================
+
+    def _parse_command(self, raw_text: str, business_id: int) -> dict[str, Any] | None:
+        text = raw_text.strip()
+
+        # close_day: "close tomorrow", "close clinic 2026-08-15"
+        m = _CLOSE_RE.match(text)
+        if m:
+            date_expr = m.group(1).strip()
+            target = self._parse_date_expr(date_expr)
+            if target is not None:
+                return {
+                    "command_type": "close_day",
+                    "target_date": target,
+                    "reason": "Owner requested closure",
+                }
+
+        # cancel_appointments: "cancel all tomorrow", "cancel appointments 2026-08-15"
+        m = _CANCEL_ALL_RE.match(text)
+        if m:
+            date_expr = m.group(1).strip()
+            target = self._parse_date_expr(date_expr)
+            if target is not None:
+                return {
+                    "command_type": "cancel_appointments",
+                    "target_date": target,
+                }
+
+        # doctor_leave: "Dr. Priya leave tomorrow"
+        m = _DOCTOR_LEAVE_RE.match(text)
+        if m:
+            doctor_name = m.group(1).strip()
+            date_expr = (m.group(2) or "tomorrow").strip()
+            target = self._parse_date_expr(date_expr)
+            if target is not None:
+                return {
+                    "command_type": "doctor_leave",
+                    "doctor_name": doctor_name,
+                    "target_date": target,
+                    "reason": "Doctor leave",
+                }
+
+        # get_summary (non-destructive, no proposal needed — but parsed here
+        # for completeness; the caller can handle it without confirmation)
+        m = _GET_SUMMARY_RE.match(text)
+        if m:
+            return {
+                "command_type": "get_summary",
+                "target_date": None,
+            }
+
+        return None
+
+    @staticmethod
+    def _parse_date_expr(expr: str) -> str | None:
+        """Return a canonical date string or None if unparseable.
+
+        Returns 'today', 'tomorrow', or an ISO date string.
+        """
+        lower = expr.lower().strip()
+        if lower in _DATE_PATTERNS:
+            return _DATE_PATTERNS[lower]
+        # Try ISO date
+        try:
+            date.fromisoformat(lower)
+            return lower
+        except ValueError:
+            return None
+
+    # ===================================================================
+    # Internal — resolve target date to concrete date
+    # ===================================================================
+
+    async def _resolve_target_date(self, business_id: int, date_expr: str | None) -> date:
+        """Convert a date expression to a concrete date using business timezone."""
+        tz_name = await self._get_business_timezone(business_id)
+        today = datetime.now(ZoneInfo(tz_name)).date()
+        if not date_expr:
+            return today
+        if date_expr == "today":
+            return today
+        if date_expr == "tomorrow":
+            return today + timedelta(days=1)
+        try:
+            return date.fromisoformat(date_expr)
+        except ValueError:
+            return today
+
+    async def _get_business_timezone(self, business_id: int) -> str:
+        biz = await self._session.scalar(select(Business).where(Business.id == business_id))
+        return biz.timezone if biz else "Asia/Kolkata"
+
+    # ===================================================================
+    # Internal — query affected entities for preview
+    # ===================================================================
+
+    async def _query_affected(self, business_id: int, parsed: dict[str, Any]) -> dict[str, Any]:
+        """Build a summary of entities affected by the command."""
+        command_type = parsed["command_type"]
+        target_date_expr = parsed.get("target_date")
+        target_date = await self._resolve_target_date(business_id, target_date_expr)
+
+        if command_type in ("close_day", "cancel_appointments"):
+            appointments = await self._query_confirmed_appointments_on_date(
+                business_id, target_date
+            )
+            return {
+                "target_date": target_date.isoformat(),
+                "confirmed_appointment_count": len(appointments),
+                "appointments": [
+                    {
+                        "id": a.id,
+                        "customer_name": a.customer_name or "Patient",
+                        "service": a.service_name_snapshot,
+                        "resource": a.resource_name_snapshot,
+                        "start_at": a.start_at.isoformat(),
+                    }
+                    for a in appointments
+                ],
+            }
+
+        if command_type == "doctor_leave":
+            doctor_name = parsed.get("doctor_name", "")
+            resource = await self._resolve_resource(business_id, doctor_name)
+            if resource is None:
+                return {
+                    "target_date": target_date.isoformat(),
+                    "error": f"doctor_not_found: {doctor_name}",
+                }
+            appointments = await self._query_confirmed_appointments_for_resource(
+                business_id, resource.id, target_date
+            )
+            return {
+                "target_date": target_date.isoformat(),
+                "resource_id": resource.id,
+                "resource_name": resource.name,
+                "confirmed_appointment_count": len(appointments),
+                "appointments": [
+                    {
+                        "id": a.id,
+                        "customer_name": a.customer_name or "Patient",
+                        "service": a.service_name_snapshot,
+                        "start_at": a.start_at.isoformat(),
+                    }
+                    for a in appointments
+                ],
+            }
+
+        return {}
+
+    # ===================================================================
+    # Internal — command execution
+    # ===================================================================
+
+    async def _execute_command(
+        self,
+        business_id: int,
+        command_type: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Dispatch to the appropriate command handler."""
+        if command_type == "close_day":
+            return await self._exec_close_day(business_id, payload)
+        if command_type == "cancel_appointments":
+            return await self._exec_cancel_appointments(business_id, payload)
+        if command_type == "doctor_leave":
+            return await self._exec_doctor_leave(business_id, payload)
+        raise ValueError(f"unsupported_command_type: {command_type}")
+
+    async def _exec_close_day(self, business_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Upsert a ScheduleException with is_closed=True, then cancel all appointments."""
+        target_date_str = payload.get("target_date", "today")
+        target_date = await self._resolve_target_date(business_id, target_date_str)
+        reason = payload.get("reason", "Owner requested closure")
+
+        # Upsert schedule exception (business-level, no resource)
+        await self._upsert_schedule_exception(
+            business_id=business_id,
+            resource_id=None,
+            exception_date=target_date,
+            is_closed=True,
+            reason=reason,
+        )
+
+        # Cancel all confirmed appointments on that date
+        cancelled = await self._cancel_confirmed_appointments_on_date(
+            business_id, target_date, reason
+        )
+
+        return {
+            "action": "close_day",
+            "target_date": target_date.isoformat(),
+            "reason": reason,
+            "cancelled_count": len(cancelled),
+            "cancelled_appointment_ids": cancelled,
+        }
+
+    async def _exec_cancel_appointments(
+        self, business_id: int, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Cancel all confirmed appointments on the target date (no schedule exception)."""
+        target_date_str = payload.get("target_date", "today")
+        target_date = await self._resolve_target_date(business_id, target_date_str)
+
+        cancelled = await self._cancel_confirmed_appointments_on_date(
+            business_id, target_date, "Owner cancelled all appointments"
+        )
+
+        return {
+            "action": "cancel_appointments",
+            "target_date": target_date.isoformat(),
+            "cancelled_count": len(cancelled),
+            "cancelled_appointment_ids": cancelled,
+        }
+
+    async def _exec_doctor_leave(self, business_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """Mark a doctor on leave and cancel their appointments."""
+        target_date_str = payload.get("target_date", "today")
+        target_date = await self._resolve_target_date(business_id, target_date_str)
+        doctor_name = payload.get("doctor_name", "")
+        reason = payload.get("reason", "Doctor leave")
+
+        resource = await self._resolve_resource(business_id, doctor_name)
+        if resource is None:
+            raise ValueError(f"doctor_not_found: {doctor_name}")
+
+        # Upsert resource-level schedule exception
+        await self._upsert_schedule_exception(
+            business_id=business_id,
+            resource_id=resource.id,
+            exception_date=target_date,
+            is_closed=True,
+            reason=reason,
+        )
+
+        # Cancel confirmed appointments for this resource on the date
+        cancelled = await self._cancel_confirmed_appointments_for_resource(
+            business_id, resource.id, target_date, reason
+        )
+
+        return {
+            "action": "doctor_leave",
+            "target_date": target_date.isoformat(),
+            "resource_id": resource.id,
+            "resource_name": resource.name,
+            "reason": reason,
+            "cancelled_count": len(cancelled),
+            "cancelled_appointment_ids": cancelled,
+        }
+
+    # ===================================================================
+    # Internal — schedule exception upsert
+    # ===================================================================
+
+    async def _upsert_schedule_exception(
+        self,
+        *,
+        business_id: int,
+        resource_id: int | None,
+        exception_date: date,
+        is_closed: bool,
+        reason: str,
+        open_time: dt_time | None = None,
+        close_time: dt_time | None = None,
+    ) -> ScheduleException:
+        """Insert or detect an existing ScheduleException.
+
+        Checks for an existing exception on the same date and scope.
+        If identical, returns it (no-op). If conflicting, raises.
+        """
+        if resource_id is None:
+            stmt = (
+                select(ScheduleException)
+                .where(
+                    ScheduleException.business_id == business_id,
+                    ScheduleException.resource_id.is_(None),
+                    ScheduleException.exception_date == exception_date,
+                )
+                .with_for_update()
+            )
+        else:
+            stmt = (
+                select(ScheduleException)
+                .where(
+                    ScheduleException.business_id == business_id,
+                    ScheduleException.resource_id == resource_id,
+                    ScheduleException.exception_date == exception_date,
+                )
+                .with_for_update()
+            )
+
+        existing = (await self._session.scalars(stmt)).first()
+
+        if existing is not None:
+            # Identical exception — no-op
+            if existing.is_closed == is_closed and (
+                is_closed or (existing.open_time == open_time and existing.close_time == close_time)
+            ):
+                return existing
+            # Conflicting exception
+            raise RuntimeError(
+                f"schedule_exception_conflict: business_id={business_id} "
+                f"resource_id={resource_id} date={exception_date} "
+                f"existing_closed={existing.is_closed} requested_closed={is_closed}"
+            )
+
+        exc = ScheduleException(
+            business_id=business_id,
+            resource_id=resource_id,
+            exception_date=exception_date,
+            is_closed=is_closed,
+            open_time=open_time,
+            close_time=close_time,
+            reason=reason,
+        )
+        self._session.add(exc)
+        await self._session.flush()
+        return exc
+
+    # ===================================================================
+    # Internal — appointment queries
+    # ===================================================================
+
+    async def _query_confirmed_appointments_on_date(
+        self, business_id: int, target_date: date
+    ) -> list[Appointment]:
+        """Return confirmed appointments for a given date in business timezone."""
+        tz_name = await self._get_business_timezone(business_id)
+        tz = ZoneInfo(tz_name)
+        appointments = (
+            await self._session.scalars(
+                select(Appointment)
+                .where(
+                    Appointment.business_id == business_id,
+                    Appointment.status == AppointmentStatus.CONFIRMED.value,
+                )
+                .order_by(Appointment.start_at)
+            )
+        ).all()
+        return [a for a in appointments if a.start_at.astimezone(tz).date() == target_date]
+
+    async def _query_confirmed_appointments_for_resource(
+        self, business_id: int, resource_id: int, target_date: date
+    ) -> list[Appointment]:
+        """Return confirmed appointments for a specific resource on a given date."""
+        tz_name = await self._get_business_timezone(business_id)
+        tz = ZoneInfo(tz_name)
+        appointments = (
+            await self._session.scalars(
+                select(Appointment)
+                .where(
+                    Appointment.business_id == business_id,
+                    Appointment.resource_id == resource_id,
+                    Appointment.status == AppointmentStatus.CONFIRMED.value,
+                )
+                .order_by(Appointment.start_at)
+            )
+        ).all()
+        return [a for a in appointments if a.start_at.astimezone(tz).date() == target_date]
+
+    # ===================================================================
+    # Internal — appointment cancellation
+    # ===================================================================
+
+    async def _cancel_confirmed_appointments_on_date(
+        self, business_id: int, target_date: date, reason: str
+    ) -> list[int]:
+        """Cancel all confirmed appointments on target_date. Returns cancelled IDs."""
+        appointments = await self._query_confirmed_appointments_on_date(business_id, target_date)
+        cancelled_ids: list[int] = []
+        for appt in appointments:
+            await self._cancel_single_appointment(appt, reason)
+            cancelled_ids.append(appt.id)
+        return cancelled_ids
+
+    async def _cancel_confirmed_appointments_for_resource(
+        self, business_id: int, resource_id: int, target_date: date, reason: str
+    ) -> list[int]:
+        """Cancel confirmed appointments for a resource on target_date."""
+        appointments = await self._query_confirmed_appointments_for_resource(
+            business_id, resource_id, target_date
+        )
+        cancelled_ids: list[int] = []
+        for appt in appointments:
+            await self._cancel_single_appointment(appt, reason)
+            cancelled_ids.append(appt.id)
+        return cancelled_ids
+
+    async def _cancel_single_appointment(self, appointment: Appointment, reason: str) -> None:
+        """Cancel a single appointment and its active resource allocation.
+
+        Also creates cancellation notifications via the NotificationService.
+        """
+        now = utcnow()
+
+        # Update appointment status
+        stmt = (
+            update(Appointment)
+            .where(
+                Appointment.id == appointment.id,
+                Appointment.business_id == appointment.business_id,
+                Appointment.status == AppointmentStatus.CONFIRMED.value,
+            )
+            .values(
+                status=AppointmentStatus.CANCELLED.value,
+                cancelled_at=now,
+                reason=reason,
+                version=appointment.version + 1,
+            )
+        )
+        await self._session.execute(stmt)
+
+        # Cancel active resource allocation
+        stmt = (
+            update(ResourceAllocation)
+            .where(
+                ResourceAllocation.appointment_id == appointment.id,
+                ResourceAllocation.business_id == appointment.business_id,
+                ResourceAllocation.status == ResourceAllocationStatus.ACTIVE.value,
+            )
+            .values(
+                status=ResourceAllocationStatus.CANCELLED.value,
+                version=ResourceAllocation.version + 1,
+            )
+        )
+        await self._session.execute(stmt)
+
+        # Create cancellation notifications
+        try:
+            from fonely.services.notifications import NotificationService
+
+            notif_service = NotificationService(self._session)
+            await notif_service.create_cancellation_notifications(
+                business_id=appointment.business_id,
+                appointment_id=appointment.id,
+                customer_phone=appointment.customer_phone,
+                customer_name=appointment.customer_name,
+                service_name=appointment.service_name_snapshot,
+                resource_name=appointment.resource_name_snapshot,
+                start_at=appointment.start_at,
+                business_timezone=appointment.business_timezone_snapshot,
+                reason=reason,
+            )
+        except Exception:
+            logger.warning(
+                "cancellation_notification_failed: appointment_id=%d",
+                appointment.id,
+                exc_info=True,
+            )
+
+    # ===================================================================
+    # Internal — resource resolution
+    # ===================================================================
+
+    async def _resolve_resource(self, business_id: int, name: str | None) -> Resource | None:
+        """Find a resource by partial name match."""
+        if not name:
+            return None
+        name_lower = name.lower()
+        resources = (
+            await self._session.scalars(
+                select(Resource).where(
+                    Resource.business_id == business_id,
+                    Resource.is_active.is_(True),
+                )
+            )
+        ).all()
+        for r in resources:
+            if r.name.lower() == name_lower or name_lower in r.name.lower():
+                return r
+        return None

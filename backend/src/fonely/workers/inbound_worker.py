@@ -254,10 +254,11 @@ async def _process_domain(
     if await _is_owner(claimed.business_id, phone, session):
         from fonely.services.owner_commands import OwnerCommandService
 
-        result = await OwnerCommandService(session, gateway).process_command(
-            claimed.business_id, phone, claimed.message_body
+        result = await OwnerCommandService(session).preview_command(
+            claimed.business_id, phone, claimed.message_body or ""
         )
-        return result.response_text, NotificationRecipientType.OWNER.value
+        response_text = str(result.get("message", result.get("error", "Command processed.")))
+        return response_text, NotificationRecipientType.OWNER.value
 
     ctx = await find_or_create_conversation_persistent(claimed.business_id, phone, session)
     actor = ActorContext(

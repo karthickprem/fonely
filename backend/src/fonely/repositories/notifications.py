@@ -105,6 +105,23 @@ class NotificationRepository:
             )
         )
 
+    async def get_event_by_idempotency_key(
+        self, business_id: int, key: str, *, lock: bool = False
+    ) -> NotificationOutboxEvent | None:
+        statement = select(NotificationOutboxEvent).where(
+            NotificationOutboxEvent.business_id == business_id,
+            NotificationOutboxEvent.idempotency_key == key,
+        )
+        if lock:
+            statement = statement.with_for_update()
+        return (await self._session.scalars(statement)).first()
+
+    async def get_event_by_global_idempotency_key(self, key: str) -> NotificationOutboxEvent | None:
+        statement = select(NotificationOutboxEvent).where(
+            NotificationOutboxEvent.idempotency_key == key,
+        )
+        return (await self._session.scalars(statement)).first()
+
     async def get_events_for_entity(
         self, business_id: int, entity_type: str, entity_id: int
     ) -> Sequence[NotificationOutboxEvent]:

@@ -126,6 +126,8 @@ class ConversationContext:
     state: ConversationState = ConversationState.GREETING
     turns: list[ConversationTurn] = field(default_factory=list)
     collected_facts: dict[str, object] = field(default_factory=dict)
+    availability_offer: object | None = None
+    selected_slot_ref: object | None = None
     proposal_id: int | None = None
     proposal_version: int | None = None
     booking_attempt: int = 0

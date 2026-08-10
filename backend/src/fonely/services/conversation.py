@@ -237,6 +237,11 @@ class ConversationService:
             self._log_turn(turn, start_time)
             return turn
 
+        offer_turn = self._resolve_active_offer(ctx, user_message, actor, biz, safety)
+        if offer_turn is not None:
+            self._log_turn(offer_turn, start_time)
+            return offer_turn
+
         await self._extract_facts(ctx, user_message, biz)
         await self._validate_facts(ctx, biz)
         missing = self._identify_missing_facts(ctx)
@@ -256,6 +261,137 @@ class ConversationService:
         )
         self._log_turn(turn, start_time)
         return turn
+
+    def _clear_availability_offer(self, ctx: ConversationContext) -> None:
+        ctx.availability_offer = None
+        ctx.selected_slot_ref = None
+
+    def _resolve_active_offer(
+        self,
+        ctx: ConversationContext,
+        user_message: str,
+        actor: ActorContext,
+        biz: object,
+        safety: SafetyClassification,
+    ) -> ConversationTurn | None:
+        from fonely.services.availability_offers import (
+            AvailabilityOffer,
+            OfferSelectionStatus,
+            availability_revision_for_slots,
+            select_from_offer,
+        )
+        from fonely.services.conversation_tools import BusinessContext
+
+        assert isinstance(biz, BusinessContext)
+        offer = ctx.availability_offer
+        if not isinstance(offer, AvailabilityOffer):
+            return None
+        if offer.business_id != ctx.business_id or offer.business_id != actor.business_id:
+            self._clear_availability_offer(ctx)
+            return self._fact_turn(
+                ctx,
+                user_message,
+                "That offer is no longer valid. Please choose a new date and time.",
+                safety,
+                ["start_at"],
+            )
+        expected_revision = availability_revision_for_slots(
+            business_id=offer.business_id,
+            conversation_id=offer.conversation_id,
+            service_id=offer.service_id,
+            target_date=offer.target_date,
+            business_timezone=offer.business_timezone,
+            slots=offer.slots,
+        )
+        if expected_revision != offer.availability_revision:
+            self._clear_availability_offer(ctx)
+            return self._fact_turn(
+                ctx,
+                user_message,
+                "That offer is no longer valid. Please choose a new date and time.",
+                safety,
+                ["start_at"],
+            )
+        current_service = ctx.collected_facts.get("service_id")
+        if current_service != offer.service_id:
+            self._clear_availability_offer(ctx)
+            return None
+        if self._message_changes_offer_scope(user_message, offer, biz):
+            self._clear_availability_offer(ctx)
+            ctx.collected_facts.pop("start_at", None)
+            return None
+
+        selection = select_from_offer(offer, user_message, now=utcnow())
+        if selection.status in {OfferSelectionStatus.EXPIRED, OfferSelectionStatus.INVALID}:
+            self._clear_availability_offer(ctx)
+            ctx.collected_facts.pop("start_at", None)
+            return self._fact_turn(
+                ctx,
+                user_message,
+                "Those times have expired. Please tell me the date and time again.",
+                safety,
+                ["start_at"],
+            )
+        if selection.status == OfferSelectionStatus.AMBIGUOUS:
+            return self._fact_turn(
+                ctx,
+                user_message,
+                "More than one offered slot matches that time. Please choose its number.",
+                safety,
+                ["start_at"],
+            )
+        if selection.status == OfferSelectionStatus.NO_MATCH:
+            choices = ", ".join(f"{slot.ordinal}. {slot.display_time()}" for slot in offer.slots)
+            return self._fact_turn(
+                ctx,
+                user_message,
+                f"Please choose one of these offered slots: {choices}.",
+                safety,
+                ["start_at"],
+            )
+
+        assert selection.slot is not None
+        selected = selection.slot
+        ctx.selected_slot_ref = selected
+        ctx.collected_facts["service_id"] = selected.service_id
+        ctx.collected_facts["resource_id"] = selected.resource_id
+        ctx.collected_facts["resource_name"] = selected.resource_name
+        ctx.collected_facts["start_at"] = selected.start_at
+        return None
+
+    def _message_changes_offer_scope(self, user_message: str, offer: object, biz: object) -> bool:
+        from fonely.services.availability_offers import AvailabilityOffer
+        from fonely.services.conversation_tools import BusinessContext
+
+        assert isinstance(offer, AvailabilityOffer)
+        assert isinstance(biz, BusinessContext)
+        normalized = user_message.casefold()
+        date_terms = (
+            "today",
+            "tomorrow",
+            "day after",
+            "இன்று",
+            "நாளை",
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday",
+        )
+        if any(term in normalized for term in date_terms):
+            return True
+        if any(
+            service.id != offer.service_id and service.name.casefold() in normalized
+            for service in biz.services
+        ):
+            return True
+        offered_resources = {slot.resource_id for slot in offer.slots}
+        return any(
+            resource.id not in offered_resources and resource.name.casefold() in normalized
+            for resource in biz.resources
+        )
 
     async def _extract_facts(self, ctx: ConversationContext, message: str, biz: object) -> None:
         from fonely.services.conversation_tools import BusinessContext
@@ -708,6 +844,34 @@ class ConversationService:
             assert isinstance(target_id, int)
             exclude_appointment_id = target_id
 
+        selected_slot = None
+        if ctx.selected_slot_ref is not None:
+            from fonely.domain.appointments.datetimes import instant
+            from fonely.repositories.appointments import AppointmentRepository
+            from fonely.services.availability_offers import SelectedSlotRef
+
+            selected_slot = ctx.selected_slot_ref
+            if not isinstance(selected_slot, SelectedSlotRef) or (
+                selected_slot.business_id != biz.business_id
+                or selected_slot.conversation_id != ctx.conversation_id
+                or selected_slot.service_id != service_id
+                or selected_slot.resource_id != resource_id
+                or instant(selected_slot.start_at) != instant(start_at)
+                or instant(utcnow()) >= instant(selected_slot.expires_at)
+            ):
+                self._clear_availability_offer(ctx)
+                ctx.collected_facts.pop("start_at", None)
+                return self._fact_turn(
+                    ctx,
+                    user_message,
+                    "That offered slot is no longer valid. Please choose a new time.",
+                    safety,
+                    ["start_at"],
+                )
+            await AppointmentRepository(self._session).lock_resource_schedule(
+                biz.business_id, selected_slot.resource_id
+            )
+
         avail_svc = AvailabilityService(self._session)
         decision = await avail_svc.check_exact_slot(
             biz.business_id,
@@ -717,22 +881,29 @@ class ConversationService:
             exclude_appointment_id=exclude_appointment_id,
         )
         if not decision.available:
-            from zoneinfo import ZoneInfo
+            from fonely.services.availability_offers import create_availability_offer
 
-            clinic_tz = ZoneInfo(biz.timezone)
-            alt_texts = [
-                slot.start_at.astimezone(clinic_tz).strftime("%-I:%M %p")
-                for slot in decision.alternatives
-            ]
             ctx.state = ConversationState.FACT_COLLECTION
             ctx.booking_attempt += 1
-            del ctx.collected_facts["start_at"]
-            if alt_texts:
+            ctx.selected_slot_ref = None
+            if decision.alternatives:
+                offer = create_availability_offer(
+                    business_id=biz.business_id,
+                    conversation_id=ctx.conversation_id,
+                    service_id=service_id,
+                    business_timezone=biz.timezone,
+                    alternatives=decision.alternatives,
+                    now=utcnow(),
+                )
+                ctx.availability_offer = offer
+                alt_texts = [slot.display_time() for slot in offer.slots]
                 response = (
                     "That exact time isn't available. Nearest slots: "
                     f"{', '.join(alt_texts)}. Which one works?"
                 )
             else:
+                self._clear_availability_offer(ctx)
+                ctx.collected_facts.pop("start_at", None)
                 response = "That time isn't available. Would you like to try another date?"
             return self._fact_turn(
                 ctx,
@@ -743,6 +914,38 @@ class ConversationService:
             )
 
         operation = ctx.collected_facts.get("_operation", "book")
+
+        if ctx.selected_slot_ref is not None:
+            from fonely.services.availability_offers import SelectedSlotRef
+
+            selected = ctx.selected_slot_ref
+            if not isinstance(selected, SelectedSlotRef):
+                self._clear_availability_offer(ctx)
+                ctx.collected_facts.pop("start_at", None)
+                return self._fact_turn(
+                    ctx,
+                    user_message,
+                    "That offer is no longer valid. Please choose a new date and time.",
+                    safety,
+                    ["start_at"],
+                )
+            if (
+                selected.business_id != biz.business_id
+                or selected.conversation_id != ctx.conversation_id
+                or selected.service_id != service_id
+                or selected.resource_id != resource_id
+                or instant(selected.start_at) != instant(start_at)
+                or instant(utcnow()) >= instant(selected.expires_at)
+            ):
+                self._clear_availability_offer(ctx)
+                ctx.collected_facts.pop("start_at", None)
+                return self._fact_turn(
+                    ctx,
+                    user_message,
+                    "That offered slot is no longer valid. Please choose a new time.",
+                    safety,
+                    ["start_at"],
+                )
 
         if operation == "reschedule":
             from fonely.domain.appointments.commands import (
@@ -789,6 +992,7 @@ class ConversationService:
         ctx.proposal_version = proposal.version
 
         ctx.transition(ConversationState.PROPOSAL_PRESENTED)
+        self._clear_availability_offer(ctx)
 
         resource_name = str(ctx.collected_facts.get("resource_name", ""))
         service_name = str(ctx.collected_facts.get("service_name", ""))

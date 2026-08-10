@@ -91,9 +91,10 @@ def create_app() -> FastAPI:
         app.include_router(whatsapp_router)
 
     # Exotel webhook route is intentionally NOT mounted.
-    # Requires: migration (exotel_inbound_events table), ExotelIntakeService
-    # wiring, gateway IP allowlist, and sandbox-verified fixtures.
-    # See docs/EXOTEL_PROVIDER_CONTRACT.md §14 for the full gate checklist.
+    # Requires: migration (exotel_inbound_events table),
+    # InboundCallIntakeService wiring, gateway IP allowlist, and
+    # sandbox-verified fixtures.
+    # See docs/EXOTEL_PROVIDER_CONTRACT.md for the full gate checklist.
 
     @app.get("/metrics")
     async def metrics_endpoint(request: Request) -> Response:

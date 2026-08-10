@@ -6,6 +6,7 @@ import re
 import time
 import uuid
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1039,6 +1040,14 @@ class ConversationService:
         )
         resources_text = ", ".join(r.name for r in biz.resources)
 
+        clinic_tz = ZoneInfo(biz.timezone)
+        now_local = datetime.now(clinic_tz)
+        day_name = now_local.strftime("%A")
+        date_str = now_local.strftime("%Y-%m-%d")
+        time_str = now_local.strftime("%-I:%M %p")
+
+        hours_text = await self._get_today_hours(ctx.business_id, biz.timezone)
+
         system_prompt = (
             f"You are the virtual receptionist for {biz.name}. "
             f"You handle appointment bookings and clinic enquiries. "
@@ -1047,6 +1056,11 @@ class ConversationService:
             f"Ask one question at a time. Never invent clinic info. "
             f"Available services: {services_text}. "
             f"Available dentists: {resources_text}. "
+            f"Today is {day_name}, {date_str}. "
+            f"Current time: {time_str} ({biz.timezone}). "
+            f"Clinic hours today: {hours_text}. "
+            f"IMPORTANT: Actual slot availability comes ONLY from tool/system results. "
+            f"Never assert or guess available times — say you will check. "
         )
 
         if missing:
@@ -1068,6 +1082,39 @@ class ConversationService:
             temperature=0.3,
             max_tokens=300,
         )
+
+    async def _get_today_hours(self, business_id: int, timezone: str) -> str:
+        from sqlalchemy import select
+
+        from fonely.models.schema import OperatingSchedule
+
+        clinic_tz = ZoneInfo(timezone)
+        today = datetime.now(clinic_tz).date()
+        day_of_week = today.weekday()
+
+        schedules = (
+            (
+                await self._session.execute(
+                    select(OperatingSchedule).where(
+                        OperatingSchedule.business_id == business_id,
+                        OperatingSchedule.day_of_week == day_of_week,
+                        OperatingSchedule.is_active.is_(True),
+                        OperatingSchedule.resource_id.is_(None),
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not schedules:
+            return "Closed today"
+        shifts = sorted(schedules, key=lambda s: s.open_time)
+        parts = []
+        for s in shifts:
+            open_str = s.open_time.strftime("%-I:%M %p")
+            close_str = s.close_time.strftime("%-I:%M %p")
+            parts.append(f"{open_str} -{close_str}")
+        return ", ".join(parts)
 
     async def _persist_turn(self, conversation_id: str, turn: ConversationTurn) -> None:
         try:

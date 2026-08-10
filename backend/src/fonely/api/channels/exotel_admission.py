@@ -128,11 +128,18 @@ def resolve_business_id(
     mapping: ExotelNumberMapping,
     called: str,
     caller: str,
+    direction: str | None = None,
 ) -> int | None:
-    """Direction-neutral ambiguity-rejecting tenant routing.
+    """Direction-aware trusted tenant routing.
 
-    Returns business_id or None if unknown/ambiguous.
+    Inbound: To is the Exotel virtual number (our tenant).
+    Outbound: From is the Exotel virtual number (our tenant).
+    Unknown direction: try both, reject if ambiguous (different businesses).
     """
+    if direction == "inbound":
+        return mapping.get_business_id(called)
+    if direction in ("outbound-api", "outbound-dial", "outbound"):
+        return mapping.get_business_id(caller)
     to_bid = mapping.get_business_id(called)
     from_bid = mapping.get_business_id(caller)
     if to_bid is not None and from_bid is not None and to_bid != from_bid:

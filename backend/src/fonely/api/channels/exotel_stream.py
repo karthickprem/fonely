@@ -111,10 +111,14 @@ def validate_start_event(msg: dict[str, Any]) -> ExotelStartMetadata:
     raw_rate = media_format.get("sample_rate")
     if raw_rate is None or isinstance(raw_rate, bool):
         raise ExotelStartValidationError("missing or malformed sample_rate")
+    if isinstance(raw_rate, float):
+        raise ExotelStartValidationError(f"sample_rate must be integer, got float: {raw_rate!r}")
     try:
         sample_rate = int(raw_rate)
     except (ValueError, TypeError) as exc:
         raise ExotelStartValidationError(f"malformed sample_rate: {raw_rate!r}") from exc
+    if str(sample_rate) != str(raw_rate).strip():
+        raise ExotelStartValidationError(f"sample_rate truncated: {raw_rate!r} → {sample_rate}")
     if sample_rate not in _SUPPORTED_RATES:
         raise ExotelStartValidationError(f"unsupported sample_rate: {sample_rate}")
 
@@ -199,7 +203,9 @@ async def exotel_media_websocket(websocket: WebSocket) -> None:
         if metadata.account_sid != expected_account:
             raise ExotelStartValidationError("provider account mismatch")
 
-        business_id = resolve_business_id(mapping, metadata.to_number, metadata.from_number)
+        business_id = resolve_business_id(
+            mapping, metadata.to_number, metadata.from_number, metadata.direction
+        )
         if business_id is None:
             await websocket.close(code=4404, reason="unknown tenant")
             return
@@ -257,12 +263,20 @@ async def exotel_media_websocket(websocket: WebSocket) -> None:
                 provisioning_drift=provisioning_drift,
             ),
         )
-        await websocket.close(code=1000)
     except ExotelStartValidationError as exc:
         logger.warning("exotel_stream_protocol_error", extra={"error": str(exc)})
-        await websocket.close(code=4400, reason="protocol error")
     except WebSocketDisconnect:
         pass
+    except Exception:
+        logger.warning(
+            "exotel_stream_runtime_error",
+            extra={"business_id": admitted_business_id},
+            exc_info=True,
+        )
     finally:
         if admitted_business_id is not None:
             admission.release(str(admitted_business_id))
+        try:
+            await websocket.close(code=1000)
+        except Exception:
+            pass

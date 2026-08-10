@@ -294,7 +294,7 @@ def select_from_offer(
             return OfferSelection(OfferSelectionStatus.SELECTED, matches[0])
         return OfferSelection(OfferSelectionStatus.NO_MATCH)
 
-    match = _TIME_PATTERN.search(normalized)
+    match = _TIME_PATTERN.fullmatch(normalized)
     if match is None:
         return OfferSelection(OfferSelectionStatus.NO_MATCH)
     hour = int(match.group(1))

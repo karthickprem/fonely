@@ -48,13 +48,47 @@ class TTSPort(Protocol):
     async def close(self) -> None: ...
 
 
+@dataclass(frozen=True)
+class ProposeCommand:
+    """Typed proposal: service, resource, date, time, customer."""
+    business_id: int
+    service_id: int | None = None
+    resource_id: int | None = None
+    target_date: date | None = None
+    target_time: str = ""
+    customer_name: str = ""
+    customer_phone: str = ""
+    idempotency_key: str = ""
+
+
+@dataclass(frozen=True)
+class ConfirmCommand:
+    """Typed confirmation of a pending proposal."""
+    business_id: int
+    proposal_id: int
+    idempotency_key: str = ""
+
+
+@dataclass(frozen=True)
+class CommandResult:
+    """Result of a business command: proposal or commit evidence."""
+    success: bool
+    operation: str = ""
+    proposal_id: int | None = None
+    committed: bool = False
+    evidence: dict[str, Any] | None = None
+    error: str = ""
+
+
 class CommandPort(Protocol):
     """Typed command port for authoritative business mutations.
 
     Live booking/order requires both an accepted validator AND
     this port.  Without both, mode must be demo with upfront refusal.
+    Only committed evidence from this port authorizes confirmation speech.
     """
-    async def submit_command(self, command: dict[str, Any]) -> dict[str, Any]: ...
+    async def propose(self, cmd: ProposeCommand) -> CommandResult: ...
+    async def confirm(self, cmd: ConfirmCommand) -> CommandResult: ...
 
 
 @dataclass
@@ -62,8 +96,9 @@ class TurnResult:
     turn_number: int
     caller_text: str
     response_text: str
-    speech_class: SpeechClass
-    allowed: bool
+    response_audio: bytes = b""
+    speech_class: SpeechClass = SpeechClass.NON_CONSEQUENTIAL
+    allowed: bool = False
     blocked_reason: str = ""
     availability_queried: bool = False
     relative_date_resolved: date | None = None
@@ -72,6 +107,7 @@ class TurnResult:
     terminal: bool = False
     terminal_reason: str = ""
     elapsed_ms: float = 0.0
+    commit_evidence: dict[str, Any] | None = None
 
 
 class PipelineRuntime:
@@ -269,9 +305,10 @@ class PipelineRuntime:
             self._dialogue.set_terminal(terminal_reason)
 
         # 9. TTS — exactly once, only if ALLOW and generation current
+        response_audio = b""
         if allowed and self._gen_clock.is_current(token):
-            tts_audio = await self._tts.synthesize(response)
-            self._total_tts_bytes += len(tts_audio)
+            response_audio = await self._tts.synthesize(response)
+            self._total_tts_bytes += len(response_audio)
             self._telemetry.record_tts_usage(len(response))
             self._messages.append({"role": "assistant", "content": response})
         elif not allowed:
@@ -285,6 +322,7 @@ class PipelineRuntime:
             turn_number=token.turn_id,
             caller_text=caller_text,
             response_text=response,
+            response_audio=response_audio,
             speech_class=speech_class,
             allowed=allowed,
             blocked_reason=validation.reason if not allowed else "",

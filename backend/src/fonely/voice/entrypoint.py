@@ -77,15 +77,14 @@ async def run_voice_session(
     try:
         await runtime.initialize()
 
-        # Send greeting (single TTS call)
+        # Send greeting (single TTS call at entrypoint level)
         from .prompts import build_greeting
         greeting = build_greeting(business_name)
         greeting_audio = await tts.synthesize(greeting)
         await media.send_audio(greeting_audio)
         await media.send_event({"type": "greeting", "text_length": len(greeting)})
 
-        # Turn loop — runtime.process_turn handles STT→LLM→validate→TTS internally
-        # We only forward the TTS result that runtime already synthesized
+        # Turn loop — runtime.process_turn returns TurnResult with audio
         while True:
             audio = await media.receive_audio()
             if audio is None:
@@ -93,16 +92,18 @@ async def run_voice_session(
 
             result = await runtime.process_turn(audio)
 
-            # Runtime already synthesized exactly once if allowed;
-            # we retrieve the audio through the TTS port's last output
-            # In production Pipecat wiring, transport output handles this.
-            # For the entrypoint, we just forward the event.
+            # Send response audio exactly once from TurnResult
+            if result.response_audio:
+                await media.send_audio(result.response_audio)
+
             await media.send_event({
                 "type": "turn_complete",
                 "turn": result.turn_number,
                 "allowed": result.allowed,
                 "terminal": result.terminal,
                 "speech_class": result.speech_class,
+                "has_audio": len(result.response_audio) > 0,
+                "commit_evidence": result.commit_evidence is not None,
             })
 
             if result.terminal:
@@ -120,7 +121,8 @@ async def run_voice_session(
         return await runtime.close("normal")
 
     except asyncio.CancelledError:
-        return await runtime.close("cancelled")
+        summary = await runtime.close("cancelled")
+        raise  # Re-raise CancelledError after cleanup
     except Exception as exc:
         logger.error("session_error", extra={
             "session": config.session_id,

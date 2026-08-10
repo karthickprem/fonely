@@ -35,6 +35,7 @@ class _EvidenceState:
         self.nodes: list[str] = []
         self.node_markers: dict[str, list[str]] = {}
         self.stream_bytes = b""
+        self.collect_only = False
 
 
 _state: _EvidenceState | None = None
@@ -63,6 +64,7 @@ def pytest_configure(config: pytest.Config) -> None:
         raise pytest.UsageError("invalid run manifest schema")
 
     _state = _EvidenceState(root, manifest, partition)
+    _state.collect_only = config.option.collectonly
 
 
 def pytest_collection_finish(session: pytest.Session) -> None:
@@ -104,7 +106,7 @@ def pytest_collection_finish(session: pytest.Session) -> None:
 
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:
-    if _state is None:
+    if _state is None or _state.collect_only:
         return
 
     if not any(name == "node_id" for name, _ in report.user_properties):
@@ -131,7 +133,8 @@ def pytest_runtest_logreport(report: pytest.TestReport) -> None:
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
-    if _state is None:
+    if _state is None or _state.collect_only:
+        _cleanup()
         return
 
     _state.sequence += 1
@@ -153,4 +156,11 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         final_record,
     )
 
-    _state.root.close()
+    _cleanup()
+
+
+def _cleanup() -> None:
+    global _state
+    if _state is not None:
+        _state.root.close()
+        _state = None

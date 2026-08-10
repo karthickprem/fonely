@@ -65,10 +65,14 @@ def _validate_phases(root: TrustedRoot, manifest: dict[str, Any]) -> list[str]:
     errors = []
     results_path = root.path / PHASE_RESULTS_FILE
     if not results_path.exists() or results_path.stat().st_size == 0:
+        required = manifest.get("required_phases", [])
+        if required:
+            errors.append(f"no phase results but {len(required)} required")
         return errors
 
     raw = results_path.read_bytes()
     seen_phases = []
+    prev_seq = 0
     for i, line in enumerate(raw.decode().strip().splitlines()):
         try:
             record = json.loads(line)
@@ -81,8 +85,18 @@ def _validate_phases(root: TrustedRoot, manifest: dict[str, Any]) -> list[str]:
         if phase in seen_phases:
             errors.append(f"duplicate phase: {phase}")
         seen_phases.append(phase)
+        seq = record.get("sequence", 0)
+        if seq != prev_seq + 1:
+            errors.append(f"phase sequence gap at {seq}")
+        prev_seq = seq
         if record.get("exit_code", 0) != 0:
             errors.append(f"phase {phase} exit={record['exit_code']}")
+
+    required = manifest.get("required_phases", [])
+    missing = [p for p in required if p not in seen_phases]
+    if missing:
+        errors.append(f"missing required phases: {', '.join(missing)}")
+
     return errors
 
 
@@ -176,6 +190,19 @@ def _validate_events(
 
     if final.get("source_sha") != manifest["source_sha"]:
         errors.append(f"{partition} final record SHA mismatch")
+
+    if final.get("partition") != partition:
+        errors.append(f"{partition} final record partition mismatch")
+
+    if final.get("environment") != manifest["environment"]:
+        errors.append(f"{partition} final record environment mismatch")
+
+    expected_final_seq = len(event_lines) + 1
+    if final.get("final_sequence") != expected_final_seq:
+        errors.append(
+            f"{partition} final_sequence {final.get('final_sequence')} "
+            f"!= expected {expected_final_seq}"
+        )
 
     stream_bytes = "".join(ln + "\n" for ln in event_lines).encode("utf-8")
     if final.get("preceding_stream_digest") != digest_bytes(stream_bytes):

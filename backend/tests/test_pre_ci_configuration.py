@@ -34,7 +34,7 @@ def test_ci_uses_frozen_sync_and_required_root_qa_gates() -> None:
     assert "backend/.venv/bin/python scripts/report-eval-coverage.py" in workflow
     assert "--profile chennai-pilot" in workflow
     assert "-m postgres -q" in workflow
-    assert workflow.count("working-directory: .") >= 2
+    assert "working-directory: ." in workflow
 
 
 def test_ci_evidence_initializer_after_checkout() -> None:

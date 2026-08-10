@@ -14,7 +14,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
 
     services:
       postgres:
@@ -40,7 +40,7 @@ jobs:
 
     defaults:
       run:
-        working-directory: backend
+        working-directory: .
 
     steps:
       # actions/checkout v4.2.2
@@ -48,7 +48,6 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - name: Initialize execution evidence
-        working-directory: .
         run: >-
           python3 scripts/ci_evidence/orchestrator.py init
           --evidence-root "$EVIDENCE_ROOT"
@@ -76,21 +75,18 @@ jobs:
             uv-${{ runner.os }}-py3.12-
 
       - name: Require lockfile
-        working-directory: .
         run: >-
           python3 scripts/ci_evidence/orchestrator.py phase
           --evidence-root "$EVIDENCE_ROOT" --phase lockfile_check
           -- bash -c 'test -f backend/uv.lock || { echo "ERROR: backend/uv.lock not found"; exit 1; }'
 
       - name: Install dependencies
-        working-directory: .
         run: >-
           python3 scripts/ci_evidence/orchestrator.py phase
           --evidence-root "$EVIDENCE_ROOT" --phase dependency_install
           -- bash -c 'cd backend && uv sync --frozen --all-extras'
 
       - name: Validate evaluation corpus and tool contracts
-        working-directory: .
         run: >-
           python3 scripts/ci_evidence/orchestrator.py phase
           --evidence-root "$EVIDENCE_ROOT" --phase eval_validation
@@ -98,7 +94,6 @@ jobs:
           --tool-mismatch-report "${{ runner.temp }}/tool-contract-mismatches.ci.json"
 
       - name: Verify Chennai pilot evaluation coverage
-        working-directory: .
         run: >-
           python3 scripts/ci_evidence/orchestrator.py phase
           --evidence-root "$EVIDENCE_ROOT" --phase eval_coverage
@@ -106,73 +101,72 @@ jobs:
           --profile chennai-pilot
 
       - name: Verify package import
-        working-directory: .
         run: >-
           python3 scripts/ci_evidence/orchestrator.py phase
           --evidence-root "$EVIDENCE_ROOT" --phase package_import
           -- backend/.venv/bin/python -c "import fonely; print(fonely.__file__)"
 
       - name: Ruff check
-        working-directory: .
         run: >-
           python3 scripts/ci_evidence/orchestrator.py phase
           --evidence-root "$EVIDENCE_ROOT" --phase lint
           -- bash -c 'cd backend && .venv/bin/ruff check .'
 
       - name: Ruff format check
-        working-directory: .
         run: >-
           python3 scripts/ci_evidence/orchestrator.py phase
           --evidence-root "$EVIDENCE_ROOT" --phase format_check
           -- bash -c 'cd backend && .venv/bin/ruff format --check .'
 
       - name: Mypy
-        working-directory: .
         run: >-
           python3 scripts/ci_evidence/orchestrator.py phase
           --evidence-root "$EVIDENCE_ROOT" --phase typecheck
           -- bash -c 'cd backend && .venv/bin/mypy src'
 
       - name: Migration upgrade to head
-        working-directory: .
         run: >-
           python3 scripts/ci_evidence/orchestrator.py phase
           --evidence-root "$EVIDENCE_ROOT" --phase migration_upgrade
           -- bash -c 'cd backend && .venv/bin/alembic upgrade head'
 
       - name: Alembic check
-        working-directory: .
         run: >-
           python3 scripts/ci_evidence/orchestrator.py phase
           --evidence-root "$EVIDENCE_ROOT" --phase migration_check
           -- bash -c 'cd backend && .venv/bin/alembic check'
 
       - name: Readiness verifier unit tests
-        working-directory: .
         run: >-
           python3 scripts/ci_evidence/orchestrator.py phase
           --evidence-root "$EVIDENCE_ROOT" --phase readiness_tests
-          -- backend/.venv/bin/python -m pytest scripts/tests/test_check_deployment_readiness.py -q
+          -- backend/.venv/bin/python -m pytest
+          scripts/tests/test_check_deployment_readiness.py -q
 
       - name: Database deployment readiness check
-        working-directory: .
         env:
           FONELY_READINESS_DATABASE_URL: ${{ env.FONELY_TEST_DATABASE_URL }}
           FONELY_READINESS_ENVIRONMENT: github-ci
         run: >-
           python3 scripts/ci_evidence/orchestrator.py phase
           --evidence-root "$EVIDENCE_ROOT" --phase readiness_live
-          -- bash -c 'backend/.venv/bin/python scripts/check-deployment-readiness.py | tee /dev/stderr | python3 -c "import json,sys; d=json.load(sys.stdin); assert d[\"overall_status\"]==\"passed\", \"readiness check failed\""'
+          -- bash -c 'set -euo pipefail;
+          backend/.venv/bin/python scripts/check-deployment-readiness.py |
+          tee /dev/stderr |
+          python3 -c "import json,sys; d=json.load(sys.stdin); assert d[\"overall_status\"]==\"passed\", \"readiness check failed\""'
 
       - name: Evidence verifier unit tests
-        working-directory: .
         run: >-
           python3 scripts/ci_evidence/orchestrator.py phase
           --evidence-root "$EVIDENCE_ROOT" --phase verifier_tests
-          -- bash -c 'cd .. && PYTHONPATH=scripts:backend/src:backend backend/.venv/bin/python -m pytest scripts/tests/test_ci_evidence_writer.py scripts/tests/test_ci_evidence_orchestrator.py scripts/tests/test_ci_evidence_plugin.py scripts/tests/test_ci_evidence_reconciler.py -q'
+          -- bash -c 'PYTHONPATH=scripts:backend/src:backend
+          backend/.venv/bin/python -m pytest
+          scripts/tests/test_ci_evidence_writer.py
+          scripts/tests/test_ci_evidence_orchestrator.py
+          scripts/tests/test_ci_evidence_plugin.py
+          scripts/tests/test_ci_evidence_reconciler.py -q'
 
       - name: Collect all tests
-        working-directory: .
         env:
           FONELY_EVIDENCE_ROOT: ${{ env.EVIDENCE_ROOT }}
           FONELY_EVIDENCE_PARTITION: all
@@ -180,11 +174,13 @@ jobs:
         run: >-
           python3 scripts/ci_evidence/orchestrator.py phase
           --evidence-root "$EVIDENCE_ROOT" --phase collection_all
-          -- backend/.venv/bin/pytest -p ci_evidence.pytest_plugin
-          --collect-only -q
+          -- bash -c 'cd backend && FONELY_EVIDENCE_ROOT="$FONELY_EVIDENCE_ROOT"
+          FONELY_EVIDENCE_PARTITION="$FONELY_EVIDENCE_PARTITION"
+          PYTHONPATH="../scripts"
+          .venv/bin/pytest -p ci_evidence.pytest_plugin
+          --collect-only -q'
 
       - name: Collect non-PG tests
-        working-directory: .
         env:
           FONELY_EVIDENCE_ROOT: ${{ env.EVIDENCE_ROOT }}
           FONELY_EVIDENCE_PARTITION: non_pg
@@ -192,11 +188,13 @@ jobs:
         run: >-
           python3 scripts/ci_evidence/orchestrator.py phase
           --evidence-root "$EVIDENCE_ROOT" --phase collection_non_pg
-          -- backend/.venv/bin/pytest -p ci_evidence.pytest_plugin
-          --collect-only -q -m "not postgres"
+          -- bash -c 'cd backend && FONELY_EVIDENCE_ROOT="$FONELY_EVIDENCE_ROOT"
+          FONELY_EVIDENCE_PARTITION="$FONELY_EVIDENCE_PARTITION"
+          PYTHONPATH="../scripts"
+          .venv/bin/pytest -p ci_evidence.pytest_plugin
+          --collect-only -q -m "not postgres"'
 
       - name: Collect PG tests
-        working-directory: .
         env:
           FONELY_EVIDENCE_ROOT: ${{ env.EVIDENCE_ROOT }}
           FONELY_EVIDENCE_PARTITION: pg
@@ -204,11 +202,13 @@ jobs:
         run: >-
           python3 scripts/ci_evidence/orchestrator.py phase
           --evidence-root "$EVIDENCE_ROOT" --phase collection_pg
-          -- backend/.venv/bin/pytest -p ci_evidence.pytest_plugin
-          --collect-only -q -m postgres
+          -- bash -c 'cd backend && FONELY_EVIDENCE_ROOT="$FONELY_EVIDENCE_ROOT"
+          FONELY_EVIDENCE_PARTITION="$FONELY_EVIDENCE_PARTITION"
+          PYTHONPATH="../scripts"
+          .venv/bin/pytest -p ci_evidence.pytest_plugin
+          --collect-only -q -m postgres'
 
       - name: Unit and non-PostgreSQL tests
-        working-directory: .
         env:
           FONELY_EVIDENCE_ROOT: ${{ env.EVIDENCE_ROOT }}
           FONELY_EVIDENCE_PARTITION: non_pg
@@ -216,12 +216,14 @@ jobs:
         run: >-
           python3 scripts/ci_evidence/orchestrator.py phase
           --evidence-root "$EVIDENCE_ROOT" --phase test_non_pg
-          -- backend/.venv/bin/pytest -p ci_evidence.pytest_plugin
+          -- bash -c 'cd backend && FONELY_EVIDENCE_ROOT="$FONELY_EVIDENCE_ROOT"
+          FONELY_EVIDENCE_PARTITION="$FONELY_EVIDENCE_PARTITION"
+          PYTHONPATH="../scripts"
+          .venv/bin/pytest -p ci_evidence.pytest_plugin
           -m "not postgres" -q
-          --junitxml "${{ runner.temp }}/non-pg-junit.xml"
+          --junitxml "${{ runner.temp }}/non-pg-junit.xml"'
 
       - name: PostgreSQL integration tests
-        working-directory: .
         env:
           FONELY_EVIDENCE_ROOT: ${{ env.EVIDENCE_ROOT }}
           FONELY_EVIDENCE_PARTITION: pg
@@ -229,33 +231,33 @@ jobs:
         run: >-
           python3 scripts/ci_evidence/orchestrator.py phase
           --evidence-root "$EVIDENCE_ROOT" --phase test_pg
-          -- backend/.venv/bin/pytest -p ci_evidence.pytest_plugin
+          -- bash -c 'cd backend && FONELY_EVIDENCE_ROOT="$FONELY_EVIDENCE_ROOT"
+          FONELY_EVIDENCE_PARTITION="$FONELY_EVIDENCE_PARTITION"
+          PYTHONPATH="../scripts"
+          .venv/bin/pytest -p ci_evidence.pytest_plugin
           -m postgres -q
-          --junitxml "${{ runner.temp }}/pg-junit.xml"
+          --junitxml "${{ runner.temp }}/pg-junit.xml"'
 
       - name: Migration downgrade to base
-        working-directory: .
         run: >-
           python3 scripts/ci_evidence/orchestrator.py phase
           --evidence-root "$EVIDENCE_ROOT" --phase migration_downgrade
           -- bash -c 'cd backend && .venv/bin/alembic downgrade base'
 
       - name: Migration upgrade to head (verify re-upgrade)
-        working-directory: .
         run: >-
           python3 scripts/ci_evidence/orchestrator.py phase
           --evidence-root "$EVIDENCE_ROOT" --phase migration_reupgrade
           -- bash -c 'cd backend && .venv/bin/alembic upgrade head'
 
       - name: Backup-restore verification unit tests
-        working-directory: .
         run: >-
           python3 scripts/ci_evidence/orchestrator.py phase
           --evidence-root "$EVIDENCE_ROOT" --phase backup_tests
-          -- backend/.venv/bin/python -m pytest scripts/tests/test_verify_backup_restore.py -q
+          -- backend/.venv/bin/python -m pytest
+          scripts/tests/test_verify_backup_restore.py -q
 
       - name: Backup-restore verification (live)
-        working-directory: .
         env:
           PGHOST: localhost
           PGPORT: "5432"
@@ -295,7 +297,6 @@ jobs:
 
       - name: Reconcile execution evidence
         if: always()
-        working-directory: .
         run: >-
           python3 scripts/ci_evidence/reconcile.py
           --evidence-root "$EVIDENCE_ROOT"
@@ -304,7 +305,6 @@ jobs:
 
       - name: Assert terminal success
         if: always()
-        working-directory: .
         run: |
           python3 -c "
           import json, sys

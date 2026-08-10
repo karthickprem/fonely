@@ -88,10 +88,12 @@ class TestFailedTranscriptRegression:
         resolved = resolve_relative_date("இன்னைக்கு doctor free-ஆ?", clock)
         assert resolved == date(2026, 8, 10)
 
-    def test_no_hardcoded_slots_in_prompt(self):
-        ctx = build_pipeline_context(
+    @pytest.mark.asyncio
+    async def test_no_hardcoded_slots_in_prompt(self):
+        ctx = await build_pipeline_context(
             VoiceSessionConfig(session_id="test", business_id=1),
             clock=_clock(),
+            business_name="Test Dental",
         )
         assert "Tomorrow: 10, 11, 5, 6:30, 7:30" not in ctx.system_prompt
 
@@ -112,10 +114,12 @@ class TestFailedTranscriptRegression:
         text = format_availability(_fully_booked())
         assert "FULLY BOOKED" in text
 
-    def test_demo_mode_disclosed_before_collection(self):
-        ctx = build_pipeline_context(
+    @pytest.mark.asyncio
+    async def test_demo_mode_disclosed_before_collection(self):
+        ctx = await build_pipeline_context(
             VoiceSessionConfig(session_id="test", business_id=1),
             clock=_clock(),
+            business_name="Test Dental",
             session_mode="demo",
         )
         assert "demo" in ctx.system_prompt.lower()
@@ -175,11 +179,13 @@ class TestAcceptanceScenarioContracts:
     """Verify each acceptance scenario's typed port requirements
     and forbidden behaviors can be enforced by the runtime."""
 
-    def test_ac001_simple_inquiry(self):
-        ctx = build_pipeline_context(
+    @pytest.mark.asyncio
+    async def test_ac001_simple_inquiry(self):
+        ctx = await build_pipeline_context(
             VoiceSessionConfig(session_id="ac001", business_id=1),
             clock=_clock(),
-            clinic_context="Dr. Priya: Mon-Sat. Consultation ₹300.",
+            business_name="Test Dental",
+            business_context="Dr. Priya: Mon-Sat. Consultation ₹300.",
         )
         assert "Dr. Priya" in ctx.system_prompt
         assert "₹300" in ctx.system_prompt
@@ -191,10 +197,12 @@ class TestAcceptanceScenarioContracts:
         assert "Dr. Priya" in text
         assert "10:00" in text
 
-    def test_ac004_demo_refusal_upfront(self):
-        ctx = build_pipeline_context(
+    @pytest.mark.asyncio
+    async def test_ac004_demo_refusal_upfront(self):
+        ctx = await build_pipeline_context(
             VoiceSessionConfig(session_id="ac004", business_id=1),
             clock=_clock(),
+            business_name="Test Dental",
             session_mode="demo",
         )
         assert "BEFORE" in ctx.system_prompt or "before" in ctx.system_prompt.lower()
@@ -234,8 +242,10 @@ class TestAcceptanceScenarioContracts:
 
     @pytest.mark.asyncio
     async def test_ac002_stub_returns_not_connected(self):
+        from fonely.voice.context import AvailabilityQuery
         stub = StubAvailabilityPort()
-        result = await stub.query_day_availability(1, date(2026, 8, 10))
+        query = AvailabilityQuery(business_id=1, target_date=date(2026, 8, 10), business_timezone="Asia/Kolkata")
+        result = await stub.query_day_availability(query)
         assert not result.is_operating_day
         assert "not connected" in result.reason
 
@@ -257,12 +267,14 @@ class TestCleanSyntheticConversation:
         assert not ds.is_over_budget()
         assert not ds.has_repeated_question()
 
-    def test_booking_flow_typed_ports(self):
+    @pytest.mark.asyncio
+    async def test_booking_flow_typed_ports(self):
         clock = _clock()
         avail = _monday_availability()
-        ctx = build_pipeline_context(
+        ctx = await build_pipeline_context(
             VoiceSessionConfig(session_id="clean-1", business_id=1),
             clock=clock,
+            business_name="Test Dental",
             session_mode="demo",
         )
         assert "demo" in ctx.system_prompt.lower()

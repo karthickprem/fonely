@@ -10,13 +10,13 @@ def test_initial_state():
     assert not gate.is_ready
 
 
-def test_preload_succeeds():
+def test_preload_without_credentials_fails():
     gate = VoiceReadinessGate()
     snap = gate.preload()
-    assert snap.state == ReadinessState.READY
-    assert snap.ready
-    assert snap.preload_ms > 0
-    assert gate.is_ready
+    # Without credentials, readiness should fail closed
+    assert snap.state == ReadinessState.FAILED
+    assert not snap.ready
+    assert "missing_credentials" in snap.failure_reason
 
 
 def test_preload_idempotent():
@@ -24,7 +24,6 @@ def test_preload_idempotent():
     s1 = gate.preload()
     s2 = gate.preload()
     assert s1 == s2
-    assert gate.is_ready
 
 
 def test_concurrent_preload():
@@ -41,5 +40,5 @@ def test_concurrent_preload():
         t.start()
     for t in threads:
         t.join(timeout=10)
-    assert all(r.ready for r in results)
+    assert len(results) == 5
     assert len(set(r.preload_ms for r in results)) == 1

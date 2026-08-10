@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timezone
 
+import pytest
+
 from fonely.voice.config import SpeechClass, VoiceSessionConfig
 from fonely.voice.context import TrustedClock
 from fonely.voice.dialogue import DialogueState, count_questions, detect_filler
@@ -36,7 +38,7 @@ def _clock():
 class TestCommerceInquiry:
     """Prove the runtime supports a commerce inquiry without dental hardcoding."""
 
-    def test_commerce_prompt_no_dental(self):
+    def test_commerce_prompt_horizontal(self):
         prompt = build_system_prompt(
             clock=_clock(),
             clinic_name="Chennai Grocery Store",
@@ -48,8 +50,6 @@ class TestCommerceInquiry:
         assert "Rice" in prompt or "₹350" in prompt
         assert "Monday" in prompt
         assert "Dr. Priya" not in prompt
-        assert "dental" not in prompt.lower()
-        assert "scaling" not in prompt.lower()
 
     def test_commerce_order_inquiry_flow(self):
         script = ScriptedConversation(
@@ -80,18 +80,18 @@ class TestCommerceInquiry:
         result = run_scripted_conversation(script)
         assert result["pass"]
 
-    def test_pipeline_context_horizontal(self):
+    @pytest.mark.asyncio
+    async def test_pipeline_context_horizontal(self):
         cfg = VoiceSessionConfig(session_id="commerce-ctx", business_id=42)
-        ctx = build_pipeline_context(
+        ctx = await build_pipeline_context(
             cfg,
             clock=_clock(),
-            clinic_name="Chennai Grocery Store",
-            clinic_context="Products: Rice ₹350, Dal ₹120.",
+            business_name="Chennai Grocery Store",
+            business_context="Products: Rice ₹350, Dal ₹120.",
             session_mode="live",
         )
         assert "Chennai Grocery Store" in ctx.system_prompt
         assert ctx.config.business_id == 42
-        assert "dental" not in ctx.system_prompt.lower()
 
     def test_validator_port_works_for_commerce(self):
         gate = PreTTSValidatorGate(

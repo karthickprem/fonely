@@ -110,14 +110,14 @@ def build_llm(config: LLMConfig, *, evidence_sink: Any = None) -> Any:
         http_client=http_client,
     )
 
+    settings_kwargs: dict[str, Any] = {"max_tokens": config.max_tokens}
+    if config.model:
+        settings_kwargs["model"] = config.model
+
     return AnthropicLLMService(
         api_key=api_key,
         client=client,
-        settings=AnthropicLLMService.Settings(
-            model=config.model,
-            max_tokens=config.max_tokens,
-            temperature=config.temperature,
-        ),
+        settings=AnthropicLLMService.Settings(**settings_kwargs),
     )
 
 

@@ -31,6 +31,8 @@ class TrustedClock:
 
     @classmethod
     def from_now(cls, tz_name: str) -> TrustedClock:
+        if not tz_name:
+            raise ValueError("business_timezone is required; no hardcoded fallback")
         now = datetime.now(timezone.utc)
         tz = zoneinfo.ZoneInfo(tz_name)
         local = now.astimezone(tz)
@@ -101,18 +103,27 @@ class DayAvailability:
     reason: str = ""
 
 
+@dataclass(frozen=True)
+class AvailabilityQuery:
+    """Typed availability query scoped by trusted business context."""
+    business_id: int
+    target_date: date
+    business_timezone: str
+    service_id: int | None = None
+    resource_id: int | None = None
+    capability: str | None = None
+
+
 class AvailabilityPort(Protocol):
     """Read-only authoritative availability query.
 
-    Scoped by trusted business_id and date.  Never mutates state.
-    Returns typed DayAvailability, not generic text.
+    Scoped by trusted business_id, service, resource, and date.
+    Never mutates state.  Returns typed DayAvailability with
+    service-specific slots filtered by status.
     """
     async def query_day_availability(
         self,
-        business_id: int,
-        target_date: date,
-        *,
-        resource_id: int | None = None,
+        query: AvailabilityQuery,
     ) -> DayAvailability: ...
 
 
@@ -120,18 +131,15 @@ class StubAvailabilityPort:
     """Fail-closed stub: returns no-data availability.
 
     Production implementation will query the authoritative backend
-    AppointmentService for real slot data.
+    AppointmentService/InventoryService for real slot/stock data.
     """
     async def query_day_availability(
         self,
-        business_id: int,
-        target_date: date,
-        *,
-        resource_id: int | None = None,
+        query: AvailabilityQuery,
     ) -> DayAvailability:
         return DayAvailability(
-            business_date=target_date,
-            day_of_week=target_date.strftime("%A").lower(),
+            business_date=query.target_date,
+            day_of_week=query.target_date.strftime("%A").lower(),
             is_operating_day=False,
             is_exception_day=False,
             reason="availability data not connected",

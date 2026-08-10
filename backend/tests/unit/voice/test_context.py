@@ -131,7 +131,9 @@ class TestDayAvailability:
 class TestStubAvailabilityPort:
     @pytest.mark.asyncio
     async def test_stub_returns_not_connected(self):
+        from fonely.voice.context import AvailabilityQuery
         stub = StubAvailabilityPort()
-        result = await stub.query_day_availability(1, date(2026, 8, 10))
+        query = AvailabilityQuery(business_id=1, target_date=date(2026, 8, 10), business_timezone="Asia/Kolkata")
+        result = await stub.query_day_availability(query)
         assert not result.is_operating_day
         assert "not connected" in result.reason

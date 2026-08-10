@@ -62,6 +62,21 @@ class VoiceReadinessGate:
             import fonely.voice.lifecycle
             import fonely.voice.telemetry
             import fonely.voice.validator_port
+            from fonely.voice.providers import credentials_ready, probe_credentials
+
+            cred_probe = probe_credentials()
+            if not credentials_ready():
+                missing = [k for k, v in cred_probe.items() if v != "SET"]
+                elapsed = (time.monotonic() - start) * 1000
+                self._snapshot = ReadinessSnapshot(
+                    state=ReadinessState.FAILED,
+                    ready=False,
+                    preload_ms=elapsed,
+                    failure_reason=f"missing_credentials:{','.join(missing)}",
+                )
+                self._state = ReadinessState.FAILED
+                logger.error("voice_readiness_credentials_missing", extra={"missing": missing})
+                return
 
             elapsed = (time.monotonic() - start) * 1000
             self._snapshot = ReadinessSnapshot(

@@ -40,7 +40,12 @@ class ValidatorPort(Protocol):
 
 
 class FailClosedValidatorStub:
-    """Always BLOCK consequential speech.  ALLOW only non-consequential."""
+    """Always BLOCK consequential or unclassified speech.
+
+    ALLOW only explicitly NON_CONSEQUENTIAL.  Unknown or missing
+    speech class defaults to BLOCK — the validator cannot trust
+    caller-supplied classification.
+    """
 
     def validate_speech(
         self,
@@ -51,14 +56,14 @@ class FailClosedValidatorStub:
         turn_id: str = "",
         generation_id: int = 0,
     ) -> SpeechValidationResult:
-        if speech_class in CONSEQUENTIAL_CLASSES:
+        if speech_class == SpeechClass.NON_CONSEQUENTIAL:
             return SpeechValidationResult(
-                decision=ValidationDecision.BLOCK,
+                decision=ValidationDecision.ALLOW,
                 speech_class=speech_class,
-                reason="consequential speech blocked: no accepted validator injected",
+                reason="non-consequential speech allowed",
             )
         return SpeechValidationResult(
-            decision=ValidationDecision.ALLOW,
+            decision=ValidationDecision.BLOCK,
             speech_class=speech_class,
-            reason="non-consequential speech allowed",
+            reason="consequential/unclassified speech blocked: no accepted validator",
         )

@@ -58,9 +58,8 @@ class STTConfig:
 @dataclass(frozen=True)
 class LLMConfig:
     provider: str = "anthropic"
-    model: str = "claude-opus-4-6"
+    model: str = ""  # Use project default; no hardcoded model version
     max_tokens: int = 1024
-    temperature: float = 0.2
     per_turn_timeout_seconds: float = 15.0
     session_token_budget: int = 50_000
 

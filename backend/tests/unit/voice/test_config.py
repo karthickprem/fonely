@@ -37,7 +37,7 @@ def test_session_state_transitions():
 def test_config_defaults():
     cfg = VoiceSessionConfig(session_id="test-1", business_id=1)
     assert cfg.stt.model == "saaras:v3"
-    assert cfg.llm.model == "claude-opus-4-6"
+    assert cfg.llm.model == ""  # Use project default, no hardcoded version
     assert cfg.tts.model == "sonic-3.5"
     assert cfg.audio.input_sample_rate == 16000
     assert cfg.audio.output_sample_rate == 24000

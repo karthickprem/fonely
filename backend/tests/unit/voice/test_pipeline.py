@@ -1,4 +1,5 @@
 """Tests for pipeline builder, pre-TTS validator gate, and post-TTS generation gate."""
+import pytest
 from datetime import date, datetime, time, timezone
 
 from fonely.voice.config import SpeechClass, VoiceSessionConfig
@@ -27,28 +28,28 @@ def _config():
 
 
 class TestPipelineContext:
-    def test_build_with_defaults(self):
-        ctx = build_pipeline_context(_config(), clock=_clock())
+    @pytest.mark.asyncio
+    async def test_build_with_required_args(self):
+        ctx = await build_pipeline_context(_config(), clock=_clock(), business_name="Test Dental")
         assert "August 10, 2026" in ctx.system_prompt
         assert "Monday" in ctx.system_prompt
         assert "Tomorrow: 10, 11, 5, 6:30, 7:30" not in ctx.system_prompt
         assert ctx.session_mode == "demo"
 
-    def test_demo_mode_in_prompt(self):
-        ctx = build_pipeline_context(_config(), clock=_clock(), session_mode="demo")
+    @pytest.mark.asyncio
+    async def test_demo_mode_in_prompt(self):
+        ctx = await build_pipeline_context(_config(), clock=_clock(), business_name="Test", session_mode="demo")
         assert "demo" in ctx.system_prompt.lower()
         assert "cannot" in ctx.system_prompt.lower() or "CANNOT" in ctx.system_prompt
 
-    def test_availability_included(self):
-        ctx = build_pipeline_context(
-            _config(),
-            clock=_clock(),
-            clinic_name="Test Dental",
-        )
+    @pytest.mark.asyncio
+    async def test_business_name_in_greeting(self):
+        ctx = await build_pipeline_context(_config(), clock=_clock(), business_name="Test Dental")
         assert "Test Dental" in ctx.greeting
 
-    def test_context_immutable(self):
-        ctx = build_pipeline_context(_config(), clock=_clock())
+    @pytest.mark.asyncio
+    async def test_context_immutable(self):
+        ctx = await build_pipeline_context(_config(), clock=_clock(), business_name="Test")
         try:
             ctx.session_mode = "live"
             assert False, "should be frozen"

@@ -22,7 +22,7 @@ def _clock() -> TrustedClock:
 def test_no_hardcoded_slots_in_prompt():
     prompt = build_system_prompt(
         clock=_clock(),
-        clinic_name="Test Clinic",
+        clinic_name="Test Business",
         clinic_context="",
         availability=None,
         session_mode="demo",

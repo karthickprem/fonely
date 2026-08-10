@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .config import SpeechClass, VoiceSessionConfig
-from .context import AvailabilityPort, DayAvailability, StubAvailabilityPort, TrustedClock
+from .context import AvailabilityPort, AvailabilityQuery, DayAvailability, StubAvailabilityPort, TrustedClock
 from .generation import GenerationClock
 from .prompts import build_greeting, build_system_prompt
 from .telemetry import VoiceTelemetryExporter
@@ -32,45 +32,42 @@ class PipelineContext:
     session_mode: str
 
 
-def build_pipeline_context(
+async def build_pipeline_context(
     config: VoiceSessionConfig,
     *,
-    clock: TrustedClock | None = None,
+    clock: TrustedClock,
+    business_name: str,
+    business_context: str = "",
     availability_port: AvailabilityPort | None = None,
-    clinic_name: str = "Smile Dental Clinic",
-    clinic_context: str = "",
     session_mode: str = "demo",
+    service_id: int | None = None,
+    resource_id: int | None = None,
 ) -> PipelineContext:
-    """Build immutable pipeline context from typed ports."""
-    if clock is None:
-        clock = TrustedClock.from_now("Asia/Kolkata")
+    """Build immutable pipeline context from typed ports.
 
+    Timezone is required through clock — no hardcoded fallback.
+    Availability is always awaited when a port is provided.
+    """
     availability: DayAvailability | None = None
     if availability_port is not None:
-        import asyncio
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-        if loop and loop.is_running():
-            pass
-        else:
-            availability = asyncio.run(
-                availability_port.query_day_availability(
-                    config.business_id,
-                    clock.business_date,
-                )
-            )
+        query = AvailabilityQuery(
+            business_id=config.business_id,
+            target_date=clock.business_date,
+            business_timezone=clock.business_timezone,
+            service_id=service_id,
+            resource_id=resource_id,
+        )
+        availability = await availability_port.query_day_availability(query)
 
     system_prompt = build_system_prompt(
         clock=clock,
-        clinic_name=clinic_name,
-        clinic_context=clinic_context,
+        clinic_name=business_name,
+        clinic_context=business_context,
         availability=availability,
         session_mode=session_mode,
     )
 
-    greeting = build_greeting(clinic_name)
+    greeting = build_greeting(business_name)
 
     return PipelineContext(
         config=config,

@@ -21,13 +21,17 @@ class DialogueState:
     last_assistant_text: str = ""
     repeated_question_count: int = 0
 
-    def record_turn(self, assistant_text: str, asked_field: str | None = None) -> None:
+    def record_turn(self, assistant_text: str, asked_field: str | None = None) -> bool:
+        """Record a turn. Returns False if terminal — caller must not deliver."""
+        if self.terminal:
+            return False
         self.turn_count += 1
         if asked_field:
             if asked_field in self.asked_fields and asked_field == self._last_asked_field():
                 self.repeated_question_count += 1
             self.asked_fields.append(asked_field)
         self.last_assistant_text = assistant_text
+        return True
 
     def _last_asked_field(self) -> str:
         return self.asked_fields[-1] if self.asked_fields else ""

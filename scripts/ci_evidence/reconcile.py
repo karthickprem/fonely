@@ -245,6 +245,9 @@ def _validate_node_state_machines(
             if outcome in ("failed", "error"):
                 errors.append(f"{partition} {outcome}: {node_id}")
 
+            if outcome == "skipped" and not wasxfail and partition == "non_pg":
+                errors.append(f"non_pg skip not waivable: {node_id}")
+
     return errors
 
 
@@ -379,16 +382,6 @@ def _validate_waivers(
         if environment in envs:
             waived.add(node_id)
 
-    applicable = {
-        entry.get("node_id")
-        for entry in entries
-        if isinstance(entry, dict) and environment in entry.get("environments", [])
-    }
-    unused = applicable - waived
-    for node_id in unused:
-        if node_id and node_id not in waived:
-            pass
-
     return waived, errors
 
 
@@ -465,6 +458,13 @@ def reconcile(
         )
 
         pg_errors = _validate_pg_proof(pg_events, pg_nodes, waived)
+
+        for wnode in waived:
+            events = pg_events.get(wnode, [])
+            call_events = [e for e in events if e.get("phase") == "call"]
+            call_passed = call_events and call_events[0]["outcome"] == "passed"
+            if call_passed and not call_events[0].get("wasxfail"):
+                waiver_errors.append(f"unused waiver (node passed): {wnode}")
 
         has_test_failure = any("failed" in e or "error" in e or "XPASS" in e for e in state_errors)
         has_test_failure = has_test_failure or any("exit=" in e for e in phase_errors)

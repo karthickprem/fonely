@@ -863,10 +863,11 @@ class ConversationService:
         from fonely.services.availability_offers import AvailabilitySelectionState
 
         state = ctx.availability_selection
+        from fonely.repositories.appointments import AppointmentRepository
+
         selected_slot = None
         if isinstance(state, AvailabilitySelectionState) and state.selected_slot is not None:
             from fonely.domain.appointments.datetimes import instant
-            from fonely.repositories.appointments import AppointmentRepository
             from fonely.services.availability_offers import SelectedSlotRef
 
             selected_slot = state.selected_slot
@@ -887,9 +888,9 @@ class ConversationService:
                     safety,
                     ["start_at"],
                 )
-            await AppointmentRepository(self._session).lock_resource_schedule(
-                biz.business_id, selected_slot.resource_id
-            )
+        await AppointmentRepository(self._session).lock_resource_schedule(
+            biz.business_id, resource_id
+        )
 
         avail_svc = AvailabilityService(self._session)
         decision = await avail_svc.check_exact_slot(

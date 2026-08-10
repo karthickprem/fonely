@@ -33,8 +33,53 @@ def test_ci_uses_frozen_sync_and_required_root_qa_gates() -> None:
     assert "${{ runner.temp }}/tool-contract-mismatches.ci.json" in workflow
     assert "backend/.venv/bin/python scripts/report-eval-coverage.py" in workflow
     assert "--profile chennai-pilot" in workflow
-    assert ".venv/bin/pytest -m postgres -q" in workflow
+    assert "-m postgres -q" in workflow
     assert workflow.count("working-directory: .") >= 2
+
+
+def test_ci_evidence_initializer_after_checkout() -> None:
+    workflow = (PROJECT_ROOT / ".github" / "workflows" / "backend-ci.yml").read_text()
+    checkout_pos = workflow.index("actions/checkout@")
+    init_pos = workflow.index("orchestrator.py init")
+    setup_pos = workflow.index("actions/setup-python@")
+    assert checkout_pos < init_pos < setup_pos
+
+
+def test_ci_evidence_orchestrator_wraps_gates() -> None:
+    workflow = (PROJECT_ROOT / ".github" / "workflows" / "backend-ci.yml").read_text()
+    for phase in ("lint", "typecheck", "test_non_pg", "test_pg", "migration_upgrade"):
+        assert f"--phase {phase}" in workflow
+
+
+def test_ci_evidence_plugin_explicitly_loaded() -> None:
+    workflow = (PROJECT_ROOT / ".github" / "workflows" / "backend-ci.yml").read_text()
+    assert "-p ci_evidence.pytest_plugin" in workflow
+
+
+def test_ci_evidence_reconciler_always() -> None:
+    workflow = (PROJECT_ROOT / ".github" / "workflows" / "backend-ci.yml").read_text()
+    reconcile_idx = workflow.index("reconcile.py")
+    pre_block = workflow[max(0, reconcile_idx - 200):reconcile_idx]
+    assert "always()" in pre_block
+
+
+def test_ci_evidence_upload_always() -> None:
+    workflow = (PROJECT_ROOT / ".github" / "workflows" / "backend-ci.yml").read_text()
+    upload_idx = workflow.index("upload-artifact@")
+    pre_block = workflow[max(0, upload_idx - 200):upload_idx]
+    assert "always()" in pre_block
+
+
+def test_ci_evidence_terminal_success_assertion() -> None:
+    workflow = (PROJECT_ROOT / ".github" / "workflows" / "backend-ci.yml").read_text()
+    assert "terminal.json" in workflow
+    assert "success" in workflow
+
+
+def test_ci_evidence_no_shell_terminal_truth() -> None:
+    workflow = (PROJECT_ROOT / ".github" / "workflows" / "backend-ci.yml").read_text()
+    assert "test-terminal-state.json" not in workflow
+    assert "verifier_not_run" not in workflow
 
 
 def test_postgres_async_engine_and_tests_share_session_loop() -> None:

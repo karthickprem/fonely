@@ -154,7 +154,10 @@ def _parse_multipart_fields(raw: bytes, content_type: str) -> dict[str, str]:
         payload = part.get_payload(decode=True)
         if payload is None:
             continue
-        fields[str(name)] = payload.decode("utf-8", errors="replace")
+        try:
+            fields[str(name)] = payload.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
     return fields
 
 

@@ -164,18 +164,20 @@ class PipelineRuntime:
                              session_mode=self._session_mode)
 
     async def process_turn(self, caller_audio: bytes) -> TurnResult:
-        """Process one caller turn through the full pipeline.
+        """Process one caller turn through the corrected pipeline.
 
-        STT → date resolve → availability query → LLM → classify →
-        validate → TTS (if allowed) → dialogue state → telemetry.
+        Order: terminal gate → STT → dialogue budget gate → date resolve →
+        availability query → update system prompt → LLM → classify
+        (default consequential/BLOCK) → validate → TTS (exactly once,
+        only if ALLOW) → record dialogue → telemetry.
         """
+        # 0. Terminal gate BEFORE any provider call
         if self._closed or self._dialogue.terminal:
             reason = self._dialogue.terminal_reason or "session_closed"
-            terminal_text = get_terminal_response(reason)
             return TurnResult(
                 turn_number=self._gen_clock.turn_count,
                 caller_text="",
-                response_text=terminal_text,
+                response_text="",
                 speech_class=SpeechClass.NON_CONSEQUENTIAL,
                 allowed=False,
                 terminal=True,
@@ -190,7 +192,21 @@ class PipelineRuntime:
         self._total_stt_calls += 1
         self._telemetry.record_stt_usage(len(caller_text.split()) * 0.4)
 
-        # 2. Resolve relative dates and query availability per turn
+        # 2. Dialogue budget gate BEFORE LLM
+        if self._dialogue.is_over_budget():
+            self._dialogue.set_terminal("max_turns")
+            return TurnResult(
+                turn_number=token.turn_id,
+                caller_text=caller_text,
+                response_text="",
+                speech_class=SpeechClass.NON_CONSEQUENTIAL,
+                allowed=False,
+                terminal=True,
+                terminal_reason="max_turns",
+                elapsed_ms=(time.monotonic() - t0) * 1000,
+            )
+
+        # 3. Resolve relative dates and query availability per turn
         availability_queried = False
         resolved_date = None
         resolved = resolve_relative_date(caller_text, self._clock)
@@ -198,12 +214,19 @@ class PipelineRuntime:
             resolved_date = resolved
             availability = await self._query_availability(resolved)
             availability_queried = True
-            availability_text = format_availability(availability)
+            # 4. UPDATE system prompt with fresh availability data
+            self._system_prompt = build_system_prompt(
+                clock=self._clock,
+                clinic_name=self._business_name,
+                clinic_context=self._business_context,
+                availability=availability,
+                session_mode=self._session_mode,
+            )
             self._telemetry.emit("availability_queried",
                                  date=str(resolved),
                                  turn=token.turn_id)
 
-        # 3. LLM
+        # 5. LLM with updated prompt containing availability
         self._messages.append({"role": "user", "content": caller_text})
         response = await self._llm.generate(self._system_prompt, self._messages)
         self._total_llm_calls += 1
@@ -212,8 +235,10 @@ class PipelineRuntime:
             len(response.split()),
         )
 
-        # 4. Classify speech and validate
+        # 6. Classify speech — DEFAULT CONSEQUENTIAL for unknown
         speech_class = self._classify_speech(response)
+
+        # 7. Validate — only explicit ALLOW passes
         validation = self._validator.validate_speech(
             response,
             speech_class,
@@ -228,18 +253,7 @@ class PipelineRuntime:
                              decision=validation.decision,
                              source=validation.source)
 
-        # 5. TTS (only if allowed and generation still current)
-        if allowed and self._gen_clock.is_current(token):
-            tts_audio = await self._tts.synthesize(response)
-            self._total_tts_bytes += len(tts_audio)
-            self._telemetry.record_tts_usage(len(response))
-            self._messages.append({"role": "assistant", "content": response})
-        elif not allowed:
-            self._telemetry.emit("speech_blocked",
-                                 speech_class=speech_class,
-                                 reason=validation.reason)
-
-        # 6. Dialogue state
+        # 8. Record dialogue state BEFORE TTS (terminal set before synthesis)
         has_filler = detect_filler(response)
         q_count = count_questions(response)
         can_continue = self._dialogue.record_turn(
@@ -253,6 +267,17 @@ class PipelineRuntime:
             terminal = True
             terminal_reason = "max_turns" if self._dialogue.is_over_budget() else self._dialogue.terminal_reason
             self._dialogue.set_terminal(terminal_reason)
+
+        # 9. TTS — exactly once, only if ALLOW and generation current
+        if allowed and self._gen_clock.is_current(token):
+            tts_audio = await self._tts.synthesize(response)
+            self._total_tts_bytes += len(tts_audio)
+            self._telemetry.record_tts_usage(len(response))
+            self._messages.append({"role": "assistant", "content": response})
+        elif not allowed:
+            self._telemetry.emit("speech_blocked",
+                                 speech_class=speech_class,
+                                 reason=validation.reason)
 
         elapsed = (time.monotonic() - t0) * 1000
 
@@ -308,42 +333,68 @@ class PipelineRuntime:
         )
         return await self._availability.query_day_availability(query)
 
+    # Pre-compiled safe speech patterns (questions, collection, informational, conversational)
+    _SAFE_PATTERNS = [
+        r"\?",  # Contains question mark
+        r"(available|slot|time|date|நேரம்|தேதி)",  # Availability info
+        r"(₹\d|ரூபாய்|rupees?|fee|price|cost)",  # Price info
+        r"(clinic|address|location|எங்க|இருக்கு)",  # Location info
+        r"(Mon|Tue|Wed|Thu|Fri|Sat|Sun|திங்கள்|செவ்வாய்)",  # Schedule info
+        r"(சொல்லுங்க|tell me|what|எந்த|என்ன)",  # Collection questions
+        r"(demo|save ஆகல|collect பண்ணிட்டேன்|not saved)",  # Demo disclosure
+        r"(வணக்கம்|welcome|help பண்ண|hi|hello|bye|thanks)",  # Greetings/farewells
+        r"(scaling|root canal|extraction|cleaning|consultation|checkup)",  # Service names
+        r"(Dr\.|doctor|டாக்டர்)",  # Resource references
+        r"(sorry|மன்னிக்கவும்|unable|cannot|can't|முடியாது)",  # Polite refusal
+        r"(open|closed|hours|நேரம்)",  # Operating info
+        r"(call|phone|contact|staff)",  # Referral
+        r"(order|delivery|product|stock|rice|dal)",  # Commerce safe terms
+        r"(note|okay|correct|சரி|ஆமா)",  # Acknowledgement
+    ]
+
+    _COMMIT_PATTERNS = [
+        r"\b(confirmed|booked|reserved|saved|fixed|scheduled)\b",
+        r"(book aayiduchu|fix aayiduchu|confirm aayiduchu|உறுதியாகிவிட்டது|பதிவு செய்யப்பட்டது)",
+    ]
+    _NOTIFY_PATTERNS = [
+        r"\b(notified|informed|alerted|alert sent|message sent)\b",
+        r"(தகவல் அனுப்பப்பட்டது)",
+    ]
+    _HANDOFF_PATTERNS = [
+        r"\b(transferred|connected|call transferred)\b",
+        r"(இணைத்துவிட்டேன்)",
+    ]
+
     def _classify_speech(self, text: str) -> SpeechClass:
         """Deterministic speech classification from response text.
 
-        Default: NON_CONSEQUENTIAL for safe speech.
-        Any consequential claim detected → appropriate class.
-        Unclassified suspicious text → NON_CONSEQUENTIAL (validator
-        stub will still block if truly consequential).
+        Default: COMMITTED_CREATE (most restrictive consequential class)
+        for unrecognized text.  The validator stub will BLOCK it.
+        Only explicitly recognized safe patterns get NON_CONSEQUENTIAL.
         """
         import re
         lower = text.lower()
 
-        commit_patterns = [
-            r"\b(confirmed|booked|reserved|saved|fixed|scheduled)\b",
-            r"(book aayiduchu|fix aayiduchu|confirm aayiduchu|உறுதியாகிவிட்டது|பதிவு செய்யப்பட்டது)",
-        ]
-        for p in commit_patterns:
+        # Check consequential patterns first
+        for p in self._COMMIT_PATTERNS:
             if re.search(p, lower) or re.search(p, text):
                 return SpeechClass.COMMITTED_CREATE
 
-        notify_patterns = [
-            r"\b(notified|informed|alerted|alert sent|message sent)\b",
-            r"(தகவல் அனுப்பப்பட்டது)",
-        ]
-        for p in notify_patterns:
+        for p in self._NOTIFY_PATTERNS:
             if re.search(p, lower) or re.search(p, text):
                 return SpeechClass.NOTIFICATION_SENT
 
-        handoff_patterns = [
-            r"\b(transferred|connected|call transferred)\b",
-            r"(இணைத்துவிட்டேன்)",
-        ]
-        for p in handoff_patterns:
+        for p in self._HANDOFF_PATTERNS:
             if re.search(p, lower) or re.search(p, text):
                 return SpeechClass.HANDOFF_CONNECTED
 
-        return SpeechClass.NON_CONSEQUENTIAL
+        # Check safe patterns — only if NO consequential match
+        for p in self._SAFE_PATTERNS:
+            if re.search(p, lower) or re.search(p, text):
+                return SpeechClass.NON_CONSEQUENTIAL
+
+        # Default: treat unknown text as consequential → validator BLOCKs
+        return SpeechClass.COMMITTED_CREATE
 
     def _infer_asked_field(self, response: str) -> str | None:
         """Infer which field was asked from response text."""

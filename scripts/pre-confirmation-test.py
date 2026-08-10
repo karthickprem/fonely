@@ -214,7 +214,7 @@ async def run_model(model_name: str, model_id: str):
         "total_preconf_turns": total_preconf_turns,
         # Denominator A: per conversation
         "convs_with_preconf_fc": convs_with_preconf_fc,
-        "convs_with_preconf_fc_survived": convs_with_preconf_fc_survived,
+        "convs_with_preconf_fc_survived_gate": convs_with_preconf_fc_survived_gate,
         # Denominator B: per turn
         "preconf_fc_turns": preconf_fc_turns,
         "preconf_fc_survived": preconf_fc_survived,
@@ -243,11 +243,11 @@ async def main():
         print(f"  Denominator A (per conv):  {r['convs_with_preconf_fc']}/{r['total_conversations']} = {pct_a}%")
         print(f"  Denominator B (per turn):  {r['preconf_fc_turns']}/{r['total_preconf_turns']} = {pct_b}%")
 
-        surv_a = r["convs_with_preconf_fc_survived"] * 100 // max(r["total_conversations"], 1)
+        surv_a = r["convs_with_preconf_fc_survived_gate"] * 100 // max(r["total_conversations"], 1)
         surv_b = r["preconf_fc_survived"] * 100 // max(r["total_preconf_turns"], 1)
 
         print(f"\n{model_name} GATE SURVIVAL (what caller hears):")
-        print(f"  Denominator A (per conv):  {r['convs_with_preconf_fc_survived']}/{r['total_conversations']} = {surv_a}%")
+        print(f"  Denominator A (per conv):  {r['convs_with_preconf_fc_survived_gate']}/{r['total_conversations']} = {surv_a}%")
         print(f"  Denominator B (per turn):  {r['preconf_fc_survived']}/{r['total_preconf_turns']} = {surv_b}%")
 
         if r["suppressed_outputs"]:
@@ -270,7 +270,7 @@ async def main():
     print("-" * 50)
     for label, key in [
         ("Raw pre-conf FC (conv)", "convs_with_preconf_fc"),
-        ("Survived gate (conv)", "convs_with_preconf_fc_survived"),
+        ("Survived gate (conv)", "convs_with_preconf_fc_survived_gate"),
         ("Total conversations", "total_conversations"),
     ]:
         print(f"{label:30} {results['Luna'][key]:>10} {results['Claude'][key]:>10}")

@@ -296,6 +296,12 @@ jobs:
                 python3 -c "import json,sys; d=json.load(sys.stdin); assert d[\"overall_status\"]==\"passed\", \"backup-restore failed\""
             '
 
+      - name: Finalize phase records
+        if: always()
+        run: >-
+          PYTHONPATH=scripts python3 -m ci_evidence.orchestrator finalize-phases
+          --evidence-root "$EVIDENCE_ROOT"
+
       - name: Reconcile execution evidence
         if: always()
         run: >-

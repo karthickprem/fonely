@@ -118,7 +118,15 @@ def _validate_phases(
         if not isinstance(seq, int) or seq != prev_seq + 1:
             evidence.append(f"phase sequence gap at {seq}")
         prev_seq = seq
-        exit_code = record.get("exit_code", 0)
+        failure_class = record.get("failure_class")
+        exit_code = record.get("exit_code")
+
+        if failure_class == "not_run":
+            cause = record.get("cause_phase")
+            if not isinstance(cause, str) or not cause:
+                evidence.append(f"phase {phase} not_run missing cause_phase")
+            continue
+
         if not isinstance(exit_code, int):
             evidence.append(f"phase {phase} non-integer exit_code")
             continue
@@ -560,18 +568,18 @@ def _classify_terminal(
     evidence_errors: list[str],
     test_errors: list[str],
 ) -> str:
-    has_test = bool(test_errors or phase_errors)
     has_evidence = bool(collection_errors or evidence_errors)
     has_incomplete = bool(incomplete_errors)
+    has_test = bool(test_errors or phase_errors)
 
-    if has_test:
-        return TERMINAL_TEST_FAILED
+    if has_evidence:
+        return TERMINAL_EVIDENCE_FAILED
 
     if has_incomplete:
         return TERMINAL_INCOMPLETE
 
-    if has_evidence:
-        return TERMINAL_EVIDENCE_FAILED
+    if has_test:
+        return TERMINAL_TEST_FAILED
 
     return TERMINAL_SUCCESS
 
@@ -672,26 +680,34 @@ def _reconcile_inner(
     if not npg_nodes and not pg_nodes:
         incomplete_errors.append("no selected nodes in either partition")
 
-    npg_state_errors = _validate_node_state_machines(npg_events, "non_pg")
-    pg_state_errors = _validate_node_state_machines(pg_events, "pg")
-    state_errors = npg_state_errors + pg_state_errors
+    state_errors: list[str] = []
+    pg_errors: list[str] = []
+    waiver_errors: list[str] = []
+    waived: dict[str, str] = {}
 
-    now = datetime.now(UTC)
-    waived, waiver_errors = _validate_waivers(
-        Path(waivers_path),
-        environment,
-        pg_nodes,
-        now,
-    )
+    if not incomplete_errors:
+        npg_state_errors = _validate_node_state_machines(npg_events, "non_pg")
+        pg_state_errors = _validate_node_state_machines(pg_events, "pg")
+        state_errors = npg_state_errors + pg_state_errors
 
-    pg_errors = _validate_pg_proof(pg_events, pg_nodes, waived)
+        now = datetime.now(UTC)
+        waived, waiver_errors = _validate_waivers(
+            Path(waivers_path),
+            environment,
+            pg_nodes,
+            now,
+        )
 
-    for wnode in waived:
-        events = pg_events.get(wnode, [])
-        call_events = [e for e in events if e.get("phase") == "call"]
-        call_passed = call_events and call_events[0]["outcome"] == "passed"
-        if call_passed and not call_events[0].get("wasxfail"):
-            waiver_errors.append(f"unused waiver (node passed): {wnode}")
+        pg_errors = _validate_pg_proof(pg_events, pg_nodes, waived)
+
+        for wnode in waived:
+            events = pg_events.get(wnode, [])
+            call_events = [e for e in events if e.get("phase") == "call"]
+            call_passed = call_events and call_events[0]["outcome"] == "passed"
+            if call_passed and not call_events[0].get("wasxfail"):
+                waiver_errors.append(f"unused waiver (node passed): {wnode}")
+    else:
+        now = datetime.now(UTC)
 
     for err in state_errors:
         if "XPASS" in err or "failed" in err or "error" in err:

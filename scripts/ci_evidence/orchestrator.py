@@ -96,6 +96,25 @@ def cmd_phase(args: argparse.Namespace) -> None:
             )
             raise SystemExit(2)
 
+        current_tree = _git_rev("HEAD^{tree}")
+        if current_tree != manifest["source_tree"]:
+            print(
+                f"ERROR: tree {current_tree} != manifest {manifest['source_tree']}",
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
+
+        if manifest.get("environment") == "ci":
+            dirty = subprocess.run(
+                ["git", "diff", "--quiet", "HEAD"],
+                capture_output=True,
+                timeout=10,
+                check=False,
+            )
+            if dirty.returncode != 0:
+                print("ERROR: tracked worktree is dirty", file=sys.stderr)
+                raise SystemExit(2)
+
         phase_name = args.phase
         if phase_name not in VALID_PHASES:
             print(f"ERROR: unknown phase: {phase_name}", file=sys.stderr)
@@ -150,6 +169,56 @@ def cmd_phase(args: argparse.Namespace) -> None:
     raise SystemExit(max(exit_code, 1) if exit_code != 0 else 0)
 
 
+def cmd_finalize_phases(args: argparse.Namespace) -> None:
+    root_path = Path(args.evidence_root).resolve()
+
+    with TrustedRoot(root_path) as root:
+        raw = safe_read(root, RUN_MANIFEST_FILE)
+        manifest = json.loads(raw)
+
+        required = manifest.get("required_phases", [])
+
+        results_raw = safe_read(root, PHASE_RESULTS_FILE)
+        recorded: dict[str, dict] = {}
+        content = results_raw.decode().strip()
+        if content:
+            for line in content.splitlines():
+                record = json.loads(line)
+                recorded[record["phase"]] = record
+
+        cause_phase = None
+        cause_sequence = None
+        for phase in required:
+            if phase in recorded and recorded[phase].get("exit_code", 0) != 0:
+                cause_phase = phase
+                cause_sequence = recorded[phase].get("sequence")
+                break
+
+        if not cause_phase:
+            return
+
+        sequence = len(recorded)
+        now_utc = datetime.now(UTC).isoformat()
+        for phase in required:
+            if phase in recorded:
+                continue
+            sequence += 1
+            not_run = {
+                "schema_version": PHASE_RESULT_SCHEMA,
+                "phase": phase,
+                "sequence": sequence,
+                "exit_code": None,
+                "failure_class": "not_run",
+                "cause_phase": cause_phase,
+                "cause_sequence": cause_sequence,
+                "start_utc": now_utc,
+                "end_utc": now_utc,
+            }
+            append_jsonl(root, PHASE_RESULTS_FILE, not_run)
+
+    print(f"Finalized: {cause_phase} caused downstream not_run")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="ci-evidence-orchestrator")
     sub = parser.add_subparsers(dest="subcommand", required=True)
@@ -164,6 +233,9 @@ def main() -> None:
     phase_p.add_argument("--evidence-root", required=True)
     phase_p.add_argument("--phase", required=True)
     phase_p.add_argument("command", nargs=argparse.REMAINDER)
+
+    fin_p = sub.add_parser("finalize-phases")
+    fin_p.add_argument("--evidence-root", required=True)
 
     args = parser.parse_args()
 
@@ -180,6 +252,8 @@ def main() -> None:
                 print("ERROR: no command after --", file=sys.stderr)
                 raise SystemExit(2)
             cmd_phase(args)
+        elif args.subcommand == "finalize-phases":
+            cmd_finalize_phases(args)
     except EvidenceWriteError as exc:
         print(f"EVIDENCE ERROR: {exc}", file=sys.stderr)
         raise SystemExit(2) from None

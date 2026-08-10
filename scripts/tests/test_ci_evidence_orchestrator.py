@@ -34,7 +34,7 @@ def init(tmp_path: Path) -> Path:
             "--attempt",
             "1",
             "--environment",
-            "ci",
+            "local",
         ]
     )
     assert r.returncode == 0, r.stderr
@@ -47,7 +47,7 @@ class TestInit:
         manifest = json.loads((evidence / "run-manifest.json").read_text())
         assert manifest["schema_version"] == 1
         assert manifest["workflow_run_id"] == "12345"
-        assert manifest["environment"] == "ci"
+        assert manifest["environment"] == "local"
         assert len(manifest["source_sha"]) == 40
         assert len(manifest["source_tree"]) == 40
         assert len(manifest["required_phases"]) > 0

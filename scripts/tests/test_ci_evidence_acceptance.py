@@ -905,33 +905,53 @@ class TestInterruptAndIncomplete:
         assert t["state"] == TERMINAL_INCOMPLETE
 
     def test_missing_nodes_in_stream_is_incomplete(self, tmp_path: Path) -> None:
+        """Stream has valid final record but events for only one of two selected nodes."""
         evidence, waivers = tmp_path / "e", tmp_path / "w.json"
         evidence.mkdir()
         _manifest(evidence)
         _phase_ok(evidence)
         npg2 = "tests/test_x.py::test_x"
         _collections(evidence, [NPG, npg2], [PG])
-        _streams(evidence, [NPG], [PG])
+        npg_data = _events_for([NPG])
+        full = _finalize(npg_data, "non_pg", [NPG, npg2])
+        (evidence / event_stream_file("non_pg")).write_bytes(full)
+        _write_partition_stream(evidence, "pg", [PG])
         _waivers(waivers)
         t = _reconcile(evidence, waivers)
         assert t["state"] == TERMINAL_INCOMPLETE
 
 
 class TestFailFastClassification:
-    def test_phase_failure_with_missing_later_phases_is_test_failed(self, tmp_path: Path) -> None:
-        """Fail-fast: lint fails, later phases never run → test_failed not incomplete."""
+    def test_phase_failure_with_not_run_downstream(self, tmp_path: Path) -> None:
+        """Fail-fast: lint fails, downstream phases have not_run with causal ref → test_failed."""
         evidence, waivers = tmp_path / "e", tmp_path / "w.json"
         evidence.mkdir()
         _manifest(evidence)
         lines = []
-        for i, p in enumerate(ALL_PHASES):
-            if p == "lint":
+        lint_seq = None
+        for seq, p in enumerate(ALL_PHASES, 1):
+            if lint_seq is None and p != "lint":
                 lines.append(
                     json.dumps(
                         {
                             "schema_version": 1,
                             "phase": p,
-                            "sequence": i + 1,
+                            "sequence": seq,
+                            "exit_code": 0,
+                            "failure_class": None,
+                            "start_utc": "T",
+                            "end_utc": "T",
+                        }
+                    )
+                )
+            elif p == "lint":
+                lint_seq = seq
+                lines.append(
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "phase": p,
+                            "sequence": seq,
                             "exit_code": 1,
                             "failure_class": "nonzero_exit",
                             "start_utc": "T",
@@ -939,20 +959,22 @@ class TestFailFastClassification:
                         }
                     )
                 )
-                break
-            lines.append(
-                json.dumps(
-                    {
-                        "schema_version": 1,
-                        "phase": p,
-                        "sequence": i + 1,
-                        "exit_code": 0,
-                        "failure_class": None,
-                        "start_utc": "T",
-                        "end_utc": "T",
-                    }
+            else:
+                lines.append(
+                    json.dumps(
+                        {
+                            "schema_version": 1,
+                            "phase": p,
+                            "sequence": seq,
+                            "exit_code": None,
+                            "failure_class": "not_run",
+                            "cause_phase": "lint",
+                            "cause_sequence": lint_seq,
+                            "start_utc": "T",
+                            "end_utc": "T",
+                        }
+                    )
                 )
-            )
         (evidence / PHASE_RESULTS_FILE).write_text("\n".join(lines) + "\n")
         _collections(evidence, [NPG], [PG])
         _streams(evidence, [NPG], [PG])

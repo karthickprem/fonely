@@ -1,7 +1,7 @@
 # Dev5 Availability Selection Correction Design
 
 **Status:** design only; implementation stopped pending independent approval  
-**Current design SHA:** to be filled by this revision's commit  
+**Approved design SHA:** `636000a31fbbdedb0c5e892229d29d7a92634a47`  
 **Base:** `6a15a4043ac745189a8652f8870380c122971a86`  
 **Migration:** none
 

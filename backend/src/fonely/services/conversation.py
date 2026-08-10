@@ -263,8 +263,7 @@ class ConversationService:
         return turn
 
     def _clear_availability_offer(self, ctx: ConversationContext) -> None:
-        ctx.availability_offer = None
-        ctx.selected_slot_ref = None
+        ctx.availability_selection = None
 
     def _resolve_active_offer(
         self,
@@ -275,7 +274,6 @@ class ConversationService:
         safety: SafetyClassification,
     ) -> ConversationTurn | None:
         from fonely.services.availability_offers import (
-            AvailabilityOffer,
             OfferSelectionStatus,
             availability_revision_for_slots,
             select_from_offer,
@@ -283,9 +281,15 @@ class ConversationService:
         from fonely.services.conversation_tools import BusinessContext
 
         assert isinstance(biz, BusinessContext)
-        offer = ctx.availability_offer
-        if not isinstance(offer, AvailabilityOffer):
+        state = ctx.availability_selection
+        if state is None:
             return None
+        from fonely.services.availability_offers import AvailabilitySelectionState
+
+        if not isinstance(state, AvailabilitySelectionState):
+            self._clear_availability_offer(ctx)
+            return None
+        offer = state.offer
         if offer.business_id != ctx.business_id or offer.business_id != actor.business_id:
             self._clear_availability_offer(ctx)
             return self._fact_turn(
@@ -352,7 +356,7 @@ class ConversationService:
 
         assert selection.slot is not None
         selected = selection.slot
-        ctx.selected_slot_ref = selected
+        ctx.availability_selection = state.model_copy(update={"selected_slot": selected})
         ctx.collected_facts["service_id"] = selected.service_id
         ctx.collected_facts["resource_id"] = selected.resource_id
         ctx.collected_facts["resource_name"] = selected.resource_name
@@ -844,13 +848,16 @@ class ConversationService:
             assert isinstance(target_id, int)
             exclude_appointment_id = target_id
 
+        from fonely.services.availability_offers import AvailabilitySelectionState
+
+        state = ctx.availability_selection
         selected_slot = None
-        if ctx.selected_slot_ref is not None:
+        if isinstance(state, AvailabilitySelectionState) and state.selected_slot is not None:
             from fonely.domain.appointments.datetimes import instant
             from fonely.repositories.appointments import AppointmentRepository
             from fonely.services.availability_offers import SelectedSlotRef
 
-            selected_slot = ctx.selected_slot_ref
+            selected_slot = state.selected_slot
             if not isinstance(selected_slot, SelectedSlotRef) or (
                 selected_slot.business_id != biz.business_id
                 or selected_slot.conversation_id != ctx.conversation_id
@@ -885,7 +892,6 @@ class ConversationService:
 
             ctx.state = ConversationState.FACT_COLLECTION
             ctx.booking_attempt += 1
-            ctx.selected_slot_ref = None
             if decision.alternatives:
                 offer = create_availability_offer(
                     business_id=biz.business_id,
@@ -895,7 +901,8 @@ class ConversationService:
                     alternatives=decision.alternatives,
                     now=utcnow(),
                 )
-                ctx.availability_offer = offer
+                ctx.availability_selection = AvailabilitySelectionState(offer=offer)
+                state = ctx.availability_selection
                 alt_texts = [slot.display_time() for slot in offer.slots]
                 response = (
                     "That exact time isn't available. Nearest slots: "
@@ -915,10 +922,10 @@ class ConversationService:
 
         operation = ctx.collected_facts.get("_operation", "book")
 
-        if ctx.selected_slot_ref is not None:
+        if state is not None and state.selected_slot is not None:
             from fonely.services.availability_offers import SelectedSlotRef
 
-            selected = ctx.selected_slot_ref
+            selected = state.selected_slot
             if not isinstance(selected, SelectedSlotRef):
                 self._clear_availability_offer(ctx)
                 ctx.collected_facts.pop("start_at", None)

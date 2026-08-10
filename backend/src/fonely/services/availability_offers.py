@@ -157,6 +157,46 @@ class AvailabilityOffer(BaseModel):
             raise ValueError("Availability offer is invalid") from exc
 
 
+class AvailabilitySelectionState(BaseModel):
+    """Atomically persisted active offer and optional selected reference."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    schema_version: Literal[1] = 1
+    offer: AvailabilityOffer
+    selected_slot: SelectedSlotRef | None = None
+
+    @model_validator(mode="after")
+    def validate_selected_membership(self) -> AvailabilitySelectionState:
+        if self.selected_slot is None:
+            return self
+        selected = self.selected_slot
+        if (
+            selected.offer_id != self.offer.offer_id
+            or selected.business_id != self.offer.business_id
+            or selected.conversation_id != self.offer.conversation_id
+            or selected.service_id != self.offer.service_id
+            or selected.availability_revision != self.offer.availability_revision
+            or not any(slot == selected for slot in self.offer.slots)
+        ):
+            raise ValueError("Selected slot does not belong to active offer")
+        return self
+
+    def serialize(self) -> dict[str, Any]:
+        return self.model_dump(mode="json")
+
+    @classmethod
+    def deserialize(cls, value: object) -> AvailabilitySelectionState:
+        if not isinstance(value, dict):
+            raise ValueError("Availability selection state must be an object")
+        try:
+            return cls.model_validate_json(
+                json.dumps(value, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            )
+        except ValidationError as exc:
+            raise ValueError("Availability selection state is invalid") from exc
+
+
 @dataclass(frozen=True, slots=True)
 class OfferSelection:
     status: OfferSelectionStatus

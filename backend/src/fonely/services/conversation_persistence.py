@@ -52,16 +52,11 @@ class ConversationPersistenceService:
     ) -> None:
         facts_for_json = _serialize_facts(ctx.collected_facts)
         facts_for_json["_booking_attempt"] = ctx.booking_attempt
-        if ctx.availability_offer is not None:
-            from fonely.services.availability_offers import AvailabilityOffer
+        if ctx.availability_selection is not None:
+            from fonely.services.availability_offers import AvailabilitySelectionState
 
-            if isinstance(ctx.availability_offer, AvailabilityOffer):
-                facts_for_json["_availability_offer"] = ctx.availability_offer.serialize()
-        if ctx.selected_slot_ref is not None:
-            from fonely.services.availability_offers import SelectedSlotRef
-
-            if isinstance(ctx.selected_slot_ref, SelectedSlotRef):
-                facts_for_json["_selected_slot_ref"] = ctx.selected_slot_ref.model_dump(mode="json")
+            if isinstance(ctx.availability_selection, AvailabilitySelectionState):
+                facts_for_json["_availability_selection"] = ctx.availability_selection.serialize()
 
         await self._repo.update_state(
             ctx.conversation_id,
@@ -119,26 +114,15 @@ class ConversationPersistenceService:
         raw_attempt = facts.pop("_booking_attempt", 0)
         attempt_value: int = raw_attempt if isinstance(raw_attempt, int) else 0
         ctx.booking_attempt = attempt_value
-        raw_offer = facts.pop("_availability_offer", None)
-        if raw_offer is not None:
+        raw_selection = facts.pop("_availability_selection", None)
+        if raw_selection is not None:
             try:
-                from fonely.services.availability_offers import AvailabilityOffer
+                from fonely.services.availability_offers import AvailabilitySelectionState
 
-                ctx.availability_offer = AvailabilityOffer.deserialize(raw_offer)
+                ctx.availability_selection = AvailabilitySelectionState.deserialize(raw_selection)
             except ValueError:
                 logger.warning(
-                    "invalid_persisted_availability_offer",
-                    extra={"conversation_id": ctx.conversation_id},
-                )
-        raw_selected = facts.pop("_selected_slot_ref", None)
-        if raw_selected is not None:
-            try:
-                from fonely.services.availability_offers import SelectedSlotRef
-
-                ctx.selected_slot_ref = SelectedSlotRef.model_validate(raw_selected)
-            except ValueError:
-                logger.warning(
-                    "invalid_persisted_selected_slot_ref",
+                    "invalid_persisted_availability_selection",
                     extra={"conversation_id": ctx.conversation_id},
                 )
         return ctx

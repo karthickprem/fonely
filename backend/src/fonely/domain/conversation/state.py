@@ -4,6 +4,14 @@ import enum
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fonely.services.availability_offers import (
+        AvailabilityOffer,
+        AvailabilitySelectionState,
+        SelectedSlotRef,
+    )
 
 from fonely.core.validators import utcnow
 
@@ -126,8 +134,36 @@ class ConversationContext:
     state: ConversationState = ConversationState.GREETING
     turns: list[ConversationTurn] = field(default_factory=list)
     collected_facts: dict[str, object] = field(default_factory=dict)
-    availability_offer: object | None = None
-    selected_slot_ref: object | None = None
+    availability_selection: "AvailabilitySelectionState | None" = None
+
+    @property
+    def availability_offer(self) -> "AvailabilityOffer | None":
+        state = self.availability_selection
+        return state.offer if state is not None else None
+
+    @availability_offer.setter
+    def availability_offer(self, offer: "AvailabilityOffer | None") -> None:
+        if offer is None:
+            self.availability_selection = None
+            return
+        from fonely.services.availability_offers import AvailabilitySelectionState
+
+        self.availability_selection = AvailabilitySelectionState(offer=offer)
+
+    @property
+    def selected_slot_ref(self) -> "SelectedSlotRef | None":
+        state = self.availability_selection
+        return state.selected_slot if state is not None else None
+
+    @selected_slot_ref.setter
+    def selected_slot_ref(self, selected: "SelectedSlotRef | None") -> None:
+        state = self.availability_selection
+        if state is None:
+            if selected is not None:
+                raise ValueError("Selected slot requires an active availability offer")
+            return
+        self.availability_selection = state.model_copy(update={"selected_slot": selected})
+
     proposal_id: int | None = None
     proposal_version: int | None = None
     booking_attempt: int = 0

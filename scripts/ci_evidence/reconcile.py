@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -737,6 +738,40 @@ def _reconcile_inner(
     incomplete_errors.extend(phase_inc)
     evidence_errors.extend(phase_ev)
     test_errors.extend(phase_test)
+
+    try:
+        head_result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        actual_head = head_result.stdout.strip()
+        if actual_head == manifest["source_sha"]:
+            tree_result = subprocess.run(
+                ["git", "rev-parse", "HEAD^{tree}"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+            if tree_result.stdout.strip() != manifest["source_tree"]:
+                evidence_errors.append("final tree != manifest source_tree")
+            if manifest.get("environment") == "ci":
+                dirty = subprocess.run(
+                    ["git", "diff", "--quiet", "HEAD", "--"],
+                    capture_output=True,
+                    timeout=10,
+                    check=False,
+                )
+                if dirty.returncode != 0:
+                    evidence_errors.append("final tracked worktree is dirty")
+        elif manifest.get("environment") == "ci":
+            evidence_errors.append(f"final HEAD {actual_head} != manifest {manifest['source_sha']}")
+    except (OSError, subprocess.TimeoutExpired):
+        if manifest.get("environment") == "ci":
+            evidence_errors.append("final repo state verification failed")
 
     terminal_state = _classify_terminal(
         [],

@@ -39,7 +39,7 @@ def _setup_full_evidence(evidence: Path, waivers: Path) -> None:
                 "source_tree": "b" * 40,
                 "workflow_run_id": "1",
                 "workflow_attempt": 1,
-                "environment": "ci",
+                "environment": "local",
                 "required_phases": ALL_PHASES,
                 "created_at_utc": "2026-08-10T00:00:00+00:00",
             },
@@ -73,7 +73,7 @@ def _setup_full_evidence(evidence: Path, waivers: Path) -> None:
                 {
                     "schema_version": 1,
                     "source_sha": sha,
-                    "environment": "ci",
+                    "environment": "local",
                     "partition": partition,
                     "nodes": nodes,
                     "requires_call_body": rcb,
@@ -106,7 +106,7 @@ def _setup_full_evidence(evidence: Path, waivers: Path) -> None:
             "record_type": "final",
             "partition": partition,
             "source_sha": sha,
-            "environment": "ci",
+            "environment": "local",
             "final_sequence": seq,
             "selected_nodes_digest": digest_nodes(nodes),
             "preceding_stream_digest": digest_bytes(events_data),
@@ -124,7 +124,7 @@ class TestSuccess:
         evidence.mkdir()
         waivers = tmp_path / "waivers.json"
         _setup_full_evidence(evidence, waivers)
-        terminal = reconcile(str(evidence), str(waivers), "ci")
+        terminal = reconcile(str(evidence), str(waivers), "local")
         assert terminal["state"] == TERMINAL_SUCCESS
 
     def test_terminal_file_created(self, tmp_path: Path) -> None:
@@ -132,7 +132,7 @@ class TestSuccess:
         evidence.mkdir()
         waivers = tmp_path / "waivers.json"
         _setup_full_evidence(evidence, waivers)
-        reconcile(str(evidence), str(waivers), "ci")
+        reconcile(str(evidence), str(waivers), "local")
         assert (evidence / TERMINAL_FILE).exists()
         data = json.loads((evidence / TERMINAL_FILE).read_text())
         assert data["state"] == TERMINAL_SUCCESS
@@ -144,9 +144,9 @@ class TestDoubleFinalization:
         evidence.mkdir()
         waivers = tmp_path / "waivers.json"
         _setup_full_evidence(evidence, waivers)
-        t1 = reconcile(str(evidence), str(waivers), "ci")
+        t1 = reconcile(str(evidence), str(waivers), "local")
         assert t1["state"] == TERMINAL_SUCCESS
-        t2 = reconcile(str(evidence), str(waivers), "ci")
+        t2 = reconcile(str(evidence), str(waivers), "local")
         assert t2["state"] in (TERMINAL_EVIDENCE_FAILED, TERMINAL_INCOMPLETE)
 
 
@@ -156,7 +156,7 @@ class TestIncomplete:
         evidence.mkdir()
         waivers = tmp_path / "waivers.json"
         waivers.write_text(json.dumps({"schema_version": 1, "entries": []}) + "\n")
-        terminal = reconcile(str(evidence), str(waivers), "ci")
+        terminal = reconcile(str(evidence), str(waivers), "local")
         assert terminal["state"] == TERMINAL_INCOMPLETE
 
 
@@ -185,7 +185,7 @@ class TestTestFailed:
                 )
             )
         (evidence / PHASE_RESULTS_FILE).write_text("\n".join(lines) + "\n")
-        terminal = reconcile(str(evidence), str(waivers), "ci")
+        terminal = reconcile(str(evidence), str(waivers), "local")
         assert terminal["state"] == TERMINAL_TEST_FAILED
 
 
@@ -199,7 +199,7 @@ class TestEvidenceFailed:
         manifest = json.loads((evidence / collection_manifest_file("non_pg")).read_text())
         manifest["nodes_digest"] = "wrong"
         (evidence / collection_manifest_file("non_pg")).write_text(json.dumps(manifest) + "\n")
-        terminal = reconcile(str(evidence), str(waivers), "ci")
+        terminal = reconcile(str(evidence), str(waivers), "local")
         assert terminal["state"] == TERMINAL_EVIDENCE_FAILED
 
     def test_pg_missing_call(self, tmp_path: Path) -> None:
@@ -228,7 +228,7 @@ class TestEvidenceFailed:
             "record_type": "final",
             "partition": "pg",
             "source_sha": "a" * 40,
-            "environment": "ci",
+            "environment": "local",
             "final_sequence": seq,
             "selected_nodes_digest": digest_nodes([pg_node]),
             "preceding_stream_digest": digest_bytes(events_data),
@@ -236,6 +236,6 @@ class TestEvidenceFailed:
         }
         full = events_data + (json.dumps(final, sort_keys=True) + "\n").encode()
         (evidence / event_stream_file("pg")).write_bytes(full)
-        terminal = reconcile(str(evidence), str(waivers), "ci")
+        terminal = reconcile(str(evidence), str(waivers), "local")
         assert terminal["state"] in (TERMINAL_EVIDENCE_FAILED, TERMINAL_TEST_FAILED)
         assert any("call" in e.lower() for e in terminal["errors"])

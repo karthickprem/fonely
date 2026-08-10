@@ -47,7 +47,7 @@ def _manifest(evidence: Path) -> None:
                 "source_tree": "b" * 40,
                 "workflow_run_id": "1",
                 "workflow_attempt": 1,
-                "environment": "ci",
+                "environment": "local",
                 "required_phases": ALL_PHASES,
                 "created_at_utc": "2026-08-10T00:00:00+00:00",
             },
@@ -126,7 +126,7 @@ def _finalize(data: bytes, partition: str, nodes: list[str]) -> bytes:
         "record_type": "final",
         "partition": partition,
         "source_sha": SHA,
-        "environment": "ci",
+        "environment": "local",
         "final_sequence": seq_count + 1,
         "selected_nodes_digest": digest_nodes(nodes),
         "preceding_stream_digest": digest_bytes(data),
@@ -148,7 +148,7 @@ def _collections(
                 {
                     "schema_version": 1,
                     "source_sha": SHA,
-                    "environment": "ci",
+                    "environment": "local",
                     "partition": partition,
                     "nodes": nodes,
                     "requires_call_body": rcb,
@@ -195,7 +195,7 @@ def _waivers(path: Path, entries: list[dict[str, Any]] | None = None) -> None:
 def _waiver_entry(
     node: str = PG,
     exc: str = "setup_skip",
-    env: str = "ci",
+    env: str = "local",
     created: str = "2026-08-09T00:00:00Z",
     expires: str = "2026-08-20T00:00:00Z",
 ) -> dict[str, Any]:
@@ -221,7 +221,7 @@ def _full(evidence: Path, waivers: Path) -> None:
 
 def _reconcile(evidence: Path, waivers: Path) -> dict[str, Any]:
     (evidence / TERMINAL_FILE).unlink(missing_ok=True)
-    return reconcile(str(evidence), str(waivers), "ci")
+    return reconcile(str(evidence), str(waivers), "local")
 
 
 class TestSuccess:
@@ -839,7 +839,7 @@ class TestEventStreamIntegrity:
             "record_type": "final",
             "partition": "non_pg",
             "source_sha": SHA,
-            "environment": "ci",
+            "environment": "local",
             "final_sequence": len(data.decode().strip().splitlines()) + 1,
             "selected_nodes_digest": digest_nodes([NPG]),
             "preceding_stream_digest": "wrong_digest",
@@ -864,7 +864,7 @@ class TestEventStreamIntegrity:
             "record_type": "final",
             "partition": "non_pg",
             "source_sha": "f" * 40,
-            "environment": "ci",
+            "environment": "local",
             "final_sequence": len(data.decode().strip().splitlines()) + 1,
             "selected_nodes_digest": digest_nodes([NPG]),
             "preceding_stream_digest": digest_bytes(data),
@@ -1184,7 +1184,7 @@ class TestMalformedArtifacts:
         _waivers(waivers)
         (evidence / RUN_MANIFEST_FILE).write_text("not json{{{")
         (evidence / PHASE_RESULTS_FILE).write_bytes(b"")
-        t = reconcile(str(evidence), str(waivers), "ci")
+        t = reconcile(str(evidence), str(waivers), "local")
         assert t["state"] in (TERMINAL_EVIDENCE_FAILED, TERMINAL_INCOMPLETE)
         assert (evidence / TERMINAL_FILE).exists()
 
@@ -1194,7 +1194,7 @@ class TestMalformedArtifacts:
         _waivers(waivers)
         (evidence / RUN_MANIFEST_FILE).write_text('"just a string"')
         (evidence / PHASE_RESULTS_FILE).write_bytes(b"")
-        t = reconcile(str(evidence), str(waivers), "ci")
+        t = reconcile(str(evidence), str(waivers), "local")
         assert t["state"] in (TERMINAL_EVIDENCE_FAILED, TERMINAL_INCOMPLETE)
         assert (evidence / TERMINAL_FILE).exists()
 
@@ -1204,7 +1204,7 @@ class TestMalformedArtifacts:
         _waivers(waivers)
         (evidence / RUN_MANIFEST_FILE).write_bytes(b"\xff\xfe not utf8")
         (evidence / PHASE_RESULTS_FILE).write_bytes(b"")
-        t = reconcile(str(evidence), str(waivers), "ci")
+        t = reconcile(str(evidence), str(waivers), "local")
         assert t["state"] in (TERMINAL_EVIDENCE_FAILED, TERMINAL_INCOMPLETE)
         assert (evidence / TERMINAL_FILE).exists()
 
@@ -1240,23 +1240,23 @@ class TestTerminalEvidence:
         evidence.mkdir()
         _waivers(waivers)
         _manifest(evidence)
-        t = reconcile(str(evidence), str(waivers), "ci")
+        t = reconcile(str(evidence), str(waivers), "local")
         assert t["state"] == TERMINAL_INCOMPLETE
 
     def test_double_finalization(self, tmp_path: Path) -> None:
         evidence, waivers = tmp_path / "e", tmp_path / "w.json"
         evidence.mkdir()
         _full(evidence, waivers)
-        t1 = reconcile(str(evidence), str(waivers), "ci")
+        t1 = reconcile(str(evidence), str(waivers), "local")
         assert t1["state"] == TERMINAL_SUCCESS
-        t2 = reconcile(str(evidence), str(waivers), "ci")
+        t2 = reconcile(str(evidence), str(waivers), "local")
         assert t2["state"] in (TERMINAL_EVIDENCE_FAILED, TERMINAL_INCOMPLETE)
 
     def test_completeness_hash_mismatch(self, tmp_path: Path) -> None:
         evidence, waivers = tmp_path / "e", tmp_path / "w.json"
         evidence.mkdir()
         _full(evidence, waivers)
-        t = reconcile(str(evidence), str(waivers), "ci")
+        t = reconcile(str(evidence), str(waivers), "local")
         assert t["state"] == TERMINAL_SUCCESS
         hashes = t.get("artifact_hashes", {})
         assert all(v is not None for v in hashes.values())
@@ -1274,7 +1274,7 @@ class TestTerminalEvidence:
                     {
                         "schema_version": 1,
                         "source_sha": wrong_sha,
-                        "environment": "ci",
+                        "environment": "local",
                         "partition": partition,
                         "nodes": nodes,
                         "requires_call_body": {n: "postgres" in n for n in nodes},
@@ -1330,7 +1330,7 @@ class TestUpload:
         evidence, waivers = tmp_path / "e", tmp_path / "w.json"
         evidence.mkdir()
         _full(evidence, waivers)
-        reconcile(str(evidence), str(waivers), "ci")
+        reconcile(str(evidence), str(waivers), "local")
         terminal_before = (evidence / TERMINAL_FILE).read_text()
         terminal_after = (evidence / TERMINAL_FILE).read_text()
         assert terminal_before == terminal_after

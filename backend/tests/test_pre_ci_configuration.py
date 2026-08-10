@@ -25,10 +25,11 @@ def test_lockfile_contains_resolved_jsonschema_dependency() -> None:
     assert jsonschema_requirement["marker"] == "extra == 'dev'"
 
 
-def test_ci_uses_frozen_sync_and_required_root_qa_gates() -> None:
+def test_ci_uses_locked_sync_and_required_root_qa_gates() -> None:
     workflow = (PROJECT_ROOT / ".github" / "workflows" / "backend-ci.yml").read_text()
     assert "actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809" in workflow
-    assert "uv sync --frozen --all-extras" in workflow
+    assert "uv sync --locked --all-extras" in workflow
+    assert "uv sync --frozen" not in workflow
     assert "backend/.venv/bin/python scripts/validate-evals.py" in workflow
     assert "${{ runner.temp }}/tool-contract-mismatches.ci.json" in workflow
     assert "backend/.venv/bin/python scripts/report-eval-coverage.py" in workflow

@@ -29,6 +29,7 @@ from fonely.domain.calls.intake import (
     DuplicateCallEventError,
     InboundCallEventIntake,
 )
+from fonely.domain.calls.transitions import LateCallEventError
 from fonely.services.exotel_config import ExotelNumberMapping
 
 logger = logging.getLogger("fonely.api.channels.exotel")
@@ -259,6 +260,17 @@ async def call_status_webhook(request: Request) -> Response:
             },
         )
         return Response(status_code=409, content="conflicting event")
+    except LateCallEventError:
+        logger.info(
+            "exotel_callback_late_noop",
+            extra={
+                "business_id": business_id,
+                "call_sid": event.call_sid,
+                "event_type": event.event_type,
+                "status": event.status,
+            },
+        )
+        return Response(status_code=200, content="ok")
     except Exception:
         logger.warning(
             "exotel_callback_persistence_failed",

@@ -914,14 +914,22 @@ class ConversationService:
 
         assert isinstance(result, PreCommitAppointmentSuccess)
 
+        from fonely.services.conversation_tools import format_confirmation_summary
+
+        receipt = format_confirmation_summary(
+            service_name=result.appointment.service_name,
+            resource_name=result.appointment.resource_name,
+            start_at=result.appointment.start_at,
+            price=str(result.appointment.price) if result.appointment.price else None,
+            timezone=result.appointment.business_timezone,
+        )
+
         ctx.transition(ConversationState.CONFIRMED)
         ctx.transition(ConversationState.COMPLETED)
         return self._fact_turn(
             ctx,
             user_message,
-            f"Your appointment is confirmed! "
-            f"Appointment ID: {result.appointment.appointment_id}. "
-            f"See you at the clinic!",
+            f"Your appointment is confirmed!\n{receipt}\nSee you at the clinic!",
             safety,
             [],
         )

@@ -227,20 +227,21 @@ def _validate_events(
     manifest: dict[str, Any],
     partition: str,
     expected_nodes: set[str],
-) -> tuple[dict[str, list[dict[str, Any]]], list[str], int | None]:
-    errors = []
+) -> tuple[dict[str, list[dict[str, Any]]], list[str], list[str], int | None]:
+    evidence_errors: list[str] = []
+    incomplete_errors: list[str] = []
     node_events: dict[str, list[dict[str, Any]]] = {}
 
     try:
         raw = safe_read(root, event_stream_file(partition))
     except EvidenceWriteError:
-        errors.append(f"missing event stream: {partition}")
-        return node_events, errors, None
+        incomplete_errors.append(f"missing event stream: {partition}")
+        return node_events, evidence_errors, incomplete_errors, None
 
     lines = raw.decode().strip().splitlines()
     if not lines:
-        errors.append(f"empty event stream: {partition}")
-        return node_events, errors, None
+        incomplete_errors.append(f"empty event stream: {partition}")
+        return node_events, evidence_errors, incomplete_errors, None
 
     final_line = lines[-1]
     event_lines = lines[:-1]
@@ -248,50 +249,50 @@ def _validate_events(
     try:
         final = json.loads(final_line)
     except json.JSONDecodeError:
-        errors.append(f"{partition} malformed final record")
-        return node_events, errors, None
+        incomplete_errors.append(f"{partition} malformed final record")
+        return node_events, evidence_errors, incomplete_errors, None
 
     if final.get("record_type") != "final":
-        errors.append(f"{partition} missing final record")
-        return node_events, errors, None
+        incomplete_errors.append(f"{partition} missing final record")
+        return node_events, evidence_errors, incomplete_errors, None
 
     if final.get("source_sha") != manifest["source_sha"]:
-        errors.append(f"{partition} final record SHA mismatch")
+        evidence_errors.append(f"{partition} final record SHA mismatch")
 
     if final.get("partition") != partition:
-        errors.append(f"{partition} final record partition mismatch")
+        evidence_errors.append(f"{partition} final record partition mismatch")
 
     if final.get("environment") != manifest["environment"]:
-        errors.append(f"{partition} final record environment mismatch")
+        evidence_errors.append(f"{partition} final record environment mismatch")
 
     expected_final_seq = len(event_lines) + 1
     if final.get("final_sequence") != expected_final_seq:
-        errors.append(
+        evidence_errors.append(
             f"{partition} final_sequence {final.get('final_sequence')} "
             f"!= expected {expected_final_seq}"
         )
 
     stream_bytes = "".join(ln + "\n" for ln in event_lines).encode("utf-8")
     if final.get("preceding_stream_digest") != digest_bytes(stream_bytes):
-        errors.append(f"{partition} stream digest mismatch")
+        evidence_errors.append(f"{partition} stream digest mismatch")
 
     if final.get("selected_nodes_digest") != digest_nodes(expected_nodes):
-        errors.append(f"{partition} selected nodes digest mismatch")
+        evidence_errors.append(f"{partition} selected nodes digest mismatch")
 
     prev_seq = 0
     for i, line in enumerate(event_lines):
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
-            errors.append(f"{partition} event line {i + 1} malformed")
+            evidence_errors.append(f"{partition} event line {i + 1} malformed")
             continue
 
         if event.get("schema_version") != EXECUTION_EVENT_SCHEMA:
-            errors.append(f"{partition} event {i + 1} bad schema")
+            evidence_errors.append(f"{partition} event {i + 1} bad schema")
 
         seq = event.get("sequence", 0)
         if seq != prev_seq + 1:
-            errors.append(f"{partition} sequence gap/duplicate at {seq}")
+            evidence_errors.append(f"{partition} sequence gap/duplicate at {seq}")
         prev_seq = seq
 
         node_id = event.get("node_id", "")
@@ -299,25 +300,25 @@ def _validate_events(
         outcome = event.get("outcome", "")
 
         if phase not in VALID_EVENT_PHASES:
-            errors.append(f"{partition} unknown phase: {phase}")
+            evidence_errors.append(f"{partition} unknown phase: {phase}")
         if outcome not in VALID_EVENT_OUTCOMES:
-            errors.append(f"{partition} unknown outcome: {outcome}")
+            evidence_errors.append(f"{partition} unknown outcome: {outcome}")
 
         if node_id not in expected_nodes:
-            errors.append(f"{partition} extra node: {node_id}")
+            evidence_errors.append(f"{partition} extra node: {node_id}")
 
         node_events.setdefault(node_id, []).append(event)
 
     missing = expected_nodes - set(node_events)
     if missing:
-        errors.append(f"{partition} missing events for {len(missing)} nodes")
+        incomplete_errors.append(f"{partition} missing events for {len(missing)} nodes")
 
     pytest_exit = final.get("pytest_exit_status")
     if not isinstance(pytest_exit, int):
-        errors.append(f"{partition} final record missing/invalid pytest_exit_status")
+        evidence_errors.append(f"{partition} final record missing/invalid pytest_exit_status")
         pytest_exit = None
 
-    return node_events, errors, pytest_exit
+    return node_events, evidence_errors, incomplete_errors, pytest_exit
 
 
 def _validate_node_state_machines(
@@ -549,27 +550,17 @@ def _validate_waivers(
 def _classify_terminal(
     phase_errors: list[str],
     collection_errors: list[str],
-    event_errors: list[str],
-    state_errors: list[str],
-    pg_errors: list[str],
-    waiver_errors: list[str],
-    has_test_failure: bool,
-    is_incomplete: bool,
+    incomplete_errors: list[str],
+    evidence_errors: list[str],
+    test_errors: list[str],
 ) -> str:
-    if is_incomplete:
+    if incomplete_errors:
         return TERMINAL_INCOMPLETE
 
-    evidence_errors = collection_errors + waiver_errors
-    for err in event_errors + state_errors + pg_errors:
-        if "XPASS" in err or "failed" in err or "error" in err:
-            has_test_failure = True
-        else:
-            evidence_errors.append(err)
-
-    if evidence_errors:
+    if collection_errors or evidence_errors:
         return TERMINAL_EVIDENCE_FAILED
 
-    if has_test_failure or phase_errors:
+    if test_errors or phase_errors:
         return TERMINAL_TEST_FAILED
 
     return TERMINAL_SUCCESS
@@ -612,38 +603,40 @@ def _reconcile_inner(
     waivers_path: str,
     environment: str,
 ) -> dict[str, Any]:
-    is_incomplete = False
-
     manifest = _validate_manifest(root, environment)
 
     phase_errors, phase_exits = _validate_phases(root, manifest)
 
     npg_nodes, pg_nodes, collection_errors = _validate_collections(root, manifest)
 
-    npg_events, npg_event_errors, npg_pytest_exit = _validate_events(
+    npg_events, npg_ev_errors, npg_inc_errors, npg_pytest_exit = _validate_events(
         root, manifest, "non_pg", npg_nodes
     )
-    pg_events, pg_event_errors, pg_pytest_exit = _validate_events(root, manifest, "pg", pg_nodes)
-    event_errors = npg_event_errors + pg_event_errors
+    pg_events, pg_ev_errors, pg_inc_errors, pg_pytest_exit = _validate_events(
+        root, manifest, "pg", pg_nodes
+    )
+    evidence_errors = npg_ev_errors + pg_ev_errors
+    incomplete_errors = npg_inc_errors + pg_inc_errors
 
+    test_errors: list[str] = []
     for label, pytest_exit, phase_name in [
         ("non_pg", npg_pytest_exit, "test_non_pg"),
         ("pg", pg_pytest_exit, "test_pg"),
     ]:
         if pytest_exit is not None and pytest_exit != 0:
-            event_errors.append(f"{label} pytest_exit_status={pytest_exit}")
+            test_errors.append(f"{label} pytest_exit_status={pytest_exit}")
         if (
             pytest_exit is not None
             and phase_name in phase_exits
             and (pytest_exit == 0) != (phase_exits[phase_name] == 0)
         ):
-            event_errors.append(
+            evidence_errors.append(
                 f"{label} pytest_exit_status={pytest_exit} contradicts "
                 f"phase {phase_name} exit={phase_exits[phase_name]}"
             )
 
     if not npg_nodes and not pg_nodes:
-        is_incomplete = True
+        incomplete_errors.append("no selected nodes in either partition")
 
     npg_state_errors = _validate_node_state_machines(npg_events, "non_pg")
     pg_state_errors = _validate_node_state_machines(pg_events, "pg")
@@ -666,22 +659,25 @@ def _reconcile_inner(
         if call_passed and not call_events[0].get("wasxfail"):
             waiver_errors.append(f"unused waiver (node passed): {wnode}")
 
-    has_test_failure = any("failed" in e or "error" in e or "XPASS" in e for e in state_errors)
-    has_test_failure = has_test_failure or any("exit=" in e for e in phase_errors)
+    for err in state_errors:
+        if "XPASS" in err or "failed" in err or "error" in err:
+            test_errors.append(err)
+        else:
+            evidence_errors.append(err)
+
+    evidence_errors.extend(pg_errors)
+    evidence_errors.extend(waiver_errors)
 
     terminal_state = _classify_terminal(
         phase_errors,
         collection_errors,
-        event_errors,
-        state_errors,
-        pg_errors,
-        waiver_errors,
-        has_test_failure,
-        is_incomplete,
+        incomplete_errors,
+        evidence_errors,
+        test_errors,
     )
 
     all_errors = (
-        phase_errors + collection_errors + event_errors + state_errors + pg_errors + waiver_errors
+        phase_errors + collection_errors + incomplete_errors + evidence_errors + test_errors
     )
 
     artifact_hashes = {}

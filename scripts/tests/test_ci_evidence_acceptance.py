@@ -177,6 +177,17 @@ def _streams(
         (evidence / event_stream_file(partition)).write_bytes(full)
 
 
+def _write_partition_stream(
+    evidence: Path,
+    partition: str,
+    nodes: list[str],
+    overrides: dict[str, list[tuple[str, str, str | None]]] | None = None,
+) -> None:
+    data = _events_for(nodes, overrides=overrides)
+    full = _finalize(data, partition, nodes)
+    (evidence / event_stream_file(partition)).write_bytes(full)
+
+
 def _waivers(path: Path, entries: list[dict[str, Any]] | None = None) -> None:
     path.write_text(json.dumps({"schema_version": 1, "entries": entries or []}) + "\n")
 
@@ -677,7 +688,7 @@ class TestEventStreamIntegrity:
         )
         npg_data += extra.encode()
         (evidence / event_stream_file("non_pg")).write_bytes(_finalize(npg_data, "non_pg", [NPG]))
-        _streams(evidence, [], [PG])
+        _write_partition_stream(evidence, "pg", [PG])
         _waivers(waivers)
         t = _reconcile(evidence, waivers)
         assert t["state"] == TERMINAL_EVIDENCE_FAILED
@@ -725,7 +736,7 @@ class TestEventStreamIntegrity:
         extra_node = "tests/test_extra.py::test_extra"
         npg_data = _events_for([NPG, extra_node])
         (evidence / event_stream_file("non_pg")).write_bytes(_finalize(npg_data, "non_pg", [NPG]))
-        _streams(evidence, [], [PG])
+        _write_partition_stream(evidence, "pg", [PG])
         _waivers(waivers)
         t = _reconcile(evidence, waivers)
         assert t["state"] == TERMINAL_EVIDENCE_FAILED
@@ -738,7 +749,7 @@ class TestEventStreamIntegrity:
         _collections(evidence, [NPG], [PG])
         npg_data = _events_for([NPG, PG])
         (evidence / event_stream_file("non_pg")).write_bytes(_finalize(npg_data, "non_pg", [NPG]))
-        _streams(evidence, [], [PG])
+        _write_partition_stream(evidence, "pg", [PG])
         _waivers(waivers)
         t = _reconcile(evidence, waivers)
         assert t["state"] == TERMINAL_EVIDENCE_FAILED
@@ -762,7 +773,7 @@ class TestEventStreamIntegrity:
             }
             data += (json.dumps(event, sort_keys=True) + "\n").encode()
         (evidence / event_stream_file("non_pg")).write_bytes(_finalize(data, "non_pg", [NPG]))
-        _streams(evidence, [], [PG])
+        _write_partition_stream(evidence, "pg", [PG])
         _waivers(waivers)
         t = _reconcile(evidence, waivers)
         assert t["state"] == TERMINAL_EVIDENCE_FAILED
@@ -785,7 +796,7 @@ class TestEventStreamIntegrity:
             }
             data += (json.dumps(event, sort_keys=True) + "\n").encode()
         (evidence / event_stream_file("non_pg")).write_bytes(_finalize(data, "non_pg", [NPG]))
-        _streams(evidence, [], [PG])
+        _write_partition_stream(evidence, "pg", [PG])
         _waivers(waivers)
         t = _reconcile(evidence, waivers)
         assert t["state"] == TERMINAL_EVIDENCE_FAILED
@@ -798,7 +809,7 @@ class TestEventStreamIntegrity:
         _collections(evidence, [NPG], [PG])
         data = b'{"truncated\n'
         (evidence / event_stream_file("non_pg")).write_bytes(_finalize(data, "non_pg", [NPG]))
-        _streams(evidence, [], [PG])
+        _write_partition_stream(evidence, "pg", [PG])
         _waivers(waivers)
         t = _reconcile(evidence, waivers)
         assert t["state"] != TERMINAL_SUCCESS
@@ -811,7 +822,7 @@ class TestEventStreamIntegrity:
         _collections(evidence, [NPG], [PG])
         data = _events_for([NPG])
         (evidence / event_stream_file("non_pg")).write_bytes(data)
-        _streams(evidence, [], [PG])
+        _write_partition_stream(evidence, "pg", [PG])
         _waivers(waivers)
         t = _reconcile(evidence, waivers)
         assert t["state"] != TERMINAL_SUCCESS
@@ -836,7 +847,7 @@ class TestEventStreamIntegrity:
         }
         full = data + (json.dumps(final, sort_keys=True) + "\n").encode()
         (evidence / event_stream_file("non_pg")).write_bytes(full)
-        _streams(evidence, [], [PG])
+        _write_partition_stream(evidence, "pg", [PG])
         _waivers(waivers)
         t = _reconcile(evidence, waivers)
         assert t["state"] == TERMINAL_EVIDENCE_FAILED
@@ -861,10 +872,49 @@ class TestEventStreamIntegrity:
         }
         full = data + (json.dumps(final, sort_keys=True) + "\n").encode()
         (evidence / event_stream_file("non_pg")).write_bytes(full)
-        _streams(evidence, [], [PG])
+        _write_partition_stream(evidence, "pg", [PG])
         _waivers(waivers)
         t = _reconcile(evidence, waivers)
         assert t["state"] == TERMINAL_EVIDENCE_FAILED
+
+
+class TestInterruptAndIncomplete:
+    def test_missing_event_stream_is_incomplete(self, tmp_path: Path) -> None:
+        evidence, waivers = tmp_path / "e", tmp_path / "w.json"
+        evidence.mkdir()
+        _manifest(evidence)
+        _phase_ok(evidence)
+        _collections(evidence, [NPG], [PG])
+        _streams(evidence, [NPG], [PG])
+        (evidence / event_stream_file("pg")).unlink()
+        _waivers(waivers)
+        t = _reconcile(evidence, waivers)
+        assert t["state"] == TERMINAL_INCOMPLETE
+
+    def test_missing_final_record_is_incomplete(self, tmp_path: Path) -> None:
+        evidence, waivers = tmp_path / "e", tmp_path / "w.json"
+        evidence.mkdir()
+        _manifest(evidence)
+        _phase_ok(evidence)
+        _collections(evidence, [NPG], [PG])
+        npg_data = _events_for([NPG])
+        (evidence / event_stream_file("non_pg")).write_bytes(npg_data)
+        _write_partition_stream(evidence, "pg", [PG])
+        _waivers(waivers)
+        t = _reconcile(evidence, waivers)
+        assert t["state"] == TERMINAL_INCOMPLETE
+
+    def test_missing_nodes_in_stream_is_incomplete(self, tmp_path: Path) -> None:
+        evidence, waivers = tmp_path / "e", tmp_path / "w.json"
+        evidence.mkdir()
+        _manifest(evidence)
+        _phase_ok(evidence)
+        npg2 = "tests/test_x.py::test_x"
+        _collections(evidence, [NPG, npg2], [PG])
+        _streams(evidence, [NPG], [PG])
+        _waivers(waivers)
+        t = _reconcile(evidence, waivers)
+        assert t["state"] == TERMINAL_INCOMPLETE
 
 
 class TestWaiverGovernance:

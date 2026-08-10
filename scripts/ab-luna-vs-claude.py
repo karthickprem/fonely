@@ -77,32 +77,43 @@ CLOCK = TrustedClock(
 
 # --- LLM clients ---
 async def call_luna(messages: list[dict]) -> str:
-    async with httpx.AsyncClient(timeout=60) as client:
-        r = await client.post(
-            f"{BASE_URL}/v1/chat/completions",
-            headers={"Ocp-Apim-Subscription-Key": SUB_KEY, "Content-Type": "application/json", "user": "karthick"},
-            json={"model": "gpt-5.6-luna", "max_completion_tokens": 300,
-                  "messages": [{"role": "system", "content": SYSTEM_PROMPT}] + messages},
-        )
-        if r.status_code != 200:
-            return f"[ERROR {r.status_code}]"
-        return r.json()["choices"][0]["message"]["content"]
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=90) as client:
+                r = await client.post(
+                    f"{BASE_URL}/v1/chat/completions",
+                    headers={"Ocp-Apim-Subscription-Key": SUB_KEY, "Content-Type": "application/json", "user": "karthick"},
+                    json={"model": "gpt-5.6-luna", "max_completion_tokens": 300,
+                          "messages": [{"role": "system", "content": SYSTEM_PROMPT}] + messages},
+                )
+                if r.status_code != 200:
+                    return f"[ERROR {r.status_code}]"
+                return r.json()["choices"][0]["message"]["content"]
+        except (httpx.ConnectTimeout, httpx.ReadTimeout):
+            if attempt < 2:
+                await asyncio.sleep(5 * (attempt + 1))
+                continue
+            return "[ERROR timeout after 3 retries]"
 
 
 async def call_claude(messages: list[dict]) -> str:
-    client = anthropic.AsyncAnthropic(
-        api_key=os.environ.get("ANTHROPIC_API_KEY", "dummy"),
-        base_url=BASE_URL,
-        default_headers={"Ocp-Apim-Subscription-Key": SUB_KEY, "user": "karthick"},
-    )
-    try:
-        msg = await client.messages.create(
-            model="claude-opus-4-6", max_tokens=300,
-            system=SYSTEM_PROMPT, messages=messages,
-        )
-        return msg.content[0].text
-    except Exception as e:
-        return f"[ERROR {type(e).__name__}]"
+    for attempt in range(3):
+        try:
+            client = anthropic.AsyncAnthropic(
+                api_key=os.environ.get("ANTHROPIC_API_KEY", "dummy"),
+                base_url=BASE_URL,
+                default_headers={"Ocp-Apim-Subscription-Key": SUB_KEY, "user": "karthick"},
+            )
+            msg = await client.messages.create(
+                model="claude-opus-4-6", max_tokens=300,
+                system=SYSTEM_PROMPT, messages=messages,
+            )
+            return msg.content[0].text
+        except Exception as e:
+            if attempt < 2:
+                await asyncio.sleep(5 * (attempt + 1))
+                continue
+            return f"[ERROR {type(e).__name__} after 3 retries]"
 
 
 # --- Scorer ---

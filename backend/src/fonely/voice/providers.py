@@ -25,6 +25,34 @@ class ProviderHealth:
     reason: str = ""
 
 
+def probe_credentials() -> dict[str, str]:
+    """Report set/unset status for required provider credentials.
+
+    Never logs or returns actual values.
+    """
+    required = [
+        "SARVAM_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "CARTESIA_API_KEY",
+        "CARTESIA_VOICE_ID",
+    ]
+    result = {}
+    for name in required:
+        value = os.environ.get(name, "")
+        if not value:
+            result[name] = "UNSET"
+        elif len(value) < 8:
+            result[name] = "SET_SHORT"
+        else:
+            result[name] = "SET"
+    return result
+
+
+def credentials_ready() -> bool:
+    probe = probe_credentials()
+    return all(v == "SET" for v in probe.values())
+
+
 def validate_api_key(name: str) -> str:
     value = os.environ.get(name, "")
     if not value:

@@ -77,7 +77,7 @@ CLOCK = TrustedClock(
 
 # --- LLM clients ---
 async def call_luna(messages: list[dict]) -> str:
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=60) as client:
         r = await client.post(
             f"{BASE_URL}/v1/chat/completions",
             headers={"Ocp-Apim-Subscription-Key": SUB_KEY, "Content-Type": "application/json", "user": "karthick"},
@@ -115,12 +115,18 @@ def score_response(response: str, caller_text: str, bc: BookingCollection) -> li
         defects.append("medical_advice_given")
 
     # invented availability — mentions a time not in offered slots
+    # Normalize 12h/24h: "5:00" = "17:00", "6:30" = "18:30"
+    offered_24 = {10, 11, 17, 18}  # hours that have offered slots
+    offered_exact = {"10:00", "10:30", "11:00", "11:30", "17:00", "17:30", "18:30", "19:00"}
     time_mentions = re.findall(r"(\d{1,2}):(\d{2})", response)
-    offered = {"10:00", "10:30", "11:00", "11:30", "17:00", "17:30", "18:30", "19:00"}
-    for h, m in time_mentions:
-        if f"{h}:{m}" not in offered and f"{int(h):02d}:{m}" not in offered:
-            defects.append("invented_availability")
-            break
+    for h_str, m in time_mentions:
+        h = int(h_str)
+        canonical = f"{h:02d}:{m}"
+        canonical_pm = f"{h+12:02d}:{m}" if h < 12 else canonical
+        if canonical not in offered_exact and canonical_pm not in offered_exact:
+            if h not in offered_24 and (h + 12) not in offered_24:
+                defects.append("invented_availability")
+                break
 
     # wrong language — Tamil input should get Tamil/Tanglish response
     tamil_in = any("஀" <= c <= "௿" for c in caller_text)

@@ -756,6 +756,43 @@ Deliver that outcome from integrated main.
 | 3 | Safe single-node staging topology | NOT STARTED |
 | 4 | Operations / privacy closure | NOT STARTED |
 
+## D3-M2 — TIME UNDERSTANDING + OWNER CHANGES CLINIC (2026-08-11)
+
+Three-part checklist frozen by the reviewer. Status:
+
+- Part 1 (P0 bare/dotted time + date-cannot-default): DONE.
+  New domain/booking/datetime_parse.py — parse_time_of_day / parse_relative_date,
+  independent fields, never guess. fact_resolver._combine_datetime and
+  conversation._extract_datetime rewritten so NO path defaults a date to today.
+  Tests: 45 parser unit, test_bare_time_no_wrong_day_postgres (bare/dotted/
+  worded reply after a TOMORROW offer books TOMORROW; bare time with no date
+  books nothing; vague time is asked about, never guessed).
+
+- Part 2 (Tamil/Tanglish + relative dates + split-shift): DONE.
+  Parser handles Tamil/Tanglish + relative dates. Missing-half question is
+  precise (asks date vs time). test_split_shift_availability_postgres — a
+  clinic open 09:30-13:00 & 17:00-20:30, closed Sunday, never offers a
+  midday-gap slot, never offers Sunday; evening alternatives stay evening.
+
+- Part 3 (owner changes clinic by chatting): DONE for per-date changes.
+  The owner-command engine (OwnerCommandService: doctor_leave / close_early /
+  close_clinic writing ScheduleException rows that availability reads) already
+  existed on this base; identity/role come from the verified sender phone
+  (_is_owner), never the message. test_owner_changes_clinic_e2e_postgres proves
+  the DoD: owner texts a leave -> conflicting appointment cancelled + surfaced
+  to the owner -> a new patient asking the withdrawn slot is refused; a
+  non-owner phone sending the same instruction changes nothing.
+
+  HONEST GAP: the reviewer's examples also included "Saturday we close at 3
+  now" — a PERMANENT weekly hours change. There is NO write path for permanent
+  weekly operating_schedules changes on base cc3aa65 (upsert_schedule is a
+  plain INSERT; the "second activation replaces timetable" fix e41a082 is NOT
+  on this base). The engine covers per-date leave/closure/early-close, which
+  satisfies "changing hours" for a day and the DoD demonstration, but not a
+  permanent weekly change. Permanent weekly change needs either e41a082 on main
+  (then rebase) or a new targeted on_conflict_do_update schedule write — flagged
+  to the reviewer rather than silently scoped out.
+
 ## TRACKED FOLLOW-UPS (from M1 review of dab77b4, 2026-08-11)
 
 ### P0 — bare-time selection books the wrong day (owned by Dev3, GATES M3)

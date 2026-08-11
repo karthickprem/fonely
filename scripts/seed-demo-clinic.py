@@ -7,12 +7,10 @@ would. It deliberately does not insert services, resources or schedules
 itself: the whole point is to prove the supported path produces a bookable
 clinic, so anything this script wrote by hand would prove nothing.
 
-There is one exception, and it is a gap rather than a choice. No mounted
-route creates a business. Every onboarding route demands a trusted
-X-Business-ID header and refuses a request without one, so a brand new clinic
-has no way in. Until a provisioning command exists, --bootstrap inserts the
-business and its owner directly. That step is marked in the output so nobody
-mistakes it for something the product supports.
+Every step is now a supported one. Creating the clinic itself used to be the
+exception -- no mounted route could do it, so the script inserted the
+business and owner rows by hand -- but POST /internal/v1/businesses exists
+now and --provision uses it.
 
 Usage:
 
@@ -20,7 +18,7 @@ Usage:
     python3 scripts/seed-demo-clinic.py \
         --base-url http://127.0.0.1:8000 \
         --database-url postgresql+asyncpg://user:pw@host/db \
-        --bootstrap
+        --provision
 
 Add --verify-reactivation to activate a second, edited draft and report
 whether the configuration was replaced or duplicated.
@@ -33,7 +31,6 @@ import asyncio
 import json
 import os
 import sys
-from datetime import time
 from pathlib import Path
 from typing import Any
 
@@ -118,9 +115,7 @@ def build_draft(clinic: dict[str, Any], draft_key: str) -> dict[str, Any]:
 
     services = []
     for svc in clinic["services"]:
-        eligible = [
-            res["key"] for res in clinic["resources"] if svc["key"] in res["services"]
-        ]
+        eligible = [res["key"] for res in clinic["resources"] if svc["key"] in res["services"]]
         if not eligible:
             raise SeedError(f"service {svc['key']!r} has no eligible resource")
         services.append(
@@ -228,58 +223,47 @@ def build_draft(clinic: dict[str, Any], draft_key: str) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# Bootstrap (the gap)
+# Provisioning (was the gap)
 # ---------------------------------------------------------------------------
 
 
-async def bootstrap_business(database_url: str, clinic: dict[str, Any]) -> tuple[int, int]:
-    """Create the business and owner row that no mounted route can create.
+async def provision_business(base_url: str, secret: str, clinic: dict[str, Any]) -> tuple[int, int]:
+    """Create the clinic through the supported provisioning route.
 
-    Returns (business_id, owner_user_id). Idempotent on the business name so
-    the script can be re-run against the same database.
+    This used to insert into `businesses` and `business_users` directly,
+    because no mounted route could create a tenant. `POST
+    /internal/v1/businesses` now can, so the hand-written insert is gone and
+    this script drives the supported path from the very first step.
+
+    Re-running is safe: the route keys on the owner's phone and returns the
+    existing clinic rather than standing up a second one.
     """
-    engine = create_async_engine(database_url)
-    try:
-        async with engine.begin() as conn:
-            name = clinic["business"]["name"]
-            business_id = (
-                await conn.execute(
-                    text("SELECT id FROM businesses WHERE name = :name"), {"name": name}
-                )
-            ).scalar_one_or_none()
-
-            if business_id is None:
-                business_id = (
-                    await conn.execute(
-                        text(
-                            "INSERT INTO businesses "
-                            "(name, category, primary_contact_phone, timezone, subscription) "
-                            "VALUES (:name, 'clinic', :phone, :tz, 'active') "
-                            "RETURNING id"
-                        ),
-                        {
-                            "name": name,
-                            "phone": clinic["owner"]["phone"],
-                            "tz": clinic["business"]["timezone"],
-                        },
-                    )
-                ).scalar_one()
-
-            owner_id = (
-                await conn.execute(
-                    text(
-                        "INSERT INTO business_users (business_id, phone, role, is_active) "
-                        "VALUES (:bid, :phone, 'owner', true) "
-                        "ON CONFLICT (business_id, phone) DO UPDATE SET is_active = true "
-                        "RETURNING id"
-                    ),
-                    {"bid": business_id, "phone": clinic["owner"]["phone"]},
-                )
-            ).scalar_one()
-
-        return int(business_id), int(owner_id)
-    finally:
-        await engine.dispose()
+    async with httpx.AsyncClient(
+        base_url=base_url.rstrip("/"),
+        timeout=30.0,
+        headers={"Authorization": f"Bearer {secret}"},
+    ) as client:
+        response = await client.post(
+            "/internal/v1/businesses",
+            json={
+                "name": clinic["business"]["name"],
+                "category": "clinic",
+                "owner_phone": clinic["owner"]["phone"],
+                "owner_name": clinic["owner"].get("name"),
+                "timezone": clinic["business"]["timezone"],
+            },
+        )
+    if response.status_code >= 400:
+        raise SeedError(
+            f"POST /internal/v1/businesses -> {response.status_code} {response.text[:400]}"
+        )
+    body = response.json()
+    verb = "created" if body["created"] else "already existed"
+    print(
+        f"provisioned via API: business={body['business_id']} "
+        f"owner={body['owner_user_id']} ({verb})"
+    )
+    return int(body["business_id"]), int(body["owner_user_id"])
 
 
 # ---------------------------------------------------------------------------
@@ -406,9 +390,11 @@ async def main() -> int:
     parser.add_argument("--business-id", type=int, help="Existing tenant to configure")
     parser.add_argument("--actor-user-id", type=int, help="Owner user performing the change")
     parser.add_argument(
+        "--provision",
         "--bootstrap",
+        dest="provision",
         action="store_true",
-        help="Create the business and owner directly (no API exists for this)",
+        help="Create the clinic through POST /internal/v1/businesses if it does not exist",
     )
     parser.add_argument(
         "--verify-reactivation",
@@ -424,13 +410,12 @@ async def main() -> int:
 
     clinic = json.loads(CLINIC_FILE.read_text())
 
-    if args.bootstrap:
-        business_id, actor_user_id = await bootstrap_business(args.database_url, clinic)
-        print(f"bootstrap (unsupported path): business={business_id} owner={actor_user_id}")
+    if args.provision:
+        business_id, actor_user_id = await provision_business(args.base_url, secret, clinic)
     elif args.business_id and args.actor_user_id:
         business_id, actor_user_id = args.business_id, args.actor_user_id
     else:
-        print("pass --bootstrap, or both --business-id and --actor-user-id", file=sys.stderr)
+        print("pass --provision, or both --business-id and --actor-user-id", file=sys.stderr)
         return 2
 
     client = OnboardingClient(args.base_url, secret, business_id, actor_user_id)

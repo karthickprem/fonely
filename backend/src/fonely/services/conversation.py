@@ -379,34 +379,24 @@ class ConversationService:
             ctx.collected_facts.pop("_active_offer", None)
             return False
 
+        from fonely.domain.booking.datetime_parse import parse_time_of_day
+
         matched_slot = None
 
-        # 1. Parse time from message and match against offered slot times
-        time_match = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", message, re.IGNORECASE)
-        if time_match:
-            hour = int(time_match.group(1))
-            minute = int(time_match.group(2) or "0")
-            ampm = time_match.group(3).lower()
-            if ampm == "pm" and hour < 12:
-                hour += 12
-            elif ampm == "am" and hour == 12:
-                hour = 0
+        # 1. Parse a time from the message (bare, dotted, worded, Tamil/Tanglish)
+        # and match it against the offered slot times. Both sides use the same
+        # parser so a bare "10:30" / "10.30" / "half past ten" resolves against
+        # the slot without inventing a date — the slot already carries the date.
+        said = parse_time_of_day(message)
+        if said is not None:
             for slot in offer.slots:
-                slot_match = re.match(
-                    r"(\d{1,2}):(\d{2})\s*(am|pm)",
-                    slot.display_time.lower().strip(),
-                )
-                if slot_match:
-                    sh = int(slot_match.group(1))
-                    sm = int(slot_match.group(2))
-                    sa = slot_match.group(3)
-                    if sa == "pm" and sh < 12:
-                        sh += 12
-                    elif sa == "am" and sh == 12:
-                        sh = 0
-                    if sh == hour and sm == minute:
-                        matched_slot = slot
-                        break
+                slot_time = parse_time_of_day(slot.display_time)
+                if slot_time is not None and (
+                    slot_time.hour,
+                    slot_time.minute,
+                ) == (said.hour, said.minute):
+                    matched_slot = slot
+                    break
 
         # 2. Word-boundary ordinal matching (only if no time match)
         if matched_slot is None:
@@ -451,40 +441,57 @@ class ConversationService:
         if self._try_offer_selection(ctx, message):
             return
 
-        msg_lower = message.lower()
+        from datetime import date as _date
+
+        from fonely.domain.booking.datetime_parse import (
+            parse_relative_date,
+            parse_time_of_day,
+        )
+
         clinic_tz = ZoneInfo(timezone)
         now = datetime.now(clinic_tz)
 
-        time_match = re.search(r"\b(\d{1,2}):(\d{2})\s*(am|pm)?\b", msg_lower)
-        if time_match:
-            hour = int(time_match.group(1))
-            minute = int(time_match.group(2))
-            ampm = time_match.group(3)
-            if ampm == "pm" and hour < 12:
-                hour += 12
-            elif ampm == "am" and hour == 12:
-                hour = 0
+        said_time = parse_time_of_day(message)
+        said_date = parse_relative_date(message, now.date())
 
-            target_date = now.date()
-            if "tomorrow" in msg_lower or "நாளை" in message:
-                target_date = (now + timedelta(days=1)).date()
+        # Merge with any date/time already held from a prior turn. The parser
+        # never invents the missing half; pending state carries it forward.
+        pending_date_raw = ctx.collected_facts.get("_pending_date")
+        pending_time_raw = ctx.collected_facts.get("_pending_time")
+        held_date = (
+            _date.fromisoformat(pending_date_raw)
+            if isinstance(pending_date_raw, str)
+            else None
+        )
+        held_time = (
+            dt_time.fromisoformat(pending_time_raw)
+            if isinstance(pending_time_raw, str)
+            else None
+        )
 
-            local_dt = datetime.combine(target_date, dt_time(hour, minute), tzinfo=clinic_tz)
-            new_start = local_dt.astimezone(UTC)
-            # A raw time reaching here is not an offer selection (that was tried
-            # first), so any active offer is now stale — drop it.
-            if ctx.collected_facts.get("start_at") != new_start:
-                ctx.collected_facts.pop("_active_offer", None)
-            ctx.collected_facts["start_at"] = new_start
+        eff_date = said_date or held_date
+        eff_time = said_time or held_time
+
+        if said_time is None and said_date is None:
             return
 
-        if "tomorrow" in msg_lower or "நாளை" in message:
-            target_date = (now + timedelta(days=1)).date()
-            local_dt = datetime.combine(target_date, dt_time(10, 0), tzinfo=clinic_tz)
-            new_start = local_dt.astimezone(UTC)
-            if ctx.collected_facts.get("start_at") != new_start:
-                ctx.collected_facts.pop("_active_offer", None)
-            ctx.collected_facts["start_at"] = new_start
+        # A newly named time/date makes any active offer stale.
+        if said_time is not None or said_date is not None:
+            ctx.collected_facts.pop("_active_offer", None)
+
+        if eff_date is not None and eff_time is not None:
+            local_dt = datetime.combine(eff_date, eff_time, tzinfo=clinic_tz)
+            ctx.collected_facts["start_at"] = local_dt.astimezone(UTC)
+            ctx.collected_facts.pop("_pending_date", None)
+            ctx.collected_facts.pop("_pending_time", None)
+        else:
+            # Only one half known — never guess the other. Hold it and drop any
+            # stale composed start_at so the caller asks for what is missing.
+            ctx.collected_facts.pop("start_at", None)
+            if eff_date is not None:
+                ctx.collected_facts["_pending_date"] = eff_date.isoformat()
+            if eff_time is not None:
+                ctx.collected_facts["_pending_time"] = eff_time.isoformat()
 
     def _identify_missing_facts(self, ctx: ConversationContext) -> list[str]:
         operation = ctx.collected_facts.get("_operation", "book")

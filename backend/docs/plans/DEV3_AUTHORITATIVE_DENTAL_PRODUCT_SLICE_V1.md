@@ -793,6 +793,57 @@ Three-part checklist frozen by the reviewer. Status:
   (then rebase) or a new targeted on_conflict_do_update schedule write — flagged
   to the reviewer rather than silently scoped out.
 
+### D3-M4 — BOOKING CONVERSATION SURVIVES REAL SPEECH (candidate 2026-08-11)
+
+Adversarial harness driving the REAL conversation path (`_process_domain` ->
+`process_message`), not `_extract_datetime` in isolation. Speech-shaped corpus,
+invariants asserted on EVERY input:
+- I1 never book a time the patient did not name/select
+- I2 never book a slot not offered
+- I3 no question repeats unboundedly (bounded identical asks)
+- I4 a correction supersedes the earlier reading
+
+CORPUS: 10 scripted conversations across 8 categories. Per-category result:
+- no_punctuation (2 cases: nopunct-morning, nopunct-evening-offer) — PASS,
+  found nothing. Lowercase run-on "10 30 am" and bare "5 15"+"5 30 pm" book
+  correctly.
+- disfluency (1: disfluency) — PASS, found nothing. "um at ten thirty am" books
+  10:30.
+- stt_artifact (1: stt-trailing-period) — PASS, found nothing. "5:30 PM."
+  (trailing period) resolves.
+- code_mixing (2: codemix-tanglish, codemix-evening-word) — PASS, found
+  nothing. "naalaikku pathu mani kaalai" -> 10:00; "aaru mani"+"maalai" -> 18:00.
+- split_turn (1: split-turn) — PASS, found nothing. time-then-date-then-meridiem
+  across three turns books 18:00.
+- negation (1: negation-no-time) — **FOUND A DEFECT (I1 silent mis-booking)**.
+  "not 5 pm" booked 5:00 PM. FIXED: `_time_is_directly_negated` +
+  `_correction_replacement_spec` reject the negated time; "not 5 pm" now books
+  nothing until "6 pm" is named. Now PASS.
+- correction (1: correction-evening) — **FOUND A DEFECT (I4 correction lost)**.
+  "no no make it 6 pm" after a 10:30 AM proposal booked nothing — the negative
+  confirmation branch dropped the proposal but never re-extracted the new time.
+  FIXED: the AWAITING_CONFIRMATION negative branch now carries the rejected
+  proposal's DATE forward as _pending_date, re-extracts the replacement time,
+  and re-proposes the corrected slot. Now PASS (books 18:00).
+- vague (1: vague-time) — PASS, found nothing. "sometime"/"whenever" books
+  nothing (correctly refuses to guess).
+
+TWO CLASSES FIXED (per checklist item 4): silent mis-booking (negation) and
+correction-supersedes (I4). No unbounded repetition surfaced (I3 held on all 10).
+
+REPORTED, NOT FIXED (proposed as a call, per checklist item 4): resource-name
+punctuation. The harness lead uses the stored form "Dr. Priya"; a spoken
+"dr priya" (no period/caps) does NOT match `_extract_facts` resource matching.
+Out of scope for the TIME-understanding milestone; isolated deliberately so the
+corpus tests time, not fuzzy resource matching. Proposed as a separate call.
+
+FOLDED IN (checklist item 5): task #16 (`parse_time_spec("the evening one")`
+no longer reads ordinal "one" as hour 1 — needs a real clock token) and task
+#17 (bare "am"/"pm" standalone gate + trailing-punctuation 'PM.'/'pm please').
+
+Same integration hold as D3-M1/M2/M3: no push to main, no rebase onto the CEO
+branch. Awaiting exact-SHA authorization.
+
 ### D3-M3 ACCEPTED at af451a2 (review 2026-08-11)
 
 Time-understanding residuals + coupling guard. Accepted after four defects

@@ -123,9 +123,7 @@ def parse_time_spec(text: str) -> TimeSpec | None:
     # meridiem HINT, not evidence that a time was named; it must not license a
     # bare word-number ("one") to be read as an hour. "the evening one" names
     # no time; it is a slot-picking phrase, so parse must return None there.
-    has_clock_token = bool(
-        re.search(r"\bam\b|\ba\.m\b|\bpm\b|\bp\.m\b|o'?clock|\bsharp\b", t)
-    )
+    has_clock_token = bool(re.search(r"\bam\b|\ba\.m\b|\bpm\b|\bp\.m\b|o'?clock|\bsharp\b", t))
 
     def _resolve(h: int) -> tuple[int, bool]:
         # Returns (hour_24, meridiem_explicit).

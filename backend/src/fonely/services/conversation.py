@@ -6,6 +6,7 @@ import re
 import time
 import uuid
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,6 +28,9 @@ from fonely.domain.conversation.state import (
 )
 from fonely.domain.pending_actions.commands import ActorContext
 from fonely.services.model_gateway import ModelGateway, ModelResponse
+
+if TYPE_CHECKING:
+    from fonely.domain.booking.datetime_parse import TimeSpec
 
 logger = logging.getLogger("fonely.services.conversation")
 
@@ -607,6 +611,76 @@ class ConversationService:
         ctx.collected_facts.pop("_ambiguity_asks", None)
         return True
 
+    @staticmethod
+    def _time_is_directly_negated(message: str) -> bool:
+        """True if the message rejects the time it names ("not 5 pm", "no 5").
+
+        A negation word immediately before the time token. This is distinct
+        from a correction that names a REPLACEMENT ("no no, make it 6 pm"),
+        which _correction_replacement_time handles.
+        """
+        t = message.lower()
+        # negation word, optional filler, then a time token (digit or word-hour
+        # or Tamil hour), within a short window.
+        neg = (
+            r"\b(?:not|no|dont|don't|do not|vendaam|வேண்டாம்|illai|இல்லை)\b"
+            r"(?:\s+\w+){0,2}?\s+"
+            r"(?:\d{1,2}|one|two|three|four|five|six|seven|eight|nine|ten|"
+            r"eleven|twelve|mani|onnu|rendu|moonu|naalu|anju|aaru|ezhu|ettu|"
+            r"onbadhu|pathu)"
+        )
+        return re.search(neg, t) is not None
+
+    @staticmethod
+    def _correction_replacement_spec(message: str) -> "TimeSpec | None":
+        """Return the REPLACEMENT TimeSpec in a correction, or None.
+
+        "no no make it 6 pm" / "not 5, change to 6 pm" name a new time after a
+        correction cue or after the negated one. We parse only the text that
+        introduces the new time, so the negated time is never read as the
+        replacement, and we return None when the ONLY time present is the
+        negated one ("not 5 pm").
+        """
+        from fonely.domain.booking.datetime_parse import parse_time_spec
+
+        t = message.lower()
+        # 1. Explicit correction cue -> parse the tail after it.
+        cue = re.search(
+            r"\b(?:make it|change (?:it )?to|instead|rather|"
+            r"maathunga|மாத்துங்க)\b(.*)$",
+            t,
+        )
+        if cue is not None:
+            return parse_time_spec(cue.group(1))
+
+        # 2. No cue. The negation rejects the time ADJACENT to it. A replacement
+        # exists only if a SECOND, later time is named. Doubled negation
+        # ("no no 6 pm") has no adjacent time to reject, so its single time is
+        # the replacement.
+        _time_tok = (
+            r"(?:\d{1,2}(?::\d{2})?\s*(?:am|pm|a\.m|p\.m)?)"
+            r"|(?:aaru|pathu|anju|ettu|ezhu|moonu|naalu|rendu|onnu|onbadhu|"
+            r"one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)"
+            r"(?:\s*mani)?"
+        )
+        # A single negation immediately followed by a time = that time rejected.
+        adj = re.search(
+            rf"\b(?:not|dont|don't|do not|vendaam|வேண்டாம்)\b\s+({_time_tok})",
+            t,
+        )
+        # Doubled/lone "no" negation ("no no 6 pm", "no 6 pm" as rejection of a
+        # PRIOR proposal): the time is the replacement, not a rejection.
+        if adj is not None:
+            # Parse only what follows the rejected token — a second time, if any.
+            tail = t[adj.end() :]
+            return parse_time_spec(tail)
+        # "no ..." / "no no ..." with the time not adjacent to "not": the whole
+        # remainder after the negation run is the replacement.
+        neg_run = re.search(r"\b(?:no)(?:\s+no)*\b(.*)$", t)
+        if neg_run is not None:
+            return parse_time_spec(neg_run.group(1))
+        return None
+
     def _extract_datetime(
         self, ctx: ConversationContext, message: str, timezone: str = "Asia/Kolkata"
     ) -> None:
@@ -627,9 +701,33 @@ class ConversationService:
         clinic_tz = ZoneInfo(timezone)
         now = datetime.now(clinic_tz)
 
+        # Negation handling. "not 5 pm" / "no 5" must NOT be taken as the
+        # requested time — booking the negated time is a silent mis-booking.
+        # But "no no make it 6 pm" is a CORRECTION: the negation rejects the
+        # prior reading while naming a new time. We distinguish by adjacency —
+        # a time immediately after a negation word is the rejected one; a time
+        # introduced by "make it"/"change to"/"instead" (or simply not adjacent
+        # to the negation) is the replacement.
+        negated_time = self._time_is_directly_negated(message)
+
         said_spec = parse_time_spec(message)
         said_time = said_spec.time if said_spec is not None else None
         said_date = parse_relative_date(message, now.date())
+
+        if negated_time:
+            # The named time is explicitly rejected. If the message ALSO names a
+            # replacement (a correction like "not 5 pm, make it 6"), keep only
+            # the replacement; otherwise drop the time and clear any stale
+            # start_at so the patient is asked for a new time rather than booked
+            # into the one they just refused.
+            replacement_spec = self._correction_replacement_spec(message)
+            said_spec = replacement_spec
+            said_time = replacement_spec.time if replacement_spec is not None else None
+            if said_time is None:
+                ctx.collected_facts.pop("start_at", None)
+                ctx.collected_facts.pop("_active_offer", None)
+                ctx.collected_facts.pop("_pending_time", None)
+                ctx.collected_facts.pop("_pending_time_explicit", None)
 
         # Merge with any date/time already held from a prior turn. The parser
         # never invents the missing half; pending state carries it forward.
@@ -1175,9 +1273,34 @@ class ConversationService:
                 )
             ctx.transition(ConversationState.FACT_COLLECTION)
             ctx.booking_attempt += 1
-            ctx.collected_facts.pop("start_at", None)
             ctx.proposal_id = None
             ctx.proposal_version = None
+            # A rejection that ALSO names a new time is a correction ("no no,
+            # make it 6 pm"). The correction typically names only the time, not
+            # the date — the date was already composed into the rejected
+            # start_at. Carry that date forward as _pending_date so the
+            # replacement time composes with it, then re-extract and go straight
+            # to proposing the corrected slot instead of asking a question we
+            # already have the answer to.
+            from fonely.services.conversation_tools import (
+                BusinessContext,
+                get_business_context,
+            )
+
+            biz = await get_business_context(ctx.business_id, self._session)
+            prior_start = ctx.collected_facts.pop("start_at", None)
+            if isinstance(biz, BusinessContext):
+                if isinstance(prior_start, datetime):
+                    from zoneinfo import ZoneInfo
+
+                    prior_local = prior_start.astimezone(ZoneInfo(biz.timezone))
+                    ctx.collected_facts["_pending_date"] = prior_local.date().isoformat()
+                self._extract_datetime(ctx, user_message, biz.timezone)
+                if "start_at" in ctx.collected_facts and not self._identify_missing_facts(ctx):
+                    return await self._check_availability_and_propose(
+                        ctx, user_message, actor, biz, safety
+                    )
+                ctx.collected_facts.pop("_pending_date", None)
             return self._fact_turn(
                 ctx,
                 user_message,

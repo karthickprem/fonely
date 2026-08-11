@@ -1,0 +1,757 @@
+# FONELY CEO — DEV3 DELIVERY ASSIGNMENT
+
+## Milestone:
+Authoritative Dental Product Slice v1
+WhatsApp Synthetic Staging E2E + Stable Voice Application Contract
+
+## Priority:
+P0 — immediate product delivery
+
+## Owner:
+Dev3 — sole non-voice developer
+
+## Parallel partner:
+Dev4 — sole voice developer
+
+## Starting main:
+Exact integrated main SHA:
+cc3aa65c6bc2529868a9f8ac10812ebaca467554
+
+## Integrated migration head:
+0015
+
+## Integrated evidence:
+- Pre-integration CI fully green
+- Post-integration CI run 31449054019 fully green
+- All 21 named steps passed
+- Zero required steps skipped
+
+## EXECUTION MODE
+
+Work autonomously from start to terminal delivery.
+
+Do not:
+
+- send routine progress narration,
+- ask whether to continue,
+- create parallel implementation branches,
+- broaden into voice internals,
+- revive inventory/order scope,
+- merge retired branches wholesale,
+- start Exotel migration 0016,
+- deploy publicly,
+- use real customer data,
+- claim staging/pilot/production readiness without corresponding evidence.
+
+Return only when you have either:
+
+1. one clean, pushed, fully gated exact CANDIDATE SHA; or
+2. one genuine blocker that requires founder credentials, public infrastructure, migration authorization, or a product-policy decision.
+
+Commit durable WIP at every natural pause so session/worktree loss cannot destroy work.
+
+Do not merge or push to main without CEO authorization for the exact candidate SHA.
+
+## MISSION
+
+Deliver the first complete, trustworthy Fonely dental product journey through the real FastAPI/PostgreSQL application:
+
+synthetic signed WhatsApp message
+→ durable inbound event
+→ ordered inbound worker
+→ Tamil/Tanglish conversation
+→ trusted clinic context
+→ authoritative availability
+→ explicit offered-slot identity
+→ exact readback
+→ explicit patient confirmation
+→ PostgreSQL appointment + allocation
+→ PendingAction completion
+→ notification manifest
+→ patient and owner outbox events
+→ fake Meta delivery adapter
+→ delivery callback reconciliation
+→ restart/replay proof
+
+At the same time, expose the smallest stable typed application contract Dev4 needs to build voice in parallel.
+
+The voice runtime must be able to ask the authoritative application:
+
+- what clinic/business context is trusted,
+- what facts are still required,
+- which slots are authoritatively available,
+- which offered slot the patient selected,
+- whether a proposal was created,
+- whether explicit confirmation is required,
+- whether the operation committed,
+- what immutable receipt may be spoken,
+- whether escalation is required.
+
+PostgreSQL and application services remain authoritative.
+
+The model, voice runtime, WhatsApp adapter, and callers must never directly mutate authoritative booking state.
+
+## CUSTOMER OUTCOME
+
+A synthetic Tamil/Tanglish dental patient must be able to:
+
+1. ask for an appointment naturally,
+2. receive clarification only for missing or ambiguous facts,
+3. ask unrelated clinic questions during booking,
+4. correct service, doctor, date, or time,
+5. receive only real authoritative available choices,
+6. select an offered choice without the model inventing a slot,
+7. hear/read the exact service, doctor/resource, date, time, clinic, and price facts,
+8. explicitly confirm,
+9. receive success only after PostgreSQL commit,
+10. receive a replay-safe committed result after retries or restart,
+11. cancel or reschedule through the same confirmation discipline,
+12. receive truthful notification-evidence status,
+13. escalate safely when the request is medical, urgent, unsupported, or asks for a human.
+
+The clinic owner must receive durable notification evidence for every committed operation.
+
+## PRODUCT BOUNDARY
+
+### IN SCOPE
+
+- WhatsApp text booking, cancellation, and rescheduling
+- Tamil, Tanglish, and Indian English text behavior
+- Trusted clinic/business context
+- Authoritative availability
+- Durable offered-slot selection
+- Exact proposal/readback
+- Explicit confirmation
+- Appointment commit receipt
+- Notification manifest and outbox
+- Fake-provider delivery and callback reconciliation
+- Restart and duplicate handling
+- Application ports needed by Dev4
+- Synthetic single-clinic staging composition
+- Operator-visible failure evidence
+- Main-based integration candidate
+
+### OUT OF SCOPE
+
+- STT implementation
+- TTS implementation
+- voice prompt/dialogue implementation
+- browser voice UI
+- Exotel edge implementation
+- Exotel migration 0016
+- public TLS/DNS
+- real Meta credentials
+- real patient traffic
+- inventory/order workflows
+- additional industries
+- new languages
+- microservices/Kafka/Celery/Kubernetes
+- generic workflow engines
+- dashboards unrelated to operating this slice
+- tenant-unsafe retention redesign
+- wholesale merge of retired branches
+
+## NON-NEGOTIABLE ARCHITECTURE
+
+1. PostgreSQL is authoritative.
+2. Every tenant-owned read/write is scoped by trusted business_id.
+3. Trusted tenant and actor context are injected by the application.
+4. Never accept model-generated tenant, actor, service, resource, slot, price, role, or committed state as authoritative.
+5. Business mutation occurs only through typed application commands.
+6. Every external retryable mutation has semantic idempotency backed by PostgreSQL uniqueness.
+7. PendingAction remains the proposal/confirmation boundary.
+8. Caller owns the outer transaction.
+9. Internal services do not commit.
+10. No success response before outer commit.
+11. Notification manifest/outbox creation is atomic with appointment mutation.
+12. Provider calls occur outside database transactions and authoritative locks.
+13. Immutable committed facts drive replay and customer-visible receipt.
+14. Mutable catalog/configuration changes cannot corrupt committed replay.
+15. Multi-row locks use deterministic total ordering.
+16. Concurrency evidence uses independent PostgreSQL sessions and real overlap.
+17. Channel adapters remain thin and stateless.
+18. Do not add platform abstractions not required by this exact product slice.
+
+## WORKTREE AND GIT SAFETY
+
+Before editing:
+
+1. Verify remote main is exactly:
+   cc3aa65c6bc2529868a9f8ac10812ebaca467554
+
+2. Inspect:
+   - branch,
+   - status,
+   - tracked and untracked files,
+   - current migration head,
+   - all visible worktrees,
+   - relevant retired handoffs,
+   - complete current-main production path.
+
+3. Create a clean isolated worktree and branch:
+   suggested branch:
+   dev3/dental-whatsapp-staging-e2e
+
+4. Base exactly on accepted main.
+
+5. Do not modify:
+   - Dev4 worktrees,
+   - retired Dev1 worktree,
+   - retired Dev2 worktree,
+   - retired Dev5 worktree,
+   - user-owned untracked files.
+
+6. Retired branches are read-only evidence:
+   - Dev2 staging WIP:
+     /tmp/dev2-staging-runtime
+     local WIP 503ea16895a4cf9e7ae21f3783a05852f3fd2833
+   - Dev5 rejected availability candidate:
+     3ddd030
+   - Dev1 Exotel WIP/design:
+     b35ab88
+     f429251
+
+Do not merge or rebase any of those branches wholesale.
+
+If useful logic is needed, inspect it, rederive the smallest correct main-based implementation, and prove it independently.
+
+## FIRST PHASE — COMPLETE TRACE BEFORE EDITING
+
+Read every production line and relevant test for:
+
+- app composition,
+- WhatsApp webhook,
+- inbound event repository,
+- inbound worker,
+- conversation persistence,
+- ConversationService,
+- safety classifier,
+- fact resolution,
+- AvailabilityService,
+- appointment proposal/confirmation,
+- cancellation,
+- rescheduling,
+- PendingAction,
+- notification manifest,
+- notification outbox,
+- notification worker,
+- WhatsApp sender,
+- delivery callback reconciliation,
+- business onboarding/configuration,
+- clinic schedules/exceptions,
+- operator evidence,
+- staging topology and configuration,
+- internal API response models.
+
+Trace the complete path:
+
+HTTP webhook
+→ signature verification
+→ tenant mapping
+→ durable inbound event
+→ worker claim
+→ conversation loading
+→ LLM/fact extraction
+→ authoritative application command
+→ transaction
+→ response outbox
+→ provider send
+→ callback reconciliation
+→ replay/restart
+
+For every fact, identify internally whether it is:
+
+- trusted current configuration,
+- untrusted patient text,
+- model interpretation,
+- authoritative application result,
+- immutable committed fact,
+- provider delivery evidence.
+
+Do not edit until that trace is understood.
+
+## MILESTONE A — STABLE APPLICATION CONTRACT FOR CHANNELS
+
+Create the smallest typed contract usable by WhatsApp today and Dev4 voice later.
+
+Do not create a generic workflow framework.
+
+Prefer typed dataclasses/Pydantic/domain result types and application facades over a large new abstraction hierarchy.
+
+The contract must represent:
+
+1. TrustedConversationContext
+   - business_id
+   - conversation/session ID
+   - trusted actor/subject
+   - clinic timezone
+   - current local date/time
+   - supported language/register
+   - clinic identity
+
+2. BookingDraft
+   - operation
+   - service identity
+   - resource identity/preference
+   - date/time intent
+   - patient identity
+   - collected facts
+   - missing facts
+   - rejected/corrected facts
+   - revision/version
+
+3. AvailabilityOffer
+   - opaque offer ID
+   - offer revision
+   - business/conversation/service/resource bindings
+   - absolute aware UTC start/end
+   - clinic-local display facts
+   - expiry
+   - opaque selection token
+   - deterministic ordering
+
+4. SelectedSlot
+   - must be a member of the active offer
+   - offer ID/revision/token binding
+   - no raw model-created slot
+   - no selection from stale/tampered offer
+
+5. AppointmentProposalResult
+   - proposal/PendingAction identity
+   - exact immutable facts for readback
+   - expiry/version
+   - explicit-confirmation requirement
+
+6. AppointmentCommitReceipt
+   - committed appointment ID/version
+   - operation identity
+   - exact service/resource snapshots
+   - exact start/end/timezone
+   - patient facts
+   - price facts
+   - notification evidence status
+   - immutable replay identity
+
+7. EscalationResult
+   - medical/urgent/unsupported/human-help class
+   - safe patient message
+   - whether a real operator notification/handoff was created
+   - never claim an alert/transfer that did not occur
+
+The contract must not expose internal commit methods as public LLM tools.
+
+## MILESTONE B — DURABLE OFFERED-SLOT SEAM
+
+The current natural-language alternatives path is not sufficient if it relies on matching free-form time text without durable offer identity.
+
+Implement the accepted useful principles from the retired availability work, but not its rejected branch wholesale:
+
+- availability choices come only from AvailabilityService,
+- persist one typed active offer aggregate,
+- issue opaque tokens,
+- bind tenant/conversation/service/resource/date/time/revision,
+- validate selected token membership,
+- distinguish acceptance, rejection, correction, ambiguity, and scope changes,
+- canonical date/time handling,
+- fail closed on malformed/orphan/cross-offer state,
+- exact-slot recheck under the canonical resource-schedule lock,
+- no proposal if the slot changed,
+- critical persistence failures propagate,
+- restart restores the active offer safely,
+- timeout/rollback cannot leave process cache ahead of PostgreSQL.
+
+Every proposal path—selected offer or direct exact-time request—must use the same authoritative lock and recheck boundary.
+
+No migration unless genuinely required.
+
+If current conversation JSON persistence can safely store the aggregate, prefer it.
+
+If schema enforcement is truly required:
+
+- stop before creating migration 0016,
+- produce the exact need,
+- preserve migration ordering because Exotel 0016 is reserved for a later separately authorized milestone.
+
+## MILESTONE C — NATURAL-LANGUAGE PRODUCT BEHAVIOR
+
+Use the existing conversation architecture; do not replace it with an unrestricted LLM agent.
+
+Required behaviors:
+
+- "I need a dental appointment" activates booking.
+- Tamil/Tanglish equivalents activate booking.
+- "Tomorrow" cannot become patient name.
+- "Not 5, make it 6" rejects 5 and selects only an offered 6.
+- "5 PM doesn't work" creates no proposal.
+- Changing service clears incompatible resource/time facts.
+- Changing doctor/resource clears incompatible time.
+- Changing date clears old offered selection.
+- Same-date restatement preserves valid offer provenance.
+- Known fields are not asked repeatedly.
+- The application chooses the required next field.
+- LLM may phrase the question but may not choose authority.
+- Readback uses immutable proposal facts.
+- Confirmation must be explicit.
+- Success comes only from AppointmentCommitReceipt.
+- Medical questions cannot mutate booking state.
+- If the patient asks a clinic question mid-booking, answer from trusted context and resume the booking safely.
+- Human escalation must be real or worded as a request—not a false completed transfer.
+
+Do not solve all of this with one giant prompt.
+
+Hard safety and state guarantees remain deterministic.
+
+## MILESTONE D — SYNTHETIC WHATSAPP STAGING E2E
+
+Build one reproducible synthetic staging harness that exercises actual production composition.
+
+It must not call service methods directly as a substitute for the real path.
+
+Required composition:
+
+- production FastAPI app,
+- PostgreSQL at current migration head,
+- inbound worker,
+- notification worker,
+- explicit fake Meta sender,
+- synthetic clinic/business mappings,
+- synthetic patient and owner phones,
+- deterministic model/fact adapter where necessary,
+- real application services,
+- real repositories and transactions.
+
+### MANDATORY HAPPY PATH
+
+1. Seed one synthetic dental clinic:
+   - business,
+   - timezone,
+   - services,
+   - dentists/resources,
+   - eligibility,
+   - business/resource schedules,
+   - owner BusinessUsers,
+   - WhatsApp phone-number mapping.
+
+2. Send a signed Meta-style webhook:
+   - Tamil or Tanglish appointment request,
+   - correct provider message envelope,
+   - trusted phone_number_id.
+
+3. Verify:
+   - webhook authenticates,
+   - event persists before 200,
+   - worker claims in order,
+   - conversation is loaded/created durably,
+   - facts are collected,
+   - authoritative options are returned.
+
+4. Patient selects an opaque offered slot.
+
+5. Patient receives exact proposal/readback.
+
+6. Patient explicitly confirms.
+
+7. Verify committed state:
+   - one appointment,
+   - one active allocation,
+   - completed PendingAction,
+   - one notification manifest,
+   - patient + all deduplicated owner events,
+   - response outbox,
+   - no partial writes.
+
+8. Run fake Meta delivery:
+   - attempts recorded,
+   - accepted outcome stored,
+   - delivery callback reconciled monotonically.
+
+9. Restart:
+   - clear process-local caches,
+   - reconstruct services/sessions,
+   - replay duplicate provider message/confirmation,
+   - return exact committed result,
+   - no duplicate appointment/allocation/manifest/events.
+
+### MANDATORY CUSTOMER VARIATIONS
+
+- appointment booking,
+- cancellation,
+- rescheduling,
+- different dentist,
+- unavailable requested time,
+- patient rejects first options,
+- patient changes date/service/resource,
+- duplicate inbound provider message,
+- expired offer,
+- stale slot occupied by competitor,
+- clinic closure/exception,
+- human-help request,
+- medical question,
+- malformed mapping,
+- invalid signature,
+- provider send failure,
+- ambiguous provider acceptance,
+- application restart.
+
+### MANDATORY NEGATIVE INVARIANTS
+
+- no tenant cross-read/write,
+- no appointment before confirmation,
+- no success before commit,
+- no invented availability,
+- no model-created authoritative IDs,
+- no duplicate booking on retry,
+- no notification evidence loss,
+- no false "delivered" wording,
+- no false "owner alerted" wording,
+- no partial state after failure.
+
+## MILESTONE E — STAGING OPERABILITY FROM CLEAN MAIN
+
+Use the retired Dev2 worktree only as read-only evidence.
+
+Create the safe topology from current main; do not merge its rejected history.
+
+Minimum topology:
+
+- PostgreSQL,
+- migration service,
+- API,
+- inbound worker,
+- notification worker.
+
+Do not deploy the current retention worker until it is tenant-scoped and evidence-safe.
+
+Required properties:
+
+- one immutable buildable image,
+- DB-aware readiness,
+- fail-closed WhatsApp config,
+- strict duplicate-key-safe business mapping parser,
+- correct component variable ownership,
+- cooperative worker stop,
+- claimed work drained or fenced-release/requeue,
+- task failure exits process,
+- safe resource cleanup,
+- separate bootstrap/migration/runtime DB roles,
+- no credential-bearing URLs in repository/logs,
+- safe generated connection URLs,
+- API shutdown grace,
+- private atomic backup,
+- clean fail-fast restore,
+- migration and readiness after restore,
+- truthful docs.
+
+If Docker is unavailable locally:
+
+- complete all static and non-Docker gates,
+- use an authorized Docker-capable environment if available,
+- otherwise return Docker runtime as a genuine blocker,
+- do not call staging validated.
+
+## SECURITY REQUIREMENTS
+
+- HMAC verification mandatory.
+- Mapping configuration validated at startup.
+- Internal APIs remain private.
+- Shared internal bearer is acceptable only behind controlled private ingress for this milestone.
+- No raw customer payloads, phones, secrets, credentials, database URLs, authorization headers, or transcripts in logs/evidence.
+- Synthetic data only.
+- Least-privilege DB roles.
+- Health/metrics endpoints not exposed publicly without an ingress policy.
+- No model-generated authority.
+- No provider calls in transactions.
+- No customer success before commit.
+- No false delivery claims.
+
+## TEST REQUIREMENTS
+
+### UNIT / DOMAIN
+
+- booking activation across Tamil/Tanglish/English,
+- date/time/name parsing,
+- correction and negation,
+- offer membership,
+- offer expiry,
+- cross-tenant/cross-conversation rejection,
+- field invalidation,
+- readback,
+- confirmation,
+- medical safety,
+- evidence result propagation.
+
+### POSTGRESQL
+
+- offer persistence/restart,
+- exact slot recheck,
+- real overlapping competitor,
+- appointment atomicity,
+- notification atomicity,
+- same-PA concurrency,
+- duplicate inbound event,
+- duplicate confirmation,
+- cancellation/reschedule,
+- retention-independent manifest replay,
+- tenant isolation,
+- rollback/session usability.
+
+### ROUTE / WORKER E2E
+
+- signed webhook to durable inbox,
+- worker to proposal,
+- confirmation to commit,
+- outbox to fake provider,
+- callback reconciliation,
+- restart and replay,
+- error and dead-letter behavior.
+
+### CONCURRENCY CLAIMS REQUIRE
+
+- independent sessions,
+- real overlap,
+- deterministic barrier,
+- fresh observer where needed,
+- proof of contender non-completion,
+- release,
+- terminal outcomes,
+- timeout and cleanup.
+
+A sequential test is not concurrency evidence.
+
+## FUNCTIONAL PROOF ARTIFACT
+
+Produce one sanitized report containing:
+
+- exact SHA,
+- clinic fixture,
+- patient request transcript,
+- state transitions,
+- offered slots,
+- selected token,
+- readback,
+- committed receipt,
+- manifest/outbox identities,
+- provider-attempt/callback outcome,
+- restart/replay result,
+- failure-path outcomes,
+- timing,
+- all skipped external gates.
+
+No PII or credentials.
+
+## REQUIRED GATES
+
+Run once at final candidate:
+
+1. focused unit/domain tests,
+2. offer/persistence tests,
+3. PostgreSQL atomicity and concurrency,
+4. route/worker E2E,
+5. functional proof,
+6. Ruff,
+7. format check,
+8. full mypy,
+9. Alembic heads/check/parity,
+10. offline migration rendering,
+11. fresh/populated migration cycle,
+12. full non-PG,
+13. full PG on fresh isolated DB,
+14. backup/restore tests,
+15. readiness verifier,
+16. git diff check,
+17. secret/PII scan,
+18. clean tree,
+19. exact-head hosted CI.
+
+Do not rerun full suites without a code change or final-gate need.
+
+## DELIVERY AND INTEGRATION
+
+Final candidate report:
+
+```
+CANDIDATE SHA:
+BRANCH:
+BASE:
+REMOTE SHA:
+FILES CHANGED:
+PRODUCT OUTCOME:
+APPLICATION CONTRACT:
+WHATSAPP E2E:
+APPOINTMENT/CONCURRENCY:
+NOTIFICATION EVIDENCE:
+RESTART/REPLAY:
+STAGING TOPOLOGY:
+SECURITY/TENANT:
+FUNCTIONAL PROOF:
+UNIT:
+NON-PG:
+PG:
+MIGRATIONS:
+BACKUP/RESTORE:
+RUFF/FORMAT/MYPY:
+READINESS:
+HOSTED CI:
+SKIPPED/BLOCKED:
+KNOWN LIMITATIONS:
+WORKTREE STATUS:
+NEXT INTEGRATION STEP:
+```
+
+Do not self-approve.
+
+After one bounded review and required corrections:
+
+- report exact final SHA,
+- wait for CEO exact-SHA authorization,
+- fast-forward main only,
+- push without force,
+- verify remote main SHA,
+- verify post-integration CI,
+- only then begin the next non-voice milestone.
+
+## EFFICIENCY RULES
+
+- One branch.
+- One milestone.
+- One reviewer.
+- Maximum five blockers.
+- One correction pass.
+- No routine progress messages.
+- No speculative abstractions.
+- No optimization before integration.
+- No broad documentation rewrite except direct contradictions.
+- No additional channel or industry work.
+- No merging retired branches wholesale.
+- No "production-ready" claim without staging and operational evidence.
+
+## TERMINAL STOP CONDITIONS
+
+Return a genuine blocker only for:
+
+- unavailable real provider credentials,
+- unavailable Docker/staging host after all other work is exhausted,
+- migration conflict requiring founder/CEO decision,
+- unavoidable Dev4 ownership collision,
+- destructive external operation requiring approval,
+- product-policy contradiction.
+
+Everything else is your responsibility to resolve autonomously.
+
+## PRIMARY SUCCESS CRITERION
+
+A synthetic Tamil/Tanglish dental patient completes a real WhatsApp booking against PostgreSQL, receives a committed result, the clinic receives durable notification evidence, and a duplicate/restart cannot create a second booking.
+
+Deliver that outcome from integrated main.
+
+---
+
+## IMPLEMENTATION SLICE INDEX
+
+| Slice | Goal | Status |
+|-------|------|--------|
+| 0 | Trace + fixed contract types | DONE (trace completed, types in Slice 1) |
+| 1 | Durable offer + selection seam | IN PROGRESS |
+| 2 | Complete mounted WhatsApp booking E2E | NOT STARTED |
+| 3 | Safe single-node staging topology | NOT STARTED |
+| 4 | Operations / privacy closure | NOT STARTED |

@@ -55,6 +55,23 @@ def next_weekday(base: datetime, weekday: int) -> datetime:
     return base + timedelta(days=ahead)
 
 
+def first_free_morning_slot(day: datetime, taken: list[tuple]) -> datetime | None:
+    """Pick a morning slot on `day` that nobody holds yet.
+
+    The proof is meant to be re-runnable against the same clinic, so it
+    cannot hard-code 10:00 -- the previous run booked it. Morning hours are
+    09:30-13:00; the last 15-minute consultation starts at 12:45.
+    """
+    booked = {row[3].astimezone(IST).replace(tzinfo=IST) for row in taken}
+    slot = day.replace(hour=9, minute=30, second=0, microsecond=0)
+    last = day.replace(hour=12, minute=45, second=0, microsecond=0)
+    while slot <= last:
+        if slot not in booked:
+            return slot
+        slot += timedelta(minutes=15)
+    return None
+
+
 async def load_ids(database_url: str, business_id: int) -> tuple[int, int, str, str]:
     """Pick the consultation service and a dentist eligible to perform it."""
     engine = create_async_engine(database_url)
@@ -183,12 +200,19 @@ async def main() -> int:
     run_tag = args.run_tag or now.strftime("%Y%m%d%H%M%S")
     monday = next_weekday(now, 0)
     closed_slot = monday.replace(hour=15, minute=0, second=0, microsecond=0)
-    open_slot = monday.replace(hour=10, minute=0, second=0, microsecond=0)
     # A hold lasts as long as a phone call, not a day.
     hold_until = now + timedelta(minutes=10)
-    print(f"target Monday: {monday.date().isoformat()}\n")
 
     before = await read_appointments(args.database_url, args.business_id)
+    open_slot = first_free_morning_slot(monday, before)
+    if open_slot is None:
+        print(
+            f"every morning slot on {monday.date().isoformat()} is already booked; "
+            "pass --now a week later or use a fresh database",
+            file=sys.stderr,
+        )
+        return 2
+    print(f"target: {open_slot:%a %d %b %H:%M} IST\n")
     client = BookingClient(args.base_url, secret, args.business_id, PATIENT_PHONE)
     failures: list[str] = []
 

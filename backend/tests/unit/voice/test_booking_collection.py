@@ -581,9 +581,9 @@ class TestD2DeterministicReadback:
         bc.patient_name = "Karthick"
         assert bc.required_field == "confirmation"
         readback = bc.format_readback()
-        assert "scaling" in readback
+        assert "Scaling" in readback
         assert "Karthick" in readback
-        assert "18:30" in readback
+        assert "மாலை 6:30" in readback
 
     def test_readback_not_generated_when_incomplete(self):
         bc = BookingCollection()

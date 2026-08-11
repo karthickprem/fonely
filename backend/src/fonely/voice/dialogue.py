@@ -50,13 +50,22 @@ class DialogueState:
         self.terminal_reason = reason
 
 
-_BOOKING_REQUEST = re.compile(
-    r"(?:appointment|அப்பாயிண்ட்மெண்ட்).*(?:book|புக்|வேணும்|வேண்டும்|பண்ணனும்|venum|pannanum)"
-    r"|(?:book|புக்|pannanum).*(?:appointment|அப்பாயிண்ட்மெண்ட்)"
-    r"|(?:doctor|டாக்டர்).*(?:பாக்கணும்|paakkanum)"
-    r"|(?:scaling|cleaning|checkup|root canal|extraction|consultation).*(?:வேணும்|venum)",
-    re.IGNORECASE,
-)
+_REQUESTING_VERBS = r"(?:book|புக்|வேணும்|வேண்டும்|பண்ணனும்|venum|pannanum|போடணும்|podanum|எடுக்கணும்|fix|need|want|schedule)"
+_SERVICES = r"(?:scaling|cleaning|checkup|root\s*canal|extraction|consultation|filling|treatment)"
+_APPOINTMENT = r"(?:appointment|அப்பாயிண்ட்மெண்ட்)"
+
+_BOOKING_ACTIVATORS: list[re.Pattern[str]] = [
+    # appointment + requesting verb (either order)
+    re.compile(_APPOINTMENT + r".*" + _REQUESTING_VERBS, re.IGNORECASE),
+    re.compile(_REQUESTING_VERBS + r".*" + _APPOINTMENT, re.IGNORECASE),
+    # English intent: "I need/want/schedule a/an (dental) appointment"
+    re.compile(r"(?:need|want|schedule|get|make)\s+(?:a\s+|an\s+)?(?:dental\s+)?" + _APPOINTMENT, re.IGNORECASE),
+    # Doctor visit intent
+    re.compile(r"(?:doctor|டாக்டர்|dentist).*(?:பாக்கணும்|paakkanum|போகணும்|poganum|visit|appointment)", re.IGNORECASE),
+    # Service + requesting verb
+    re.compile(_SERVICES + r".*" + _REQUESTING_VERBS, re.IGNORECASE),
+    re.compile(_REQUESTING_VERBS + r".*" + _SERVICES, re.IGNORECASE),
+]
 _TIME = re.compile(
     r"(?<!\d)(?P<hour>\d{1,2})(?:[:.](?P<minute>[0-5]\d))?\s*"
     r"(?P<meridiem>am|pm)?\s*(?:மணி(?:க்கு)?)?(?=\s|[.,!?]|$)",
@@ -67,6 +76,41 @@ _VISIT_REASON = re.compile(
     re.IGNORECASE,
 )
 _NAME = re.compile(r"(?:[A-Za-z][A-Za-z .'-]{0,79}|[஀-௿][஀-௿ .'-]{0,79})$")
+
+
+_SERVICE_NAMES = {
+    "scaling": "Scaling", "cleaning": "Cleaning", "checkup": "Checkup",
+    "root canal": "Root canal", "extraction": "Extraction",
+    "filling": "Filling", "consultation": "Consultation", "treatment": "Treatment",
+}
+
+
+def _normalize_service(raw_reason: str) -> str:
+    lower = raw_reason.lower()
+    for key, display in _SERVICE_NAMES.items():
+        if key in lower:
+            return display
+    return raw_reason
+
+
+def _format_spoken_date(d: date) -> str:
+    months = ["January", "February", "March", "April", "May", "June",
+              "July", "August", "September", "October", "November", "December"]
+    return f"{months[d.month - 1]} {d.day}"
+
+
+def _format_spoken_time(t: time) -> str:
+    hour_12 = t.hour % 12 or 12
+    minute_str = f":{t.minute:02d}" if t.minute else ""
+    if 5 <= t.hour < 12:
+        period = "காலை"
+    elif 12 <= t.hour < 17:
+        period = "மதியம்"
+    elif 17 <= t.hour < 21:
+        period = "மாலை"
+    else:
+        period = ""
+    return f"{period} {hour_12}{minute_str}".strip()
 
 
 @dataclass
@@ -107,7 +151,7 @@ class BookingCollection:
         previous_assistant_text: str = "",
     ) -> None:
         normalized = " ".join(caller_text.casefold().split())
-        if _BOOKING_REQUEST.search(normalized):
+        if any(p.search(normalized) for p in _BOOKING_ACTIVATORS):
             self.active = True
 
         if resolved_date is not None and resolved_date != self.target_date:
@@ -145,10 +189,11 @@ class BookingCollection:
     def format_readback(self) -> str | None:
         if self.required_field != "confirmation":
             return None
-        time_str = self.selected_time.strftime("%H:%M") if self.selected_time else "?"
-        date_str = self.target_date.isoformat() if self.target_date else "?"
+        service = _normalize_service(self.reason) if self.reason else "?"
+        date_str = _format_spoken_date(self.target_date) if self.target_date else "?"
+        time_str = _format_spoken_time(self.selected_time) if self.selected_time else "?"
         return (
-            f"{self.reason}, {date_str} {time_str}, {self.patient_name}. "
+            f"{service}, {date_str} {time_str}, {self.patient_name}. "
             f"இது correct-ஆ?"
         )
 

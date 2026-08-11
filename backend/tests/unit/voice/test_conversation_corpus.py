@@ -75,10 +75,7 @@ class TestBookingActivation:
     def test_a03_english_need_appointment(self):
         bc = BookingCollection()
         step(bc, "I need a dental appointment")
-        # "need appointment" doesn't match the booking regex — activation
-        # requires "book appointment" or "appointment book". This is expected:
-        # the LLM handles this case by asking a follow-up.
-        assert not bc.active
+        assert bc.active
 
     def test_a04_tamil_script_booking(self):
         bc = BookingCollection()
@@ -412,7 +409,7 @@ class TestFieldOrder:
         rb = bc.format_readback()
         assert rb is not None
         assert "Karthick" in rb
-        assert "17:00" in rb
+        assert "மாலை 5" in rb
         assert "correct" in rb.lower()
 
     def test_e10_render_shows_all_fields(self):
@@ -525,7 +522,7 @@ class TestFullConversations:
         assert bc.patient_name == "கார்த்திக்"
         assert bc.required_field == "confirmation"
         rb = bc.format_readback()
-        assert "கார்த்திக்" in rb and "17:00" in rb
+        assert "கார்த்திக்" in rb and "மாலை 5" in rb
 
     def test_h02_tanglish_path(self):
         bc = BookingCollection()

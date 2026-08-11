@@ -334,8 +334,7 @@ class ConversationService:
                 return turn
             ctx.collected_facts["_ambiguity_asks"] = asked + 1
             options = " or ".join(
-                str(x.get("display", x)) if isinstance(x, dict) else str(x)
-                for x in ambiguous
+                str(x.get("display", x)) if isinstance(x, dict) else str(x) for x in ambiguous
             )
             turn = self._fact_turn(
                 ctx,

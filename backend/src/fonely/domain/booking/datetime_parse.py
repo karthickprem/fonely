@@ -218,9 +218,11 @@ def parse_relative_date(text: str, today: date) -> date | None:
                 days_ahead = 7  # "monday" said on a Monday means next Monday
             return today + timedelta(days=days_ahead)
 
-    # Explicit day-of-month like "on the 15th".
-    dom = re.search(r"\b(?:on\s+)?(?:the\s+)?(\d{1,2})(?:st|nd|rd|th)?\b", t)
-    if dom and ("th" in t or "st" in t or "nd" in t or "rd" in t):
+    # Explicit day-of-month like "on the 15th" — the ordinal suffix must be
+    # attached to the digits (st/nd/rd/th), so "at 10:30" or "with" never
+    # reads as a date, and a bare time is never mistaken for a day.
+    dom = re.search(r"\b(\d{1,2})(?:st|nd|rd|th)\b", t)
+    if dom:
         day = int(dom.group(1))
         if 1 <= day <= 31:
             month, year = today.month, today.year

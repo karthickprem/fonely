@@ -14,6 +14,7 @@ from fonely.domain.inventory.commands import SetOwnerStockCommand
 from fonely.domain.pending_actions.commands import ActorContext
 from fonely.models.enums import CallerRole
 from fonely.services.inventory import InventoryService
+from tests.integration.postgres.conftest import MIGRATION_HEAD
 
 pytestmark = pytest.mark.postgres
 NOW = datetime(2026, 8, 1, 6, tzinfo=UTC)
@@ -564,7 +565,7 @@ async def test_populated_migration_cycle(
 
     async with pg_engine.begin() as conn:
         rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-        assert rev == "0015"
+        assert rev == MIGRATION_HEAD
 
         lines_after_upgrade = tuple((await conn.execute(text(line_query))).all())
         assert len(lines_after_upgrade) == 2
@@ -650,7 +651,7 @@ async def test_populated_migration_cycle(
 
     async with pg_engine.begin() as conn:
         rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-        assert rev == "0015"
+        assert rev == MIGRATION_HEAD
 
         lines_after_reupgrade = tuple((await conn.execute(text(line_query))).all())
         assert len(lines_after_reupgrade) == 2

@@ -21,6 +21,7 @@ from fonely.services.onboarding import (
     OnboardingUnauthorizedError,
 )
 from tests.fixtures.dental_clinic import DENTAL_CLINIC_DRAFT
+from tests.integration.postgres.conftest import MIGRATION_HEAD
 
 pytestmark = pytest.mark.postgres
 
@@ -284,7 +285,7 @@ async def test_populated_onboarding_migration_roundtrip(
 
     async with pg_engine.begin() as conn:
         rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-        assert rev == "0015"
+        assert rev == MIGRATION_HEAD
 
         await conn.execute(
             text(
@@ -339,7 +340,7 @@ async def test_populated_onboarding_migration_roundtrip(
 
     async with pg_engine.begin() as conn:
         rev = await conn.scalar(text("SELECT version_num FROM alembic_version"))
-        assert rev == "0015"
+        assert rev == MIGRATION_HEAD
 
         tables_exist = await conn.scalar(
             text(

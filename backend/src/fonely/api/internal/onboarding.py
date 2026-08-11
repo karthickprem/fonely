@@ -18,6 +18,10 @@ from fonely.domain.onboarding.commands import (
 from fonely.domain.onboarding.errors import OnboardingError
 from fonely.models.enums import BusinessUserRole
 from fonely.models.schema import Business, BusinessUser
+from fonely.repositories.whatsapp_channels import (
+    ChannelOwnershipConflictError,
+    register_channel,
+)
 from fonely.services.onboarding import (
     OnboardingInvalidTransitionError,
     OnboardingNotFoundError,
@@ -46,6 +50,20 @@ class ProvisionBusinessResponse(BaseModel):
     business_id: int
     owner_user_id: int
     created: bool
+
+
+class RegisterWhatsAppChannelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    phone_number_id: str = Field(min_length=1, max_length=100)
+    waba_id: str | None = Field(default=None, max_length=100)
+    display_phone_number: str | None = Field(default=None, max_length=20)
+    make_primary: bool = True
+
+
+class RegisterWhatsAppChannelResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    business_id: int
+    phone_number_id: str
 
 
 class SubmitDraftRequest(BaseModel):
@@ -202,6 +220,54 @@ async def provision_business(
         return ProvisionBusinessResponse(
             business_id=business.id, owner_user_id=owner.id, created=True
         )
+
+
+@router.post(
+    "/businesses/whatsapp-channel",
+    response_model=RegisterWhatsAppChannelResponse,
+    status_code=201,
+)
+async def register_whatsapp_channel(
+    body: RegisterWhatsAppChannelRequest, request: Request
+) -> RegisterWhatsAppChannelResponse:
+    """Attach a provider WhatsApp number to the calling tenant.
+
+    Until this exists, the only way to make a clinic reachable is to write the
+    row by hand, which is the operator-gated problem migration 0016 set out to
+    remove. The tenant comes from the trusted X-Business-ID header, never from
+    the body: a caller must not be able to name the business it is registering
+    a number for.
+
+    A number already held by another tenant is a conflict, not an overwrite.
+    Silently reassigning it would start routing that clinic's patients into
+    this one.
+    """
+    _verify_internal_auth(request)
+    business_id = _get_business_id(request)
+    async with _get_factory(request)() as session:
+        try:
+            await register_channel(
+                session,
+                business_id=business_id,
+                phone_number_id=body.phone_number_id.strip(),
+                waba_id=body.waba_id,
+                display_phone_number=body.display_phone_number,
+                make_primary=body.make_primary,
+            )
+        except ChannelOwnershipConflictError as exc:
+            await session.rollback()
+            logger.warning(
+                "whatsapp_channel_conflict",
+                extra={"business_id": business_id},
+            )
+            raise HTTPException(
+                status_code=409, detail="Number is registered to another business"
+            ) from exc
+        await session.commit()
+    logger.info("whatsapp_channel_registered", extra={"business_id": business_id})
+    return RegisterWhatsAppChannelResponse(
+        business_id=business_id, phone_number_id=body.phone_number_id.strip()
+    )
 
 
 @router.post("/onboarding/drafts", response_model=OnboardingDraftResponse, status_code=201)

@@ -42,6 +42,7 @@ from fonely.models.enums import CallerRole, PendingActionType
 from fonely.models.schema import PendingAction
 from fonely.services.authorization import require_owner_or_manager
 from fonely.services.pending_actions import PendingActionService
+from tests.integration.postgres.conftest import MIGRATION_HEAD
 
 pytestmark = pytest.mark.postgres
 BACKEND_ROOT = Path(__file__).parents[3]
@@ -223,7 +224,7 @@ async def test_0002_migrates_populated_0001_database(
 
 async def test_migrations_through_head_are_applied(pg_session: AsyncSession) -> None:
     revision = await pg_session.scalar(text("SELECT version_num FROM alembic_version"))
-    assert revision == "0015"
+    assert revision == MIGRATION_HEAD
 
 
 @pytest.mark.parametrize(
@@ -601,7 +602,7 @@ async def test_session_fixture_keeps_database_at_current_head(
 ) -> None:
     """Session fixture keeps the database at the current head during tests."""
     revision = await pg_session.scalar(text("SELECT version_num FROM alembic_version"))
-    assert revision == "0015"
+    assert revision == MIGRATION_HEAD
 
 
 async def test_retry_after_idempotency_is_tenant_scoped(pg_session: AsyncSession) -> None:

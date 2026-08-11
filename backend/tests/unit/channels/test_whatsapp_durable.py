@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
@@ -35,13 +36,24 @@ def _create_app(*, business_id: int | None = 1) -> tuple[FastAPI, MagicMock]:
     mock_factory.return_value = mock_session
     app.state.session_factory = mock_factory
 
-    with patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as map_cls:
-        mock_map = MagicMock()
-        mock_map.get_business_id.return_value = business_id
-        map_cls.return_value = mock_map
-        app.state._mock_mapping = map_cls
-
+    app.state._resolved_business_id = business_id
     return app, mock_session
+
+
+@contextmanager
+def _patch_channels(business_id: int | None):
+    """Stand in for the business_whatsapp_channels lookup.
+
+    Inbound tenant resolution reads the database as of migration 0016. These
+    tests are about webhook durability, not routing, so the repository is
+    replaced wholesale — which also keeps session.execute assertions below
+    measuring only the event insert.
+    """
+    with patch("fonely.api.channels.whatsapp.WhatsAppChannelRepository") as repo_cls:
+        repo = MagicMock()
+        repo.resolve_business_id = AsyncMock(return_value=business_id)
+        repo_cls.return_value = repo
+        yield repo_cls
 
 
 def _webhook_payload(
@@ -90,13 +102,10 @@ class TestWebhookPersistsThenReturns:
     def test_returns_200_after_persisting(self) -> None:
         app, mock_session = _create_app()
         with (
-            patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as map_cls,
+            _patch_channels(1),
             patch("fonely.api.channels.whatsapp.settings") as s,
         ):
             s.whatsapp_app_secret = "test-app-secret"
-            mock_map = MagicMock()
-            mock_map.get_business_id.return_value = 1
-            map_cls.return_value = mock_map
             client = TestClient(app)
             response = _signed_post(client, _webhook_payload())
         assert response.status_code == 200
@@ -109,13 +118,10 @@ class TestWebhookPersistsThenReturns:
         dup_result.rowcount = 0
         mock_session.execute = AsyncMock(return_value=dup_result)
         with (
-            patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as map_cls,
+            _patch_channels(1),
             patch("fonely.api.channels.whatsapp.settings") as s,
         ):
             s.whatsapp_app_secret = "test-app-secret"
-            mock_map = MagicMock()
-            mock_map.get_business_id.return_value = 1
-            map_cls.return_value = mock_map
             client = TestClient(app)
             response = _signed_post(client, _webhook_payload())
         assert response.status_code == 200
@@ -124,13 +130,10 @@ class TestWebhookPersistsThenReturns:
     def test_unknown_business_skipped(self) -> None:
         app, mock_session = _create_app()
         with (
-            patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as map_cls,
+            _patch_channels(None),
             patch("fonely.api.channels.whatsapp.settings") as s,
         ):
             s.whatsapp_app_secret = "test-app-secret"
-            mock_map = MagicMock()
-            mock_map.get_business_id.return_value = None
-            map_cls.return_value = mock_map
             client = TestClient(app)
             response = _signed_post(client, _webhook_payload())
         assert response.status_code == 200
@@ -151,13 +154,10 @@ class TestWebhookPersistsThenReturns:
         app, mock_session = _create_app()
         mock_session.execute = AsyncMock(side_effect=RuntimeError("db down"))
         with (
-            patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as map_cls,
+            _patch_channels(1),
             patch("fonely.api.channels.whatsapp.settings") as s,
         ):
             s.whatsapp_app_secret = "test-app-secret"
-            mock_map = MagicMock()
-            mock_map.get_business_id.return_value = 1
-            map_cls.return_value = mock_map
             client = TestClient(app)
             response = _signed_post(client, _webhook_payload())
         assert response.status_code == 503
@@ -252,7 +252,12 @@ class TestDeploymentConfiguration:
         assert compose.count("disable: true") >= 2
         assert "SARVAM_API_KEY: ${SARVAM_API_KEY:?" in compose
         assert "WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:?" in compose
-        assert "WHATSAPP_BUSINESS_MAPPINGS: ${WHATSAPP_BUSINESS_MAPPINGS:?" in compose
+        # Channel identity is database state (migration 0016), not deploy
+        # config. A required env var here would block staging startup over a
+        # value nothing reads, and would invite re-introducing the per-process
+        # mapping that made onboarding a clinic a deploy.
+        assert "WHATSAPP_BUSINESS_MAPPINGS" not in compose
+        assert "WHATSAPP_PHONE_NUMBER_ID" not in compose
 
 
 class TestBackoff:

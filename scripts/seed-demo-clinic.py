@@ -14,7 +14,8 @@ now and --provision uses it.
 
 Usage:
 
-    export FONELY_INTERNAL_API_SECRET=...        # never passed on argv
+    export INTERNAL_API_SECRET=...               # never passed on argv;
+                                                 # the same variable the server reads
     python3 scripts/seed-demo-clinic.py \
         --base-url http://127.0.0.1:8000 \
         --database-url postgresql+asyncpg://user:pw@host/db \
@@ -266,6 +267,36 @@ async def provision_business(base_url: str, secret: str, clinic: dict[str, Any])
     return int(body["business_id"]), int(body["owner_user_id"])
 
 
+async def register_whatsapp_channel(
+    base_url: str, secret: str, business_id: int, phone_number_id: str
+) -> None:
+    """Attach the demo clinic's WhatsApp number through the supported route.
+
+    Without this the clinic is configured but unreachable: appointment commit
+    resolves the sending number from business_whatsapp_channels and refuses
+    with whatsapp_mapping_missing when there is no row. Re-running is safe --
+    re-registering the same number for the same tenant is idempotent.
+    """
+    async with httpx.AsyncClient(
+        base_url=base_url.rstrip("/"),
+        timeout=30.0,
+        headers={
+            "Authorization": f"Bearer {secret}",
+            "X-Business-ID": str(business_id),
+        },
+    ) as client:
+        response = await client.post(
+            "/internal/v1/businesses/whatsapp-channel",
+            json={"phone_number_id": phone_number_id, "make_primary": True},
+        )
+    if response.status_code >= 400:
+        raise SeedError(
+            "POST /internal/v1/businesses/whatsapp-channel -> "
+            f"{response.status_code} {response.text[:400]}"
+        )
+    print(f"whatsapp channel registered for business={business_id}")
+
+
 # ---------------------------------------------------------------------------
 # The real path
 # ---------------------------------------------------------------------------
@@ -397,15 +428,28 @@ async def main() -> int:
         help="Create the clinic through POST /internal/v1/businesses if it does not exist",
     )
     parser.add_argument(
+        "--whatsapp-phone-number-id",
+        help=(
+            "Provider phone_number_id to attach to this clinic. Without a "
+            "registered channel the clinic is configured but unreachable and "
+            "booking commit refuses with whatsapp_mapping_missing."
+        ),
+    )
+    parser.add_argument(
         "--verify-reactivation",
         action="store_true",
         help="Activate a second edited draft and report whether hours were replaced",
     )
     args = parser.parse_args()
 
-    secret = os.environ.get("FONELY_INTERNAL_API_SECRET")
+    # Settings carries no env_prefix, so the server reads INTERNAL_API_SECRET.
+    # The prefixed spelling stays as a fallback for anyone already exporting it.
+    secret = os.environ.get("INTERNAL_API_SECRET") or os.environ.get("FONELY_INTERNAL_API_SECRET")
     if not secret:
-        print("FONELY_INTERNAL_API_SECRET is not set", file=sys.stderr)
+        print(
+            "INTERNAL_API_SECRET is not set (the same variable the server reads)",
+            file=sys.stderr,
+        )
         return 2
 
     clinic = json.loads(CLINIC_FILE.read_text())
@@ -417,6 +461,16 @@ async def main() -> int:
     else:
         print("pass --provision, or both --business-id and --actor-user-id", file=sys.stderr)
         return 2
+
+    if args.whatsapp_phone_number_id:
+        await register_whatsapp_channel(
+            args.base_url, secret, business_id, args.whatsapp_phone_number_id
+        )
+    else:
+        print(
+            "no --whatsapp-phone-number-id given: clinic will be configured but "
+            "unreachable, and booking commit will refuse with whatsapp_mapping_missing"
+        )
 
     client = OnboardingClient(args.base_url, secret, business_id, actor_user_id)
     try:

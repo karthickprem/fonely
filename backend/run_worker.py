@@ -1,10 +1,9 @@
 """Notification worker entrypoint with trusted WhatsApp channel routing."""
 
 import asyncio
-import json
 import logging
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from fonely.core.config import settings
 from fonely.core.logging_config import configure_logging
@@ -17,29 +16,27 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message
 logger = logging.getLogger("fonely.workers.main")
 
 
-def _create_sender() -> NotificationSender:
+def _create_sender(session_factory: async_sessionmaker[AsyncSession]) -> NotificationSender:
+    """Build the outbound sender.
+
+    Channel identity is no longer a process setting: which provider number
+    belongs to which tenant lives in business_whatsapp_channels (migration
+    0016). The resolver re-reads ownership at delivery time, so there is
+    nothing left to validate at startup beyond the shared access token.
+    """
     if not settings.whatsapp_access_token:
         raise RuntimeError("WHATSAPP_ACCESS_TOKEN is required")
-    if not settings.whatsapp_business_mappings:
-        raise RuntimeError("WHATSAPP_BUSINESS_MAPPINGS is required")
-    try:
-        mappings_raw = json.loads(settings.whatsapp_business_mappings)
-        mappings = {str(key): int(value) for key, value in mappings_raw.items()}
-    except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise RuntimeError("WHATSAPP_BUSINESS_MAPPINGS is invalid") from exc
-    if not mappings:
-        raise RuntimeError("WHATSAPP_BUSINESS_MAPPINGS must not be empty")
 
     from fonely.services.whatsapp_notification_sender import (
-        ConfiguredWhatsAppSenderResolver,
+        DatabaseWhatsAppSenderResolver,
         WhatsAppNotificationSender,
     )
 
-    resolver = ConfiguredWhatsAppSenderResolver(
+    resolver = DatabaseWhatsAppSenderResolver(
         access_token=settings.whatsapp_access_token,
-        business_mappings=mappings,
+        session_factory=session_factory,
     )
-    logger.info("notification_sender_configured", extra={"type": "whatsapp_resolver"})
+    logger.info("notification_sender_configured", extra={"type": "whatsapp_db_resolver"})
     return WhatsAppNotificationSender(resolver=resolver)
 
 
@@ -47,7 +44,7 @@ async def main() -> None:
     configure_logging(settings.log_format, settings.log_level)
     engine = create_async_engine(settings.database_url, pool_pre_ping=True)
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    sender = _create_sender()
+    sender = _create_sender(factory)
     try:
         await run_notification_worker(factory, sender)
     finally:

@@ -379,24 +379,34 @@ class ConversationService:
             ctx.collected_facts.pop("_active_offer", None)
             return False
 
-        from fonely.domain.booking.datetime_parse import parse_time_of_day
+        from fonely.domain.booking.datetime_parse import parse_time_spec
 
         matched_slot = None
 
-        # 1. Parse a time from the message (bare, dotted, worded, Tamil/Tanglish)
-        # and match it against the offered slot times. Both sides use the same
-        # parser so a bare "10:30" / "10.30" / "half past ten" resolves against
-        # the slot without inventing a date — the slot already carries the date.
-        said = parse_time_of_day(message)
+        # 1. Parse the patient's time and match it against the offered slots.
+        # Slot display_time always carries an explicit am/pm. The patient's time
+        # often does not ("5:30" for a 5:30 PM slot). When the patient's meridiem
+        # is explicit we require an exact (hour, minute) match; when it is a bare
+        # hour we match modulo 12 (minute equal, hour ≡ said.hour mod 12) against
+        # the authoritative, finite offer set. This is safe disambiguation — not
+        # a clinic-hours guess — and we only accept it when EXACTLY ONE offered
+        # slot matches; two candidates are genuinely ambiguous, so we ask.
+        said = parse_time_spec(message)
         if said is not None:
+            candidates = []
             for slot in offer.slots:
-                slot_time = parse_time_of_day(slot.display_time)
-                if slot_time is not None and (
-                    slot_time.hour,
-                    slot_time.minute,
-                ) == (said.hour, said.minute):
-                    matched_slot = slot
-                    break
+                slot_spec = parse_time_spec(slot.display_time)
+                if slot_spec is None:
+                    continue
+                ss = slot_spec.time
+                if said.meridiem_explicit:
+                    if (ss.hour, ss.minute) == (said.time.hour, said.time.minute):
+                        candidates.append(slot)
+                elif ss.minute == said.time.minute and (ss.hour % 12) == (said.time.hour % 12):
+                    candidates.append(slot)
+            if len(candidates) == 1:
+                matched_slot = candidates[0]
+            # len(candidates) >= 2 -> ambiguous bare time; fall through to ask.
 
         # 2. Word-boundary ordinal matching (only if no time match)
         if matched_slot is None:

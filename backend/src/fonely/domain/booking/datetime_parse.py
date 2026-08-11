@@ -7,8 +7,12 @@ Two hard rules, both from the M1 review:
    returns a time. A caller composes a datetime only when it holds BOTH.
 
 2. NEVER guess. Every function returns None on anything short of a
-   confident parse. A misparse that books the wrong slot is worse than a
-   question — the caller asks the patient to repeat rather than defaulting.
+   confident parse, and it never leans a bare hour toward the clinic's
+   opening hours. A bare "5:30" is reported as 05:30 with
+   meridiem_explicit=False; resolving it to 17:30 is the caller's job, done
+   against an authoritative, finite offer set (safe disambiguation) — not a
+   heuristic here (an unsafe guess). A misparse that books the wrong slot is
+   worse than a question.
 
 Handles the forms real people send in English, Tamil, and Tanglish.
 """
@@ -16,9 +20,26 @@ Handles the forms real people send in English, Tamil, and Tanglish.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import date, time, timedelta
 
 # --- Time of day ------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TimeSpec:
+    """A parsed time plus whether its am/pm was stated explicitly.
+
+    `meridiem_explicit` is False for a bare "5:30" (which could be 05:30 or
+    17:30) and True for "5:30 pm" / "5:30 in the evening". The parser does NOT
+    guess the meridiem for a bare hour — the caller resolves it against an
+    authoritative, finite offer set (safe disambiguation), never by a clinic-
+    hours heuristic (an unsafe guess).
+    """
+
+    time: time
+    meridiem_explicit: bool
+
 
 _WORD_NUMBERS: dict[str, int] = {
     "one": 1,
@@ -61,52 +82,71 @@ _EVENING = ("evening", "pm", "maalai", "மாலை", "saayangaalam")
 _NIGHT = ("night", "iravu", "இரவு")
 
 
-def _clamp(h: int, m: int) -> time | None:
+def _spec(h: int, m: int, *, explicit: bool) -> TimeSpec | None:
     if 0 <= h <= 23 and 0 <= m <= 59:
-        return time(h, m)
+        return TimeSpec(time(h, m), meridiem_explicit=explicit)
     return None
 
 
-def parse_time_of_day(text: str) -> time | None:
-    """Parse a time of day, or None if not confidently present.
+def parse_time_spec(text: str) -> TimeSpec | None:
+    """Parse a time of day into a TimeSpec, or None if not confidently present.
 
-    Accepts: "10:30", "10.30", "10 30", "1030", "10:30 am", "10 am",
-    "ten thirty", "half past ten", "quarter past ten", "pathu mani",
-    "aaru mani", plus am/pm and Tamil/Tanglish part-of-day markers.
-    Never returns a date. Never guesses a missing minute as anything but :00
-    only when an explicit hour is given.
+    Accepts "10:30", "10.30", "10 30", "1030", "10:30 am", "10 am", "ten
+    thirty", "half past ten", "quarter past ten", "pathu mani", "aaru mani",
+    "3 in the afternoon", plus am/pm and Tamil/Tanglish part-of-day markers.
+
+    When am/pm is NOT stated for an hour <= 12, the returned time keeps the
+    literal hour (e.g. "5:30" -> 05:30) and `meridiem_explicit=False`. The
+    parser never leans the hour toward the clinic's opening hours — that would
+    be an unsafe guess. The caller disambiguates a bare time against the
+    authoritative offer set. Hours >= 13 are unambiguous (24h), so they are
+    reported explicit.
     """
     if not text:
         return None
     t = text.lower().strip()
 
-    ampm = None
-    if re.search(r"\bpm\b|\bp\.m\b", t) or any(w in t for w in _EVENING if w != "pm"):
-        ampm = "pm"
-    elif re.search(r"\bam\b|\ba\.m\b", t) or any(w in t for w in _MORNING if w != "am"):
-        ampm = "am"
+    explicit_pm = bool(
+        re.search(r"\bpm\b|\bp\.m\b", t) or any(w in t for w in _EVENING if w != "pm")
+    )
+    explicit_am = bool(
+        re.search(r"\bam\b|\ba\.m\b", t) or any(w in t for w in _MORNING if w != "am")
+    )
+    # "afternoon" / "noon" imply PM; "night" implies PM (evening/night hours).
+    if not explicit_pm and (any(w in t for w in _AFTERNOON) or any(w in t for w in _NIGHT)):
+        explicit_pm = True
 
-    def _apply_ampm(h: int) -> int:
-        if ampm == "pm" and h < 12:
-            return h + 12
-        if ampm == "am" and h == 12:
-            return 0
-        return h
+    ampm = "pm" if explicit_pm else ("am" if explicit_am else None)
+
+    def _resolve(h: int) -> tuple[int, bool]:
+        # Returns (hour_24, meridiem_explicit).
+        if h >= 13:
+            return h, True  # 24h form is unambiguous
+        if ampm == "pm":
+            return (h + 12 if h < 12 else 12), True
+        if ampm == "am":
+            return (0 if h == 12 else h), True
+        return h, False  # bare hour, meridiem unknown
 
     # 1. Explicit H:MM / H.MM / "H MM" with a separator.
     sep = re.search(r"\b(\d{1,2})[:.\s](\d{2})\b", t)
     if sep:
         h, m = int(sep.group(1)), int(sep.group(2))
-        # A bare "10 30" is only a time if the second group is a valid minute.
         if 0 <= m <= 59:
-            return _clamp(_apply_ampm(h), m)
+            hh, exp = _resolve(h)
+            return _spec(hh, m, explicit=exp)
 
-    # 2. Compact "1030" -> 10:30 (4 digits, valid minute tail).
-    compact = re.search(r"\b(\d{2})(\d{2})\b", t)
+    # 2. Compact "1030" -> 10:30. Reject a bare 4-digit number that is really a
+    # year (2026) or otherwise date-like — require the leading pair be a valid
+    # 24h hour AND the value not look like a plausible year (1900-2099).
+    compact = re.search(r"(?<!\d)(\d{2})(\d{2})(?!\d)", t)
     if compact:
+        whole = int(compact.group(0))
         h, m = int(compact.group(1)), int(compact.group(2))
-        if 0 <= h <= 23 and 0 <= m <= 59:
-            return _clamp(_apply_ampm(h), m)
+        looks_like_year = 1900 <= whole <= 2099
+        if 0 <= h <= 23 and 0 <= m <= 59 and not looks_like_year:
+            hh, exp = _resolve(h)
+            return _spec(hh, m, explicit=exp)
 
     # Half/quarter markers must match as words, so "kaal" (quarter) does not
     # fire inside "kaalai" (morning).
@@ -119,48 +159,61 @@ def parse_time_of_day(text: str) -> time | None:
     # 3. "half past ten" / "quarter past ten" / "ten thirty" / "ten am".
     for word, val in _WORD_NUMBERS.items():
         if re.search(rf"\b{word}\b", t):
+            minute: int | None = None
             if half:
-                return _clamp(_apply_ampm(val), 30)
-            if quarter:
-                return _clamp(_apply_ampm(val), 15)
-            tail = re.search(rf"\b{word}\b\s+(\d{{1,2}})\b", t)
-            if tail and 0 <= int(tail.group(1)) <= 59:
-                return _clamp(_apply_ampm(val), int(tail.group(1)))
-            if "thirty" in t:
-                return _clamp(_apply_ampm(val), 30)
-            if "fifteen" in t:
-                return _clamp(_apply_ampm(val), 15)
-            # Bare word hour with any disambiguator (am/pm, o'clock, sharp).
-            if ampm is not None or "o'clock" in t or "oclock" in t or "sharp" in t:
-                return _clamp(_apply_ampm(val), 0)
+                minute = 30
+            elif quarter:
+                minute = 15
+            else:
+                tail = re.search(rf"\b{word}\b\s+(\d{{1,2}})\b", t)
+                if tail and 0 <= int(tail.group(1)) <= 59:
+                    minute = int(tail.group(1))
+                elif "thirty" in t:
+                    minute = 30
+                elif "fifteen" in t:
+                    minute = 15
+                elif ampm is not None or "o'clock" in t or "oclock" in t or "sharp" in t:
+                    minute = 0
+            if minute is not None:
+                hh, exp = _resolve(val)
+                return _spec(hh, minute, explicit=exp)
 
-    # 4. Tamil/Tanglish hour + "mani" (o'clock).
+    # 4. Tamil/Tanglish hour + "mani" (o'clock). No clinic-hours lean — a bare
+    # Tamil hour is reported with the literal hour and meridiem_explicit=False,
+    # exactly like a bare numeric hour.
     for word, val in _TAMIL_HOUR.items():
         if word in t:
-            h = val
-            # Clinic-hours heuristic: a bare Tamil hour <= 8 with an evening or
-            # no explicit morning marker leans afternoon/evening.
-            leans_pm = ampm == "pm" and h < 12
-            bare_low = ampm is None and h <= 8 and not any(w in t for w in _MORNING)
-            if leans_pm or bare_low:
-                h += 12
             minute = 30 if half else (15 if quarter else 0)
-            return _clamp(h, minute)
+            hh, exp = _resolve(val)
+            return _spec(hh, minute, explicit=exp)
 
     # 5. Bare hour with an explicit am/pm or "mani"/"o'clock".
     bare = re.search(r"\b(\d{1,2})\s*(am|pm|mani|o'?clock)\b", t)
     if bare:
         h = int(bare.group(1))
-        suffix = bare.group(2)
-        if suffix == "pm" and h < 12:
-            h += 12
-        elif suffix == "am" and h == 12:
-            h = 0
-        elif suffix in ("mani", "oclock", "o'clock") and h <= 8:
-            h += 12
-        return _clamp(h, 30 if half else 0)
+        minute = 30 if half else 0
+        hh, exp = _resolve(h)
+        return _spec(hh, minute, explicit=exp)
+
+    # 6. A lone hour digit with a part-of-day marker ("3 in the afternoon",
+    # "afternoon 3", "evening 6"). The marker already set `ampm` above, so a
+    # bare digit is now anchored to a meridiem. Requires a marker so a stray
+    # digit in unrelated text is not read as a time.
+    if ampm is not None:
+        lone = re.search(r"\b(\d{1,2})\b", t)
+        if lone:
+            h = int(lone.group(1))
+            minute = 30 if half else (15 if quarter else 0)
+            hh, exp = _resolve(h)
+            return _spec(hh, minute, explicit=exp)
 
     return None
+
+
+def parse_time_of_day(text: str) -> time | None:
+    """Backward-compatible wrapper returning just the parsed time (or None)."""
+    spec = parse_time_spec(text)
+    return spec.time if spec is not None else None
 
 
 # --- Relative date ----------------------------------------------------------

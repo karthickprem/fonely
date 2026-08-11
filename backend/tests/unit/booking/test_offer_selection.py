@@ -95,3 +95,35 @@ def test_ordinal_still_works() -> None:
     ctx = _ctx_with_offer((17, 0), (17, 30))
     assert _svc()._try_offer_selection(ctx, "the second one") is True
     assert ctx.collected_facts["start_at"].astimezone(KOLKATA).minute == 30
+
+
+class TestBareMeridiemWord:
+    """The helper that lets a bare 'pm'/'evening'/'மாலை' resolve an ambiguity."""
+
+    def test_english(self) -> None:
+        from fonely.services.conversation import _bare_meridiem_word
+
+        assert _bare_meridiem_word("pm") == "pm"
+        assert _bare_meridiem_word("PM") == "pm"
+        assert _bare_meridiem_word("evening") == "pm"
+        assert _bare_meridiem_word("morning") == "am"
+        assert _bare_meridiem_word("am") == "am"
+
+    def test_tamil_tanglish(self) -> None:
+        from fonely.services.conversation import _bare_meridiem_word
+
+        assert _bare_meridiem_word("மாலை") == "pm"
+        assert _bare_meridiem_word("maalai") == "pm"
+        assert _bare_meridiem_word("kaalai") == "am"
+        assert _bare_meridiem_word("காலை") == "am"
+
+    def test_word_boundary_no_false_positive(self) -> None:
+        from fonely.services.conversation import _bare_meridiem_word
+
+        # 'am' inside 'name'/'exam' must NOT match.
+        assert _bare_meridiem_word("my name is Karthik") is None
+        assert _bare_meridiem_word("the exam") is None
+        # No meridiem word at all.
+        assert _bare_meridiem_word("hmm not sure") is None
+        # Both present -> ambiguous within the reply -> None (do not guess).
+        assert _bare_meridiem_word("morning or evening") is None

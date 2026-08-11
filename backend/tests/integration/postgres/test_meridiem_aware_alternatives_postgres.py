@@ -503,3 +503,169 @@ async def test_out_of_hours_bare_time_still_reaches_a_bookable_slot(
         local = committed.astimezone(KOLKATA)
         assert local.date() == tomorrow
         assert time(18, 15) <= local.time() < time(19, 45)
+
+
+async def test_split_turn_meridiem_survives_and_offers_evening(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """DEFECT 1 regression: a bare evening hour given BEFORE the date still
+    offers evening slots when the date arrives in a later turn.
+
+    Patient says "6 mani" (time first, no date), we ask for the date, they say
+    "naalaikku" (tomorrow). The alternate 18:00 reading must survive the
+    _pending_time path so an evening clinic offers evening slots, not morning.
+    """
+    async with pg_session_factory() as setup:
+        await _seed_evening_clinic(setup)
+
+    gw = _gw()
+    # Turn 1: time only, no date -> held as pending, no offer yet.
+    async with pg_session_factory() as session:
+        await _process_domain(
+            _claimed(
+                1,
+                "book a general consultation with Dr. Priya at 6 mani, reach me on +919123456789",
+            ),
+            session,
+            gw,
+        )
+        await session.commit()
+
+    conv_id = next(iter(_CONVERSATIONS.keys()))
+    ctx = _CONVERSATIONS[conv_id]
+    assert ctx.collected_facts.get("_pending_time") == "06:00:00"
+    assert ctx.collected_facts.get("_pending_time_explicit") is False
+    assert "start_at" not in ctx.collected_facts
+
+    # Turn 2: the date arrives in a SEPARATE turn.
+    async with pg_session_factory() as session:
+        await _process_domain(_claimed(2, "naalaikku"), session, gw)
+        await session.commit()
+
+    ctx = _CONVERSATIONS[conv_id]
+    # The alternate reading survived, so the offer is EVENING, not morning.
+    offer = ctx.collected_facts.get("_active_offer")
+    assert offer is not None, (
+        f"No offer after split-turn. State: {ctx.state}, facts: {list(ctx.collected_facts)}"
+    )
+    assert isinstance(offer, dict)
+    for slot in offer["slots"]:
+        local = datetime.fromisoformat(slot["start_at_utc"]).astimezone(KOLKATA)
+        assert time(18, 0) <= local.time() < time(19, 30), (
+            f"Split-turn offered a non-evening slot {local.time()} — defect 1 regressed."
+        )
+
+
+@pytest.mark.parametrize("answer", ["pm", "evening", "மாலை"])
+async def test_ambiguity_resolved_by_bare_meridiem_word(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+    answer: str,
+) -> None:
+    """DEFECT 2 regression: a bare meridiem answer resolves the which-one
+    question in English, Tamil, and Tanglish — never an infinite loop."""
+    async with pg_session_factory() as setup:
+        await _seed_dual_window(setup)
+
+    gw = _gw()
+    # Off-grid 5:45 -> alternatives span both 5:30 AM and 5:30 PM.
+    async with pg_session_factory() as session:
+        await _process_domain(
+            _claimed(
+                1,
+                "book a general consultation with Dr. Priya tomorrow 5:45, "
+                "reach me on +919123456789",
+            ),
+            session,
+            gw,
+        )
+        await session.commit()
+    conv_id = next(iter(_CONVERSATIONS.keys()))
+
+    # Bare "5:30" -> ambiguous, we ask which one.
+    async with pg_session_factory() as session:
+        await _process_domain(_claimed(2, "5:30"), session, gw)
+        await session.commit()
+    ctx = _CONVERSATIONS[conv_id]
+    assert ctx.collected_facts.get("_selection_ambiguous")
+
+    # The patient answers with a bare meridiem word -> resolves, no loop.
+    async with pg_session_factory() as session:
+        await _process_domain(_claimed(3, answer), session, gw)
+        await session.commit()
+    ctx = _CONVERSATIONS[conv_id]
+    assert "_selection_ambiguous" not in ctx.collected_facts, (
+        f"{answer!r} did not resolve the ambiguity — loop regressed."
+    )
+    assert ctx.proposal_id is not None, f"{answer!r} resolved but did not book."
+
+    async with pg_session_factory() as session:
+        await _process_domain(_claimed(4, "yes confirm"), session, gw)
+        await session.commit()
+
+    is_pm = answer in ("pm", "evening", "மாலை")
+    async with pg_session_factory() as verify:
+        row = (
+            await verify.execute(
+                text(
+                    "SELECT start_at FROM appointments "
+                    "WHERE business_id = 1 AND status = 'confirmed'"
+                )
+            )
+        ).one_or_none()
+        assert row is not None
+        committed = row[0]
+        if committed.tzinfo is None:
+            committed = committed.replace(tzinfo=UTC)
+        hour = committed.astimezone(KOLKATA).hour
+        assert (hour >= 12) == is_pm, f"{answer!r} booked hour {hour}, expected PM={is_pm}"
+
+
+async def test_ambiguity_question_is_bounded(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """DEFECT 2 regression: unresolvable answers cannot loop forever — after a
+    bounded number of asks the offer is dropped and a plain time question is
+    asked, guaranteeing an exit."""
+    async with pg_session_factory() as setup:
+        await _seed_dual_window(setup)
+
+    gw = _gw()
+    async with pg_session_factory() as session:
+        await _process_domain(
+            _claimed(
+                1,
+                "book a general consultation with Dr. Priya tomorrow 5:45, "
+                "reach me on +919123456789",
+            ),
+            session,
+            gw,
+        )
+        await session.commit()
+    conv_id = next(iter(_CONVERSATIONS.keys()))
+
+    async with pg_session_factory() as session:
+        await _process_domain(_claimed(2, "5:30"), session, gw)
+        await session.commit()
+    assert _CONVERSATIONS[conv_id].collected_facts.get("_selection_ambiguous")
+
+    # Reply with something that neither resolves nor parses — no time, no
+    # ordinal, and NO meridiem word (so it cannot accidentally resolve).
+    last_response = ""
+    for i in range(4):
+        async with pg_session_factory() as session:
+            last_response, _ = await _process_domain(
+                _claimed(10 + i, "hmm not really sure"), session, gw
+            )
+            await session.commit()
+        ctx = _CONVERSATIONS[conv_id]
+        if "_selection_ambiguous" not in ctx.collected_facts:
+            break
+
+    ctx = _CONVERSATIONS[conv_id]
+    # The loop must have exited via the bound: ambiguity cleared, offer dropped,
+    # and the plain fallback time question asked.
+    assert "_selection_ambiguous" not in ctx.collected_facts, (
+        "Ambiguity question looped without bound — defect 2 regressed."
+    )
+    assert ctx.proposal_id is None
+    assert "what time" in last_response.lower()

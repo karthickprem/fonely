@@ -82,6 +82,54 @@ def _get_lock(conversation_id: str) -> asyncio.Lock:
 
 _REQUIRED_FACTS = ("service_id", "resource_id", "start_at", "customer_phone")
 
+# Bare meridiem answers to a "which one — AM or PM?" question, in English,
+# Tamil, and Tanglish. These let the patient resolve an ambiguity with the
+# word they actually say, so the question is never a dead-end loop.
+_PM_WORDS = (
+    "pm",
+    "p.m",
+    "evening",
+    "afternoon",
+    "night",
+    "maalai",
+    "மாலை",
+    "iravu",
+    "இரவு",
+    "pagal",
+    "பகல்",
+    "mathiyaanam",
+    "மதியம்",
+)
+_AM_WORDS = (
+    "am",
+    "a.m",
+    "morning",
+    "kaalai",
+    "காலை",
+    "forenoon",
+)
+
+
+def _bare_meridiem_word(message: str) -> str | None:
+    """Return 'pm'/'am' if the message names a meridiem/part-of-day, else None.
+
+    Word-boundary matched so 'am' inside 'name' does not fire. Used only to
+    resolve a pending two-slot ambiguity, where the offered set is authoritative
+    and the patient just needs to pick a half of the day.
+    """
+    t = message.strip().lower()
+
+    def _has(words: tuple[str, ...]) -> bool:
+        return any(re.search(rf"(?<!\w){re.escape(w)}(?!\w)", t) for w in words)
+
+    pm = _has(_PM_WORDS)
+    am = _has(_AM_WORDS)
+    if pm and not am:
+        return "pm"
+    if am and not pm:
+        return "am"
+    return None
+
 
 class ConversationService:
     def __init__(
@@ -241,9 +289,33 @@ class ConversationService:
         await self._validate_facts(ctx, biz)
 
         # A bare time that matched two offered slots is ambiguous: keep the
-        # offer and ask which one, rather than dropping known context.
+        # offer and ask which one, rather than dropping known context. Bounded
+        # so the question can never repeat forever no matter what arrives — a
+        # patient answer that resolves it clears the flag in _try_offer_selection
+        # (an English ordinal, a full time, or a bare meridiem word in either
+        # language); anything else counts toward the bound and then we fall back.
         ambiguous = ctx.collected_facts.get("_selection_ambiguous")
         if ambiguous and isinstance(ambiguous, list):
+            asked_raw = ctx.collected_facts.get("_ambiguity_asks", 0)
+            asked = asked_raw if isinstance(asked_raw, int) else 0
+            if asked >= 2:
+                # Escape hatch: stop looping. Drop the stale offer/ambiguity and
+                # ask for the time plainly so the turn cannot recur.
+                ctx.collected_facts.pop("_selection_ambiguous", None)
+                ctx.collected_facts.pop("_ambiguity_asks", None)
+                ctx.collected_facts.pop("_active_offer", None)
+                ctx.collected_facts.pop("start_at", None)
+                turn = self._fact_turn(
+                    ctx,
+                    user_message,
+                    "Sorry, I didn't catch which time. What time would you "
+                    "like — for example '10:30 AM' or '6 PM'?",
+                    safety,
+                    ["start_at"],
+                )
+                self._log_turn(turn, start_time)
+                return turn
+            ctx.collected_facts["_ambiguity_asks"] = asked + 1
             options = " or ".join(str(x) for x in ambiguous)
             turn = self._fact_turn(
                 ctx,
@@ -428,10 +500,22 @@ class ConversationService:
                 # already have — keep the offer and ask WHICH ONE. Returning
                 # True consumes the turn without setting start_at, so the offer
                 # survives and the missing-fact question becomes "which one".
-                ctx.collected_facts["_selection_ambiguous"] = [
-                    s.display_time for s in candidates
-                ]
+                ctx.collected_facts["_selection_ambiguous"] = [s.display_time for s in candidates]
                 return True
+
+        # 1.5 Resolve a pending ambiguity by a bare meridiem word. When we asked
+        # "5:30 AM or 5:30 PM?", the natural answer is just "pm" / "evening" /
+        # "மாலை" / "காலை" — not a full time or an English ordinal. Match against
+        # the offered slot whose own display_time carries that meridiem. This
+        # must be escapable in both languages, so the conversation never loops.
+        if matched_slot is None and ctx.collected_facts.get("_selection_ambiguous"):
+            half = _bare_meridiem_word(message)
+            if half is not None:
+                want = "pm" if half == "pm" else "am"
+                for slot in offer.slots:
+                    if want in slot.display_time.lower():
+                        matched_slot = slot
+                        break
 
         # 2. Word-boundary ordinal matching (only if no time match)
         if matched_slot is None:
@@ -465,6 +549,7 @@ class ConversationService:
         ctx.collected_facts["_selected_token"] = selected.token
         ctx.collected_facts["_selected_offer_id"] = selected.offer_id
         ctx.collected_facts.pop("_selection_ambiguous", None)
+        ctx.collected_facts.pop("_ambiguity_asks", None)
         return True
 
     def _extract_datetime(
@@ -501,9 +586,20 @@ class ConversationService:
         held_time = (
             dt_time.fromisoformat(pending_time_raw) if isinstance(pending_time_raw, str) else None
         )
+        # The held time's meridiem-explicitness must survive across turns, or a
+        # bare "6 mani" said before the date loses its alternate reading when
+        # the date arrives later (defect 1). Default True so an unknown-origin
+        # held time is treated as explicit (no spurious alt reading).
+        held_time_explicit = bool(ctx.collected_facts.get("_pending_time_explicit", True))
 
         eff_date = said_date or held_date
         eff_time = said_time or held_time
+        # Explicitness of the effective time: this turn's spec if it supplied
+        # the time, else the carried-forward flag from the held time.
+        if said_time is not None and said_spec is not None:
+            eff_time_explicit = said_spec.meridiem_explicit
+        else:
+            eff_time_explicit = held_time_explicit
 
         if said_time is None and said_date is None:
             return
@@ -512,6 +608,7 @@ class ConversationService:
         if said_time is not None or said_date is not None:
             ctx.collected_facts.pop("_active_offer", None)
             ctx.collected_facts.pop("_selection_ambiguous", None)
+            ctx.collected_facts.pop("_ambiguity_asks", None)
 
         # Any previously-computed alt reading is stale once we re-extract.
         ctx.collected_facts.pop("_start_at_alt", None)
@@ -521,11 +618,12 @@ class ConversationService:
             ctx.collected_facts["start_at"] = local_dt.astimezone(UTC)
             ctx.collected_facts.pop("_pending_date", None)
             ctx.collected_facts.pop("_pending_time", None)
-            # When the patient's time carried no explicit am/pm, remember the
-            # OTHER meridiem reading (hour +/- 12) so availability can consider
-            # both — a bare "6" that means 6 PM must not be offered only morning
-            # slots. Only meaningful this turn (said_time, not a held time).
-            if said_time is not None and said_spec is not None and not said_spec.meridiem_explicit:
+            ctx.collected_facts.pop("_pending_time_explicit", None)
+            # When the effective time carried no explicit am/pm — whether it was
+            # given this turn OR carried across turns via _pending_time — record
+            # the OTHER meridiem reading (hour +/- 12) so availability considers
+            # both. This survives the split-turn path (defect 1).
+            if not eff_time_explicit:
                 alt_hour = (eff_time.hour + 12) % 24
                 alt_local = datetime.combine(
                     eff_date, eff_time.replace(hour=alt_hour), tzinfo=clinic_tz
@@ -539,6 +637,7 @@ class ConversationService:
                 ctx.collected_facts["_pending_date"] = eff_date.isoformat()
             if eff_time is not None:
                 ctx.collected_facts["_pending_time"] = eff_time.isoformat()
+                ctx.collected_facts["_pending_time_explicit"] = eff_time_explicit
 
     def _refine_datetime_gap(self, ctx: ConversationContext, missing: list[str]) -> list[str]:
         # When start_at is missing but one half was understood, name the half

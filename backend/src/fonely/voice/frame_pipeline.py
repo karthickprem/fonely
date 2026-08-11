@@ -29,14 +29,13 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 from .context import TrustedClock, resolve_relative_date
 from .dialogue import BookingCollection, contains_medical_advice
+from .language import DEFAULT_LANGUAGE, detect_language, get_response
 
 logger = logging.getLogger("fonely.voice.frame_pipeline")
 
-MEDICAL_SAFE_RESPONSE = (
-    "அதற்கு doctor நேரில் பார்த்துதான் சொல்ல முடியும். Appointment book பண்ணலாமா?"
-)
-GOODBYE_RESPONSE = "நன்றி, take care! Clinic-ல சந்திப்போம்."
-BOOKING_NOTED_RESPONSE = "Booking note பண்ணிட்டேன். வேற ஏதாவது doubt இருக்கா?"
+# Deterministic response strings now live in language.py's RESPONSES table
+# (one source of truth, three language buckets). The gate looks them up via
+# get_response(key, caller_language).
 
 _CONFIRM_WORDS = frozenset({
     "yes", "yeah", "yep", "ok", "okay", "correct", "right", "sure", "hmm",
@@ -51,6 +50,21 @@ _AVAILABILITY_WORDS = ("availability", "slot", "available", "time", "அவை�
 
 def _is_confirmation(text: str) -> bool:
     return text.strip().casefold().rstrip(".!") in _CONFIRM_WORDS
+
+
+# Confirmation-question markers across all three languages. Gate 4 forces the
+# deterministic readback only when the LLM's own text did NOT already ask for
+# confirmation. The old check was `"correct" not in text` — Tanglish-only; it
+# would miss a Tamil "சரியா?" readback and wrongly force a second one, and it
+# would over-match an English "Is this correct?" the model produced itself.
+_READBACK_CONFIRM_MARKERS = ("correct", "சரியா", "correct-ஆ")
+
+
+def _readback_confirm_missing(text: str) -> bool:
+    """True if the model's text did NOT already ask a confirmation question,
+    in any of the three languages — so the deterministic readback is forced."""
+    low = text.lower()
+    return not any(m in low for m in _READBACK_CONFIRM_MARKERS)
 
 
 @dataclass
@@ -81,6 +95,9 @@ class BookingStateInjector(FrameProcessor):
         self._last_availability = None
         self.caller_confirmed = False
         self.booking_closed = False
+        # Caller's language, updated per turn (sticky). The single propagation
+        # point: the post-LLM gate reads this to mirror deterministic strings.
+        self.caller_language = DEFAULT_LANGUAGE
 
     @property
     def booking(self) -> BookingCollection:
@@ -106,6 +123,11 @@ class BookingStateInjector(FrameProcessor):
                 content = msg.get("content", "")
                 prev_assistant = content if isinstance(content, str) else ""
                 break
+
+        # Sticky per-turn language detection. A turn with real language signal
+        # sets the bucket; a short/ambiguous turn ("ok", "6:30") keeps the
+        # previous. The next deterministic response mirrors this.
+        self.caller_language = detect_language(user_text, self.caller_language)
 
         resolved_date = resolve_relative_date(user_text, self._resolver.clock)
 
@@ -213,38 +235,41 @@ class BookingPostLLMGate(FrameProcessor):
         self._response_frames = None
         text = "".join(f.text for f in buffered if isinstance(f, LLMTextFrame))
         st = self._injector
+        lang = st.caller_language
 
         # Gate 1: medical advice
         if contains_medical_advice(text):
-            await self._emit(MEDICAL_SAFE_RESPONSE, direction)
+            await self._emit(get_response("medical_safe", lang), direction)
             return
 
         # Gate 2: closed after confirmation
         if st.booking_closed:
-            await self._emit(GOODBYE_RESPONSE, direction)
+            await self._emit(get_response("goodbye", lang), direction)
             return
 
         # Gate 3: caller confirmed → commit once through the port
         if st.caller_confirmed and not self._booking_done:
             self._booking_done = True
-            await self._emit(await self._commit_and_confirm(), direction)
+            await self._emit(await self._commit_and_confirm(lang), direction)
             return
 
         if st.caller_confirmed and self._booking_done:
-            await self._emit(BOOKING_NOTED_RESPONSE, direction)
+            await self._emit(get_response("booking_noted", lang), direction)
             return
 
-        # Gate 4: force deterministic readback if the model skipped it
-        readback = st.booking.format_readback()
-        if readback is not None and "correct" not in text.lower():
+        # Gate 4: force deterministic readback if the model skipped it.
+        # Readback mirrors the caller's language; facts stay identical.
+        readback = st.booking.format_readback(lang)
+        if readback is not None and _readback_confirm_missing(text):
             await self._emit(readback, direction)
             return
 
         for f in [*buffered, frame]:
             await self.push_frame(f, direction)
 
-    async def _commit_and_confirm(self) -> str:
-        """Commit through the single path and produce receipt-derived speech.
+    async def _commit_and_confirm(self, lang: str) -> str:
+        """Commit through the single path and produce receipt-derived speech,
+        in the caller's language.
 
         Never claims success without a receipt: on any failure the caller is
         told to confirm with the clinic, and no success language is spoken.
@@ -253,7 +278,7 @@ class BookingPostLLMGate(FrameProcessor):
 
         bc = self._injector.booking
         if bc.selected_time is None or bc.target_date is None:
-            return "Details incomplete. Clinic staff கிட்ட confirm பண்ணுங்க."
+            return get_response("commit_incomplete", lang)
 
         try:
             async with self._resolver.session_factory() as session:
@@ -268,16 +293,13 @@ class BookingPostLLMGate(FrameProcessor):
                 )
         except Exception as exc:
             logger.error("commit_error: %s", type(exc).__name__)
-            return "Details note பண்ணிட்டேன். Clinic staff confirm பண்ணுவாங்க."
+            return get_response("commit_error", lang)
 
         if outcome.success:
             logger.info("booking_committed appointment_id=%s", outcome.appointment_id)
-            return (
-                f"Appointment #{outcome.appointment_id} confirm ஆயிடுச்சு. "
-                "வேற ஏதாவது doubt இருக்கா?"
-            )
+            return get_response("commit_success", lang).format(id=outcome.appointment_id)
         logger.warning("booking_refused: %s", outcome.error)
-        return "இந்த நேரம் book பண்ண முடியல. Clinic-ல call பண்ணி confirm பண்ணுங்க."
+        return get_response("commit_refused", lang)
 
     async def _emit(self, text: str, direction: FrameDirection):
         await self.push_frame(LLMFullResponseStartFrame(), direction)

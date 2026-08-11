@@ -24,9 +24,8 @@ from fonely.voice.frame_pipeline import (
     ResolverContext,
     _is_confirmation,
     _AVAILABILITY_WORDS,
-    MEDICAL_SAFE_RESPONSE,
-    GOODBYE_RESPONSE,
 )
+from fonely.voice.language import get_response, DEFAULT_LANGUAGE
 
 
 CLOCK = TrustedClock(
@@ -87,7 +86,7 @@ class TestMedicalGate:
         injector = BookingStateInjector(_resolver())
         gate = BookingPostLLMGate(injector, _resolver())
         collector = await _drive_gate(gate, "take paracetamol twice daily")
-        assert MEDICAL_SAFE_RESPONSE in collector.texts()
+        assert get_response("medical_safe", DEFAULT_LANGUAGE) in collector.texts()
 
     @pytest.mark.asyncio
     async def test_normal_response_passes(self):
@@ -105,7 +104,7 @@ class TestClosureGate:
         injector.booking_closed = True
         gate = BookingPostLLMGate(injector, _resolver())
         collector = await _drive_gate(gate, "anything the model said")
-        assert GOODBYE_RESPONSE in collector.texts()
+        assert get_response("goodbye", DEFAULT_LANGUAGE) in collector.texts()
 
 
 class TestReadbackGate:

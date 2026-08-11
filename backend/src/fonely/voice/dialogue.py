@@ -186,16 +186,20 @@ class BookingCollection:
     def should_include_availability(self) -> bool:
         return self.target_date is not None
 
-    def format_readback(self) -> str | None:
+    def format_readback(self, lang: str = "ta-Latn") -> str | None:
         if self.required_field != "confirmation":
             return None
+        # Facts are language-neutral: service (English display name), date
+        # (English month), and the time VALUE are identical across languages.
+        # Only the time-period word and the trailing question mirror the caller.
+        # This keeps the readback's date/time byte-identical to what commit
+        # uses — a readback whose facts drifted per language would book wrong.
+        from .language import format_time_spoken, get_response
         service = _normalize_service(self.reason) if self.reason else "?"
         date_str = _format_spoken_date(self.target_date) if self.target_date else "?"
-        time_str = _format_spoken_time(self.selected_time) if self.selected_time else "?"
-        return (
-            f"{service}, {date_str} {time_str}, {self.patient_name}. "
-            f"இது correct-ஆ?"
-        )
+        time_str = format_time_spoken(self.selected_time, lang) if self.selected_time else "?"
+        tail = get_response("readback_tail", lang)
+        return f"{service}, {date_str} {time_str}, {self.patient_name}. {tail}"
 
     def render(self) -> str:
         selected = self.selected_time.strftime("%H:%M") if self.selected_time else "missing"

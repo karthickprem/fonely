@@ -233,16 +233,21 @@ def _is_date_or_time_word(normalized: str) -> bool:
 
 def _assistant_asks_name(text: str) -> bool:
     lower = text.casefold()
-    return any(term in lower for term in ("name", "பேரு", "பெயர்", "நேம்"))
+    return any(term in lower for term in (
+        "name", "பேரு", "பெயர்", "பெயர", "நேம்", "நேம",
+    ))
 
 
+_DRUG_NAMES = r"(?:paracetamol|ibuprofen|amoxicillin|crocin|combiflam|antibiotic|dolo(?:\s*\d+)?|meftal|brufen)"
 _MEDICAL_ADVICE = re.compile(
-    r"\b(?:take|use|apply|need)\s+(?:paracetamol|ibuprofen|amoxicillin|crocin|combiflam|antibiotic)"
-    r"|\b\d+\s*(?:mg|ml)\b.*(?:daily|twice|once|thrice)"
-    r"|(?:root canal|extraction|filling|surgery|implant)\s+(?:தேவை|need|required|வேணும்)"
-    r"|(?:you |நீங்க )?\s*need\s+(?:a |an )?(?:root canal|extraction|filling|surgery|implant)"
-    r"|(?:could be|might be|probably)\s+(?:an? )?(?:infection|cavity|abscess|fracture)"
-    r"|(?:இருக்கலாம்|தேவைப்படலாம்)\s*$",
+    r"\b(?:take|use|apply|need)\s+" + _DRUG_NAMES
+    + r"|\b" + _DRUG_NAMES + r"\s+(?:எடு|எடுக்க|எடுத்து|போட|போடு|சாப்பிடு|குடி)"
+    + r"|(?:எடு|எடுக்க|எடுத்து|போட|போடு|சாப்பிடு)\w*\s+" + _DRUG_NAMES
+    + r"|\b\d+\s*(?:mg|ml)\b.*(?:daily|twice|once|thrice)"
+    + r"|(?:root canal|extraction|filling|surgery|implant)\s+(?:தேவை|need|required|வேணும்)"
+    + r"|(?:you |நீங்க )?\s*need\s+(?:a |an )?(?:root canal|extraction|filling|surgery|implant)"
+    + r"|(?:could be|might be|probably)\s+(?:an? )?(?:infection|cavity|abscess|fracture)"
+    + r"|(?:இருக்கலாம்|தேவைப்படலாம்)\s*$",
     re.IGNORECASE,
 )
 

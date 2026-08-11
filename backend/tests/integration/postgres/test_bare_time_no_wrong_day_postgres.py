@@ -224,8 +224,7 @@ async def test_vague_time_is_not_guessed(
         await _process_domain(
             _claimed(
                 1,
-                f"book a consultation with Dr. Priya tomorrow {vague}, "
-                "reach me on +919123456789",
+                f"book a consultation with Dr. Priya tomorrow {vague}, reach me on +919123456789",
             ),
             session,
             gw,
@@ -239,7 +238,5 @@ async def test_vague_time_is_not_guessed(
     assert ctx.proposal_id is None
 
     async with pg_session_factory() as verify:
-        count = await verify.scalar(
-            text("SELECT count(*) FROM appointments WHERE business_id = 1")
-        )
+        count = await verify.scalar(text("SELECT count(*) FROM appointments WHERE business_id = 1"))
         assert count == 0

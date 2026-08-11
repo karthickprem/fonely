@@ -22,6 +22,14 @@ class Settings(BaseSettings):
     cartesia_api_key: str = ""
     cartesia_voice_id: str = ""
 
+    # The voice call pipeline is off unless someone turns it on. Unlike the
+    # other router groups, whose credential doubles as their switch, this one
+    # needs a flag of its own: the keys it depends on are also used by the
+    # offline voice work, so their presence does not mean anyone intended to
+    # answer live calls. Turning it on with those keys missing is a
+    # misconfiguration and must be reported as one, not silently ignored.
+    voice_pipeline_enabled: bool = False
+
     # Exotel
     exotel_api_key: str = ""
     exotel_api_token: str = ""

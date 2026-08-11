@@ -305,11 +305,11 @@ class TestWhatsAppBusinessMapping:
             m = WhatsAppBusinessMapping()
             assert m.get_business_id("ph1") == 10
 
-    def test_invalid_json_falls_back_empty(self):
+    def test_invalid_json_raises(self):
         with patch("fonely.services.whatsapp_config.settings") as mock_s:
             mock_s.whatsapp_business_mappings = "not-json"
-            m = WhatsAppBusinessMapping()
-            assert m.get_business_id("anything") is None
+            with pytest.raises(ValueError, match="not valid JSON"):
+                WhatsAppBusinessMapping()
 
 
 class TestWhatsAppSender:

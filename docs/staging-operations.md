@@ -145,25 +145,34 @@ Workers use lease-based claiming. If a worker crashes mid-processing:
 # Stop writers first
 docker compose -f docker-compose.staging.yml --env-file .env.staging stop backend inbound-worker notification-worker
 
-# Backup
+# Backup to private temp file (mode 0600, outside repo)
+umask 077
+BACKUP_TMP=$(mktemp /tmp/fonely-backup-XXXXXX.sql)
 docker compose -f docker-compose.staging.yml --env-file .env.staging exec postgres \
-  pg_dump -U fonely fonely > backup.sql
-test -s backup.sql || { echo "ERROR: backup is empty"; exit 1; }
+  pg_dump -U fonely fonely > "$BACKUP_TMP"
+PG_EXIT=$?
+if [ "$PG_EXIT" -ne 0 ] || [ ! -s "$BACKUP_TMP" ]; then
+  echo "ERROR: pg_dump failed (exit=$PG_EXIT) or backup is empty"; rm -f "$BACKUP_TMP"; exit 1
+fi
+BACKUP="/tmp/fonely-backup.sql"
+mv "$BACKUP_TMP" "$BACKUP"
+echo "Backup written to $BACKUP"
 
-# Drop and recreate schema for clean restore target
+# Drop and recreate schema for clean restore target (requires validated backup)
+test -s "$BACKUP" || { echo "ERROR: backup file missing"; exit 1; }
 docker compose -f docker-compose.staging.yml --env-file .env.staging exec postgres \
   psql -U fonely -v ON_ERROR_STOP=1 -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public; GRANT USAGE, CREATE ON SCHEMA public TO fonely;" fonely
 
 # Restore into clean schema (ON_ERROR_STOP ensures visibility)
 docker compose -f docker-compose.staging.yml --env-file .env.staging exec -T postgres \
-  psql -U fonely -v ON_ERROR_STOP=1 -1 fonely < backup.sql
+  psql -U fonely -v ON_ERROR_STOP=1 -1 fonely < "$BACKUP"
 
 # Verify migration state after restore (fresh one-shot)
 docker compose -f docker-compose.staging.yml --env-file .env.staging run --rm migrate
 
 # Restart services and verify readiness
 docker compose -f docker-compose.staging.yml --env-file .env.staging up -d
-curl --fail -s http://127.0.0.1:8000/health/ready || echo "WARN: readiness check failed after restore"
+curl --fail -s http://127.0.0.1:8000/health/ready || { echo "ERROR: readiness check failed after restore"; exit 1; }
 ```
 
 ## Resource bounds

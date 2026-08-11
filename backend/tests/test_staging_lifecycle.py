@@ -1,6 +1,7 @@
-"""Behavioral lifecycle tests for worker cooperative stop/drain.
+"""Behavioral lifecycle tests for worker cooperative stop/drain and startup validation.
 
-Tests actual stop behavior of worker loops with real coroutines and events.
+Tests actual stop behavior of worker loops with real coroutines and events,
+and strict mapping validation at startup.
 """
 
 from __future__ import annotations
@@ -265,3 +266,73 @@ class TestEntrypointStructure:
         assert "http_client = httpx.AsyncClient()" in code
         assert "SarvamModelGateway(client=http_client)" in code
         assert "http_client.aclose()" in code
+
+
+class TestMappingValidation:
+    def test_valid_mapping(self) -> None:
+        from fonely.services.whatsapp_config import parse_business_mappings
+
+        result = parse_business_mappings('{"12345": 1, "67890": 2}')
+        assert result == {"12345": 1, "67890": 2}
+
+    def test_empty_string_rejected(self) -> None:
+        from fonely.services.whatsapp_config import parse_business_mappings
+
+        with pytest.raises(ValueError, match="required but empty"):
+            parse_business_mappings("")
+
+    def test_invalid_json_rejected(self) -> None:
+        from fonely.services.whatsapp_config import parse_business_mappings
+
+        with pytest.raises(ValueError, match="not valid JSON"):
+            parse_business_mappings("{bad json")
+
+    def test_non_object_rejected(self) -> None:
+        from fonely.services.whatsapp_config import parse_business_mappings
+
+        with pytest.raises(ValueError, match="must be a JSON object"):
+            parse_business_mappings("[1, 2]")
+
+    def test_empty_object_rejected(self) -> None:
+        from fonely.services.whatsapp_config import parse_business_mappings
+
+        with pytest.raises(ValueError, match="must not be empty"):
+            parse_business_mappings("{}")
+
+    def test_string_value_rejected(self) -> None:
+        from fonely.services.whatsapp_config import parse_business_mappings
+
+        with pytest.raises(ValueError, match="must be integer"):
+            parse_business_mappings('{"12345": "one"}')
+
+    def test_float_value_rejected(self) -> None:
+        from fonely.services.whatsapp_config import parse_business_mappings
+
+        with pytest.raises(ValueError, match="must be integer"):
+            parse_business_mappings('{"12345": 1.5}')
+
+    def test_zero_business_id_rejected(self) -> None:
+        from fonely.services.whatsapp_config import parse_business_mappings
+
+        with pytest.raises(ValueError, match="must be positive"):
+            parse_business_mappings('{"12345": 0}')
+
+    def test_negative_business_id_rejected(self) -> None:
+        from fonely.services.whatsapp_config import parse_business_mappings
+
+        with pytest.raises(ValueError, match="must be positive"):
+            parse_business_mappings('{"12345": -1}')
+
+    def test_boolean_value_rejected(self) -> None:
+        from fonely.services.whatsapp_config import parse_business_mappings
+
+        with pytest.raises(ValueError, match="must be integer"):
+            parse_business_mappings('{"12345": true}')
+
+    def test_multi_tenant_mapping(self) -> None:
+        from fonely.services.whatsapp_config import parse_business_mappings
+
+        result = parse_business_mappings('{"phone_a": 1, "phone_b": 2, "phone_c": 1}')
+        assert len(result) == 3
+        assert result["phone_a"] == 1
+        assert result["phone_b"] == 2

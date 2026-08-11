@@ -6,7 +6,6 @@ unit (no new claims), then exits. Force cancel after configured timeout.
 
 import asyncio
 import contextlib
-import json
 import logging
 import signal
 import sys
@@ -15,6 +14,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from fonely.core.config import settings
 from fonely.core.logging_config import configure_logging
+from fonely.services.whatsapp_config import parse_business_mappings
 from fonely.workers.notification_worker import (
     NotificationSender,
     run_notification_worker,
@@ -26,15 +26,7 @@ logger = logging.getLogger("fonely.workers.main")
 def _create_sender() -> NotificationSender:
     if not settings.whatsapp_access_token:
         raise RuntimeError("WHATSAPP_ACCESS_TOKEN is required")
-    if not settings.whatsapp_business_mappings:
-        raise RuntimeError("WHATSAPP_BUSINESS_MAPPINGS is required")
-    try:
-        mappings_raw = json.loads(settings.whatsapp_business_mappings)
-        mappings = {str(key): int(value) for key, value in mappings_raw.items()}
-    except (AttributeError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise RuntimeError("WHATSAPP_BUSINESS_MAPPINGS is invalid") from exc
-    if not mappings:
-        raise RuntimeError("WHATSAPP_BUSINESS_MAPPINGS must not be empty")
+    mappings = parse_business_mappings(settings.whatsapp_business_mappings)
 
     from fonely.services.whatsapp_notification_sender import (
         ConfiguredWhatsAppSenderResolver,

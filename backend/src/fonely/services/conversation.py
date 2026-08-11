@@ -132,12 +132,37 @@ def _bare_meridiem_word(message: str) -> str | None:
         return any(re.search(rf"(?<!\w){re.escape(w)}(?!\w)", t) for w in words)
 
     # Standalone = the meridiem token is the whole answer once trivial filler
-    # ("ok", punctuation) is stripped. "yes pm" counts; "I am not sure" does not.
-    stripped = re.sub(r"[^\w.]+", " ", t).strip()
-    tokens = [tok for tok in stripped.split() if tok not in ("ok", "okay", "yes", "yeah")]
+    # (affirmations, politeness, spoken particles) is stripped. "yes pm",
+    # "pm please", "pm ah"/"pm da" (Tanglish), "PM." (STT trailing period) all
+    # count; "I am not sure" does not, and crucially the NEGATIONS "no am" /
+    # "not pm" do NOT — "no"/"not" are never filler, so they correctly leave
+    # two tokens and fail the standalone test.
+    raw = re.sub(r"[^\w.]+", " ", t).split()
+    # Strip trailing dots from a token unless the token IS a dotted meridiem
+    # form (a.m / p.m / a.m. / p.m.), so "pm." -> "pm" but "a.m." is preserved.
+    _dotted = {"a.m", "p.m", "a.m.", "p.m."}
+    tokens = []
+    for tok in raw:
+        norm = tok if tok in _dotted else tok.rstrip(".")
+        if norm:
+            tokens.append(norm)
+    _filler = (
+        "ok",
+        "okay",
+        "yes",
+        "yeah",
+        "yup",
+        "please",
+        "pls",
+        "ah",
+        "aa",
+        "da",
+        "na",
+    )
+    core = [tok for tok in tokens if tok not in _filler]
 
     def _is_standalone(forms: tuple[str, ...]) -> bool:
-        return len(tokens) == 1 and tokens[0] in forms
+        return len(core) == 1 and core[0] in forms
 
     pm = _has_anywhere(_PM_ANYWHERE) or _is_standalone(_PM_STANDALONE)
     am = _has_anywhere(_AM_ANYWHERE) or _is_standalone(_AM_STANDALONE)
@@ -334,8 +359,7 @@ class ConversationService:
                 return turn
             ctx.collected_facts["_ambiguity_asks"] = asked + 1
             options = " or ".join(
-                str(x.get("display", x)) if isinstance(x, dict) else str(x)
-                for x in ambiguous
+                str(x.get("display", x)) if isinstance(x, dict) else str(x) for x in ambiguous
             )
             turn = self._fact_turn(
                 ctx,

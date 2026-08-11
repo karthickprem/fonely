@@ -239,6 +239,22 @@ class ConversationService:
 
         await self._extract_facts(ctx, user_message, biz)
         await self._validate_facts(ctx, biz)
+
+        # A bare time that matched two offered slots is ambiguous: keep the
+        # offer and ask which one, rather than dropping known context.
+        ambiguous = ctx.collected_facts.get("_selection_ambiguous")
+        if ambiguous and isinstance(ambiguous, list):
+            options = " or ".join(str(x) for x in ambiguous)
+            turn = self._fact_turn(
+                ctx,
+                user_message,
+                f"Did you mean {options}? Which one works for you?",
+                safety,
+                ["start_at"],
+            )
+            self._log_turn(turn, start_time)
+            return turn
+
         missing = self._identify_missing_facts(ctx)
 
         if not missing and ctx.state == ConversationState.FACT_COLLECTION:
@@ -406,7 +422,16 @@ class ConversationService:
                     candidates.append(slot)
             if len(candidates) == 1:
                 matched_slot = candidates[0]
-            # len(candidates) >= 2 -> ambiguous bare time; fall through to ask.
+            elif len(candidates) >= 2:
+                # Ambiguous bare time (e.g. "5:30" with both 5:30 AM and 5:30 PM
+                # offered). Do NOT drop the offer and do NOT ask for a date we
+                # already have — keep the offer and ask WHICH ONE. Returning
+                # True consumes the turn without setting start_at, so the offer
+                # survives and the missing-fact question becomes "which one".
+                ctx.collected_facts["_selection_ambiguous"] = [
+                    s.display_time for s in candidates
+                ]
+                return True
 
         # 2. Word-boundary ordinal matching (only if no time match)
         if matched_slot is None:
@@ -439,6 +464,7 @@ class ConversationService:
         ctx.collected_facts["start_at"] = selected.start_at_utc
         ctx.collected_facts["_selected_token"] = selected.token
         ctx.collected_facts["_selected_offer_id"] = selected.offer_id
+        ctx.collected_facts.pop("_selection_ambiguous", None)
         return True
 
     def _extract_datetime(
@@ -485,6 +511,7 @@ class ConversationService:
         # A newly named time/date makes any active offer stale.
         if said_time is not None or said_date is not None:
             ctx.collected_facts.pop("_active_offer", None)
+            ctx.collected_facts.pop("_selection_ambiguous", None)
 
         # Any previously-computed alt reading is stale once we re-extract.
         ctx.collected_facts.pop("_start_at_alt", None)

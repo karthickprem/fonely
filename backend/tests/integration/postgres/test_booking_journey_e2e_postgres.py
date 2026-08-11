@@ -146,6 +146,12 @@ async def _run_offer_arc(
     assert "_active_offer" in ctx.collected_facts, (
         f"No active offer stored. Facts: {list(ctx.collected_facts.keys())}, State: {ctx.state}"
     )
+    active_offer = ctx.collected_facts["_active_offer"]
+    assert isinstance(active_offer, dict)
+    offer_id_before = active_offer["offer_id"]
+    slot_tokens = {s["display_time"]: s["token"] for s in active_offer["slots"]}
+    # No selection markers may exist before the patient chooses.
+    assert "_selected_token" not in ctx.collected_facts
 
     # Turn 2: patient names an offered time
     async with pg_session_factory() as session:
@@ -161,6 +167,15 @@ async def _run_offer_arc(
         f"No proposal after selection. State: {ctx.state}, "
         f"Facts: {list(ctx.collected_facts.keys())}"
     )
+    # Prove the time was reached THROUGH the offer, not the raw datetime parser.
+    # _selected_token/_selected_offer_id are set only by _try_offer_selection;
+    # the raw fallback never sets them. Their presence, bound to the active
+    # offer, is the proof that the patient's selection went through validation.
+    assert "_selected_token" in ctx.collected_facts, (
+        "Selection did not go through the offer token path"
+    )
+    assert ctx.collected_facts["_selected_offer_id"] == offer_id_before
+    assert ctx.collected_facts["_selected_token"] in slot_tokens.values()
 
     # Turn 3: explicit confirmation
     async with pg_session_factory() as session:

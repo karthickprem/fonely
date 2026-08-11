@@ -158,14 +158,12 @@ class TestWorkerSenderSelection:
 
         from fonely.core.config import Settings
 
-        s = Settings(
-            whatsapp_access_token="test-token",
-            whatsapp_phone_number_id="123",
-            whatsapp_business_mappings='{"123": 1}',
-        )
+        s = Settings(whatsapp_access_token="test-token")
         with patch.object(run_worker, "settings", s):
-            sender = run_worker._create_sender()
+            sender = run_worker._create_sender(MagicMock())
         assert type(sender).__name__ == "WhatsAppNotificationSender"
+        # Channel identity must come from the database, not from process config.
+        assert type(sender._resolver).__name__ == "DatabaseWhatsAppSenderResolver"
 
     def test_fails_closed_when_not_configured(self) -> None:
         from unittest.mock import patch
@@ -174,9 +172,9 @@ class TestWorkerSenderSelection:
 
         from fonely.core.config import Settings
 
-        s = Settings(whatsapp_access_token="", whatsapp_phone_number_id="")
+        s = Settings(whatsapp_access_token="")
         with (
             patch.object(run_worker, "settings", s),
             pytest.raises(RuntimeError, match="WHATSAPP_ACCESS_TOKEN"),
         ):
-            run_worker._create_sender()
+            run_worker._create_sender(MagicMock())

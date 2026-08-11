@@ -18,7 +18,7 @@ or a plausible-sounding lie:
 
 Exit code is 0 only if all four hold.
 
-    export FONELY_INTERNAL_API_SECRET=...
+    export INTERNAL_API_SECRET=...   # the same variable the server reads
     python3 scripts/prove-booking.py \
         --base-url http://127.0.0.1:8000 \
         --database-url postgresql+asyncpg://user:pw@host/db \
@@ -181,9 +181,17 @@ async def main() -> int:
     )
     args = parser.parse_args()
 
-    secret = os.environ.get("FONELY_INTERNAL_API_SECRET")
+    # Settings carries no env_prefix, so the server reads INTERNAL_API_SECRET.
+    # This script used to read FONELY_INTERNAL_API_SECRET only, which meant the
+    # one export that started the app did not authenticate the proof run, and
+    # the failure looked like a wrong secret rather than a wrong variable name.
+    # The prefixed spelling stays as a fallback for anyone already exporting it.
+    secret = os.environ.get("INTERNAL_API_SECRET") or os.environ.get("FONELY_INTERNAL_API_SECRET")
     if not secret:
-        print("FONELY_INTERNAL_API_SECRET is not set", file=sys.stderr)
+        print(
+            "INTERNAL_API_SECRET is not set (the same variable the server reads)",
+            file=sys.stderr,
+        )
         return 2
 
     now = datetime.fromisoformat(args.now) if args.now else datetime.now(IST)
@@ -219,7 +227,12 @@ async def main() -> int:
     try:
         # 1. The afternoon closure.
         response = await client.propose(
-            service_id, resource_id, closed_slot, f"proof-closed-gap-{run_tag}", PATIENT_PHONE, hold_until
+            service_id,
+            resource_id,
+            closed_slot,
+            f"proof-closed-gap-{run_tag}",
+            PATIENT_PHONE,
+            hold_until,
         )
         if response.status_code == 201:
             failures.append(
@@ -233,7 +246,12 @@ async def main() -> int:
 
         # 2. A real slot, proposed and committed.
         response = await client.propose(
-            service_id, resource_id, open_slot, f"proof-open-slot-{run_tag}", PATIENT_PHONE, hold_until
+            service_id,
+            resource_id,
+            open_slot,
+            f"proof-open-slot-{run_tag}",
+            PATIENT_PHONE,
+            hold_until,
         )
         if response.status_code != 201:
             detail = response.json().get("detail", response.text[:200])
@@ -270,7 +288,12 @@ async def main() -> int:
 
         # 4. The dropped call: same key, again.
         response = await client.propose(
-            service_id, resource_id, open_slot, f"proof-open-slot-{run_tag}", PATIENT_PHONE, hold_until
+            service_id,
+            resource_id,
+            open_slot,
+            f"proof-open-slot-{run_tag}",
+            PATIENT_PHONE,
+            hold_until,
         )
         after_retry = await read_appointments(args.database_url, args.business_id)
         new_rows = len(after_retry) - len(before)
@@ -281,13 +304,20 @@ async def main() -> int:
             )
             print(f"4. idempotent retry    FAIL  {new_rows} appointments exist")
         else:
-            print(f"4. idempotent retry    ok    still exactly 1 appointment ({response.status_code})")
+            print(
+                f"4. idempotent retry    ok    still exactly 1 appointment ({response.status_code})"
+            )
 
         # 5. A different patient wanting the same doctor at the same time.
         other = BookingClient(args.base_url, secret, args.business_id, OTHER_PATIENT_PHONE)
         try:
             response = await other.propose(
-                service_id, resource_id, open_slot, f"proof-double-book-{run_tag}", OTHER_PATIENT_PHONE, hold_until
+                service_id,
+                resource_id,
+                open_slot,
+                f"proof-double-book-{run_tag}",
+                OTHER_PATIENT_PHONE,
+                hold_until,
             )
             if response.status_code == 201:
                 confirmed = await other.confirm(
@@ -300,7 +330,9 @@ async def main() -> int:
                     )
                     print("5. double booking      FAIL  second appointment committed")
                 else:
-                    print(f"5. double booking      ok    refused at confirm ({confirmed.status_code})")
+                    print(
+                        f"5. double booking      ok    refused at confirm ({confirmed.status_code})"
+                    )
             else:
                 detail = response.json().get("detail", response.text[:120])
                 print(f"5. double booking      ok    refused {response.status_code} ({detail})")
@@ -322,8 +354,10 @@ def _report(failures: list[str]) -> int:
         for failure in failures:
             print(f"  - {failure}")
         return 1
-    print("\nOK: the clinic refuses closed hours, commits a real booking, survives a "
-          "retry, and will not double-book.")
+    print(
+        "\nOK: the clinic refuses closed hours, commits a real booking, survives a "
+        "retry, and will not double-book."
+    )
     return 0
 
 

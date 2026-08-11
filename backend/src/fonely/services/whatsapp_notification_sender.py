@@ -26,28 +26,41 @@ class DeliveryReceipt:
 
 
 class WhatsAppSenderResolver(Protocol):
-    def resolve(self, business_id: int, phone_number_id: str) -> WhatsAppSender: ...
+    async def resolve(self, business_id: int, phone_number_id: str) -> WhatsAppSender: ...
 
 
-class ConfiguredWhatsAppSenderResolver:
-    """Resolve trusted tenant/phone identity using configured business mapping."""
+class DatabaseWhatsAppSenderResolver:
+    """Re-check tenant/channel ownership against the database before sending.
+
+    The phone_number_id on an outbox event was chosen when the event was
+    enqueued, which may be minutes or retries earlier. Between then and now a
+    channel can be disabled or reassigned, so ownership is re-read at delivery
+    rather than trusted from the payload. A mismatch is refused, never
+    downgraded to a default sender.
+    """
 
     def __init__(
         self,
         *,
         access_token: str,
-        business_mappings: dict[str, int],
+        session_factory: Any,
         client: object | None = None,
     ) -> None:
         self._access_token = access_token
-        self._business_mappings = business_mappings
+        self._session_factory = session_factory
         self._client = client
         self._senders: dict[str, WhatsAppSender] = {}
 
-    def resolve(self, business_id: int, phone_number_id: str) -> WhatsAppSender:
-        mapped_business = self._business_mappings.get(phone_number_id)
-        if mapped_business != business_id:
+    async def resolve(self, business_id: int, phone_number_id: str) -> WhatsAppSender:
+        from fonely.repositories.whatsapp_channels import WhatsAppChannelRepository
+
+        async with self._session_factory() as session:
+            owns = await WhatsAppChannelRepository(session).owns_channel(
+                business_id, phone_number_id
+            )
+        if not owns:
             raise NotificationDeliveryError("channel_identity_mismatch")
+
         sender = self._senders.get(phone_number_id)
         if sender is None:
             sender = WhatsAppSender(
@@ -73,19 +86,19 @@ class WhatsAppNotificationSender:
 
     async def send(self, event: NotificationOutboxEvent) -> DeliveryReceipt:
         message = self._format_message(event)
-        sender = self._resolve_sender(event)
+        sender = await self._resolve_sender(event)
         result = await sender.send_text(event.recipient_phone, message)
         if not result.success:
             raise NotificationDeliveryError(result.error or "unknown")
         return DeliveryReceipt(provider_message_id=result.message_id)
 
-    def _resolve_sender(self, event: NotificationOutboxEvent) -> WhatsAppSender:
+    async def _resolve_sender(self, event: NotificationOutboxEvent) -> WhatsAppSender:
         payload = event.payload or {}
         phone_number_id = payload.get("phone_number_id")
         if self._resolver is not None:
             if not isinstance(phone_number_id, str) or not phone_number_id:
                 raise NotificationDeliveryError("missing_phone_number_id")
-            return self._resolver.resolve(event.business_id, phone_number_id)
+            return await self._resolver.resolve(event.business_id, phone_number_id)
         assert self._sender is not None
         return self._sender
 

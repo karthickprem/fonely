@@ -25,6 +25,27 @@ from sqlalchemy.ext.asyncio import (
 BACKEND_ROOT = Path(__file__).parents[3]
 
 
+def _migration_head() -> str:
+    """The single head of the migration chain, read from the scripts on disk.
+
+    Tests that assert "the database is fully migrated" used to hardcode the
+    revision, so every new migration broke a dozen unrelated tests and the
+    only available fix was to retype the number. Deriving it keeps the
+    assertion meaningful — it still fails if the upgrade did not run — without
+    making it a maintenance tax on the next migration.
+    """
+    from alembic.script import ScriptDirectory
+
+    script = ScriptDirectory(str(BACKEND_ROOT / "migrations"))
+    heads = script.get_heads()
+    if len(heads) != 1:
+        raise RuntimeError(f"expected exactly one migration head, found {heads!r}")
+    return heads[0]
+
+
+MIGRATION_HEAD = _migration_head()
+
+
 def _test_database_url() -> str:
     url = os.environ.get("FONELY_TEST_DATABASE_URL", "")
     if not url:
@@ -124,6 +145,7 @@ async def clean_database(
             await connection.execute(
                 text(
                     "TRUNCATE TABLE whatsapp_delivery_attempts, "
+                    "business_whatsapp_channels, "
                     "whatsapp_inbound_events, business_daily_context, "
                     "conversation_turns, conversations, "
                     "notification_outbox, notification_manifests, "
@@ -137,6 +159,31 @@ async def clean_database(
                     "RESTART IDENTITY CASCADE"
                 )
             )
+
+
+async def seed_whatsapp_channel(
+    session: AsyncSession,
+    business_id: int = 1,
+    phone_number_id: str = "phone-1",
+) -> None:
+    """Give a seeded business an active WhatsApp channel.
+
+    Channel identity moved from WHATSAPP_BUSINESS_MAPPINGS into the
+    business_whatsapp_channels table in migration 0016. Notification and
+    booking-commit paths resolve the sending number from this row, so a test
+    that seeds a clinic without one now reproduces a genuinely unconfigured
+    business and fails commit with whatsapp_mapping_missing.
+    """
+    await session.execute(
+        text(
+            "INSERT INTO business_whatsapp_channels "
+            "(business_id, phone_number_id, status, is_primary) "
+            "VALUES (:bid, :pnid, 'active', true) "
+            "ON CONFLICT (phone_number_id) DO NOTHING"
+        ),
+        {"bid": business_id, "pnid": phone_number_id},
+    )
+    await session.flush()
 
 
 @pytest_asyncio.fixture(loop_scope="session")

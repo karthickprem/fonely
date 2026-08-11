@@ -21,7 +21,6 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from fonely.core.config import settings
 from fonely.models.enums import (
     BusinessUserRole,
     NotificationChannel,
@@ -31,7 +30,7 @@ from fonely.models.enums import (
 )
 from fonely.models.schema import Business, BusinessUser, NotificationManifest
 from fonely.repositories.notifications import NotificationRepository
-from fonely.services.whatsapp_config import WhatsAppBusinessMapping
+from fonely.repositories.whatsapp_channels import WhatsAppChannelRepository
 
 logger = logging.getLogger("fonely.services.notifications")
 
@@ -163,13 +162,16 @@ class NotificationService:
         business = await self._session.scalar(select(Business).where(Business.id == business_id))
         clinic_name = business.name if business else "Business"
 
-        phone_number_id = WhatsAppBusinessMapping().get_phone_number_id(
-            business_id, preferred=settings.whatsapp_phone_number_id or None
+        phone_number_id = await WhatsAppChannelRepository(self._session).resolve_phone_number_id(
+            business_id
         )
         if phone_number_id is None:
             raise NotificationConfigurationError(
                 code="whatsapp_mapping_missing",
-                message=f"No WhatsApp mapping for business_id={business_id}",
+                message=(
+                    f"business_id={business_id} has no active WhatsApp channel. "
+                    "Register one in business_whatsapp_channels."
+                ),
             )
         return clinic_name, phone_number_id
 

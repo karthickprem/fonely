@@ -195,21 +195,38 @@ all. The check now walks forward a week at a time until it finds a genuinely
 free slot and fails loudly if it cannot, so "never ran" can no longer read as
 "worked".
 
-Deferred, and this is the substantive half: the mapping still comes from the
-`WHATSAPP_BUSINESS_MAPPINGS` environment variable. Onboarding a second clinic
-therefore still requires an env change and a process restart, so tenant
-onboarding is still not self-service. The fix is a `business_whatsapp_channels`
-table written during activation, which needs a migration. Alembic head is
-0015 and **0016 is reserved for Dev1's Exotel work, which already has code
-written against it**, so taking that revision here would create a competing
-migration. This waits for 0016 to land.
+**No longer deferred — fixed at migration 0016.** The paragraph that used to
+sit here said the substantive half was waiting because 0016 was reserved for
+Dev1's Exotel work. That reservation turned out not to exist on disk: the
+versions directory ended at 0015 with a single linear head, so 0016 was free.
+Dev1's Exotel migration is now allocated 0017.
 
-The original recommendation stands and is also not yet done: the check
-belongs at activation, where it is a configuration error someone can fix,
-rather than at the patient's booking, where it is a lost customer. Moving it
-there is only worth doing once the mapping lives in the database, since an
-activation-time check against an env var would pass and then rot at the next
-restart.
+The mapping no longer comes from `WHATSAPP_BUSINESS_MAPPINGS`. It lives in
+`business_whatsapp_channels`, and the two properties that matter are database
+constraints rather than application checks:
+
+- A global `UNIQUE` on `phone_number_id`. Two tenants sharing one provider
+  number is unrepresentable, so cross-tenant routing cannot be introduced by
+  a future code path.
+- A partial unique index on `business_id WHERE is_primary AND status =
+  'active'`. Outbound sender selection is deterministic, and a clinic may
+  hold more than one number — the case the env var could not express at all.
+
+Onboarding a clinic is no longer a deploy. `POST
+/internal/v1/businesses/whatsapp-channel` attaches a number, taking the
+tenant only from the trusted `X-Business-ID` header, and returns 409 rather
+than silently reassigning a number another tenant already holds.
+
+The unconfigured case is deliberately unchanged: no row still means
+`whatsapp_mapping_missing` and a rolled-back appointment. An empty table
+reproduces today's fail-closed behaviour instead of inventing a mapping
+nobody authorised.
+
+The original recommendation stands and is still not done: the check belongs
+at activation, where it is a configuration error someone can fix, rather than
+at the patient's booking, where it is a lost customer. That move is now
+unblocked — the mapping is durable state, so an activation-time check can no
+longer pass and then rot at the next restart.
 
 ## A fifth defect, found while fixing the fourth
 

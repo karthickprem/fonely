@@ -78,8 +78,9 @@ class Settings(BaseSettings):
     # WhatsApp
     whatsapp_verify_token: str = ""
     whatsapp_access_token: str = ""
-    whatsapp_phone_number_id: str = ""
-    whatsapp_business_mappings: str = ""
+    # Channel identity (which provider number belongs to which tenant) lives in
+    # the business_whatsapp_channels table as of migration 0016. It is not a
+    # process setting: it changes when a clinic onboards, not when we deploy.
     whatsapp_app_secret: str = ""
 
     # Shutdown

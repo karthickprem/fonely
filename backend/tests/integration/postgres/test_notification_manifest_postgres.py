@@ -16,20 +16,11 @@ from fonely.services.notifications import (
     NotificationEvidenceConflictError,
     NotificationService,
 )
+from tests.integration.postgres.conftest import seed_whatsapp_channel
 
 pytestmark = pytest.mark.postgres
 
 NOW = datetime(2026, 8, 15, 4, 30, tzinfo=UTC)
-
-
-@pytest.fixture(autouse=True)
-def _whatsapp_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
-    from fonely.services import notifications, whatsapp_config
-
-    mappings = '{"phone-1": 1}'
-    monkeypatch.setattr(whatsapp_config.settings, "whatsapp_business_mappings", mappings)
-    monkeypatch.setattr(notifications.settings, "whatsapp_business_mappings", mappings)
-    monkeypatch.setattr(notifications.settings, "whatsapp_phone_number_id", "phone-1")
 
 
 async def _seed(
@@ -48,6 +39,7 @@ async def _seed(
         ),
         {"id": business_id, "phone": owner_phones[0]},
     )
+    await seed_whatsapp_channel(session)
     for i, phone in enumerate(owner_phones, start=1):
         await session.execute(
             text(

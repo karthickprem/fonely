@@ -12,20 +12,11 @@ from fonely.workers.notification_worker import (
     LoggingNotificationSender,
     run_notification_worker,
 )
+from tests.integration.postgres.conftest import seed_whatsapp_channel
 
 pytestmark = pytest.mark.postgres
 
 NOW = datetime(2026, 8, 12, 13, 30, tzinfo=UTC)
-
-
-@pytest.fixture(autouse=True)
-def _whatsapp_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
-    from fonely.services import notifications, whatsapp_config
-
-    mappings = '{"phone-1": 1}'
-    monkeypatch.setattr(whatsapp_config.settings, "whatsapp_business_mappings", mappings)
-    monkeypatch.setattr(notifications.settings, "whatsapp_business_mappings", mappings)
-    monkeypatch.setattr(notifications.settings, "whatsapp_phone_number_id", "phone-1")
 
 
 async def _seed_clinic(session: AsyncSession) -> None:
@@ -37,6 +28,7 @@ async def _seed_clinic(session: AsyncSession) -> None:
             "'Asia/Kolkata', 'trial')"
         )
     )
+    await seed_whatsapp_channel(session)
     await session.execute(
         text(
             "INSERT INTO business_users (business_id, phone, role, is_active) "

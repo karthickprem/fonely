@@ -28,18 +28,9 @@ from fonely.domain.appointments.results import PreCommitAppointmentSuccess
 from fonely.domain.pending_actions.commands import ActorContext
 from fonely.models.enums import CallerRole
 from fonely.services.appointments import AppointmentService
+from tests.integration.postgres.conftest import seed_whatsapp_channel
 
 pytestmark = pytest.mark.postgres
-
-
-@pytest.fixture(autouse=True)
-def _whatsapp_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
-    from fonely.services import notifications, whatsapp_config
-
-    mappings = '{"phone-1": 1}'
-    monkeypatch.setattr(whatsapp_config.settings, "whatsapp_business_mappings", mappings)
-    monkeypatch.setattr(notifications.settings, "whatsapp_business_mappings", mappings)
-    monkeypatch.setattr(notifications.settings, "whatsapp_phone_number_id", "phone-1")
 
 
 async def _seed_two_owner_clinic(session: AsyncSession) -> None:
@@ -51,6 +42,7 @@ async def _seed_two_owner_clinic(session: AsyncSession) -> None:
             "'Asia/Kolkata', 'trial')"
         )
     )
+    await seed_whatsapp_channel(session)
     await session.execute(
         text(
             "INSERT INTO business_users (id, business_id, phone, role, is_active) VALUES "

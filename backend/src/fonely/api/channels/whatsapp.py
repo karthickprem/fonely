@@ -22,7 +22,7 @@ from fonely.core.config import settings
 from fonely.models.enums import NotificationStatus
 from fonely.models.schema import NotificationOutboxEvent, WhatsAppDeliveryAttempt
 from fonely.repositories.inbound_events import InboundEventRepository
-from fonely.services.whatsapp_config import WhatsAppBusinessMapping
+from fonely.repositories.whatsapp_channels import WhatsAppChannelRepository
 
 logger = logging.getLogger("fonely.api.channels.whatsapp")
 
@@ -90,11 +90,11 @@ async def handle_webhook(request: Request) -> Response:
         logger.error("whatsapp_webhook_no_session_factory")
         return Response(status_code=503)
 
-    mapping = WhatsAppBusinessMapping()
     persisted = 0
 
     try:
         async with factory() as session:
+            channels = WhatsAppChannelRepository(session)
             entries = payload.get("entry", [])
             if not isinstance(entries, list):
                 return Response(status_code=200)
@@ -124,8 +124,12 @@ async def handle_webhook(request: Request) -> Response:
                     if not isinstance(phone_number_id, str) or not phone_number_id:
                         continue
 
-                    business_id = mapping.get_business_id(phone_number_id)
+                    business_id = await channels.resolve_business_id(phone_number_id)
                     if business_id is None:
+                        logger.warning(
+                            "whatsapp_unregistered_phone_number_id",
+                            extra={"phone_number_id": phone_number_id},
+                        )
                         continue
 
                     messages = value.get("messages", [])

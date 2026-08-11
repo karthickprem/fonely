@@ -35,6 +35,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     literal_column,
+    text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, ExcludeConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -1254,6 +1255,58 @@ class NotificationManifest(Base):
 # =============================================================================
 # WhatsApp Durable Inbound Events
 # =============================================================================
+
+
+class BusinessWhatsAppChannel(Base):
+    """Which provider WhatsApp number belongs to which tenant.
+
+    Authoritative for both directions: inbound webhooks carry only a
+    phone_number_id, and outbound notifications must send from a number the
+    business actually owns. See migration 0016 for why the two uniqueness
+    rules are database constraints rather than application checks.
+    """
+
+    __tablename__ = "business_whatsapp_channels"
+    __table_args__ = (
+        UniqueConstraint(
+            "phone_number_id",
+            name="uq_business_whatsapp_channels_phone_number_id",
+        ),
+        Index(
+            "ix_business_whatsapp_channels_business_active",
+            "business_id",
+            "status",
+        ),
+        # One active primary per business. Mirrors the partial unique index
+        # created in migration 0016; declared here so create_all-based test
+        # setups get the same guarantee as a migrated database.
+        Index(
+            "uq_business_whatsapp_channels_one_active_primary",
+            "business_id",
+            unique=True,
+            postgresql_where=text("is_primary AND status = 'active'"),
+        ),
+        CheckConstraint(
+            "status IN ('active', 'disabled')",
+            name="ck_business_whatsapp_channels_status",
+        ),
+        CheckConstraint(
+            "length(phone_number_id) > 0",
+            name="ck_business_whatsapp_channels_pnid_nonempty",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    phone_number_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    waba_id: Mapped[str | None] = mapped_column(String(100))
+    display_phone_number: Mapped[str | None] = mapped_column(String(20))
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="active")
+    is_primary: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=literal_column("false")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class WhatsAppDeliveryAttempt(Base):

@@ -6,6 +6,7 @@ before returning 200. Processing happens in the inbound worker.
 
 import json
 import logging
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -13,7 +14,6 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from fonely.api.channels.whatsapp import router
-from fonely.services.whatsapp_config import WhatsAppBusinessMapping
 
 
 @pytest.fixture(autouse=True)
@@ -21,10 +21,23 @@ def _patch_settings():
     with patch("fonely.api.channels.whatsapp.settings") as mock_settings:
         mock_settings.whatsapp_verify_token = "test-token"
         mock_settings.whatsapp_access_token = "test-access"
-        mock_settings.whatsapp_phone_number_id = "12345"
-        mock_settings.whatsapp_business_mappings = ""
         mock_settings.whatsapp_app_secret = "test-app-secret"
         yield mock_settings
+
+
+@contextmanager
+def _patch_channels(business_id: int | None):
+    """Patch the DB-backed channel resolver used by the webhook.
+
+    Channel identity moved into business_whatsapp_channels in migration 0016;
+    the resolver's real behaviour against the live constraints is covered in
+    tests/integration/postgres/test_whatsapp_channels_postgres.py.
+    """
+    with patch("fonely.api.channels.whatsapp.WhatsAppChannelRepository") as repo_cls:
+        repo = MagicMock()
+        repo.resolve_business_id = AsyncMock(return_value=business_id)
+        repo_cls.return_value = repo
+        yield repo
 
 
 def _make_app(*, insert_rowcount: int = 1) -> tuple[FastAPI, MagicMock]:
@@ -215,10 +228,7 @@ class TestWebhookPersistence:
     async def test_post_persists_and_returns_200(self):
         app, mock_session = _make_app()
         body = json.dumps(_webhook_payload()).encode()
-        with patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as map_cls:
-            mock_map = MagicMock()
-            mock_map.get_business_id.return_value = 1
-            map_cls.return_value = mock_map
+        with _patch_channels(1):
             transport = ASGITransport(app=app)
             async with AsyncClient(transport=transport, base_url="http://test") as client:
                 r = await client.post(
@@ -236,10 +246,7 @@ class TestWebhookPersistence:
     @pytest.mark.asyncio
     async def test_duplicate_not_committed(self):
         app, mock_session = _make_app(insert_rowcount=0)
-        with patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as map_cls:
-            mock_map = MagicMock()
-            mock_map.get_business_id.return_value = 1
-            map_cls.return_value = mock_map
+        with _patch_channels(1):
             transport = ASGITransport(app=app)
             async with AsyncClient(transport=transport, base_url="http://test") as client:
                 r = await client.post("/webhooks/whatsapp", json=_webhook_payload())
@@ -249,10 +256,7 @@ class TestWebhookPersistence:
     @pytest.mark.asyncio
     async def test_unknown_business_skipped(self):
         app, mock_session = _make_app()
-        with patch("fonely.api.channels.whatsapp.WhatsAppBusinessMapping") as map_cls:
-            mock_map = MagicMock()
-            mock_map.get_business_id.return_value = None
-            map_cls.return_value = mock_map
+        with _patch_channels(None):
             transport = ASGITransport(app=app)
             async with AsyncClient(transport=transport, base_url="http://test") as client:
                 r = await client.post("/webhooks/whatsapp", json=_webhook_payload())
@@ -281,35 +285,6 @@ class TestWebhookPersistence:
                 headers={"content-type": "application/json"},
             )
         assert r.status_code == 200
-
-
-class TestWhatsAppBusinessMapping:
-    def test_explicit_mappings(self):
-        m = WhatsAppBusinessMapping(mappings={"phone1": 100, "phone2": 200})
-        assert m.get_business_id("phone1") == 100
-        assert m.get_business_id("phone2") == 200
-        assert m.get_business_id("unknown") is None
-
-    def test_empty_mappings(self):
-        m = WhatsAppBusinessMapping(mappings={})
-        assert m.get_business_id("anything") is None
-
-    def test_reverse_mapping_prefers_trusted_configured_number(self):
-        m = WhatsAppBusinessMapping(mappings={"phone1": 100, "phone2": 100})
-        assert m.get_phone_number_id(100, preferred="phone2") == "phone2"
-        assert m.get_phone_number_id(100) is None
-
-    def test_from_settings_json(self):
-        with patch("fonely.services.whatsapp_config.settings") as mock_s:
-            mock_s.whatsapp_business_mappings = json.dumps({"ph1": 10})
-            m = WhatsAppBusinessMapping()
-            assert m.get_business_id("ph1") == 10
-
-    def test_invalid_json_falls_back_empty(self):
-        with patch("fonely.services.whatsapp_config.settings") as mock_s:
-            mock_s.whatsapp_business_mappings = "not-json"
-            m = WhatsAppBusinessMapping()
-            assert m.get_business_id("anything") is None
 
 
 class TestWhatsAppSender:

@@ -61,12 +61,26 @@ def test_bare_morning_time_selects_the_am_slot() -> None:
 
 def test_ambiguous_bare_time_across_two_meridiems_asks() -> None:
     # An offer with BOTH 5:30 AM and 5:30 PM: a bare "5:30" matches two slots
-    # mod 12 -> genuinely ambiguous -> must NOT select, so the caller asks.
+    # mod 12 -> genuinely ambiguous. It consumes the turn (returns True) but
+    # does NOT select; it keeps the offer and marks the ambiguity so the caller
+    # asks "which one" instead of dropping known context and asking for a date.
     ctx = _ctx_with_offer((5, 30), (17, 30))  # 5:30 AM, 5:30 PM
-    assert _svc()._try_offer_selection(ctx, "5:30") is False
+    assert _svc()._try_offer_selection(ctx, "5:30") is True
     assert "start_at" not in ctx.collected_facts
-    # The offer survives so the caller can present it again / ask which one.
-    assert "_active_offer" in ctx.collected_facts
+    assert "_active_offer" in ctx.collected_facts  # offer survives
+    ambiguous = ctx.collected_facts.get("_selection_ambiguous")
+    assert isinstance(ambiguous, list) and len(ambiguous) == 2
+    assert set(ambiguous) == {"5:30 AM", "5:30 PM"}
+
+
+def test_ambiguity_marker_cleared_on_explicit_resolution() -> None:
+    ctx = _ctx_with_offer((5, 30), (17, 30))
+    _svc()._try_offer_selection(ctx, "5:30")  # sets the marker
+    assert "_selection_ambiguous" in ctx.collected_facts
+    # Patient resolves with an explicit meridiem -> selects and clears marker.
+    assert _svc()._try_offer_selection(ctx, "5:30 pm") is True
+    assert "_selection_ambiguous" not in ctx.collected_facts
+    assert ctx.collected_facts["start_at"].astimezone(KOLKATA).hour == 17
 
 
 def test_explicit_meridiem_disambiguates_even_when_two_slots_exist() -> None:

@@ -793,6 +793,33 @@ Three-part checklist frozen by the reviewer. Status:
   (then rebase) or a new targeted on_conflict_do_update schedule write — flagged
   to the reviewer rather than silently scoped out.
 
+### D3-M3 ACCEPTED at af451a2 (review 2026-08-11)
+
+Time-understanding residuals + coupling guard. Accepted after four defects
+found across three review rounds, all closed by execution-verified fixes:
+- D1 bare-time-books-wrong-day (round 1), D2 ambiguity-loop (round 1),
+  D3 resolution-scanned-whole-offer (round 2 introduced, rescoped),
+  D4 bare-"am"-books-morning (round 2 introduced, rescoped).
+Final state: ambiguity stored as {display, token}; resolution targets only the
+two candidate tokens; bare "am"/"pm" resolve standalone-only; meaning-words
+(morning/evening/kaalai/maalai/…) resolve anywhere; "pagal"/"பகல்" dropped
+(daytime-broad, would be a guess); split-turn meridiem carried via
+_pending_time_explicit; ambiguity question hard-bounded at 2 asks.
+
+Same integration hold as D3-M2/M1: main integration sequenced by the reviewer/
+Karthick. Do NOT push to main, do NOT rebase onto the CEO branch. Reviewer
+recommended b522c82 first to Karthick (fast-forwards from cc3aa65, no force,
+no merge); awaiting his exact-SHA authorization.
+
+NON-BLOCKING FOLLOW-UP (do NOT reopen D3-M3 for it — fix in a later pass when
+next touching _bare_meridiem_word): the standalone gate rejects any second
+token, so some natural answers fall through to the bound instead of resolving:
+'PM.' (trailing period — most likely off an STT transcript), 'pm please',
+'pm ah', 'pm da' (Tanglish). NONE mis-book — they cost one extra turn then hit
+the fallback (safe direction). Fix direction: strip trailing punctuation from
+the token ('PM.' -> 'PM'). CAUTION: the same strictness correctly makes 'no am'
+and 'not pm' return None; a looser gate must not break that.
+
 ### D3-M2 ACCEPTED at f3a4d1f (review 2026-08-11)
 
 Code gate passed; main integration SEQUENCED BEHIND the CEO branch. Do NOT

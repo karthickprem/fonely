@@ -864,6 +864,32 @@ fixed in the follow-up candidate:
 Reviewer logged the "dr priya" resource-name gap as item #19 (mine, after M4).
 Corpus now 12 cases; 12/12 pass. Non-PG 1259 passed; ruff+mypy clean.
 
+RE-REVIEW READINESS — the reviewer named two things they will check BY
+EXECUTION after main moves. Both self-verified proactively at 4bc395f:
+1. "two thirty" and the other word-number times still parse after the guard
+   change. VERIFIED: exhaustive matrix of all 12 word-numbers x {thirty,
+   fifteen, half past, quarter past, o'clock, pm, am} = 84/84 parse correctly;
+   only the ordinal "one" slot-picking phrases suppress, as intended.
+2. The I4 assertion actually FAILS if correction handling is broken (an
+   assertion that cannot fail is absence-reads-as-success). VERIFIED by a
+   mutation experiment: temporarily forcing negated_time=False in
+   _extract_datetime makes negation-no-time fail with exactly "[negation-no-time]
+   I4 violated: booked the SUPERSEDED reading 17:00:00", while control cases
+   still pass; reverted, tree byte-identical to 4bc395f afterward.
+
+DURABILITY (cannot push — credential wall): 4bc395f is pinned by two local
+branches (dev3/dental-whatsapp-staging-e2e, d3m4-backup) AND tag
+d3m4-reject1-4bc395f, all in the shared /scratch/karthick/fonely/.git object
+store, so it survives this worktree's removal. Holding here per reviewer
+instruction; will rebase onto the integration tip only after main moves.
+
+NOTE on PG flakiness observed 2026-08-11: the shared PG instance is under
+concurrent DDL from other live sessions; conftest's session-scoped
+downgrade-base/upgrade-head races them (symptoms rotate: pg_type dup,
+businesses_pkey dup, downgrade-base non-zero — different case each run). Corpus
+logic is proven: 12/12 twice earlier this session, 11/12 once with the sole
+failure a cross-session businesses_pkey collision (not logic). Not a code defect.
+
 ### D3-M3 ACCEPTED at af451a2 (review 2026-08-11)
 
 Time-understanding residuals + coupling guard. Accepted after four defects

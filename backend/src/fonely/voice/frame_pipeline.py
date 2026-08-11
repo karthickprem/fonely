@@ -40,7 +40,14 @@ logger = logging.getLogger("fonely.voice.frame_pipeline")
 
 _CONFIRM_WORDS = frozenset({
     "yes", "yeah", "yep", "ok", "okay", "correct", "right", "sure", "hmm",
-    "ஆமா", "ஆம்", "சரி", "சரிங்க", "aamaa", "sari", "aama",
+    # Tamil confirmations, INCLUDING the fuller forms real Sarvam STT produces.
+    # A caller saying "ஆமா" is transcribed "ஆமாம்"; "சரி" comes back "சரி" but
+    # often with an adjacent particle. Text-in used the short forms; audio
+    # revealed the STT forms. Missing "ஆமாம்" meant a spoken yes never
+    # confirmed and the booking never committed.
+    "ஆமா", "ஆமாம்", "ஆம்", "ஆமாம",
+    "சரி", "சரிங்க", "சரிதான்", "ரைட்",
+    "aamaa", "aamaam", "sari", "aama", "seri", "seringa",
 })
 _CLOSURE_WORDS = ("no", "bye", "இல்ல", "போறேன்", "நன்றி", "thanks", "nothing", "வேண்டாம்")
 

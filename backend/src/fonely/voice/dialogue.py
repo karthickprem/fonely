@@ -51,7 +51,20 @@ class DialogueState:
 
 
 _REQUESTING_VERBS = r"(?:book|புக்|வேணும்|வேண்டும்|பண்ணனும்|venum|pannanum|போடணும்|podanum|எடுக்கணும்|fix|need|want|schedule)"
-_SERVICES = r"(?:scaling|cleaning|checkup|root\s*canal|extraction|consultation|filling|treatment)"
+# Tamil-script transliterations real Sarvam STT emits when a Tamil caller says
+# an English service word ("cleaning" → "கிளீனிங்"). Defined ONCE and shared by
+# every service-recognizing regex below — booking activation (_SERVICES),
+# reason capture (_VISIT_REASON) — so the three can never drift apart. The
+# STT-on-audio proof showed that a form present in one but missing from another
+# silently broke booking activation while the readback still looked right.
+_TAMIL_SERVICE_FORMS = (
+    r"கிளீனிங்|கிளீனிங|க்ளீனிங்|ஸ்கேலிங்|ஸ்கேலிங|செக்கப்|கன்சல்ட|"
+    r"ரூட்\s*கேனால்|ரூட்கேனால்|ஃபில்லிங்|பில்லிங்|பிரேஸ்|எக்ஸ்ட்ராக்ஷன்"
+)
+_SERVICES = (
+    r"(?:scaling|cleaning|checkup|root\s*canal|extraction|consultation|filling|treatment|"
+    + _TAMIL_SERVICE_FORMS + r")"
+)
 _APPOINTMENT = r"(?:appointment|அப்பாயிண்ட்மெண்ட்)"
 
 _BOOKING_ACTIVATORS: list[re.Pattern[str]] = [
@@ -71,8 +84,16 @@ _TIME = re.compile(
     r"(?P<meridiem>am|pm)?\s*(?:மணி(?:க்கு)?)?(?=\s|[.,!?]|$)",
     re.IGNORECASE,
 )
+# Reason capture shares the same Tamil-script service forms as booking
+# activation (_TAMIL_SERVICE_FORMS) plus pain/symptom words. The captured
+# phrase is later resolved to a real service_id through
+# clinic_resolver._SERVICE_ALIASES (which carries the same forms). Without the
+# Tamil-script forms here, `reason` stayed None on real audio, required_field
+# never reached "confirmation", and the booking could never commit — even
+# though the readback looked right. Found by the STT-on-audio proof.
 _VISIT_REASON = re.compile(
-    r"வலி|வலிக்க|சொத்தை|pain|scaling|cleaning|checkup|root canal|consultation|treatment|filling",
+    r"வலி|வலிக்க|சொத்தை|pain|scaling|cleaning|checkup|root canal|consultation|treatment|filling"
+    r"|" + _TAMIL_SERVICE_FORMS,
     re.IGNORECASE,
 )
 _NAME = re.compile(r"(?:[A-Za-z][A-Za-z .'-]{0,79}|[஀-௿][஀-௿ .'-]{0,79})$")
@@ -227,6 +248,36 @@ _TAMIL_NUMERAL_RE = re.compile(
 )
 
 
+# Tamil / Tanglish / English period-of-day words that carry a PM meaning. The
+# _TIME regex only understands the Latin "am/pm"; a Tamil caller never says
+# "pm" — they say "மாலை 7:30" (evening 7:30 = 19:30) or "இரவு எட்டு" (night 8).
+# Real Sarvam STT also emits word-order variants ("7:30 அந்தி மாலை"), so this
+# is a whole-text substring scan, not a positional match. WITHOUT this, evening
+# times silently book at the morning hour — the caller asks for 7:30 evening
+# and the row lands at 07:30. Each form here was seen from real STT or is a
+# common spoken variant.
+_PM_PERIOD_MARKERS = (
+    "மாலை", "அந்தி", "சாயங்கால", "இரவு", "ராத்திரி", "ராத்ரி", "மதியம்", "மத்தியான",
+    "maalai", "malai", "andhi", "saayangaalam", "iravu", "raathiri", "raatri",
+    "madhiyam", "mathiyam", "evening", "night", "afternoon",
+)
+# Morning words: force a spoken "12" back to 00 only when explicitly morning.
+_AM_PERIOD_MARKERS = ("காலை", "kaalai", "kalai", "morning")
+
+
+def _apply_period_marker(hour: int, text: str) -> int:
+    """Shift a 1–12 hour to PM when the surrounding text carries an evening /
+    night / afternoon marker. Noon '12' with such a marker stays 12 (midday),
+    never 24. Morning '12' becomes 0. This is the single place the Tamil period
+    word turns into 24-hour time, applied to both extraction branches."""
+    low = text.casefold()
+    if any(m in low for m in _PM_PERIOD_MARKERS) and 1 <= hour <= 11:
+        return hour + 12
+    if any(m in low for m in _AM_PERIOD_MARKERS) and hour == 12:
+        return 0
+    return hour
+
+
 def extract_booking_time(text: str) -> time | None:
     match = _TIME.search(text)
     tamil_match = _TAMIL_NUMERAL_RE.search(text)
@@ -235,7 +286,7 @@ def extract_booking_time(text: str) -> time | None:
         matched_text = tamil_match.group(0)
         for k, v in sorted(_TAMIL_NUMERALS.items(), key=lambda x: -len(x[0])):
             if k in matched_text:
-                hour = v
+                hour = _apply_period_marker(v, text)
                 minute = int(tamil_match.group("tmin") or 0)
                 return time(hour, minute)
 
@@ -250,6 +301,9 @@ def extract_booking_time(text: str) -> time | None:
         hour += 12
     elif meridiem == "am" and hour == 12:
         hour = 0
+    elif not meridiem:
+        # No Latin am/pm — let a Tamil/Tanglish period word decide.
+        hour = _apply_period_marker(hour, text)
     return time(hour, minute)
 
 

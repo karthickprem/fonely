@@ -39,14 +39,23 @@ logger = logging.getLogger("fonely.voice.clinic_resolver")
 # is NOT fuzzy matching — every entry is a hand-verified equivalence, and a
 # phrase matching nothing here still refuses rather than guessing.
 _SERVICE_ALIASES: dict[str, tuple[str, ...]] = {
-    "scaling": ("cleaning", "polish", "scal", "clean"),
-    "cleaning": ("scaling", "polish", "scal"),
-    "consultation": ("checkup", "check up", "consult", "review"),
-    "checkup": ("consultation", "consult"),
-    "extraction": ("remove", "pull", "extract"),
-    "filling": ("cavity", "fill"),
-    "root canal": ("rct", "canal"),
-    "braces": ("braces review", "orthodontic"),
+    # English aliases AND the Tamil-script transliterations that Sarvam STT
+    # actually produces when a Tamil caller says an English service word.
+    # Without these, a real caller saying "cleaning" — which STT returns as
+    # "கிளீனிங்" — gets a valid service refused: the classic works-on-text,
+    # dies-on-audio failure. Each Tamil form here was observed from real STT.
+    "scaling": ("cleaning", "polish", "scal", "clean",
+                "ஸ்கேலிங்", "ஸ்கேலிங", "கிளீனிங்", "கிளீனிங", "க்ளீனிங்"),
+    "cleaning": ("scaling", "polish", "scal",
+                 "கிளீனிங்", "கிளீனிங", "க்ளீனிங்", "ஸ்கேலிங்"),
+    "consultation": ("checkup", "check up", "consult", "review",
+                     "கன்சல்டேஷன்", "செக்கப்", "கன்சல்ட்"),
+    "checkup": ("consultation", "consult", "செக்கப்", "செக் அப்"),
+    "extraction": ("remove", "pull", "extract",
+                   "எக்ஸ்ட்ராக்ஷன்", "பல் எடு", "பல்லு எடு"),
+    "filling": ("cavity", "fill", "ஃபில்லிங்", "பில்லிங்", "ஃபில்லிங"),
+    "root canal": ("rct", "canal", "ரூட் கேனால்", "ரூட்கேனால்", "ரூட் கனால்"),
+    "braces": ("braces review", "orthodontic", "பிரேஸ்", "ப்ரேஸ்"),
 }
 
 

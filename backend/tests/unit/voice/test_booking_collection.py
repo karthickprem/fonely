@@ -63,6 +63,25 @@ class TestTamilBookingIntent:
         bc.update("I want to book an appointment", resolved_date=None, availability=None)
         assert bc.active
 
+    def test_stt_transliterated_service_activates(self):
+        # Real Sarvam STT renders a spoken "cleaning வேணும்" as "கிளீனிங் வேணும்".
+        # Before the shared _TAMIL_SERVICE_FORMS fix, this did NOT activate the
+        # booking (active stayed False), so reason/name/confirmation were all
+        # gated off and the booking could never commit through real STT.
+        bc = BookingCollection()
+        bc.update("நாளைக்கு கிளீனிங் வேணும்", resolved_date=None, availability=None)
+        assert bc.active
+
+    def test_stt_transliterated_service_captures_reason(self):
+        bc = BookingCollection()
+        bc.update("நாளைக்கு கிளீனிங் வேணும்", resolved_date=None, availability=None)
+        assert bc.reason is not None
+
+    def test_stt_scaling_transliteration_activates(self):
+        bc = BookingCollection()
+        bc.update("ஸ்கேலிங் வேணும்", resolved_date=None, availability=None)
+        assert bc.active
+
 
 class TestTimeExtraction:
     def test_tamil_inflected_time(self):
@@ -82,6 +101,46 @@ class TestTimeExtraction:
 
     def test_no_time(self):
         assert extract_booking_time("scaling வேணும்") is None
+
+
+class TestTamilPeriodMarkers:
+    """A Tamil caller never says 'pm' — they say the period word (மாலை / இரவு /
+    காலை). Without honoring it, 'மாலை 7:30' (evening 7:30 = 19:30) silently
+    booked at 07:30. Found by the STT-on-audio proof: real Sarvam STT returned
+    the caller's 'மாலை 7:30' as '7:30 அந்தி மாலை' (word order flipped, dusk
+    word), and the booking landed at the wrong hour / no valid slot. These
+    strings are the actual STT output that triggered the wrong-time booking."""
+
+    def test_evening_prefix_shifts_to_pm(self):
+        assert extract_booking_time("மாலை 7:30") == time(19, 30)
+
+    def test_real_stt_word_order_dusk_evening(self):
+        # Verbatim Sarvam STT output for a spoken "மாலை 7:30".
+        assert extract_booking_time("7:30 அந்தி மாலை") == time(19, 30)
+
+    def test_evening_with_tamil_numeral(self):
+        assert extract_booking_time("மாலை 6 மணி") == time(18, 0)
+
+    def test_night_with_tamil_numeral_word(self):
+        assert extract_booking_time("இரவு எட்டு") == time(20, 0)
+
+    def test_morning_stays_morning(self):
+        assert extract_booking_time("காலை 9:30") == time(9, 30)
+
+    def test_noon_with_marker_stays_twelve(self):
+        # Midday 12 must NOT become 24 — 'மதியம் 12' is noon.
+        assert extract_booking_time("மதியம் 12") == time(12, 0)
+
+    def test_morning_twelve_becomes_midnight(self):
+        assert extract_booking_time("காலை பன்னிரெண்டு") == time(0, 0)
+
+    def test_bare_time_unchanged_without_marker(self):
+        # No period word present → no shift; a bare number stays as-is so the
+        # state machine's offered-slot match still decides am/pm.
+        assert extract_booking_time("9:30") == time(9, 30)
+
+    def test_latin_pm_still_wins(self):
+        assert extract_booking_time("7:30 pm") == time(19, 30)
 
 
 class TestStateContinuity:

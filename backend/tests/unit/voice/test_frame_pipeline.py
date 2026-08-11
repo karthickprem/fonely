@@ -87,6 +87,14 @@ class TestConfirmationDetection:
         assert _is_confirmation("ok sure")
         assert _is_confirmation("சரி சரி")
 
+    def test_stt_confirmation_forms(self):
+        # Real Sarvam STT renders a spoken "ஆமா சரி" as the fuller "ஆமாம், சரி".
+        # The short forms alone left a spoken yes unrecognised and the booking
+        # never committed through real audio. Found by the STT-on-audio proof.
+        assert _is_confirmation("ஆமாம்")
+        assert _is_confirmation("ஆமாம், சரி.")
+        assert _is_confirmation("ஆமாம் சரி")
+
     def test_agreement_with_other_content_is_not_confirmation(self):
         # "yes but change the time" contains a confirm word but carries other
         # content — must NOT confirm, or a correction would book prematurely.

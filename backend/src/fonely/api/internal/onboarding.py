@@ -4,8 +4,9 @@ import hmac
 import logging
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from fonely.core.config import settings
@@ -15,6 +16,8 @@ from fonely.domain.onboarding.commands import (
     SubmitDraftCommand,
 )
 from fonely.domain.onboarding.errors import OnboardingError
+from fonely.models.enums import BusinessUserRole
+from fonely.models.schema import Business, BusinessUser
 from fonely.services.onboarding import (
     OnboardingInvalidTransitionError,
     OnboardingNotFoundError,
@@ -27,6 +30,22 @@ from fonely.services.onboarding import (
 logger = logging.getLogger("fonely.api.internal.onboarding")
 
 router = APIRouter(prefix="/internal/v1", tags=["internal-onboarding"])
+
+
+class ProvisionBusinessRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=200)
+    category: str = Field(min_length=1, max_length=50)
+    owner_phone: str = Field(min_length=8, max_length=20)
+    owner_name: str | None = Field(default=None, max_length=200)
+    timezone: str = Field(default="Asia/Kolkata", max_length=50)
+
+
+class ProvisionBusinessResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    business_id: int
+    owner_user_id: int
+    created: bool
 
 
 class SubmitDraftRequest(BaseModel):
@@ -110,6 +129,79 @@ def _map_error(exc: OnboardingError) -> HTTPException:
     if isinstance(exc, OnboardingValidationError):
         return HTTPException(status_code=422, detail=str(exc))
     return HTTPException(status_code=500, detail="Internal error")
+
+
+@router.post("/businesses", response_model=ProvisionBusinessResponse, status_code=201)
+async def provision_business(
+    body: ProvisionBusinessRequest, request: Request, response: Response
+) -> ProvisionBusinessResponse:
+    """Create the tenant an owner's first message implies.
+
+    Every other onboarding route resolves the tenant from `X-Business-ID`,
+    which leaves no way to bring the first one into existence -- an owner
+    messaging us for the first time has no business to be scoped to. This is
+    the one route that runs without that header.
+
+    Re-sending is safe. The owner's phone identifies the clinic, so a repeat
+    returns the existing tenant with 200 instead of standing up a second one;
+    an owner who double-sends during onboarding must not end up with two
+    clinics. A transaction-scoped advisory lock on the phone makes that hold
+    under concurrent sends rather than only under sequential ones.
+    """
+    _verify_internal_auth(request)
+    phone = body.owner_phone.strip()
+    async with _get_factory(request)() as session:
+        await session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+            {"key": f"provision_business:{phone}"},
+        )
+        existing = (
+            await session.execute(
+                select(Business.id, BusinessUser.id)
+                .join(BusinessUser, BusinessUser.business_id == Business.id)
+                .where(
+                    BusinessUser.phone == phone,
+                    BusinessUser.role == BusinessUserRole.OWNER.value,
+                    BusinessUser.is_active.is_(True),
+                )
+                .order_by(Business.id)
+                .limit(1)
+            )
+        ).first()
+        if existing is not None:
+            await session.commit()
+            response.status_code = 200
+            return ProvisionBusinessResponse(
+                business_id=int(existing[0]), owner_user_id=int(existing[1]), created=False
+            )
+
+        business = Business(
+            name=body.name.strip(),
+            category=body.category.strip(),
+            owner_name=body.owner_name.strip() if body.owner_name else None,
+            primary_contact_phone=phone,
+            timezone=body.timezone,
+        )
+        session.add(business)
+        await session.flush()
+
+        owner = BusinessUser(
+            business_id=business.id,
+            phone=phone,
+            role=BusinessUserRole.OWNER.value,
+            is_active=True,
+        )
+        session.add(owner)
+        await session.flush()
+        await session.commit()
+
+        logger.info(
+            "business_provisioned",
+            extra={"business_id": business.id, "category": business.category},
+        )
+        return ProvisionBusinessResponse(
+            business_id=business.id, owner_user_id=owner.id, created=True
+        )
 
 
 @router.post("/onboarding/drafts", response_model=OnboardingDraftResponse, status_code=201)
@@ -233,11 +325,18 @@ async def activate_configuration(
                 )
             )
             await session.commit()
-            resp = ActivationResponse(success=result.success, commit_id=result.commit_id)
+            # `error` carries the only machine-readable reason a commit was
+            # rolled back; dropping it leaves the caller with a bare
+            # {"success": false} and the cause buried in rollback_evidence,
+            # which no route exposes.
+            resp = ActivationResponse(
+                success=result.success, commit_id=result.commit_id, error=result.error
+            )
             if result.evidence is not None:
                 resp = ActivationResponse(
                     success=result.success,
                     commit_id=result.commit_id,
+                    error=result.error,
                     services_count=result.evidence.services_count,
                     resources_count=result.evidence.resources_count,
                     eligibilities_count=result.evidence.eligibilities_count,

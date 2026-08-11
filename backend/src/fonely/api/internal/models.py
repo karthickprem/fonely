@@ -66,6 +66,7 @@ class CommittedAppointmentResponse(BaseModel):
     start_at: datetime
     end_at: datetime
     business_timezone: str
+    notification_evidence: str = "verified"
 
 
 class RetryableFailureResponse(BaseModel):

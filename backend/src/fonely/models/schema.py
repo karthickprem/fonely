@@ -36,7 +36,7 @@ from sqlalchemy import (
     Uuid,
     literal_column,
 )
-from sqlalchemy.dialects.postgresql import JSONB, ExcludeConstraint
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, ExcludeConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
@@ -1193,6 +1193,62 @@ class NotificationOutboxEvent(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class NotificationManifest(Base):
+    """Retention-independent immutable notification evidence per operation."""
+
+    __tablename__ = "notification_manifests"
+    __table_args__ = (
+        Index("uq_manifest_operation_instance", "business_id", "pending_action_id", unique=True),
+        ForeignKeyConstraint(
+            ["business_id", "pending_action_id"],
+            ["pending_actions.business_id", "pending_actions.id"],
+            name="fk_manifest_pending_action",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "operation IN ('create', 'cancel', 'reschedule')",
+            name="ck_manifest_operation",
+        ),
+        CheckConstraint("schema_version > 0", name="ck_manifest_schema_version"),
+        CheckConstraint("recipient_count > 0", name="ck_manifest_recipient_count"),
+        CheckConstraint(
+            "jsonb_typeof(recipient_manifest) = 'array' "
+            "AND jsonb_array_length(recipient_manifest) > 0",
+            name="ck_manifest_recipient_array",
+        ),
+        CheckConstraint(
+            "octet_length(recipient_manifest::text) <= 102400",
+            name="ck_manifest_size",
+        ),
+        CheckConstraint(
+            "(actor_kind = 'system' AND actor_phone IS NULL AND actor_bu_id IS NULL) "
+            "OR (actor_kind = 'customer' AND actor_phone IS NOT NULL AND actor_bu_id IS NULL) "
+            "OR (actor_kind = 'owner' AND actor_phone IS NOT NULL AND actor_bu_id IS NOT NULL) "
+            "OR (actor_kind = 'manager' AND actor_phone IS NOT NULL AND actor_bu_id IS NOT NULL)",
+            name="ck_manifest_actor_consistency",
+        ),
+        Index("ix_manifest_entity", "business_id", "entity_type", "entity_id"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    entity_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    operation: Mapped[str] = mapped_column(String(20), nullable=False)
+    pending_action_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    actor_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    actor_phone: Mapped[str | None] = mapped_column(String(20))
+    actor_bu_id: Mapped[int | None] = mapped_column(Integer)
+    recipient_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    recipient_manifest: Mapped[Any] = mapped_column(JSONB, nullable=False)
+    channel: Mapped[str] = mapped_column(String(20), nullable=False)
+    phone_number_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    equivalence_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    outbox_event_ids: Mapped[list[int]] = mapped_column(ARRAY(Integer), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 # =============================================================================

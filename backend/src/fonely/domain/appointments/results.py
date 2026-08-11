@@ -139,6 +139,7 @@ class PreCommitAppointmentSuccess(AppointmentResult):
     outcome: Literal["success"] = "success"
     appointment: AppointmentConfirmationResult
     pending_action_version: PositiveVersion
+    notification_evidence: str = "verified"
 
 
 class PreCommitAppointmentFailure(AppointmentResult):
@@ -166,6 +167,7 @@ class AppointmentCancellationResult(AppointmentResult):
     appointment_commit_id: PositiveId
     status: Literal["cancelled"] = "cancelled"
     cancelled_at: ResultDatetime
+    notification_evidence: str = "verified"
 
 
 class AppointmentRescheduleResult(AppointmentResult):
@@ -176,6 +178,7 @@ class AppointmentRescheduleResult(AppointmentResult):
     resource_name: SnapshotName
     start_at: ResultDatetime
     end_at: ResultDatetime
+    notification_evidence: str = "verified"
 
     @model_validator(mode="after")
     def validate_interval(self) -> "AppointmentRescheduleResult":

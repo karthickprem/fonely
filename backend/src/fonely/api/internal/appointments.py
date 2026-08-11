@@ -252,6 +252,7 @@ async def confirm_proposal(
             start_at=result.appointment.start_at,
             end_at=result.appointment.end_at,
             business_timezone=result.appointment.business_timezone,
+            notification_evidence=result.notification_evidence,
         )
     except PendingActionNotFoundError as exc:
         await session.rollback()

@@ -41,13 +41,14 @@ EXPECTED_TABLES = [
     "business_daily_context",
     "whatsapp_inbound_events",
     "whatsapp_delivery_attempts",
+    "notification_manifests",
 ]
 
 
 class TestSchemaMetadata:
     def test_expected_table_count(self) -> None:
         tables = list(Base.metadata.tables.keys())
-        assert len(tables) == 30
+        assert len(tables) == 31
 
     def test_all_expected_tables_exist(self) -> None:
         tables = set(Base.metadata.tables.keys())

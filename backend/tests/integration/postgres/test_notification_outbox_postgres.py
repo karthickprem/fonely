@@ -20,13 +20,12 @@ NOW = datetime(2026, 8, 12, 13, 30, tzinfo=UTC)
 
 @pytest.fixture(autouse=True)
 def _whatsapp_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
-    from fonely.services import whatsapp_config
+    from fonely.services import notifications, whatsapp_config
 
-    monkeypatch.setattr(
-        whatsapp_config.settings,
-        "whatsapp_business_mappings",
-        '{"phone-1": 1}',
-    )
+    mappings = '{"phone-1": 1}'
+    monkeypatch.setattr(whatsapp_config.settings, "whatsapp_business_mappings", mappings)
+    monkeypatch.setattr(notifications.settings, "whatsapp_business_mappings", mappings)
+    monkeypatch.setattr(notifications.settings, "whatsapp_phone_number_id", "phone-1")
 
 
 async def _seed_clinic(session: AsyncSession) -> None:
@@ -46,16 +45,32 @@ async def _seed_clinic(session: AsyncSession) -> None:
     )
 
 
+async def _seed_pa(session: AsyncSession, pa_id: int = 1) -> None:
+    await session.execute(
+        text(
+            "INSERT INTO pending_actions "
+            "(id, business_id, action_type, payload_schema_version, proposed_payload, "
+            "status, expires_at, idempotency_key, version, payload_digest) VALUES "
+            "(:id, 1, 'appointment', 1, '{}'::jsonb, 'confirmed', "
+            "now() + interval '1 hour', :key, 3, "
+            "'aaaa1111bbbb2222cccc3333dddd4444eeee5555ffff6666aaaa7777bbbb8888')"
+        ),
+        {"id": pa_id, "key": f"pa-notif-{pa_id}"},
+    )
+
+
 async def test_appointment_notifications_created_in_same_transaction(
     pg_session: AsyncSession,
 ) -> None:
     """Functional proof A+B: outbox events exist in same transaction as appointment data."""
     await _seed_clinic(pg_session)
+    await _seed_pa(pg_session, pa_id=42)
 
     service = NotificationService(pg_session)
     event_ids = await service.create_appointment_notifications(
         business_id=1,
         appointment_id=42,
+        pending_action_id=42,
         customer_phone="+919123456789",
         customer_name="Karthick",
         service_name="General Consultation",
@@ -63,6 +78,8 @@ async def test_appointment_notifications_created_in_same_transaction(
         start_at=NOW,
         price=300,
         business_timezone="Asia/Kolkata",
+        actor_kind="customer",
+        actor_phone="+919123456789",
     )
     assert len(event_ids) == 2
 
@@ -82,7 +99,7 @@ async def test_appointment_notifications_created_in_same_transaction(
     assert patient[2] == "patient"
     assert patient[3] == "+919123456789"
     assert patient[4] == "pending"
-    assert patient[5] == "appt-confirm-patient-42"
+    assert patient[5] == "notif-create-patient-42-pa42"
     assert patient[6]["clinic_name"] == "Smile Dental"
     assert patient[6]["service"] == "General Consultation"
     assert patient[6]["doctor"] == "Dr. Priya"
@@ -91,7 +108,7 @@ async def test_appointment_notifications_created_in_same_transaction(
     owner = events[1]
     assert owner[2] == "owner"
     assert owner[3] == "+914428350001"
-    assert owner[5] == "appt-confirm-owner-42"
+    assert owner[5].startswith("notif-create-owner-42-bu")
     assert owner[6]["patient_name"] == "Karthick"
 
 
@@ -101,6 +118,7 @@ async def test_outbox_rollback_with_transaction(
     """Functional proof E: rollback removes outbox events."""
     async with pg_session_factory() as session:
         await _seed_clinic(session)
+        await _seed_pa(session, pa_id=99)
         await session.commit()
 
     async with pg_session_factory() as session:
@@ -108,6 +126,7 @@ async def test_outbox_rollback_with_transaction(
         await service.create_appointment_notifications(
             business_id=1,
             appointment_id=99,
+            pending_action_id=99,
             customer_phone="+919000000000",
             customer_name="Test",
             service_name="Test Service",
@@ -115,6 +134,8 @@ async def test_outbox_rollback_with_transaction(
             start_at=NOW,
             price=100,
             business_timezone="Asia/Kolkata",
+            actor_kind="customer",
+            actor_phone="+919000000000",
         )
         count_before_rollback = await session.scalar(
             text("SELECT count(*) FROM notification_outbox WHERE entity_id = 99")
@@ -135,10 +156,12 @@ async def test_worker_delivers_and_marks_events(
     """Functional proof C+D: worker claims, delivers, marks delivered."""
     async with pg_session_factory() as session:
         await _seed_clinic(session)
+        await _seed_pa(session, pa_id=50)
         service = NotificationService(session)
         await service.create_appointment_notifications(
             business_id=1,
             appointment_id=50,
+            pending_action_id=50,
             customer_phone="+919123456789",
             customer_name="Patient",
             service_name="Scaling",
@@ -146,6 +169,8 @@ async def test_worker_delivers_and_marks_events(
             start_at=NOW,
             price=800,
             business_timezone="Asia/Kolkata",
+            actor_kind="customer",
+            actor_phone="+919123456789",
         )
         await session.commit()
 
@@ -266,11 +291,13 @@ async def test_dead_letter_after_max_attempts(
 
 async def test_idempotent_notification_creation(pg_session: AsyncSession) -> None:
     await _seed_clinic(pg_session)
+    await _seed_pa(pg_session, pa_id=80)
     service = NotificationService(pg_session)
 
     ids1 = await service.create_appointment_notifications(
         business_id=1,
         appointment_id=80,
+        pending_action_id=80,
         customer_phone="+919123456789",
         customer_name="Dup",
         service_name="Test",
@@ -278,10 +305,13 @@ async def test_idempotent_notification_creation(pg_session: AsyncSession) -> Non
         start_at=NOW,
         price=100,
         business_timezone="Asia/Kolkata",
+        actor_kind="customer",
+        actor_phone="+919123456789",
     )
     ids2 = await service.create_appointment_notifications(
         business_id=1,
         appointment_id=80,
+        pending_action_id=80,
         customer_phone="+919123456789",
         customer_name="Dup",
         service_name="Test",
@@ -289,6 +319,8 @@ async def test_idempotent_notification_creation(pg_session: AsyncSession) -> Non
         start_at=NOW,
         price=100,
         business_timezone="Asia/Kolkata",
+        actor_kind="customer",
+        actor_phone="+919123456789",
     )
     assert len(ids1) == 2
     assert len(ids2) == 0

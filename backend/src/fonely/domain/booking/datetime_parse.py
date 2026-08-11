@@ -167,27 +167,46 @@ def parse_time_spec(text: str) -> TimeSpec | None:
     for word, val in _WORD_NUMBERS.items():
         if re.search(rf"\b{word}\b", t):
             minute: int | None = None
+            # Whether the minute was PROVEN by an explicit minute source (a
+            # half/quarter marker, a numeric tail, or "thirty"/"fifteen"), as
+            # opposed to defaulting to :00 off a meridiem/clock hint. An explicit
+            # minute is positive evidence the word-number was a clock HOUR.
+            minute_explicit_source = False
             if half:
                 minute = 30
+                minute_explicit_source = True
             elif quarter:
                 minute = 15
+                minute_explicit_source = True
             else:
                 tail = re.search(rf"\b{word}\b\s+(\d{{1,2}})\b", t)
                 if tail and 0 <= int(tail.group(1)) <= 59:
                     minute = int(tail.group(1))
+                    minute_explicit_source = True
                 elif "thirty" in t:
                     minute = 30
+                    minute_explicit_source = True
                 elif "fifteen" in t:
                     minute = 15
+                    minute_explicit_source = True
                 elif ampm is not None or "o'clock" in t or "oclock" in t or "sharp" in t:
-                    minute = 0
-            # "one" also serves as the ordinal in slot-picking phrases ("the
-            # evening one", "the first one"). It may be read as the HOUR 1 only
-            # when a real clock token is present ("one o'clock", "one pm") — a
-            # bare part-of-day word ("evening") does not license it, so
-            # "the evening one" names no time and returns None.
-            if word == "one" and minute is not None and not has_clock_token:
-                minute = None
+                    minute = 0  # fallback :00 — NOT proof the word was an hour
+            # "one" doubles as the ordinal in slot-picking phrases ("the evening
+            # one", "the first one", "the morning one"), where it is preceded by
+            # a determiner/part-of-day word and names NO time. Read it as the
+            # HOUR 1 only on positive evidence it is a clock reading: an explicit
+            # minute ("one thirty"), a real clock token ("one o'clock"/"one pm"),
+            # or hour position — "one" first, not after "the"/a part-of-day word
+            # (so "one in the afternoon" -> 13:00 survives). Otherwise suppress.
+            if word == "one" and minute is not None:
+                ordinal_one = re.search(
+                    r"\bthe\s+(?:\w+\s+){0,2}one\b"
+                    r"|\b(?:morning|afternoon|evening|night|kaalai|maalai|"
+                    r"first|second|third|last)\s+one\b",
+                    t,
+                )
+                if ordinal_one and not minute_explicit_source and not has_clock_token:
+                    minute = None
             if minute is not None:
                 hh, exp = _resolve(val)
                 return _spec(hh, minute, explicit=exp)

@@ -455,13 +455,14 @@ class ConversationService:
 
         from fonely.domain.booking.datetime_parse import (
             parse_relative_date,
-            parse_time_of_day,
+            parse_time_spec,
         )
 
         clinic_tz = ZoneInfo(timezone)
         now = datetime.now(clinic_tz)
 
-        said_time = parse_time_of_day(message)
+        said_spec = parse_time_spec(message)
+        said_time = said_spec.time if said_spec is not None else None
         said_date = parse_relative_date(message, now.date())
 
         # Merge with any date/time already held from a prior turn. The parser
@@ -485,11 +486,24 @@ class ConversationService:
         if said_time is not None or said_date is not None:
             ctx.collected_facts.pop("_active_offer", None)
 
+        # Any previously-computed alt reading is stale once we re-extract.
+        ctx.collected_facts.pop("_start_at_alt", None)
+
         if eff_date is not None and eff_time is not None:
             local_dt = datetime.combine(eff_date, eff_time, tzinfo=clinic_tz)
             ctx.collected_facts["start_at"] = local_dt.astimezone(UTC)
             ctx.collected_facts.pop("_pending_date", None)
             ctx.collected_facts.pop("_pending_time", None)
+            # When the patient's time carried no explicit am/pm, remember the
+            # OTHER meridiem reading (hour +/- 12) so availability can consider
+            # both — a bare "6" that means 6 PM must not be offered only morning
+            # slots. Only meaningful this turn (said_time, not a held time).
+            if said_time is not None and said_spec is not None and not said_spec.meridiem_explicit:
+                alt_hour = (eff_time.hour + 12) % 24
+                alt_local = datetime.combine(
+                    eff_date, eff_time.replace(hour=alt_hour), tzinfo=clinic_tz
+                )
+                ctx.collected_facts["_start_at_alt"] = alt_local.astimezone(UTC).isoformat()
         else:
             # Only one half known — never guess the other. Hold it and drop any
             # stale composed start_at so the caller asks for what is missing.
@@ -848,6 +862,12 @@ class ConversationService:
         res = next((r for r in biz.resources if r.id == resource_id), None)
         resource_name = res.name if res else "Doctor"
 
+        # When the patient's time was a bare hour (no am/pm), the other meridiem
+        # reading was recorded so availability considers both — a Tamil-speaking
+        # patient who means 6 PM must not be offered only morning slots.
+        alt_raw = ctx.collected_facts.get("_start_at_alt")
+        alt_reading_start = datetime.fromisoformat(alt_raw) if isinstance(alt_raw, str) else None
+
         orchestrator = BookingOrchestrator(self._session)
         exact_available, offer = await orchestrator.check_and_offer(
             business_id=biz.business_id,
@@ -859,6 +879,7 @@ class ConversationService:
             requested_start=start_at,
             business_timezone=biz.timezone,
             exclude_appointment_id=exclude_appointment_id,
+            alt_reading_start=alt_reading_start,
         )
 
         if not exact_available:
@@ -885,6 +906,14 @@ class ConversationService:
 
         if offer:
             ctx.collected_facts["_active_offer"] = orchestrator.serialize(offer)
+
+        # The exact-available offer is authoritative for start_at: when the bare
+        # time's ALT reading matched (patient meant 6 PM, 18:00 was the open
+        # slot), the proposal must use that slot, not the 06:00 primary reading.
+        if exact_available and offer is not None and len(offer.slots) == 1:
+            start_at = offer.slots[0].start_at_utc
+            ctx.collected_facts["start_at"] = start_at
+        ctx.collected_facts.pop("_start_at_alt", None)
 
         operation = ctx.collected_facts.get("_operation", "book")
 

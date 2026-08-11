@@ -108,6 +108,7 @@
   "owner": {
     "name": "Dr. Rajesh Kumar",
     "role": "owner",
+    "phone": "+919840000001",
     "_comment": "The owner is also a practising dentist. This is the normal case in an independent clinic and it matters: he sends WhatsApp messages between patients, in short bursts, often mid-treatment. Expect terse input and long silences, not tidy conversations."
   },
 

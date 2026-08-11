@@ -214,11 +214,57 @@ async def get_clinic_context() -> str:
     )
 
 
+def _parse_owner_time(lower: str) -> time | None:
+    """Extract a clock time from an owner command. Handles '12', '12 noon',
+    '3 pm', '12:30', 'noon'. Returns None if no time present."""
+    import re as _re
+    if "noon" in lower and not _re.search(r"\d", lower):
+        return time(12, 0)
+    m = _re.search(r"(\d{1,2})(?::(\d{2}))?\s*(am|pm|noon)?", lower)
+    if not m:
+        return None
+    h = int(m.group(1))
+    minute = int(m.group(2) or 0)
+    mer = m.group(3)
+    if mer == "pm" and h < 12:
+        h += 12
+    elif mer == "noon":
+        h = 12
+    elif mer is None:
+        # bare hour: clinic runs 09:30-13:00 and 17:00-20:30. 1-8 → afternoon.
+        if 1 <= h <= 8:
+            h += 12
+    if h > 23:
+        return None
+    return time(h, minute)
+
+
+async def _resolve_named_resource(session, business_id: int, lower: str):
+    """Find a resource whose name a doctor-specific command mentions.
+    Returns (id, name) or None (→ command applies to all doctors)."""
+    from sqlalchemy import text as sql_text
+    rows = await session.execute(
+        sql_text("SELECT id, name FROM resources WHERE business_id = :bid AND is_active"),
+        {"bid": business_id},
+    )
+    for rid, name in [(r[0], r[1]) for r in rows.fetchall()]:
+        # Match on any name token ("priya" in "Dr. Priya Venkatesan").
+        for tok in name.lower().replace("dr.", "").replace("dr ", "").split():
+            if len(tok) >= 3 and tok in lower:
+                return rid, name
+    return None
+
+
 async def process_owner_command(text: str) -> dict:
     """Process owner command → schedule_exceptions in PostgreSQL.
 
-    Handles: doctor leave, close clinic, close early.
-    Uses direct DB writes matching OwnerCommandService behavior.
+    Handles, per-doctor or clinic-wide, for today or tomorrow:
+      - full closure: "Dr Priya leave tomorrow", "clinic closed today"
+      - not-available-at-a-time: "Dr Priya not available at 12 noon tomorrow"
+        → writes a modified-hours exception that removes that slot. With the
+        single-window schema, "not free at T" restricts the doctor's shift to
+        end before T (if T is in the morning) or start after T (if evening).
+      - reopen: "Dr Priya available again today" / "today open"
     """
     from sqlalchemy import text as sql_text
     from fonely.models.schema import ScheduleException
@@ -228,56 +274,105 @@ async def process_owner_command(text: str) -> dict:
     tz = ZoneInfo(biz["timezone"])
     today = datetime.now(tz).date()
     tomorrow = today + timedelta(days=1)
-
     target_date = tomorrow if any(w in lower for w in ("tomorrow", "நாளை", "naalai")) else today
     day_label = "tomorrow" if target_date == tomorrow else "today"
 
-    # Resolve all active resources — commands apply to all doctors unless named
+    is_negation = any(w in lower for w in ("not available", "not free", "won't", "wont", "no ", "leave", "off", "closed", "close", "busy", "cannot", "can't", "இல்ல", "வேண்டாம்"))
+    at_time = _parse_owner_time(lower)
+
     async with SessionLocal() as session:
+        named = await _resolve_named_resource(session, biz["business_id"], lower)
         rows = await session.execute(
             sql_text("SELECT id, name FROM resources WHERE business_id = :bid AND is_active"),
             {"bid": biz["business_id"]},
         )
-        resources = [(r[0], r[1]) for r in rows.fetchall()]
+        all_resources = [(r[0], r[1]) for r in rows.fetchall()]
+        targets = [named] if named else all_resources
+        who = named[1] if named else "All doctors"
 
-        if any(w in lower for w in ("leave", "off", "closed", "close")):
-            for rid, rname in resources:
-                exc = ScheduleException(
-                    business_id=biz["business_id"],
-                    resource_id=rid,
-                    exception_date=target_date,
-                    is_closed=True,
-                    reason=text,
+        # 1) NOT-AVAILABLE-AT-A-TIME (specific-time block).
+        if is_negation and at_time is not None:
+            for rid, rname in targets:
+                # Fetch this resource's base shifts for the weekday to know how
+                # to carve. Clinic default: 09:30-13:00 morning, 17:00-20:30 eve.
+                dow = target_date.weekday()
+                srows = await session.execute(
+                    sql_text("SELECT open_time, close_time FROM operating_schedules "
+                             "WHERE business_id=:bid AND (resource_id=:rid OR resource_id IS NULL) "
+                             "AND day_of_week=:d AND is_active ORDER BY open_time"),
+                    {"bid": biz["business_id"], "rid": rid, "d": dow},
                 )
-                session.add(exc)
+                shifts = [(r[0], r[1]) for r in srows.fetchall()]
+                # Find the shift containing at_time; shrink it to exclude at_time.
+                new_open, new_close = None, None
+                for op, cl in shifts:
+                    if op <= at_time < cl:
+                        # Morning slot blocked → end shift before at_time.
+                        # Evening slot blocked → start shift after at_time.
+                        if at_time.hour < 14:
+                            new_open, new_close = op, at_time
+                        else:
+                            # start just after the blocked slot (assume 15-min grid)
+                            after = time((at_time.hour + (at_time.minute + 15)//60) % 24, (at_time.minute + 15) % 60)
+                            new_open, new_close = after, cl
+                        break
+                # Clear any prior exception for this resource/date, then write.
+                await session.execute(
+                    sql_text("DELETE FROM schedule_exceptions WHERE business_id=:bid AND resource_id=:rid AND exception_date=:d"),
+                    {"bid": biz["business_id"], "rid": rid, "d": target_date},
+                )
+                if new_open and new_close and new_close > new_open:
+                    session.add(ScheduleException(
+                        business_id=biz["business_id"], resource_id=rid,
+                        exception_date=target_date, is_closed=False,
+                        open_time=new_open, close_time=new_close, reason=text,
+                    ))
             await session.commit()
             context = await get_clinic_context()
             return {
-                "success": True,
-                "command_type": "close",
-                "message": f"Clinic {day_label} ({target_date}) marked closed in database.",
+                "success": True, "command_type": "block_time",
+                "message": f"{who} {day_label} ({target_date}): {at_time.strftime('%H:%M')} slot removed. Hours adjusted in database.",
                 "context": context,
             }
 
-        if any(w in lower for w in ("open", "reopen", "available", "back")):
-            await session.execute(
-                sql_text("DELETE FROM schedule_exceptions WHERE business_id = :bid AND exception_date = :d"),
-                {"bid": biz["business_id"], "d": target_date},
-            )
+        # 2) FULL CLOSURE (negation, no specific time).
+        if is_negation:
+            for rid, rname in targets:
+                await session.execute(
+                    sql_text("DELETE FROM schedule_exceptions WHERE business_id=:bid AND resource_id=:rid AND exception_date=:d"),
+                    {"bid": biz["business_id"], "rid": rid, "d": target_date},
+                )
+                session.add(ScheduleException(
+                    business_id=biz["business_id"], resource_id=rid,
+                    exception_date=target_date, is_closed=True, reason=text,
+                ))
             await session.commit()
             context = await get_clinic_context()
             return {
-                "success": True,
-                "command_type": "reopen",
-                "message": f"Clinic {day_label} ({target_date}) reopened — exceptions removed.",
+                "success": True, "command_type": "close",
+                "message": f"{who} {day_label} ({target_date}) marked closed in database.",
+                "context": context,
+            }
+
+        # 3) REOPEN — remove exceptions (only when NOT a negation).
+        if any(w in lower for w in ("open", "reopen", "available", "back", "free")):
+            for rid, rname in targets:
+                await session.execute(
+                    sql_text("DELETE FROM schedule_exceptions WHERE business_id=:bid AND resource_id=:rid AND exception_date=:d"),
+                    {"bid": biz["business_id"], "rid": rid, "d": target_date},
+                )
+            await session.commit()
+            context = await get_clinic_context()
+            return {
+                "success": True, "command_type": "reopen",
+                "message": f"{who} {day_label} ({target_date}) reopened — exceptions removed.",
                 "context": context,
             }
 
     context = await get_clinic_context()
     return {
-        "success": False,
-        "command_type": "unknown",
-        "message": f"Didn't understand: '{text}'. Try: 'today leave', 'tomorrow closed', 'today open'.",
+        "success": False, "command_type": "unknown",
+        "message": f"Didn't understand: '{text}'. Try: 'Dr Priya not available at 12 tomorrow', 'today leave', 'today open'.",
         "context": context,
     }
 

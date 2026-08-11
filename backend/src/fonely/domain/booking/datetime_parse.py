@@ -118,6 +118,15 @@ def parse_time_spec(text: str) -> TimeSpec | None:
 
     ampm = "pm" if explicit_pm else ("am" if explicit_am else None)
 
+    # A genuine clock token — an am/pm suffix, o'clock, sharp — as opposed to a
+    # mere part-of-day word ("evening", "morning"). A part-of-day word is a
+    # meridiem HINT, not evidence that a time was named; it must not license a
+    # bare word-number ("one") to be read as an hour. "the evening one" names
+    # no time; it is a slot-picking phrase, so parse must return None there.
+    has_clock_token = bool(
+        re.search(r"\bam\b|\ba\.m\b|\bpm\b|\bp\.m\b|o'?clock|\bsharp\b", t)
+    )
+
     def _resolve(h: int) -> tuple[int, bool]:
         # Returns (hour_24, meridiem_explicit).
         if h >= 13:
@@ -174,6 +183,13 @@ def parse_time_spec(text: str) -> TimeSpec | None:
                     minute = 15
                 elif ampm is not None or "o'clock" in t or "oclock" in t or "sharp" in t:
                     minute = 0
+            # "one" also serves as the ordinal in slot-picking phrases ("the
+            # evening one", "the first one"). It may be read as the HOUR 1 only
+            # when a real clock token is present ("one o'clock", "one pm") — a
+            # bare part-of-day word ("evening") does not license it, so
+            # "the evening one" names no time and returns None.
+            if word == "one" and minute is not None and not has_clock_token:
+                minute = None
             if minute is not None:
                 hh, exp = _resolve(val)
                 return _spec(hh, minute, explicit=exp)

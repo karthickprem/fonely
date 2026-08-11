@@ -17,15 +17,15 @@ _MAIN_SRC = "/scratch/karthick/fonely/backend/src"
 if _MAIN_SRC not in sys.path:
     sys.path.insert(0, _MAIN_SRC)
 
-# Read DATABASE_URL directly from .env — don't rely on os.environ
-# (fonely.core.config sets a SQLite default before we load)
-_db_url = ""
+# The demo owner panel writes schedule_exceptions to the SAME DB the agent
+# reads: fonely_dev4. Bind explicitly (see production_wiring for why the
+# ambient env couldn't be trusted). Still load the rest of .env for provider
+# keys. This is demo wiring, not shippable config.
+_db_url = "postgresql+asyncpg://localhost:5432/fonely_dev4"
 with open("/scratch/karthick/fonely/.env") as f:
     for line in f:
         line = line.strip()
-        if line.startswith("DATABASE_URL="):
-            _db_url = line.split("=", 1)[1]
-        if "=" in line and not line.startswith("#"):
+        if "=" in line and not line.startswith("#") and not line.startswith("DATABASE_URL="):
             k, v = line.split("=", 1)
             os.environ.setdefault(k, v)
 

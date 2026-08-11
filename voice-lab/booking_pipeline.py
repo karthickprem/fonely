@@ -308,7 +308,9 @@ CRITICAL:
 - Be goal-driven: complete the booking and close the conversation.
 """
 
-GREETING = "வணக்கம், Smile Dental Clinic. நான் Fonely. Appointment book பண்ண உதவி பண்ணலாம்."
+# Single-sentence greeting → one TTS call, not three. (SENTENCE aggregation
+# split the old three-sentence greeting into three synthesis calls.)
+GREETING = "வணக்கம், Smile Care Dental Clinic-ல இருந்து Fonely பேசுறேன், appointment book பண்ண உதவி பண்ணலாம்"
 
 
 async def run_booking_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
@@ -407,26 +409,11 @@ async def run_booking_bot(transport: BaseTransport, runner_args: RunnerArguments
             ),
         )
 
-        # Deterministic state machine — owns field order, readback, confirmation, closure
-        clock = TrustedClock.from_now("Asia/Kolkata")
-        state_injector = BookingStateInjector(clock)
-
-        # Wire real booking to PostgreSQL via db_backend
-        async def real_book(service_name, target_date, target_time, patient_name):
-            try:
-                from db_backend import book_appointment
-                return await book_appointment(
-                    service_name=service_name,
-                    target_date=target_date,
-                    target_time=target_time,
-                    patient_name=patient_name,
-                    session_id=runner_args.session_id,
-                )
-            except Exception as e:
-                logger.error(f"real_book failed: {e}", exc_info=True)
-                return {"success": False, "error": str(e)}
-
-        post_llm_gate = BookingPostLLMGate(state_injector, book_fn=real_book)
+        # PRODUCTION processors from backend/src/fonely/voice — the demo runs
+        # exactly the code that ships. Injector + gate + resolver + single
+        # commit path + language mirroring all come from the production package.
+        from production_wiring import build_processors
+        state_injector, post_llm_gate = build_processors(runner_args.session_id)
 
         pipeline = Pipeline([
             transport.input(),

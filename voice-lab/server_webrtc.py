@@ -18,12 +18,17 @@ if not (CLIENT_DIST / "index.html").exists():
     raise RuntimeError("Voice client is not built. Start the lab with voice-lab/run.sh.")
 sys.path.insert(0, str(LAB_DIR))
 
-from clinic_context import ClinicContext
-from db_backend import get_clinic_context, process_owner_command, get_available_slots_text
-from doctor_bridge import BRIDGE
+# Production wiring: same DB (fonely_dev4), same doctor bridge, same clinic
+# context the agent pipeline uses. Owner panel and agent share one source.
+from production_wiring import BRIDGE, clinic_context_text as _prod_clinic_context
 
-# In-memory context kept for demo fallback only
-CLINIC = ClinicContext()
+async def get_clinic_context() -> str:
+    return await _prod_clinic_context()
+
+# Owner commands (schedule changes) still go through the lab db_backend, which
+# writes real schedule_exceptions — but it must target fonely_dev4 like the
+# rest. production_wiring sets DATABASE_URL before db_backend loads.
+from db_backend import process_owner_command
 
 
 @app.get("/voice-lab", include_in_schema=False)
@@ -104,10 +109,13 @@ async def owner_ws(websocket: WebSocket):
 
 @app.post("/api/clinic-reset")
 async def reset_clinic():
-    """Reset clinic to default state — test only."""
-    global CLINIC
-    CLINIC = ClinicContext()
-    return {"reset": True, "available_today": [s.start_time.strftime('%H:%M') for s in CLINIC.today_slots]}
+    """Clear today/tomorrow schedule exceptions in the demo DB (test only).
+    Removes any owner-set leave/closure so the clinic is back to its base
+    operating schedule."""
+    from db_backend import process_owner_command
+    r1 = await process_owner_command("today open")
+    r2 = await process_owner_command("tomorrow open")
+    return {"reset": True, "today": r1.get("message"), "tomorrow": r2.get("message")}
 
 
 @app.get("/api/clinic-context")
@@ -122,21 +130,19 @@ async def api_clinic_context():
 
 @app.get("/api/pipeline-info")
 async def pipeline_info():
-    """Confirms which pipeline and LLM are active — routing-defect guard."""
-    import booking_pipeline
+    """Confirms which pipeline, LLM, and clinic are active — routing guard.
+    Reads the real demo clinic from the production package."""
+    import production_wiring as pw
     return {
         "pipeline": "booking",
         "llm": "gpt-5.6-luna",
         "live_context": True,
-        "bot_module": booking_pipeline.__name__,
-        "bot_function": "booking_pipeline.bot",
+        "code_source": "backend/src/fonely/voice (production package)",
         "clinic_profile": {
-            "name": CLINIC.clinic_name,
-            "doctor": CLINIC.doctor_name,
+            "business_id": pw.DEMO_BUSINESS_ID,
+            "db": "fonely_dev4",
             "synthetic": True,
         },
-        "available_today": [s.start_time.strftime('%H:%M') for s in CLINIC.today_slots if s.available],
-        "available_tomorrow": [s.start_time.strftime('%H:%M') for s in CLINIC.tomorrow_slots if s.available],
     }
 
 

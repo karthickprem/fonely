@@ -1,0 +1,120 @@
+{
+  "_comment": [
+    "Demo dental clinic configuration for the investor demonstration and for",
+    "end-to-end tests. Content only — no schema is implied. Whoever seeds this",
+    "goes through the normal onboarding commands, not direct inserts.",
+    "",
+    "The clinic, doctors and patients here are fictional. Replace with a real",
+    "design partner's configuration as soon as one is signed; the point of the",
+    "demo is that the agent handles a real clinic's rules, and real clinics have",
+    "rules nobody invents (the 3pm lab pickup, the Saturday half-day).",
+    "",
+    "Durations are the appointment slot, not chair time. They include the",
+    "handover gap a receptionist leaves between patients."
+  ],
+
+  "business": {
+    "name": "Smile Care Dental Clinic",
+    "locality": "Adyar, Chennai",
+    "timezone": "Asia/Kolkata",
+    "currency": "INR",
+    "languages": ["ta-IN", "en-IN"],
+    "spoken_name": {
+      "ta-IN": "ஸ்மைல் கேர் டெண்டல் கிளினிக்",
+      "note": "Owners often want the English brand name kept in Tamil speech rather than translated. Confirm during onboarding; do not assume."
+    }
+  },
+
+  "resources": [
+    {
+      "key": "dr_rajesh",
+      "name": "Dr. Rajesh Kumar",
+      "role": "Dentist",
+      "spoken_name_ta": "டாக்டர் ராஜேஷ்",
+      "services": ["consultation", "cleaning", "filling", "root_canal", "extraction"]
+    },
+    {
+      "key": "dr_priya",
+      "name": "Dr. Priya Venkatesan",
+      "role": "Dentist",
+      "spoken_name_ta": "டாக்டர் பிரியா",
+      "services": ["consultation", "cleaning", "filling", "braces_review"]
+    }
+  ],
+
+  "services": [
+    {
+      "key": "consultation",
+      "name": "Consultation",
+      "duration_minutes": 15,
+      "price_inr": 300,
+      "ta": "பரிசோதனை",
+      "patient_phrases": ["checkup", "consultation", "பல் பார்க்கணும்", "doctor-a paakkanum"]
+    },
+    {
+      "key": "cleaning",
+      "name": "Scaling and polishing",
+      "duration_minutes": 30,
+      "price_inr": 1200,
+      "ta": "பல் சுத்தம்",
+      "patient_phrases": ["cleaning", "scaling", "பல் கிளீனிங்", "clean pannanum"]
+    },
+    {
+      "key": "filling",
+      "name": "Filling",
+      "duration_minutes": 45,
+      "price_inr": 1800,
+      "ta": "பல் அடைப்பு",
+      "patient_phrases": ["filling", "cavity", "பல்ல ஓட்டை", "othai irukku"]
+    },
+    {
+      "key": "root_canal",
+      "name": "Root canal treatment",
+      "duration_minutes": 60,
+      "price_inr": 6500,
+      "price_note": "Per sitting. Usually two or three sittings — quote per sitting, never a total.",
+      "ta": "ரூட் கேனால்",
+      "patient_phrases": ["root canal", "RCT", "ரூட் கால்", "root canal pannanum"]
+    },
+    {
+      "key": "extraction",
+      "name": "Tooth extraction",
+      "duration_minutes": 30,
+      "price_inr": 2000,
+      "ta": "பல் எடுத்தல்",
+      "patient_phrases": ["extraction", "removal", "பல்ல எடுக்கணும்", "pallu edukkanum"]
+    },
+    {
+      "key": "braces_review",
+      "name": "Braces adjustment",
+      "duration_minutes": 20,
+      "price_inr": 800,
+      "ta": "கிளிப் சரிசெய்தல்",
+      "patient_phrases": ["braces", "clip", "wire tightening", "கிளிப் போட்டிருக்கு"]
+    }
+  ],
+
+  "operating_schedule": {
+    "monday":    [{ "open": "09:30", "close": "13:00" }, { "open": "17:00", "close": "20:30" }],
+    "tuesday":   [{ "open": "09:30", "close": "13:00" }, { "open": "17:00", "close": "20:30" }],
+    "wednesday": [{ "open": "09:30", "close": "13:00" }, { "open": "17:00", "close": "20:30" }],
+    "thursday":  [{ "open": "09:30", "close": "13:00" }, { "open": "17:00", "close": "20:30" }],
+    "friday":    [{ "open": "09:30", "close": "13:00" }, { "open": "17:00", "close": "20:30" }],
+    "saturday":  [{ "open": "09:30", "close": "14:00" }],
+    "sunday":    [],
+    "_comment": "The split shift is the norm for Indian clinics and is the single most common thing a naive booking agent gets wrong — it offers 3pm, the clinic is shut, the patient shows up to a locked door. Any demo that only tests continuous hours has not tested anything."
+  },
+
+  "owner": {
+    "name": "Dr. Rajesh Kumar",
+    "role": "owner",
+    "_comment": "The owner is also a practising dentist. This is the normal case in an independent clinic and it matters: he sends WhatsApp messages between patients, in short bursts, often mid-treatment. Expect terse input and long silences, not tidy conversations."
+  },
+
+  "policies": {
+    "cancellation_notice_hours": 4,
+    "walk_ins_accepted": true,
+    "emergency_handling": "Pain, swelling, bleeding, or trauma is not booked as a routine slot — the agent takes a callback number and tells the caller the clinic will ring back. It must never advise, triage, or estimate severity.",
+    "advance_booking_days": 30
+  }
+}

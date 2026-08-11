@@ -1,0 +1,50 @@
+# Public edge overlay for docker-compose.staging.yml.
+#
+#   docker compose -f docker-compose.staging.yml -f docker-compose.public.yml \
+#     --env-file .env.staging up -d
+#
+# The staging file alone binds the backend to 127.0.0.1 and is correct for a
+# laptop. This overlay is what makes a real phone call and a real WhatsApp
+# webhook able to reach us: Caddy holds the only public ports and forwards a
+# fixed allowlist of provider paths.
+#
+# The backend keeps its 127.0.0.1 binding from the base file. It is reachable
+# from Caddy over the compose network, and from the host for debugging, but
+# never directly from the internet.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      FONELY_PUBLIC_DOMAIN: ${FONELY_PUBLIC_DOMAIN:?Set FONELY_PUBLIC_DOMAIN to the DNS name providers will call}
+      FONELY_ACME_EMAIL: ${FONELY_ACME_EMAIL:?Set FONELY_ACME_EMAIL for certificate expiry notices}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:80/health/live"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  backend:
+    environment:
+      # Provider webhooks arrive through Caddy. Without this uvicorn sees
+      # Caddy's address as the client and builds redirect URLs on http://,
+      # which breaks the WhatsApp verification handshake.
+      FORWARDED_ALLOW_IPS: "*"
+      EXOTEL_WEBHOOK_SECRET: ${EXOTEL_WEBHOOK_SECRET:?Set EXOTEL_WEBHOOK_SECRET to mount the telephony routes}
+      EXOTEL_NUMBER_MAPPINGS: ${EXOTEL_NUMBER_MAPPINGS:?Map each Exotel number to its business_id}
+
+volumes:
+  caddy_data:
+  caddy_config:

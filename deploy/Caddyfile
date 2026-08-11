@@ -1,0 +1,69 @@
+# Fonely public edge.
+#
+# Terminates TLS and forwards ONLY the provider-facing paths to the backend.
+# Everything else returns 404 so the public internet never sees operational
+# or internal surfaces.
+#
+# WhatsApp requires a publicly reachable HTTPS webhook.
+# Exotel requires HTTPS for call status and WSS for the audio stream.
+#
+# FONELY_PUBLIC_DOMAIN must resolve to this host before first start —
+# certificate issuance is an inbound HTTP-01 challenge and fails otherwise.
+
+{
+	email {$FONELY_ACME_EMAIL}
+	# Providers retry aggressively; keep the edge from amplifying a backend stall.
+	servers {
+		timeouts {
+			read_body 10s
+			idle 5m
+		}
+	}
+}
+
+{$FONELY_PUBLIC_DOMAIN} {
+	encode gzip
+
+	log {
+		output stdout
+		format json
+		# Provider payloads carry patient phone numbers and message bodies.
+		# Log the request line only; never headers or body.
+	}
+
+	# --- Provider-facing surface (the only public paths) ---
+
+	# WhatsApp Cloud API webhook: GET verification handshake + POST deliveries.
+	handle /webhooks/whatsapp* {
+		reverse_proxy backend:8000
+	}
+
+	# Exotel call status callbacks.
+	handle /webhooks/exotel/call-status {
+		reverse_proxy backend:8000
+	}
+
+	# Exotel media stream. Long-lived bidirectional WebSocket: no read timeout,
+	# no buffering, or audio arrives in bursts and the conversation stutters.
+	handle /webhooks/exotel/audio-stream {
+		reverse_proxy backend:8000 {
+			transport http {
+				read_timeout 0
+				write_timeout 0
+			}
+			flush_interval -1
+		}
+	}
+
+	# --- Liveness only. Not /health/ready, not /health/alerts. ---
+	handle /health/live {
+		reverse_proxy backend:8000
+	}
+
+	# --- Everything else is invisible from the internet ---
+	# /metrics, /health/alerts, /health/ready and /internal/* are intentionally
+	# absent. They are reachable only on the private network or via SSH tunnel.
+	handle {
+		respond 404
+	}
+}

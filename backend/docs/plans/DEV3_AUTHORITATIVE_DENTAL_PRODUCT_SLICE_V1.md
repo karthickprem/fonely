@@ -793,6 +793,46 @@ Three-part checklist frozen by the reviewer. Status:
   (then rebase) or a new targeted on_conflict_do_update schedule write — flagged
   to the reviewer rather than silently scoped out.
 
+### D3-M2 ACCEPTED at f3a4d1f (review 2026-08-11)
+
+Code gate passed; main integration SEQUENCED BEHIND the CEO branch. Do NOT
+push to main and do NOT rebase onto the CEO branch itself — wait for it to
+land on main, then rebase onto the new main.
+
+INTEGRATION ORDER (from reviewer):
+- ceo/onboarding-fixes-and-demo-edge (0132433) goes FIRST — it carries
+  e41a082 (my permanent-weekly-hours dependency) and the Exotel auth P0 Dev4
+  must mount behind. f3a4d1f and the CEO branch are divergent (11 vs 8 ahead
+  of cc3aa65; both fast-forwardable from main, not from each other).
+- After the CEO branch lands: rebase f3a4d1f onto the new main, re-run gates,
+  then the reviewer issues an exact-SHA authorization. THAT unblocks the
+  permanent-weekly-hours gap AND lets me switch the staging-e2e tenant seed
+  from raw SQL to POST /internal/v1/businesses.
+
+LOAD-BEARING INVARIANT (reviewer flagged): removing the clinic-hours lean
+(parser no longer guesses PM) and the modulo-12 offer disambiguation are
+load-bearing on each other. 'aaru mani' now parses 06:00 not 18:00; it
+self-heals because check_and_offer returns alternatives and the modulo-12
+match lands the bare reply on one. A future edit must NOT remove one without
+the other, or an out-of-hours Tamil time stops recovering.
+
+TWO RESIDUALS (logged by reviewer, NOT blocking, fix when next touching
+_extract_datetime / check_and_offer — do not resubmit for these):
+1. Ambiguous bare time (two candidate slots) declines selection, then
+   _extract_datetime pops _active_offer and asks for a DATE — discards a
+   valid offer and asks the wrong question. Near-zero real impact (needs a
+   clinic offering both 5:30 AM and 5:30 PM). Fix: ask "which one" instead of
+   dropping the offer.
+2. A bare time whose intended meridiem is PM ('aaru mani' = 6 PM -> 06:00)
+   anchors "nearest slots" to the morning; the Tamil-speaking patient we care
+   most about gets an unhelpful first offer (recovers by saying "evening").
+   Consider ranking alternatives across BOTH meridiem readings when
+   meridiem_explicit is False.
+
+NOT MY DEFECT (reviewer confirmed): the PG flaky pair
+test_scheduling_mutation_concurrency_postgres[close_early]/[doctor_leave] is
+Dev2's (history 4c765c6, fe18b7b), not in my diff, raised in Dev2's lane.
+
 ## TRACKED FOLLOW-UPS (from M1 review of dab77b4, 2026-08-11)
 
 ### P0 — bare-time selection books the wrong day (owned by Dev3, GATES M3)

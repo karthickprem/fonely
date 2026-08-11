@@ -205,3 +205,41 @@ async def test_bare_time_with_no_date_books_nothing(
     async with pg_session_factory() as verify:
         count = await verify.scalar(text("SELECT count(*) FROM appointments WHERE business_id = 1"))
         assert count == 0, "A bare time with no date must book nothing"
+
+
+@pytest.mark.parametrize(
+    "vague",
+    ["sometime in the afternoon-ish", "whenever you have space", "asap please"],
+)
+async def test_vague_time_is_not_guessed(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+    vague: str,
+) -> None:
+    """An unparseable time produces no datetime — the agent must ask, not guess."""
+    async with pg_session_factory() as setup:
+        await _seed(setup)
+
+    gw = _gw()
+    async with pg_session_factory() as session:
+        await _process_domain(
+            _claimed(
+                1,
+                f"book a consultation with Dr. Priya tomorrow {vague}, "
+                "reach me on +919123456789",
+            ),
+            session,
+            gw,
+        )
+        await session.commit()
+
+    conv_id = next(iter(_CONVERSATIONS.keys()))
+    ctx = _CONVERSATIONS[conv_id]
+    # A vague time is not resolved -> no start_at, no proposal, no booking.
+    assert "start_at" not in ctx.collected_facts
+    assert ctx.proposal_id is None
+
+    async with pg_session_factory() as verify:
+        count = await verify.scalar(
+            text("SELECT count(*) FROM appointments WHERE business_id = 1")
+        )
+        assert count == 0

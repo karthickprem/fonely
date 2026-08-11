@@ -50,7 +50,8 @@ DEMO_CUSTOMER_PHONE = "+919840000042"
 # whole class of failure; this is demo wiring, not shippable config.
 _url = _DEV4_DB
 import logging as _logging
-_logging.getLogger("fonely.voice.production_wiring").info("demo DB engine → %s", _url)
+logger = _logging.getLogger("fonely.voice.production_wiring")
+logger.info("demo DB engine → %s", _url)
 _engine = create_async_engine(_url, pool_size=5)
 _SessionLocal = async_sessionmaker(_engine, expire_on_commit=False)
 
@@ -108,3 +109,36 @@ async def clinic_context_text() -> str:
     from fonely.voice import clinic_resolver
     async with _SessionLocal() as session:
         return await clinic_resolver.clinic_context_text(session, DEMO_BUSINESS_ID)
+
+
+# conversation_id → call row id, so the notice evidence and later turns attach
+# to the same call record.
+_CALL_ROWS: dict[str, int] = {}
+
+
+async def record_notice_evidence(*, conversation_id: str, notice_event: dict) -> int:
+    """Create the call record for this session and write the DPDP notice event
+    into its transcript JSONB — proof this patient heard this notice version
+    before any capture. Returns the call row id.
+
+    This mirrors what the real telephony path must do: the notice evidence
+    belongs on the call, in the same transcript the conversation opens.
+    """
+    import json as _json
+    from sqlalchemy import text as sql_text
+    async with _SessionLocal() as session:
+        row = await session.execute(
+            sql_text(
+                "INSERT INTO calls (business_id, caller_phone, caller_role, "
+                "transcript, started_at) "
+                "VALUES (:b, :phone, 'customer', :tr, now()) RETURNING id"
+            ),
+            {"b": DEMO_BUSINESS_ID, "phone": DEMO_CUSTOMER_PHONE,
+             "tr": _json.dumps([notice_event])},
+        )
+        call_id = row.scalar()
+        await session.commit()
+    _CALL_ROWS[conversation_id] = call_id
+    logger.info("dpdp_notice_recorded call_id=%s version=%s",
+                call_id, notice_event.get("notice_version"))
+    return call_id

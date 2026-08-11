@@ -455,11 +455,26 @@ async def run_booking_bot(transport: BaseTransport, runner_args: RunnerArguments
         @transport.event_handler("on_client_connected")
         async def on_client_connected(transport, client):
             logger.info("Booking client connected")
-            await worker.queue_frames([
-                LLMFullResponseStartFrame(),
-                LLMTextFrame(text=GREETING),
-                LLMFullResponseEndFrame(),
-            ])
+            # DPDP: speak the platform-owned notice BEFORE the greeting and
+            # before any capture. Persist the resolved text+version as evidence.
+            from fonely.voice.session_open import open_session
+            opening = open_session(
+                clinic_name="Smile Care Dental Clinic",
+                greeting_text=GREETING,
+                locale="ta-IN",
+            )
+            try:
+                await production_wiring.record_notice_evidence(
+                    conversation_id=runner_args.session_id,
+                    notice_event=opening.notice_event,
+                )
+            except Exception as _e:
+                logger.warning(f"notice evidence persist failed: {_e}")
+            frames = [LLMFullResponseStartFrame()]
+            for line in opening.spoken_lines:  # notice first, greeting second
+                frames.append(LLMTextFrame(text=line))
+            frames.append(LLMFullResponseEndFrame())
+            await worker.queue_frames(frames)
 
         @transport.event_handler("on_client_disconnected")
         async def on_client_disconnected(transport, client):

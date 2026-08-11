@@ -142,6 +142,14 @@ class ResolvedFacts:
             result["resource_name"] = self.resource_name
         if self.start_at is not None:
             result["start_at"] = self.start_at
+        # Carry partial date/time forward so a bare time (no date) or a bare
+        # date (no time) is never silently completed. The conversation layer
+        # uses these to ask for the missing half or, on the offer path, to
+        # supply the active offer's date.
+        if self.resolved_date is not None:
+            result["_pending_date"] = self.resolved_date.isoformat()
+        if self.resolved_time is not None:
+            result["_pending_time"] = self.resolved_time.isoformat()
         if self.patient_name:
             result["customer_name"] = self.patient_name
         if self.phone:
@@ -344,14 +352,16 @@ class FactResolver:
         resolved_time: time | None,
         timezone: str,
     ) -> datetime | None:
-        if resolved_date is None and resolved_time is None:
+        # A datetime exists only when BOTH halves are real. The parser is not
+        # allowed to invent a date (defaulting to today books the wrong day) or
+        # a time. A partial parse leaves start_at None and surfaces the missing
+        # half through resolved_date / resolved_time so the caller can ask or,
+        # on the offer path, supply the offer's date.
+        if resolved_date is None or resolved_time is None:
             return None
 
         tz = ZoneInfo(timezone)
-        target_date = resolved_date or datetime.now(tz).date()
-        target_time = resolved_time or time(10, 0)
-
-        local_dt = datetime.combine(target_date, target_time, tzinfo=tz)
+        local_dt = datetime.combine(resolved_date, resolved_time, tzinfo=tz)
         return local_dt.astimezone(UTC)
 
     def _resolve_phone(self, phone: str | None) -> str | None:

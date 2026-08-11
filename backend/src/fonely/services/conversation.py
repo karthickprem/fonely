@@ -257,6 +257,14 @@ class ConversationService:
         self._log_turn(turn, start_time)
         return turn
 
+    @staticmethod
+    def _invalidate_offer_if_changed(
+        ctx: ConversationContext, fact_key: str, new_value: object
+    ) -> None:
+        old = ctx.collected_facts.get(fact_key)
+        if old is not None and old != new_value:
+            ctx.collected_facts.pop("_active_offer", None)
+
     async def _extract_facts(self, ctx: ConversationContext, message: str, biz: object) -> None:
         from fonely.services.conversation_tools import BusinessContext
 
@@ -265,26 +273,29 @@ class ConversationService:
 
         regex_found = False
 
-        if "service_id" not in ctx.collected_facts:
-            for svc in biz.services:
-                if svc.name.lower() in msg_lower:
+        for svc in biz.services:
+            if svc.name.lower() in msg_lower:
+                if ctx.collected_facts.get("service_id") != svc.id:
+                    self._invalidate_offer_if_changed(ctx, "service_id", svc.id)
                     ctx.collected_facts["service_id"] = svc.id
                     ctx.collected_facts["service_name"] = svc.name
                     regex_found = True
-                    break
+                break
 
-        if "resource_id" not in ctx.collected_facts:
-            for res in biz.resources:
-                if res.name.lower() in msg_lower:
-                    eligible = any(
-                        sid == ctx.collected_facts.get("service_id") and rid == res.id
-                        for sid, rid in biz.eligibility
-                    )
-                    if eligible or "service_id" not in ctx.collected_facts:
-                        ctx.collected_facts["resource_id"] = res.id
-                        ctx.collected_facts["resource_name"] = res.name
-                        regex_found = True
-                        break
+        for res in biz.resources:
+            if res.name.lower() in msg_lower:
+                eligible = any(
+                    sid == ctx.collected_facts.get("service_id") and rid == res.id
+                    for sid, rid in biz.eligibility
+                )
+                if (
+                    eligible or "service_id" not in ctx.collected_facts
+                ) and ctx.collected_facts.get("resource_id") != res.id:
+                    self._invalidate_offer_if_changed(ctx, "resource_id", res.id)
+                    ctx.collected_facts["resource_id"] = res.id
+                    ctx.collected_facts["resource_name"] = res.name
+                    regex_found = True
+                break
 
         if "customer_phone" not in ctx.collected_facts:
             phone_match = re.search(r"\+?\d{10,13}", message)
@@ -306,10 +317,12 @@ class ConversationService:
                 ctx.collected_facts["customer_name"] = name_match.group(1)
                 regex_found = True
 
-        if "start_at" not in ctx.collected_facts:
-            self._extract_datetime(ctx, message, biz.timezone)
-            if "start_at" in ctx.collected_facts:
-                regex_found = True
+        # Always attempt datetime extraction so time corrections and offered-slot
+        # selections are honored even after start_at is first set.
+        had_start = "start_at" in ctx.collected_facts
+        self._extract_datetime(ctx, message, biz.timezone)
+        if not had_start and "start_at" in ctx.collected_facts:
+            regex_found = True
 
         if not regex_found:
             try:
@@ -346,12 +359,97 @@ class ConversationService:
                 del ctx.collected_facts["resource_id"]
                 ctx.collected_facts.pop("resource_name", None)
 
+    def _try_offer_selection(self, ctx: ConversationContext, message: str) -> bool:
+        offer_data = ctx.collected_facts.get("_active_offer")
+        if not offer_data or not isinstance(offer_data, dict):
+            return False
+
+        from fonely.domain.booking.offers import (
+            OfferValidationError,
+            deserialize_offer,
+            validate_selection,
+        )
+
+        try:
+            offer = deserialize_offer(offer_data)
+        except OfferValidationError:
+            ctx.collected_facts.pop("_active_offer", None)
+            return False
+        if offer is None:
+            ctx.collected_facts.pop("_active_offer", None)
+            return False
+
+        matched_slot = None
+
+        # 1. Parse time from message and match against offered slot times
+        time_match = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b", message, re.IGNORECASE)
+        if time_match:
+            hour = int(time_match.group(1))
+            minute = int(time_match.group(2) or "0")
+            ampm = time_match.group(3).lower()
+            if ampm == "pm" and hour < 12:
+                hour += 12
+            elif ampm == "am" and hour == 12:
+                hour = 0
+            for slot in offer.slots:
+                slot_match = re.match(
+                    r"(\d{1,2}):(\d{2})\s*(am|pm)",
+                    slot.display_time.lower().strip(),
+                )
+                if slot_match:
+                    sh = int(slot_match.group(1))
+                    sm = int(slot_match.group(2))
+                    sa = slot_match.group(3)
+                    if sa == "pm" and sh < 12:
+                        sh += 12
+                    elif sa == "am" and sh == 12:
+                        sh = 0
+                    if sh == hour and sm == minute:
+                        matched_slot = slot
+                        break
+
+        # 2. Word-boundary ordinal matching (only if no time match)
+        if matched_slot is None:
+            msg_lower = message.strip().lower()
+            _ordinals = [
+                (r"\bfirst\b", 0),
+                (r"\bsecond\b", 1),
+                (r"\bthird\b", 2),
+            ]
+            for pattern, idx in _ordinals:
+                if re.search(pattern, msg_lower) and idx < len(offer.slots):
+                    matched_slot = offer.slots[idx]
+                    break
+
+        if matched_slot is None:
+            return False
+
+        # B3 fix: use trusted context ids, not the stored offer's own ids
+        try:
+            selected = validate_selection(
+                offer,
+                matched_slot.token,
+                business_id=ctx.business_id,
+                conversation_id=ctx.conversation_id,
+            )
+        except OfferValidationError:
+            ctx.collected_facts.pop("_active_offer", None)
+            return False
+
+        ctx.collected_facts["start_at"] = selected.start_at_utc
+        ctx.collected_facts["_selected_token"] = selected.token
+        ctx.collected_facts["_selected_offer_id"] = selected.offer_id
+        return True
+
     def _extract_datetime(
         self, ctx: ConversationContext, message: str, timezone: str = "Asia/Kolkata"
     ) -> None:
         from datetime import UTC, datetime
         from datetime import time as dt_time
         from zoneinfo import ZoneInfo
+
+        if self._try_offer_selection(ctx, message):
+            return
 
         msg_lower = message.lower()
         clinic_tz = ZoneInfo(timezone)
@@ -372,13 +470,21 @@ class ConversationService:
                 target_date = (now + timedelta(days=1)).date()
 
             local_dt = datetime.combine(target_date, dt_time(hour, minute), tzinfo=clinic_tz)
-            ctx.collected_facts["start_at"] = local_dt.astimezone(UTC)
+            new_start = local_dt.astimezone(UTC)
+            # A raw time reaching here is not an offer selection (that was tried
+            # first), so any active offer is now stale — drop it.
+            if ctx.collected_facts.get("start_at") != new_start:
+                ctx.collected_facts.pop("_active_offer", None)
+            ctx.collected_facts["start_at"] = new_start
             return
 
         if "tomorrow" in msg_lower or "நாளை" in message:
             target_date = (now + timedelta(days=1)).date()
             local_dt = datetime.combine(target_date, dt_time(10, 0), tzinfo=clinic_tz)
-            ctx.collected_facts["start_at"] = local_dt.astimezone(UTC)
+            new_start = local_dt.astimezone(UTC)
+            if ctx.collected_facts.get("start_at") != new_start:
+                ctx.collected_facts.pop("_active_offer", None)
+            ctx.collected_facts["start_at"] = new_start
 
     def _identify_missing_facts(self, ctx: ConversationContext) -> list[str]:
         operation = ctx.collected_facts.get("_operation", "book")
@@ -675,7 +781,6 @@ class ConversationService:
         biz: object,
         safety: SafetyClassification,
     ) -> ConversationTurn:
-        from fonely.services.availability import AvailabilityService
         from fonely.services.conversation_tools import (
             BusinessContext,
             format_confirmation_summary,
@@ -700,6 +805,8 @@ class ConversationService:
 
         from datetime import datetime
 
+        from fonely.domain.booking.orchestrator import BookingOrchestrator
+
         assert isinstance(start_at, datetime)
         operation = ctx.collected_facts.get("_operation", "book")
         exclude_appointment_id: int | None = None
@@ -708,31 +815,35 @@ class ConversationService:
             assert isinstance(target_id, int)
             exclude_appointment_id = target_id
 
-        avail_svc = AvailabilityService(self._session)
-        decision = await avail_svc.check_exact_slot(
-            biz.business_id,
-            service_id,
-            resource_id,
-            start_at,
+        res = next((r for r in biz.resources if r.id == resource_id), None)
+        resource_name = res.name if res else "Doctor"
+
+        orchestrator = BookingOrchestrator(self._session)
+        exact_available, offer = await orchestrator.check_and_offer(
+            business_id=biz.business_id,
+            conversation_id=ctx.conversation_id,
+            service_id=service_id,
+            service_name=svc.name,
+            resource_id=resource_id,
+            resource_name=resource_name,
+            requested_start=start_at,
+            business_timezone=biz.timezone,
             exclude_appointment_id=exclude_appointment_id,
         )
-        if not decision.available:
-            from zoneinfo import ZoneInfo
 
-            clinic_tz = ZoneInfo(biz.timezone)
-            alt_texts = [
-                slot.start_at.astimezone(clinic_tz).strftime("%-I:%M %p")
-                for slot in decision.alternatives
-            ]
+        if not exact_available:
             ctx.state = ConversationState.FACT_COLLECTION
             ctx.booking_attempt += 1
             del ctx.collected_facts["start_at"]
-            if alt_texts:
+            if offer and offer.slots:
+                ctx.collected_facts["_active_offer"] = orchestrator.serialize(offer)
+                alt_texts = [s.display_time for s in offer.slots]
                 response = (
                     "That exact time isn't available. Nearest slots: "
                     f"{', '.join(alt_texts)}. Which one works?"
                 )
             else:
+                ctx.collected_facts.pop("_active_offer", None)
                 response = "That time isn't available. Would you like to try another date?"
             return self._fact_turn(
                 ctx,
@@ -741,6 +852,9 @@ class ConversationService:
                 safety,
                 ["start_at"],
             )
+
+        if offer:
+            ctx.collected_facts["_active_offer"] = orchestrator.serialize(offer)
 
         operation = ctx.collected_facts.get("_operation", "book")
 
@@ -1055,17 +1169,41 @@ class ConversationService:
         )
 
     async def _persist_turn(self, conversation_id: str, turn: ConversationTurn) -> None:
-        try:
-            from fonely.services.conversation_persistence import (
-                ConversationPersistenceService,
-            )
+        from fonely.services.conversation_persistence import (
+            ConversationPersistenceService,
+        )
 
-            ctx = _CONVERSATIONS.get(conversation_id)
-            if ctx is not None:
-                persistence = ConversationPersistenceService(self._session)
-                async with self._session.begin_nested():
-                    await persistence.save_turn(ctx, turn)
+        ctx = _CONVERSATIONS.get(conversation_id)
+        if ctx is None:
+            return
+
+        has_critical_state = ctx.proposal_id is not None or turn.state in (
+            ConversationState.CONFIRMED,
+            ConversationState.COMPLETED,
+        )
+
+        try:
+            persistence = ConversationPersistenceService(self._session)
+            exists = await persistence.exists(conversation_id)
+            if not exists:
+                if has_critical_state:
+                    from fonely.core.metrics import metrics
+
+                    metrics.increment(
+                        "conversation_critical_state_unpersisted",
+                        {"business_id": str(ctx.business_id)},
+                    )
+                    logger.warning(
+                        "critical_state_not_persisted: conversation=%s",
+                        conversation_id,
+                    )
+                return
+            async with self._session.begin_nested():
+                await persistence.save_turn(ctx, turn)
         except Exception:
+            if has_critical_state:
+                _CONVERSATIONS.pop(conversation_id, None)
+                raise
             logger.debug("conversation_persist_skipped", exc_info=True)
 
     def _log_turn(self, turn: ConversationTurn, start_time: float) -> None:

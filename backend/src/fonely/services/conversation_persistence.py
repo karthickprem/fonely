@@ -83,6 +83,9 @@ class ConversationPersistenceService:
     async def mark_completed(self, conversation_id: str) -> None:
         await self._repo.mark_completed(conversation_id, utcnow())
 
+    async def exists(self, conversation_id: str) -> bool:
+        return await self._repo.get_by_id(conversation_id) is not None
+
     async def load_by_id(self, conversation_id: str) -> ConversationContext | None:
         db_conv = await self._repo.get_by_id(conversation_id)
         if db_conv is None:

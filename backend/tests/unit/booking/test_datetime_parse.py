@@ -100,6 +100,57 @@ class TestBareAndDottedTimes:
         assert isinstance(result, time)
 
 
+class TestOrdinalOneVsHourOne:
+    """The word "one" is both the hour 1 and the ordinal in slot-picking
+    phrases ("the evening one"). Task #16 suppresses the ordinal reading, but
+    must NOT suppress a genuine "one" hour. This matrix is the exact regression
+    the D3-M4 reviewer caught: an over-broad guard turned "one thirty" into None
+    while "two thirty" still parsed — an indefensible asymmetry.
+
+    Rule: "one" reads as HOUR 1 on positive evidence — an explicit minute
+    ("one thirty"/"one fifteen"/"half past one"), a clock token
+    ("one o'clock"/"one pm"), or hour position (not preceded by "the"/a
+    part-of-day/ordinal word). It reads as the ORDINAL (None) only in a
+    slot-picking phrase ("the evening one", "the first one").
+    """
+
+    @pytest.mark.parametrize(
+        "text,expected",
+        [
+            # Genuine "one" as an HOUR — must parse (regression cases).
+            ("one thirty", time(1, 30)),
+            ("one fifteen", time(1, 15)),
+            ("one in the afternoon", time(13, 0)),
+            ("one o'clock", time(1, 0)),
+            ("one pm", time(13, 0)),
+            ("one am", time(1, 0)),
+            ("half past one", time(1, 30)),
+            ("quarter past one", time(1, 15)),
+            # A different word-number must be unaffected (the asymmetry check).
+            ("two thirty", time(2, 30)),
+        ],
+    )
+    def test_one_as_hour_still_parses(self, text: str, expected: time) -> None:
+        assert parse_time_of_day(text) == expected
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "the evening one",
+            "the morning one",
+            "the afternoon one",
+            "the first one",
+            "the second one",
+            "the last one",
+            "the one",
+        ],
+    )
+    def test_ordinal_one_names_no_time(self, text: str) -> None:
+        # Slot-picking phrase: names no clock time, must return None so the
+        # caller re-asks (or resolves against the offer) rather than booking 1am.
+        assert parse_time_of_day(text) is None
+
+
 class TestMeridiemExplicitness:
     """parse_time_spec reports whether am/pm was stated — the blocker fix."""
 

@@ -844,6 +844,26 @@ no longer reads ordinal "one" as hour 1 — needs a real clock token) and task
 Same integration hold as D3-M1/M2/M3: no push to main, no rebase onto the CEO
 branch. Awaiting exact-SHA authorization.
 
+REJECT #1 of D3-M4 (c38df96, review 2026-08-11) — two required items, both
+fixed in the follow-up candidate:
+1. REGRESSION in Task #16, missed by the corpus: the ordinal guard was too
+   broad — "one thirty"/"one fifteen"/"one in the afternoon" all collapsed to
+   None (safe direction, but a real capability loss; "two thirty" still parsed,
+   an indefensible asymmetry). FIX: gate the suppression on PROVENANCE — a "one"
+   reads as hour 1 on positive evidence (explicit minute from thirty/fifteen/
+   half/quarter/tail, a clock token, or hour position); it is suppressed only in
+   a slot-picking phrase ("the evening one"/"the first one"). Verified by a new
+   unit matrix (TestOrdinalOneVsHourOne, 16 cases) AND two new corpus cases
+   (ordinal-one-no-time, one-thirty-out-of-hours).
+2. I4 CLAIMED BUT NOT ASSERTED: the header said I4 ran on every conversation;
+   it existed only as one case's expected time. FIX: added Case.superseded_local
+   and a real I4 assertion (committed time must never equal the superseded
+   reading) on the negation + correction cases; corrected the header to state
+   precisely where each invariant applies. Also fixed the _max_identical_repeats
+   docstring (counts total occurrences, not longest run — strictly stronger).
+Reviewer logged the "dr priya" resource-name gap as item #19 (mine, after M4).
+Corpus now 12 cases; 12/12 pass. Non-PG 1259 passed; ruff+mypy clean.
+
 ### D3-M3 ACCEPTED at af451a2 (review 2026-08-11)
 
 Time-understanding residuals + coupling guard. Accepted after four defects

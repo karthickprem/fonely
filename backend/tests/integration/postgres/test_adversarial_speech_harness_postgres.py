@@ -8,11 +8,17 @@ disfluencies, STT artifacts, code-mixing, split turns, negations, corrections)
 through _process_domain (the production inbound-worker entry to
 process_message), not through _extract_datetime in isolation.
 
-Invariants checked on every scripted conversation:
-  I1  never book a time the patient did not name or select
-  I2  never book a slot that was not offered
-  I3  no question repeats unboundedly (a bounded number of identical asks)
-  I4  a correction supersedes the earlier reading
+Invariants:
+  I1  never book a time the patient did not name or select      (every case)
+  I2  never book a slot that was not offered                     (every booking)
+  I3  no question repeats unboundedly (bounded identical asks)   (every case)
+  I4  a correction supersedes the earlier reading               (correction/
+      negation cases: asserted via Case.superseded_local — the committed time
+      must never equal the reading the correction overrode)
+
+I1 and I3 run on every case; I2 runs on every case that books; I4 runs on every
+case that declares a superseded reading (it does not apply to conversations
+with no correction, and does not silently pass there — it simply is not in play).
 """
 
 import uuid
@@ -179,10 +185,15 @@ async def run_script(
 
 
 def _max_identical_repeats(responses: list[str]) -> int:
-    """Longest run of the identical assistant response (the loop signature)."""
+    """Highest TOTAL count of any single identical assistant response.
+
+    Counts total occurrences, not the longest consecutive run — a strictly
+    stronger loop signal (an unbounded loop drives both up together, and total
+    count also catches a response that recurs non-consecutively), so it can
+    never miss a loop that a run-length measure would catch.
+    """
     if not responses:
         return 0
-    # Normalise trivial variation; the loop we guard against is byte-identical.
     counts = Counter(responses)
     return max(counts.values())
 
@@ -219,6 +230,10 @@ class Case:
     utterances: list[str]
     # expected committed local (h, m) or None for "must book nothing"
     expect_local: tuple[int, int] | None
+    # I4: for a conversation that CORRECTS or NEGATES an earlier reading, the
+    # (h, m) that must be SUPERSEDED — the committed time must never equal it.
+    # None for conversations with no correction (I4 does not apply to them).
+    superseded_local: tuple[int, int] | None = None
 
 
 def _corpus() -> list[Case]:
@@ -290,17 +305,19 @@ def _corpus() -> list[Case]:
         )
     )
 
-    # 6. Negations — must NOT book the negated time.
+    # 6. Negations — must NOT book the negated time. I4: 5 PM is superseded.
     cases.append(
         Case(
             "negation-no-time",
             "negation",
             [f"{_LEAD} tomorrow {_PHONE}", "not 5 pm", "6 pm", "yes confirm"],
             (18, 0),
+            superseded_local=(17, 0),
         )
     )
 
-    # 7. Mid-conversation correction — "no no, evening".
+    # 7. Mid-conversation correction — "no no, make it 6 pm". I4: the earlier
+    # 10:30 AM reading is superseded by the correction.
     cases.append(
         Case(
             "correction-evening",
@@ -311,6 +328,7 @@ def _corpus() -> list[Case]:
                 "yes confirm",
             ],
             (18, 0),
+            superseded_local=(10, 30),
         )
     )
 
@@ -320,6 +338,32 @@ def _corpus() -> list[Case]:
             "vague-time",
             "vague",
             [f"{_LEAD} tomorrow sometime {_PHONE}", "whenever"],
+            None,
+        )
+    )
+
+    # 9. Ordinal "one" — a slot-picking phrase names no time and must NOT book
+    # 1 AM (out of hours anyway). Exercises the Task #16 changed file through
+    # the real path: "the evening one" is not a clock reading.
+    cases.append(
+        Case(
+            "ordinal-one-no-time",
+            "ordinal_one",
+            [f"{_LEAD} tomorrow {_PHONE}", "the evening one", "whenever"],
+            None,
+        )
+    )
+
+    # 10. Genuine "one thirty" as an hour — the regression the reviewer caught.
+    # 1:30 is out of clinic hours, so it must book NOTHING (refuse), but for the
+    # RIGHT reason: it parsed 1:30 and found no slot, not because "one thirty"
+    # silently returned None. We assert nothing books; the unit matrix proves
+    # the parse. (Kept out-of-hours to avoid depending on a 1:30 slot existing.)
+    cases.append(
+        Case(
+            "one-thirty-out-of-hours",
+            "ordinal_one",
+            [f"{_LEAD} tomorrow one thirty {_PHONE}", "whenever"],
             None,
         )
     )
@@ -353,6 +397,21 @@ async def test_speech_corpus_invariants(
     assert _max_identical_repeats(trace.responses) <= 3, (
         f"[{case.cid}] a response repeated unboundedly: {trace.responses}"
     )
+
+    # I4: a correction supersedes the earlier reading. For any conversation that
+    # rejects/corrects an earlier time, the committed booking must NEVER equal
+    # the superseded reading — whether the correction names a replacement
+    # (negation-no-time, correction-evening: must book the NEW time, not the
+    # old) or names none (must book nothing). Asserted here, before the general
+    # I1/I2 checks, so the invariant runs on every case that declares one.
+    if case.superseded_local is not None:
+        superseded_utc = datetime.combine(
+            tomorrow, time(*case.superseded_local), tzinfo=KOLKATA
+        ).astimezone(UTC)
+        assert trace.committed_start_utc != superseded_utc, (
+            f"[{case.cid}] I4 violated: booked the SUPERSEDED reading "
+            f"{time(*case.superseded_local)}; a correction must override it"
+        )
 
     if expected_utc is None:
         # Must book nothing.

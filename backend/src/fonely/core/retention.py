@@ -51,6 +51,21 @@ def get_retention_policies() -> dict[str, RetentionPolicy]:
             retention_days=_env_days("RETENTION_APPOINTMENTS_DAYS", 365),
             description="Immutable booking evidence",
         ),
+        # The call row itself is operational evidence (duration, outcome) and
+        # is kept. Only the transcript is redacted -- it is the free text a
+        # patient spoke, so it is the part that carries whatever they chose to
+        # say about their health. DPDP purpose limitation: it exists to make a
+        # booking, and it stops existing once it cannot serve that purpose.
+        #
+        # This deliberately does NOT cover calls.caller_phone. Phone retention
+        # is per clinic instruction, which is not modelled yet -- see the note
+        # in domain/compliance/consent.py. Redacting it here would be a policy
+        # decision nobody has made.
+        "call_transcripts": RetentionPolicy(
+            data_type="call_transcripts",
+            retention_days=_env_days("RETENTION_CALL_TRANSCRIPTS_DAYS", 90),
+            description="Spoken call transcripts — redacted in place, call row retained",
+        ),
         "notifications_delivered": RetentionPolicy(
             data_type="notifications_delivered",
             retention_days=_env_days("RETENTION_NOTIFICATIONS_DAYS", 30),

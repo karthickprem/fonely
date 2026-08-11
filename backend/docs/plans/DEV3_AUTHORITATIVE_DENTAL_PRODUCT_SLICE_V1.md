@@ -751,7 +751,42 @@ Deliver that outcome from integrated main.
 | Slice | Goal | Status |
 |-------|------|--------|
 | 0 | Trace + fixed contract types | DONE (trace completed, types in Slice 1) |
-| 1 | Durable offer + selection seam | IN PROGRESS |
+| 1 | Durable offer + selection seam | ACCEPTED at dab77b4 (M1) — held, not on main |
 | 2 | Complete mounted WhatsApp booking E2E | NOT STARTED |
 | 3 | Safe single-node staging topology | NOT STARTED |
 | 4 | Operations / privacy closure | NOT STARTED |
+
+## TRACKED FOLLOW-UPS (from M1 review of dab77b4, 2026-08-11)
+
+### P0 — bare-time selection books the wrong day (owned by Dev3, GATES M3)
+A patient offered "10:00 AM, 10:30 AM" for TOMORROW who replies with a bare
+time — "10:30", "10:30 please", "ok 10:30" — does NOT select (the selection
+regex requires am/pm). The message falls through to `_extract_datetime`'s raw
+parse, which matches, sets `target_date = now.date()` because "tomorrow" is
+not in THIS message, pops the active offer, and books TODAY 10:30 — the wrong
+day. "10.30" (dot, common in India) matches neither and sets nothing.
+Two-part fix when picked up (before M3 voice booking):
+1. Selection must accept a BARE time (no am/pm, and dot separators) and match
+   it against the offered slot times.
+2. The conversation must carry the active offer's DATE forward instead of
+   defaulting to `now.date()`. This second half is the more dangerous one —
+   it misfires OUTSIDE the offer path too (any bare time defaults to today).
+Not an M1 defect: outside the six frozen conditions. Tracked as its own item.
+
+### Non-blocking, recorded (fix when cheap; do not regress)
+1. `AvailabilityOffer.generate_token` secret is a source literal
+   ("fonely-offer-key"). Given server-side `collected_facts` + authoritative
+   availability re-check at commit, this is a CORRUPTION CHECKSUM, not a
+   security control. Do NOT describe it as a "keyed MAC" in any outsider-
+   facing document. Move the key to settings when cheap.
+2. `build_offer` computes `expires_at` inside the slot loop → empty
+   `available_slots` raises `UnboundLocalError` instead of refusing cleanly.
+   Latent: both orchestrator call sites guard against empty lists.
+3. `_extract_facts` resource loop now `break`s on any name match, including an
+   ineligible resource named before an eligible one — a behaviour change vs.
+   the prior scan-and-continue. Revisit when correction eligibility matters.
+
+### Deferred dependency
+Switch staging-e2e tenant seed from raw SQL to `POST /internal/v1/businesses`
+(e41a082) AFTER that route lands on integrated main and M1 is rebased onto it.
+Do not rebase onto an unintegrated branch to satisfy this.

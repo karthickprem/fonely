@@ -282,6 +282,58 @@ async def _seed_dual_window(session: AsyncSession) -> None:
     await session.commit()
 
 
+async def _seed_offgrid_evening_clinic(session: AsyncSession) -> None:
+    """Evening clinic 18:15-19:45, 30-min slots -> slots at 18:15/18:45/19:15.
+
+    18:00 (the alt reading of a bare 6) is OFF-GRID here, so a bare six forces
+    an OFFER (not an exact confirm) and exercises the full round-trip that both
+    the lean-removal and the modulo-12 selection are load-bearing on.
+    """
+    await session.execute(
+        text(
+            "INSERT INTO businesses "
+            "(id, name, category, primary_contact_phone, timezone, subscription, "
+            "appointment_slot_interval_minutes) "
+            "VALUES (1, 'Smile Dental Clinic', 'dental', '+919000000001', "
+            "'Asia/Kolkata', 'trial', 30)"
+        )
+    )
+    await session.execute(
+        text(
+            "INSERT INTO business_users (id, business_id, phone, role, is_active) "
+            "VALUES (1, 1, '+919000000001', 'owner', true)"
+        )
+    )
+    await session.execute(
+        text(
+            "INSERT INTO services "
+            "(id, business_id, name, duration_minutes, buffer_before_minutes, "
+            "buffer_after_minutes, price, is_active) "
+            "VALUES (1, 1, 'General Consultation', 30, 0, 0, 500.00, true)"
+        )
+    )
+    await session.execute(
+        text(
+            "INSERT INTO resources (id, business_id, name, resource_type, is_active) "
+            "VALUES (1, 1, 'Dr. Priya', 'staff', true)"
+        )
+    )
+    await session.execute(
+        text(
+            "INSERT INTO service_resource_eligibility "
+            "(business_id, service_id, resource_id, is_active) VALUES (1, 1, 1, true)"
+        )
+    )
+    await session.execute(
+        text(
+            "INSERT INTO operating_schedules "
+            "(business_id, day_of_week, open_time, close_time, is_active) "
+            "SELECT 1, day, '18:15', '19:45', true FROM generate_series(0, 6) AS day"
+        )
+    )
+    await session.commit()
+
+
 async def test_ambiguous_bare_time_asks_which_one_and_keeps_offer(
     pg_session_factory: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -352,3 +404,102 @@ async def test_ambiguous_bare_time_asks_which_one_and_keeps_offer(
         if committed.tzinfo is None:
             committed = committed.replace(tzinfo=UTC)
         assert committed.astimezone(KOLKATA).hour == 17, "Must book the 5:30 PM slot"
+
+
+async def test_out_of_hours_bare_time_still_reaches_a_bookable_slot(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """D3-M3 item 3: the load-bearing coupling guard.
+
+    Lean-removal (bare 'aaru mani' -> 06:00 with meridiem_explicit=False) and
+    modulo-12 offer disambiguation are load-bearing on each other. This test
+    exercises the exact path where both matter: a bare Tamil evening hour whose
+    literal reading (06:00) is CLOSED still reaches a bookable evening slot
+    through the offer round-trip, and the patient's bare evening reply selects
+    it via modulo-12.
+
+    The coupling is guarded on both halves, each proven by reverting it alone:
+    - Revert the MODULO-12 disambiguation (bare time -> exact-hour-only match):
+      the patient's bare "6:15" no longer matches the 6:15 PM slot, so
+      _selected_token stays None and the assertion below FAILS. (Verified.)
+    - Revert the LEAN-REMOVAL (re-add small-hour -> +12 in the parser): the
+      parser unit tests test_datetime_parse::test_tamil_tanglish[aaru mani] and
+      ::test_meridiem_flag[aaru mani] FAIL, because 'aaru mani' becomes 18:00
+      with meridiem_explicit=True instead of 06:00/False. (Verified.)
+    Together those two guard points fail if either mechanism is removed.
+    """
+    async with pg_session_factory() as setup:
+        await _seed_offgrid_evening_clinic(setup)
+
+    gw = _gw()
+    # Turn 1: bare Tamil evening hour "aaru mani" -> 06:00 (closed) and 18:00
+    # (alt) which is OFF-GRID for this 18:15-19:45 clinic, so BOTH readings are
+    # non-exact and an OFFER of evening alternatives (6:15/6:45 PM) is produced.
+    async with pg_session_factory() as session:
+        await _process_domain(
+            _claimed(
+                1,
+                "book a general consultation with Dr. Priya tomorrow aaru mani, "
+                "reach me on +919123456789",
+            ),
+            session,
+            gw,
+        )
+        await session.commit()
+
+    conv_id = next(iter(_CONVERSATIONS.keys()))
+    ctx = _CONVERSATIONS[conv_id]
+
+    # DEPENDS ON lean-removal + meridiem-aware alternatives: the literal 06:00
+    # is closed, so recovery is only possible if the evening reading surfaced.
+    offer = ctx.collected_facts.get("_active_offer")
+    assert offer is not None, (
+        "Out-of-hours bare time did not reach an offer — the meridiem-aware "
+        "recovery is broken (lean-removal / alternatives coupling)."
+    )
+    assert isinstance(offer, dict)
+    for slot in offer["slots"]:
+        local = datetime.fromisoformat(slot["start_at_utc"]).astimezone(KOLKATA)
+        assert time(18, 15) <= local.time() < time(19, 45)
+
+    # DEPENDS ON modulo-12 selection: the patient replies with a BARE evening
+    # time (6:15 -> 06:15) and it must land on the 6:15 PM slot via mod-12.
+    async with pg_session_factory() as session:
+        await _process_domain(_claimed(2, "6:15"), session, gw)
+        await session.commit()
+
+    ctx = _CONVERSATIONS[conv_id]
+    assert ctx.proposal_id is not None, (
+        "Bare evening reply did not select an offered slot — the modulo-12 "
+        "disambiguation is broken."
+    )
+    # The selection MUST have gone through the offer token path — that is what
+    # the modulo-12 match feeds. _selected_token is set only by
+    # _try_offer_selection, never by a re-derivation fallback, so this pins the
+    # test to the coupling under guard rather than a lucky recovery elsewhere.
+    assert ctx.collected_facts.get("_selected_token") is not None, (
+        "Reply booked without going through offer selection — modulo-12 broke "
+        "and a re-derivation path masked it."
+    )
+
+    async with pg_session_factory() as session:
+        await _process_domain(_claimed(3, "yes confirm"), session, gw)
+        await session.commit()
+
+    tomorrow = (datetime.now(KOLKATA) + timedelta(days=1)).date()
+    async with pg_session_factory() as verify:
+        row = (
+            await verify.execute(
+                text(
+                    "SELECT start_at FROM appointments "
+                    "WHERE business_id = 1 AND status = 'confirmed'"
+                )
+            )
+        ).one_or_none()
+        assert row is not None, "No booking — the out-of-hours recovery failed end to end."
+        committed = row[0]
+        if committed.tzinfo is None:
+            committed = committed.replace(tzinfo=UTC)
+        local = committed.astimezone(KOLKATA)
+        assert local.date() == tomorrow
+        assert time(18, 15) <= local.time() < time(19, 45)

@@ -1,23 +1,54 @@
-# Fonely Staging Environment Template
-# Copy to .env.staging and fill in real values before deployment.
-# NEVER commit real secrets.
+# Fonely local/host-ready environment template
+# Copy to .env.staging and replace placeholders before starting the stack.
+# NEVER commit real secrets. This file is configuration, not hosted-staging proof.
 
+# Core database and internal API — required by docker-compose.staging.yml
 POSTGRES_PASSWORD=changeme-generate-a-real-password
-# Construct DATABASE_URL from your actual credentials:
-# DATABASE_URL=postgresql+asyncpg://<user>:<password>@<host>:5432/<database>
-DATABASE_URL=
+# Inside Compose, use the postgres service hostname. Keep the password in sync
+# with POSTGRES_PASSWORD. The application reads DATABASE_URL (no FONELY_ prefix).
+DATABASE_URL=postgresql+asyncpg://fonely:changeme-generate-a-real-password@postgres:5432/fonely
 INTERNAL_API_SECRET=changeme-generate-a-real-secret
 
-# Logging (no FONELY_ prefix — Settings reads these directly)
+# WhatsApp channel — required by the current base Compose topology
+WHATSAPP_VERIFY_TOKEN=changeme-whatsapp-verify-token
+WHATSAPP_ACCESS_TOKEN=changeme-whatsapp-access-token
+WHATSAPP_PHONE_NUMBER_ID=changeme-whatsapp-phone-number-id
+WHATSAPP_BUSINESS_MAPPINGS={"changeme-phone-number-id":1}
+WHATSAPP_APP_SECRET=changeme-whatsapp-app-secret
+
+# Model access — required by inbound-worker; also consumed by the backend
+SARVAM_API_KEY=changeme-sarvam-api-key
+
+# Logging (Settings reads these names directly)
 LOG_FORMAT=json
 LOG_LEVEL=INFO
 
-# Connection pool (defaults are suitable for 1–5 clinics)
+# Backend API connection pool only (optional; worker entrypoints currently use
+# SQLAlchemy defaults and need a separate bounded-pool correction)
 # DB_POOL_SIZE=5
 # DB_MAX_OVERFLOW=5
 # DB_POOL_TIMEOUT=30
 # DB_POOL_RECYCLE=1800
 
-# Server
-# HOST=0.0.0.0
-# PORT=8000
+# Data retention (optional; shown values are current code defaults)
+# RETENTION_CONVERSATIONS_DAYS=90
+# RETENTION_APPOINTMENTS_DAYS=365
+# RETENTION_CALL_TRANSCRIPTS_DAYS=90
+# RETENTION_NOTIFICATIONS_DAYS=30
+# RETENTION_NOTIFICATIONS_DEAD_LETTER_DAYS=90
+# RETENTION_WHATSAPP_INBOUND_DAYS=30
+# RETENTION_WHATSAPP_INBOUND_DEAD_LETTER_DAYS=30
+
+# Public edge / Exotel — required only with docker-compose.public.yml
+# FONELY_PUBLIC_DOMAIN=api.example.in
+# FONELY_ACME_EMAIL=ops@example.in
+# EXOTEL_WEBHOOK_SECRET=changeme-exotel-webhook-secret
+# EXOTEL_NUMBER_MAPPINGS={"+918000000000":1}
+
+# Voice runtime — keep disabled until its exact integrated runtime is validated
+# VOICE_PIPELINE_ENABLED=false
+# CARTESIA_API_KEY=changeme-cartesia-api-key
+# CARTESIA_VOICE_ID=changeme-cartesia-voice-id
+
+# HOST and PORT are fixed by the base Compose topology. Set them only when
+# running the application directly outside Compose.

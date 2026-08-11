@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: fonely
       POSTGRES_USER: fonely
@@ -29,6 +30,7 @@ services:
   backend:
     build:
       context: backend
+    restart: unless-stopped
     environment:
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
       INTERNAL_API_SECRET: ${INTERNAL_API_SECRET:?Set INTERNAL_API_SECRET}
@@ -38,13 +40,17 @@ services:
       WHATSAPP_APP_SECRET: ${WHATSAPP_APP_SECRET:?Set WHATSAPP_APP_SECRET}
       LOG_FORMAT: ${LOG_FORMAT:-json}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-5}
+      DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-30}
+      DB_POOL_RECYCLE: ${DB_POOL_RECYCLE:-1800}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/live')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready')"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -75,6 +81,28 @@ services:
       WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:?Set WHATSAPP_ACCESS_TOKEN}
       LOG_FORMAT: ${LOG_FORMAT:-json}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  retention-worker:
+    build:
+      context: backend
+    command: [".venv/bin/python", "run_retention_worker.py"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      RETENTION_CONVERSATIONS_DAYS: ${RETENTION_CONVERSATIONS_DAYS:-90}
+      RETENTION_APPOINTMENTS_DAYS: ${RETENTION_APPOINTMENTS_DAYS:-365}
+      RETENTION_CALL_TRANSCRIPTS_DAYS: ${RETENTION_CALL_TRANSCRIPTS_DAYS:-90}
+      RETENTION_NOTIFICATIONS_DAYS: ${RETENTION_NOTIFICATIONS_DAYS:-30}
+      RETENTION_NOTIFICATIONS_DEAD_LETTER_DAYS: ${RETENTION_NOTIFICATIONS_DEAD_LETTER_DAYS:-90}
+      RETENTION_WHATSAPP_INBOUND_DAYS: ${RETENTION_WHATSAPP_INBOUND_DAYS:-30}
+      RETENTION_WHATSAPP_INBOUND_DEAD_LETTER_DAYS: ${RETENTION_WHATSAPP_INBOUND_DEAD_LETTER_DAYS:-30}
     healthcheck:
       disable: true
     restart: unless-stopped

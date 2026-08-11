@@ -13,6 +13,7 @@ import pytest
 from fonely.domain.booking.datetime_parse import (
     parse_relative_date,
     parse_time_of_day,
+    parse_time_spec,
 )
 
 
@@ -20,18 +21,27 @@ class TestBareAndDottedTimes:
     @pytest.mark.parametrize(
         "text,expected",
         [
+            # A bare hour keeps its LITERAL value — the parser never leans it
+            # toward clinic hours. Meridiem resolution is the caller's job.
             ("10:30", time(10, 30)),
             ("10.30", time(10, 30)),
             ("10 30", time(10, 30)),
             ("1030", time(10, 30)),
             ("ok 10:30", time(10, 30)),
             ("10:30 please", time(10, 30)),
+            ("5:30", time(5, 30)),  # NOT 17:30 — bare, meridiem unknown
+            ("5.30", time(5, 30)),
+            ("2:00", time(2, 0)),
+            # Explicit meridiem is honored.
             ("let's do 10:30 am please", time(10, 30)),
             ("10:30 pm", time(22, 30)),
+            ("5:30 pm", time(17, 30)),
             ("10 am", time(10, 0)),
             ("2 pm", time(14, 0)),
             ("12 am", time(0, 0)),
             ("12 pm", time(12, 0)),
+            # 24h form is unambiguous.
+            ("17:30", time(17, 30)),
         ],
     )
     def test_numeric_forms(self, text: str, expected: time) -> None:
@@ -45,6 +55,9 @@ class TestBareAndDottedTimes:
             ("quarter past ten", time(10, 15)),
             ("ten o'clock", time(10, 0)),
             ("ten am", time(10, 0)),
+            # Word and numeric now AGREE: neither leans (secondary item 2).
+            ("two thirty", time(2, 30)),
+            ("half past five", time(5, 30)),
         ],
     )
     def test_word_forms(self, text: str, expected: time) -> None:
@@ -53,14 +66,14 @@ class TestBareAndDottedTimes:
     @pytest.mark.parametrize(
         "text,expected",
         [
-            # Bare hour 9-12 stays morning; only small hours (<=8) lean evening,
-            # because an Indian clinic's small-hour appointments are afternoon.
-            ("pathu mani", time(10, 0)),  # 10 o'clock -> morning
-            ("pathu mani kaalai", time(10, 0)),  # 10 morning (explicit)
-            ("aaru mani", time(18, 0)),  # 6 -> evening lean
-            ("aaru mani kaalai", time(6, 0)),  # 6 morning (explicit)
-            ("aaru mani maalai", time(18, 0)),  # 6 evening (explicit)
-            ("pathu arai", time(10, 30)),  # 10:30 morning
+            # No clinic-hours lean: a bare Tamil hour is literal, exactly like a
+            # bare numeric hour. "maalai"/"kaalai" set the meridiem explicitly.
+            ("pathu mani", time(10, 0)),  # 10, literal
+            ("pathu mani kaalai", time(10, 0)),  # 10 am (explicit)
+            ("aaru mani", time(6, 0)),  # 6, literal — NOT 18:00
+            ("aaru mani kaalai", time(6, 0)),  # 6 am (explicit)
+            ("aaru mani maalai", time(18, 0)),  # 6 pm (explicit evening)
+            ("pathu arai", time(10, 30)),  # 10:30, literal
         ],
     )
     def test_tamil_tanglish(self, text: str, expected: time) -> None:
@@ -85,6 +98,44 @@ class TestBareAndDottedTimes:
         # The return type is time; there is structurally no date to leak.
         result = parse_time_of_day("tomorrow at 10:30 am")
         assert isinstance(result, time)
+
+
+class TestMeridiemExplicitness:
+    """parse_time_spec reports whether am/pm was stated — the blocker fix."""
+
+    @pytest.mark.parametrize(
+        "text,expected_time,explicit",
+        [
+            ("5:30", time(5, 30), False),  # bare -> not explicit
+            ("5:30 pm", time(17, 30), True),  # am/pm stated
+            ("5:30 in the evening", time(17, 30), True),  # evening -> pm
+            ("10:30 am", time(10, 30), True),
+            ("17:30", time(17, 30), True),  # 24h is unambiguous
+            ("aaru mani", time(6, 0), False),  # bare Tamil hour
+            ("aaru mani maalai", time(18, 0), True),  # evening stated
+            ("half past five", time(5, 30), False),
+        ],
+    )
+    def test_meridiem_flag(self, text: str, expected_time: time, explicit: bool) -> None:
+        spec = parse_time_spec(text)
+        assert spec is not None
+        assert spec.time == expected_time
+        assert spec.meridiem_explicit is explicit
+
+
+class TestSecondaryFixes:
+    def test_afternoon_words_imply_pm(self) -> None:
+        # Secondary item 3: _AFTERNOON is wired into meridiem detection.
+        assert parse_time_of_day("3 in the afternoon") == time(15, 0)
+        assert parse_time_of_day("afternoon 3") == time(15, 0)
+        assert parse_time_of_day("2 in the afternoon") == time(14, 0)
+
+    def test_four_digit_year_is_not_a_time(self) -> None:
+        # Secondary item 4: "2026" must not read as 20:26.
+        assert parse_time_of_day("2026") is None
+        assert parse_time_of_day("book me on 2026") is None
+        # A real compact time still parses.
+        assert parse_time_of_day("1030") == time(10, 30)
 
 
 class TestRelativeDate:

@@ -106,6 +106,57 @@ def _claimed(event_id: int, body: str) -> ClaimedEvent:
     )
 
 
+async def _seed_evening(session: AsyncSession) -> None:
+    """Same clinic but open only in the evening: 17:00-18:00, 30-min slots.
+
+    Offered slots are 5:00 PM and 5:30 PM — the case where a bare "5:30"
+    reply parses as 05:30 and must still select the 5:30 PM slot.
+    """
+    await session.execute(
+        text(
+            "INSERT INTO businesses "
+            "(id, name, category, primary_contact_phone, timezone, subscription, "
+            "appointment_slot_interval_minutes) "
+            "VALUES (1, 'Smile Dental Clinic', 'dental', '+919000000001', "
+            "'Asia/Kolkata', 'trial', 30)"
+        )
+    )
+    await session.execute(
+        text(
+            "INSERT INTO business_users (id, business_id, phone, role, is_active) "
+            "VALUES (1, 1, '+919000000001', 'owner', true)"
+        )
+    )
+    await session.execute(
+        text(
+            "INSERT INTO services "
+            "(id, business_id, name, duration_minutes, buffer_before_minutes, "
+            "buffer_after_minutes, price, is_active) "
+            "VALUES (1, 1, 'General Consultation', 30, 0, 0, 500.00, true)"
+        )
+    )
+    await session.execute(
+        text(
+            "INSERT INTO resources (id, business_id, name, resource_type, is_active) "
+            "VALUES (1, 1, 'Dr. Priya', 'staff', true)"
+        )
+    )
+    await session.execute(
+        text(
+            "INSERT INTO service_resource_eligibility "
+            "(business_id, service_id, resource_id, is_active) VALUES (1, 1, 1, true)"
+        )
+    )
+    await session.execute(
+        text(
+            "INSERT INTO operating_schedules "
+            "(business_id, day_of_week, open_time, close_time, is_active) "
+            "SELECT 1, day, '17:00', '18:00', true FROM generate_series(0, 6) AS day"
+        )
+    )
+    await session.commit()
+
+
 def _gw() -> AsyncMock:
     gw = AsyncMock()
     gw.complete.return_value = ModelResponse(text="ok")
@@ -240,3 +291,77 @@ async def test_vague_time_is_not_guessed(
     async with pg_session_factory() as verify:
         count = await verify.scalar(text("SELECT count(*) FROM appointments WHERE business_id = 1"))
         assert count == 0
+
+
+@pytest.mark.parametrize(
+    "bare_reply",
+    ["5:30", "ok 5:30", "5.30", "half past five", "5:30 in the evening"],
+)
+async def test_bare_evening_time_selects_the_pm_offer(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+    bare_reply: str,
+) -> None:
+    """BLOCKER regression: a bare "5:30" reply selects the 5:30 PM offered slot.
+
+    Evening clinic (17:00-18:00) offers 5:00 PM and 5:30 PM. The patient's
+    "5:30" parses as 05:30 with no meridiem; the offer-set disambiguation must
+    match it (mod 12) to the 5:30 PM slot and book TOMORROW 17:30 — not fail
+    selection, discard the offer, and then reject 05:30 as outside hours.
+    """
+    async with pg_session_factory() as setup:
+        await _seed_evening(setup)
+
+    gw = _gw()
+    # Turn 1: off-grid TOMORROW evening request -> offered 5:00/5:30 PM tomorrow.
+    async with pg_session_factory() as session:
+        await _process_domain(
+            _claimed(
+                1,
+                "I want to book a general consultation with Dr. Priya tomorrow "
+                "at 5:15 pm, reach me on +919123456789",
+            ),
+            session,
+            gw,
+        )
+        await session.commit()
+
+    conv_id = next(iter(_CONVERSATIONS.keys()))
+    ctx = _CONVERSATIONS[conv_id]
+    assert "_active_offer" in ctx.collected_facts, (
+        f"No evening offer. State: {ctx.state}, facts: {list(ctx.collected_facts)}"
+    )
+
+    # Turn 2: bare evening time (no am/pm).
+    async with pg_session_factory() as session:
+        await _process_domain(_claimed(2, bare_reply), session, gw)
+        await session.commit()
+
+    ctx = _CONVERSATIONS[conv_id]
+    assert ctx.proposal_id is not None, (
+        f"Bare evening reply {bare_reply!r} did not select. State: {ctx.state}"
+    )
+    assert ctx.collected_facts.get("_selected_token") is not None
+
+    async with pg_session_factory() as session:
+        await _process_domain(_claimed(3, "yes confirm"), session, gw)
+        await session.commit()
+
+    tomorrow = (datetime.now(KOLKATA) + timedelta(days=1)).date()
+    expected = datetime.combine(tomorrow, time(17, 30), tzinfo=KOLKATA).astimezone(UTC)
+
+    async with pg_session_factory() as verify:
+        row = (
+            await verify.execute(
+                text(
+                    "SELECT start_at FROM appointments "
+                    "WHERE business_id = 1 AND status = 'confirmed'"
+                )
+            )
+        ).one_or_none()
+        assert row is not None, "No confirmed appointment"
+        committed = row[0]
+        if committed.tzinfo is None:
+            committed = committed.replace(tzinfo=UTC)
+        assert committed == expected, (
+            f"Bare {bare_reply!r} booked {committed.astimezone(KOLKATA)}, expected TOMORROW 5:30 PM"
+        )

@@ -144,8 +144,7 @@ class ResolvedFacts:
             result["start_at"] = self.start_at
         # Carry partial date/time forward so a bare time (no date) or a bare
         # date (no time) is never silently completed. The conversation layer
-        # uses these to ask for the missing half or, on the offer path, to
-        # supply the active offer's date.
+        # uses these to ask precisely for the missing half.
         if self.resolved_date is not None:
             result["_pending_date"] = self.resolved_date.isoformat()
         if self.resolved_time is not None:
@@ -355,8 +354,8 @@ class FactResolver:
         # A datetime exists only when BOTH halves are real. The parser is not
         # allowed to invent a date (defaulting to today books the wrong day) or
         # a time. A partial parse leaves start_at None and surfaces the missing
-        # half through resolved_date / resolved_time so the caller can ask or,
-        # on the offer path, supply the offer's date.
+        # half through resolved_date / resolved_time so the caller can ask
+        # precisely for whichever half is missing.
         if resolved_date is None or resolved_time is None:
             return None
 

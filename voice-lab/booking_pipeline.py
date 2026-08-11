@@ -51,7 +51,7 @@ from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
 # Add fonely.voice from the runtime worktree (the gated code)
-_RUNTIME_SRC = str(Path(__file__).resolve().parents[1] / ".claude" / "worktrees" / "dev4-voice-runtime" / "backend" / "src")
+_RUNTIME_SRC = "/scratch/karthick/fonely/.claude/worktrees/dev4-voice-runtime/backend/src"
 if _RUNTIME_SRC not in sys.path:
     sys.path.insert(0, _RUNTIME_SRC)
 
@@ -87,7 +87,7 @@ class BookingStateInjector(FrameProcessor):
     def __init__(self, clock: TrustedClock):
         super().__init__()
         self._booking = BookingCollection()
-        self._clock = clock
+        self._trusted_clock = clock
         self._last_availability = None
         self.caller_confirmed = False
         self.booking_closed = False
@@ -117,7 +117,7 @@ class BookingStateInjector(FrameProcessor):
                 prev_assistant = content if isinstance(content, str) else ""
                 break
 
-        resolved_date = resolve_relative_date(user_text, self._clock)
+        resolved_date = resolve_relative_date(user_text, self._trusted_clock)
 
         self._booking.update(
             user_text,
@@ -136,11 +136,28 @@ class BookingStateInjector(FrameProcessor):
             if any(w in lower for w in ("no", "bye", "இல்ல", "போறேன்", "நன்றி", "thanks", "nothing")):
                 self.booking_closed = True
 
+        # Inject LIVE clinic context from PostgreSQL
+        try:
+            from db_backend import get_clinic_context as _get_ctx
+            ctx_text = await _get_ctx()
+            live_context = f"\n<live_clinic_context>\n{ctx_text}\n</live_clinic_context>\n"
+
+            # If no availability confirmed, ask the doctor
+            if "No confirmed availability" in ctx_text and "availability" in user_text.lower() or "slot" in user_text.lower() or "available" in user_text.lower() or "time" in user_text.lower() or "அவைலபிள" in user_text.lower() or "நேரம்" in user_text.lower():
+                from doctor_bridge import BRIDGE
+                await BRIDGE.ask_doctor(
+                    "Patient is asking about today's availability. What are your available slots today?",
+                    patient_context=user_text[:100],
+                )
+        except Exception as _e:
+            logger.warning(f"Failed to get DB context: {_e}")
+            live_context = ""
+
         state_block = self._booking.render()
         for i in range(len(messages) - 1, -1, -1):
             if isinstance(messages[i], dict) and messages[i].get("role") == "user":
                 original = messages[i].get("content", "")
-                messages[i] = {"role": "user", "content": f"{original}\n\n{state_block}"}
+                messages[i] = {"role": "user", "content": f"{original}\n\n{live_context}\n{state_block}"}
                 break
 
         new_context = LLMContext(
@@ -162,9 +179,11 @@ class BookingPostLLMGate(FrameProcessor):
     Imports contains_medical_advice from fonely.voice — not a copy.
     """
 
-    def __init__(self, state: BookingStateInjector):
+    def __init__(self, state: BookingStateInjector, *, book_fn=None):
         super().__init__()
         self._state = state
+        self._book_fn = book_fn
+        self._booking_done = False
         self._response_frames: list[Frame] | None = None
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
@@ -197,8 +216,34 @@ class BookingPostLLMGate(FrameProcessor):
             await self._emit("நன்றி, take care! Clinic-ல சந்திப்போம்.", direction)
             return
 
-        # Gate 3: caller confirmed → force closure, never repeat readback
-        if self._state.caller_confirmed:
+        # Gate 3: caller confirmed → book in DB, then closure
+        if self._state.caller_confirmed and not self._booking_done:
+            self._booking_done = True
+            confirm_text = "Booking note பண்ணிட்டேன். வேற ஏதாவது doubt இருக்கா?"
+            if self._book_fn:
+                try:
+                    bc = self._state.booking
+                    result = await self._book_fn(
+                        service_name=bc.reason or "scaling",
+                        target_date=bc.target_date,
+                        target_time=bc.selected_time,
+                        patient_name=bc.patient_name or "Unknown",
+                    )
+                    if result.get("success"):
+                        appt_id = result.get("appointment_id", "?")
+                        logger.info(f"Booking committed: appointment #{appt_id}")
+                        confirm_text = f"Appointment #{appt_id} confirm ஆயிடுச்சு. வேற ஏதாவது doubt இருக்கா?"
+                    else:
+                        err = result.get("error", "unknown")
+                        logger.warning(f"Booking failed: {err}")
+                        confirm_text = f"Booking try பண்ணேன், ஆனா {err}. Clinic-ல call பண்ணி confirm பண்ணுங்க."
+                except Exception as e:
+                    logger.error(f"Booking error: {e}")
+                    confirm_text = "Details note பண்ணிட்டேன். Clinic staff confirm பண்ணுவாங்க."
+            await self._emit(confirm_text, direction)
+            return
+
+        if self._state.caller_confirmed and self._booking_done:
             await self._emit(
                 "Booking note பண்ணிட்டேன். வேற ஏதாவது doubt இருக்கா?",
                 direction,
@@ -244,17 +289,9 @@ Medical safety:
 Current context:
 - Today is {today_display} ({day_of_week}).
 - Business timezone: Asia/Kolkata.
-
-Available slots for today:
-  Dr. Priya: 10:00, 11:00, 17:00, 18:30
-
-Available slots for tomorrow:
-  Dr. Priya: 10:00, 11:00, 17:00, 18:30
-
-Clinic facts:
-Dr. Priya: Mon-Sat, general, root canal, scaling.
-Hours: 10-1 and 5-8:30, Mon-Sat. Sunday closed.
-Consultation ₹300, scaling ₹800.
+- Clinic details, services, prices, and available slots are in the <live_clinic_context> block below.
+- ALWAYS use the LATEST clinic context for availability and pricing. The owner may update slots or prices mid-conversation.
+- If a slot was removed or the clinic is closed, inform the caller and offer alternatives.
 
 Booking flow — follow this exact order, one field per turn:
 1. Reason/service
@@ -284,6 +321,13 @@ async def run_booking_bot(transport: BaseTransport, runner_args: RunnerArguments
     cartesia_voice_id = os.environ.get("CARTESIA_VOICE_ID")
     if not all([sarvam_key, anthropic_key, cartesia_key, cartesia_voice_id]):
         raise RuntimeError("Missing voice provider credentials")
+
+    # Import the shared clinic context from the server
+    try:
+        from server_webrtc import CLINIC
+    except ImportError:
+        from clinic_context import ClinicContext
+        CLINIC = ClinicContext()
 
     now = datetime.now(ZoneInfo("Asia/Kolkata"))
     system_prompt = BOOKING_SYSTEM_PROMPT.format(
@@ -366,7 +410,23 @@ async def run_booking_bot(transport: BaseTransport, runner_args: RunnerArguments
         # Deterministic state machine — owns field order, readback, confirmation, closure
         clock = TrustedClock.from_now("Asia/Kolkata")
         state_injector = BookingStateInjector(clock)
-        post_llm_gate = BookingPostLLMGate(state_injector)
+
+        # Wire real booking to PostgreSQL via db_backend
+        async def real_book(service_name, target_date, target_time, patient_name):
+            try:
+                from db_backend import book_appointment
+                return await book_appointment(
+                    service_name=service_name,
+                    target_date=target_date,
+                    target_time=target_time,
+                    patient_name=patient_name,
+                    session_id=runner_args.session_id,
+                )
+            except Exception as e:
+                logger.error(f"real_book failed: {e}", exc_info=True)
+                return {"success": False, "error": str(e)}
+
+        post_llm_gate = BookingPostLLMGate(state_injector, book_fn=real_book)
 
         pipeline = Pipeline([
             transport.input(),

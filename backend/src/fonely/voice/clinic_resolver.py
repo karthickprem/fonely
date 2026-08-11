@@ -140,6 +140,62 @@ async def resolve_resource_for_service(
     return ResolvedResource(resource_id=r[0], name=r[1])
 
 
+async def day_availability(
+    session: AsyncSession, business_id: int, timezone: str, target_date: date
+):
+    """Structured DayAvailability from the DB — the shape the BookingCollection
+    state machine needs to VALIDATE a caller's chosen time against real slots.
+
+    Without this, the injector passes availability=None and the state machine
+    can never match "10 மணி" to an offered slot → selected_time stays None →
+    the booking never reaches confirmation. Returns local-time AvailableSlots
+    across all service→resource pairings for the day.
+    """
+    from fonely.services.availability import AvailabilityService
+    from .context import AvailableSlot, DayAvailability, SlotStatus
+
+    tz = ZoneInfo(timezone)
+    rows = await session.execute(
+        sql_text(
+            "SELECT e.service_id, e.resource_id, r.name "
+            "FROM service_resource_eligibility e "
+            "JOIN resources r ON r.id = e.resource_id "
+            "JOIN services s ON s.id = e.service_id "
+            "WHERE e.business_id = :bid AND r.is_active AND s.is_active"
+        ),
+        {"bid": business_id},
+    )
+    pairings = [(r[0], r[1], r[2]) for r in rows.fetchall()]
+
+    svc = AvailabilityService(session)
+    seen: set = set()
+    slots: list = []
+    for service_id, resource_id, resource_name in pairings:
+        for s in await svc.get_available_slots(
+            business_id=business_id, service_id=service_id,
+            resource_id=resource_id, target_date=target_date,
+        ):
+            local_start = s.start_at.astimezone(tz).time()
+            local_end = s.end_at.astimezone(tz).time()
+            key = (resource_id, local_start)
+            if key in seen:
+                continue
+            seen.add(key)
+            slots.append(AvailableSlot(
+                resource_id=resource_id, resource_name=resource_name,
+                start_time=local_start, end_time=local_end,
+                service_name="", status=SlotStatus.AVAILABLE,
+            ))
+
+    return DayAvailability(
+        business_date=target_date,
+        day_of_week=target_date.strftime("%A").lower(),
+        is_operating_day=len(slots) > 0,
+        is_exception_day=False,
+        available_slots=tuple(slots),
+    )
+
+
 async def available_slots_text(
     session: AsyncSession, business_id: int, timezone: str, target_date: date
 ) -> str:

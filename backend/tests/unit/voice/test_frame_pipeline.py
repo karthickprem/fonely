@@ -79,6 +79,20 @@ class TestConfirmationDetection:
         assert not _is_confirmation("no")
         assert not _is_confirmation("naalaikku")
 
+    def test_multi_word_pure_agreement(self):
+        # Regression: "ஆமா சரி" / "yes correct" are natural confirmations but
+        # exact-match missed them, so the booking never confirmed or committed.
+        assert _is_confirmation("ஆமா சரி")
+        assert _is_confirmation("yes correct")
+        assert _is_confirmation("ok sure")
+        assert _is_confirmation("சரி சரி")
+
+    def test_agreement_with_other_content_is_not_confirmation(self):
+        # "yes but change the time" contains a confirm word but carries other
+        # content — must NOT confirm, or a correction would book prematurely.
+        assert not _is_confirmation("yes but change the time to 6")
+        assert not _is_confirmation("ஆமா ஆனா நேரம் மாத்துங்க")
+
 
 class TestMedicalGate:
     @pytest.mark.asyncio

@@ -14,6 +14,7 @@ directly here.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Callable
 
@@ -49,7 +50,23 @@ _AVAILABILITY_WORDS = ("availability", "slot", "available", "time", "அவை�
 
 
 def _is_confirmation(text: str) -> bool:
-    return text.strip().casefold().rstrip(".!") in _CONFIRM_WORDS
+    """True when the caller's turn is PURE agreement — one or more confirm
+    words and nothing else ("ஆமா", "ஆமா சரி", "yes correct", "ok sure").
+
+    Deliberately NOT a substring match: "yes but change the time to 6" contains
+    "yes" but is not a confirmation — it carries other content, so it must fall
+    through to normal collection. Confirmation only when EVERY meaningful token
+    is a confirm word."""
+    cleaned = text.strip().casefold().rstrip(".!,")
+    if not cleaned:
+        return False
+    if cleaned in _CONFIRM_WORDS:
+        return True
+    # Split into word tokens; every one must be a confirm word.
+    tokens = [t for t in re.split(r"[\s,.!]+", cleaned) if t]
+    if not tokens:
+        return False
+    return all(t in _CONFIRM_WORDS for t in tokens)
 
 
 # Confirmation-question markers across all three languages. Gate 4 forces the
@@ -131,6 +148,15 @@ class BookingStateInjector(FrameProcessor):
 
         resolved_date = resolve_relative_date(user_text, self._resolver.clock)
 
+        # Fetch structured availability for the booking's date so the state
+        # machine can VALIDATE the caller's chosen time against real DB slots.
+        # Without this, availability is None, selected_time never gets set, and
+        # the booking can never reach confirmation. Use the resolved date if the
+        # caller just gave one, else the date already in the collection.
+        avail_date = resolved_date or self._booking.target_date
+        if avail_date is not None:
+            self._last_availability = await self._fetch_availability(avail_date)
+
         self._booking.update(
             user_text,
             resolved_date=resolved_date,
@@ -164,6 +190,23 @@ class BookingStateInjector(FrameProcessor):
             tool_choice=frame.context.tool_choice,
         )
         await self.push_frame(LLMContextFrame(context=new_context), direction)
+
+    async def _fetch_availability(self, target_date):
+        """Structured DayAvailability from the DB for the state machine to
+        validate the caller's chosen time. Failure degrades to None (the state
+        machine then can't confirm a time, which is safe — no false booking)."""
+        from . import clinic_resolver
+        try:
+            async with self._resolver.session_factory() as session:
+                biz = await clinic_resolver.resolve_business(
+                    session, self._resolver.business_id
+                )
+                return await clinic_resolver.day_availability(
+                    session, self._resolver.business_id, biz.timezone, target_date
+                )
+        except Exception as exc:
+            logger.warning("availability_fetch_failed: %s", type(exc).__name__)
+            return None
 
     async def _build_live_context(self, user_text: str) -> str:
         """Fetch real clinic context from the DB and, if the schedule is

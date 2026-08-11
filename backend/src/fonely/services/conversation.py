@@ -85,9 +85,19 @@ _REQUIRED_FACTS = ("service_id", "resource_id", "start_at", "customer_phone")
 # Bare meridiem answers to a "which one — AM or PM?" question, in English,
 # Tamil, and Tanglish. These let the patient resolve an ambiguity with the
 # word they actually say, so the question is never a dead-end loop.
-_PM_WORDS = (
-    "pm",
-    "p.m",
+#
+# Two tiers, because "am" is also the most common English verb and "I am not
+# sure" must NOT book a morning slot:
+# - _*_ANYWHERE words are unambiguous meaning-words; they resolve wherever they
+#   appear in the reply ("ok evening please").
+# - _*_STANDALONE forms (the two-letter am/pm and dotted a.m/p.m) resolve ONLY
+#   when they are effectively the entire answer, so a sentence containing "am"
+#   as a verb does not resolve. "pm" has no English homograph but is kept
+#   standalone-only for symmetry; "evening"/"morning" cover the sentence case.
+# "pagal"/"பகல்" is deliberately omitted: it means daytime broadly and a patient
+# can mean late morning by it, so mapping it to a half-of-day would be a guess
+# we then book — let the bound catch it instead.
+_PM_ANYWHERE = (
     "evening",
     "afternoon",
     "night",
@@ -95,35 +105,42 @@ _PM_WORDS = (
     "மாலை",
     "iravu",
     "இரவு",
-    "pagal",
-    "பகல்",
     "mathiyaanam",
     "மதியம்",
 )
-_AM_WORDS = (
-    "am",
-    "a.m",
+_AM_ANYWHERE = (
     "morning",
     "kaalai",
     "காலை",
     "forenoon",
 )
+_PM_STANDALONE = ("pm", "p.m", "p.m.")
+_AM_STANDALONE = ("am", "a.m", "a.m.")
 
 
 def _bare_meridiem_word(message: str) -> str | None:
     """Return 'pm'/'am' if the message names a meridiem/part-of-day, else None.
 
-    Word-boundary matched so 'am' inside 'name' does not fire. Used only to
-    resolve a pending two-slot ambiguity, where the offered set is authoritative
-    and the patient just needs to pick a half of the day.
+    Used only to resolve a pending two-slot ambiguity, where the offered set is
+    authoritative and the patient just needs to pick a half of the day. The
+    two-letter forms ('am'/'pm') resolve only as a standalone answer so that an
+    ordinary sentence like "I am not sure" never books a morning slot.
     """
     t = message.strip().lower()
 
-    def _has(words: tuple[str, ...]) -> bool:
+    def _has_anywhere(words: tuple[str, ...]) -> bool:
         return any(re.search(rf"(?<!\w){re.escape(w)}(?!\w)", t) for w in words)
 
-    pm = _has(_PM_WORDS)
-    am = _has(_AM_WORDS)
+    # Standalone = the meridiem token is the whole answer once trivial filler
+    # ("ok", punctuation) is stripped. "yes pm" counts; "I am not sure" does not.
+    stripped = re.sub(r"[^\w.]+", " ", t).strip()
+    tokens = [tok for tok in stripped.split() if tok not in ("ok", "okay", "yes", "yeah")]
+
+    def _is_standalone(forms: tuple[str, ...]) -> bool:
+        return len(tokens) == 1 and tokens[0] in forms
+
+    pm = _has_anywhere(_PM_ANYWHERE) or _is_standalone(_PM_STANDALONE)
+    am = _has_anywhere(_AM_ANYWHERE) or _is_standalone(_AM_STANDALONE)
     if pm and not am:
         return "pm"
     if am and not pm:
@@ -316,7 +333,10 @@ class ConversationService:
                 self._log_turn(turn, start_time)
                 return turn
             ctx.collected_facts["_ambiguity_asks"] = asked + 1
-            options = " or ".join(str(x) for x in ambiguous)
+            options = " or ".join(
+                str(x.get("display", x)) if isinstance(x, dict) else str(x)
+                for x in ambiguous
+            )
             turn = self._fact_turn(
                 ctx,
                 user_message,
@@ -500,21 +520,32 @@ class ConversationService:
                 # already have — keep the offer and ask WHICH ONE. Returning
                 # True consumes the turn without setting start_at, so the offer
                 # survives and the missing-fact question becomes "which one".
-                ctx.collected_facts["_selection_ambiguous"] = [s.display_time for s in candidates]
+                # Store the candidates' tokens (with display) so a later bare
+                # meridiem answer resolves against exactly THESE two slots, not
+                # some other slot in the offer that merely shares a meridiem.
+                ctx.collected_facts["_selection_ambiguous"] = [
+                    {"display": s.display_time, "token": s.token} for s in candidates
+                ]
                 return True
 
         # 1.5 Resolve a pending ambiguity by a bare meridiem word. When we asked
         # "5:30 AM or 5:30 PM?", the natural answer is just "pm" / "evening" /
-        # "மாலை" / "காலை" — not a full time or an English ordinal. Match against
-        # the offered slot whose own display_time carries that meridiem. This
-        # must be escapable in both languages, so the conversation never loops.
-        if matched_slot is None and ctx.collected_facts.get("_selection_ambiguous"):
+        # "மாலை" / "காலை" — not a full time or an English ordinal. Resolve ONLY
+        # among the two ambiguous candidates (by their stored tokens), never the
+        # whole offer, so we cannot book a third slot that merely shares the
+        # named meridiem. Escapable in both languages so it never loops.
+        pending_amb = ctx.collected_facts.get("_selection_ambiguous")
+        if matched_slot is None and isinstance(pending_amb, list):
             half = _bare_meridiem_word(message)
             if half is not None:
                 want = "pm" if half == "pm" else "am"
-                for slot in offer.slots:
-                    if want in slot.display_time.lower():
-                        matched_slot = slot
+                for entry in pending_amb:
+                    if not isinstance(entry, dict):
+                        continue
+                    display = str(entry.get("display", "")).lower()
+                    if want in display:
+                        tok = str(entry.get("token", ""))
+                        matched_slot = offer.find_by_token(tok)
                         break
 
         # 2. Word-boundary ordinal matching (only if no time match)

@@ -70,7 +70,24 @@ def test_ambiguous_bare_time_across_two_meridiems_asks() -> None:
     assert "_active_offer" in ctx.collected_facts  # offer survives
     ambiguous = ctx.collected_facts.get("_selection_ambiguous")
     assert isinstance(ambiguous, list) and len(ambiguous) == 2
-    assert set(ambiguous) == {"5:30 AM", "5:30 PM"}
+    # Candidates are stored as {display, token} so a later meridiem answer
+    # resolves against exactly these two slots (defect 3).
+    assert {e["display"] for e in ambiguous} == {"5:30 AM", "5:30 PM"}
+    assert all(e.get("token") for e in ambiguous)
+
+
+def test_three_slot_ambiguity_resolves_to_the_asked_candidate() -> None:
+    # Defect 3: a mixed-meridiem offer with THREE slots. The ambiguity is only
+    # between 6:00 AM and 6:00 PM; a bare "pm" answer must book 6:00 PM, never
+    # the earlier 5:30 PM that merely shares the meridiem.
+    ctx = _ctx_with_offer((6, 0), (17, 30), (18, 0))  # 6:00 AM, 5:30 PM, 6:00 PM
+    assert _svc()._try_offer_selection(ctx, "6 mani") is True  # ambiguous
+    amb = ctx.collected_facts["_selection_ambiguous"]
+    assert {e["display"] for e in amb} == {"6:00 AM", "6:00 PM"}
+    # "pm" resolves against the 6:00 PM candidate, not 5:30 PM.
+    assert _svc()._try_offer_selection(ctx, "pm") is True
+    booked = ctx.collected_facts["start_at"].astimezone(KOLKATA)
+    assert (booked.hour, booked.minute) == (18, 0), booked
 
 
 def test_ambiguity_marker_cleared_on_explicit_resolution() -> None:
@@ -127,3 +144,28 @@ class TestBareMeridiemWord:
         assert _bare_meridiem_word("hmm not sure") is None
         # Both present -> ambiguous within the reply -> None (do not guess).
         assert _bare_meridiem_word("morning or evening") is None
+
+    def test_bare_am_only_resolves_standalone(self) -> None:
+        # Defect 4: 'am' is also the English verb. It must resolve ONLY as a
+        # standalone answer, never from inside a sentence, so we never book a
+        # 5:30 AM slot for a patient who said "I am not sure".
+        from fonely.services.conversation import _bare_meridiem_word
+
+        assert _bare_meridiem_word("I am not sure") is None
+        assert _bare_meridiem_word("I am free then") is None
+        # Standalone (optionally with trivial filler) still resolves.
+        assert _bare_meridiem_word("am") == "am"
+        assert _bare_meridiem_word("ok am") == "am"
+        assert _bare_meridiem_word("yes pm") == "pm"
+        assert _bare_meridiem_word("a.m.") == "am"
+        # A meaning-word inside a sentence still resolves (it is unambiguous).
+        assert _bare_meridiem_word("I am ok with evening") == "pm"
+        assert _bare_meridiem_word("morning please") == "am"
+
+    def test_pagal_is_not_mapped(self) -> None:
+        # 'pagal'/'பகல்' means daytime broadly; mapping it to a half of the day
+        # would be a guess we then book. It is deliberately not resolved.
+        from fonely.services.conversation import _bare_meridiem_word
+
+        assert _bare_meridiem_word("pagal") is None
+        assert _bare_meridiem_word("பகல்") is None

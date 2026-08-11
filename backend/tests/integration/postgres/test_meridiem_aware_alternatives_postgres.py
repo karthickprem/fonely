@@ -669,3 +669,129 @@ async def test_ambiguity_question_is_bounded(
     )
     assert ctx.proposal_id is None
     assert "what time" in last_response.lower()
+
+
+async def _seed_am_and_pm_windows(session: AsyncSession) -> None:
+    """Clinic open 06:00-06:30 (AM slot 6:00) and 17:30-18:30 (PM slots 5:30,
+    6:00). A bare six is ambiguous between 6:00 AM and 6:00 PM, and 5:30 PM
+    merely shares the PM meridiem — the defect-3 trap."""
+    await session.execute(
+        text(
+            "INSERT INTO businesses "
+            "(id, name, category, primary_contact_phone, timezone, subscription, "
+            "appointment_slot_interval_minutes) "
+            "VALUES (1, 'Smile Dental Clinic', 'dental', '+919000000001', "
+            "'Asia/Kolkata', 'trial', 30)"
+        )
+    )
+    await session.execute(
+        text(
+            "INSERT INTO business_users (id, business_id, phone, role, is_active) "
+            "VALUES (1, 1, '+919000000001', 'owner', true)"
+        )
+    )
+    await session.execute(
+        text(
+            "INSERT INTO services "
+            "(id, business_id, name, duration_minutes, buffer_before_minutes, "
+            "buffer_after_minutes, price, is_active) "
+            "VALUES (1, 1, 'General Consultation', 30, 0, 0, 500.00, true)"
+        )
+    )
+    await session.execute(
+        text(
+            "INSERT INTO resources (id, business_id, name, resource_type, is_active) "
+            "VALUES (1, 1, 'Dr. Priya', 'staff', true)"
+        )
+    )
+    await session.execute(
+        text(
+            "INSERT INTO service_resource_eligibility "
+            "(business_id, service_id, resource_id, is_active) VALUES (1, 1, 1, true)"
+        )
+    )
+    await session.execute(
+        text(
+            "INSERT INTO operating_schedules "
+            "(business_id, day_of_week, open_time, close_time, is_active) "
+            "SELECT 1, day, '06:00', '06:30', true FROM generate_series(0, 6) AS day"
+        )
+    )
+    await session.execute(
+        text(
+            "INSERT INTO operating_schedules "
+            "(business_id, day_of_week, open_time, close_time, is_active) "
+            "SELECT 1, day, '17:30', '18:30', true FROM generate_series(0, 6) AS day"
+        )
+    )
+    await session.commit()
+
+
+async def test_three_slot_ambiguity_books_the_asked_pm_not_the_other(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """DEFECT 3 regression end-to-end: offered 6:00 AM / 5:30 PM / 6:00 PM,
+    asked "6:00 AM or 6:00 PM?", the patient's "pm" books 6:00 PM — never the
+    5:30 PM that merely shares the meridiem."""
+    async with pg_session_factory() as setup:
+        await _seed_am_and_pm_windows(setup)
+
+    gw = _gw()
+    # Off-grid 6:10 so neither reading is exact and the alternative set spans
+    # both windows (6:00 AM, plus 5:30 PM and 6:00 PM near 18:10).
+    async with pg_session_factory() as session:
+        await _process_domain(
+            _claimed(
+                1,
+                "book a general consultation with Dr. Priya tomorrow 6:10, "
+                "reach me on +919123456789",
+            ),
+            session,
+            gw,
+        )
+        await session.commit()
+
+    conv_id = next(iter(_CONVERSATIONS.keys()))
+    ctx = _CONVERSATIONS[conv_id]
+    offer = ctx.collected_facts.get("_active_offer")
+    assert isinstance(offer, dict)
+    displays = [s["display_time"] for s in offer["slots"]]
+    assert "6:00 AM" in displays and "6:00 PM" in displays, displays
+
+    # A bare six maps to 6:00 AM / 6:00 PM -> ambiguous between exactly those.
+    async with pg_session_factory() as session:
+        await _process_domain(_claimed(2, "6 o'clock"), session, gw)
+        await session.commit()
+    ctx = _CONVERSATIONS[conv_id]
+    amb = ctx.collected_facts.get("_selection_ambiguous")
+    assert amb, f"Expected ambiguity. State: {ctx.state}"
+    assert {e["display"] for e in amb} == {"6:00 AM", "6:00 PM"}
+
+    # "pm" must resolve to 6:00 PM, not the 5:30 PM that shares the meridiem.
+    async with pg_session_factory() as session:
+        await _process_domain(_claimed(3, "pm"), session, gw)
+        await session.commit()
+    ctx = _CONVERSATIONS[conv_id]
+    assert ctx.proposal_id is not None
+
+    async with pg_session_factory() as session:
+        await _process_domain(_claimed(4, "yes confirm"), session, gw)
+        await session.commit()
+
+    async with pg_session_factory() as verify:
+        row = (
+            await verify.execute(
+                text(
+                    "SELECT start_at FROM appointments "
+                    "WHERE business_id = 1 AND status = 'confirmed'"
+                )
+            )
+        ).one_or_none()
+        assert row is not None
+        committed = row[0]
+        if committed.tzinfo is None:
+            committed = committed.replace(tzinfo=UTC)
+        local = committed.astimezone(KOLKATA)
+        assert (local.hour, local.minute) == (18, 0), (
+            f"Booked {local.strftime('%-I:%M %p')}, expected 6:00 PM — defect 3 regressed."
+        )

@@ -2,9 +2,9 @@
 
 from collections.abc import Mapping
 from datetime import time
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import CursorResult, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -141,7 +141,10 @@ class OnboardingRepository:
             )
             .values(is_active=False)
         )
-        return int((await self._session.execute(statement)).rowcount or 0)
+        # execute() is typed Result[Any]; an UPDATE always yields a CursorResult,
+        # which is what carries rowcount.
+        result = cast(CursorResult[Any], await self._session.execute(statement))
+        return int(result.rowcount or 0)
 
     async def upsert_schedule(
         self,
@@ -205,7 +208,8 @@ class OnboardingRepository:
         statement = delete(ScheduleException).where(
             ScheduleException.business_id == business_id,
         )
-        return int((await self._session.execute(statement)).rowcount or 0)
+        result = cast(CursorResult[Any], await self._session.execute(statement))
+        return int(result.rowcount or 0)
 
     async def upsert_exception(
         self,

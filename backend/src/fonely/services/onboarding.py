@@ -1,5 +1,6 @@
 """Onboarding persistence service within a caller-owned session transaction."""
 
+import logging
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -23,6 +24,8 @@ from fonely.domain.onboarding.validation import validate_draft
 from fonely.models.enums import BusinessUserRole, OnboardingDraftStatus
 from fonely.models.schema import BusinessUser
 from fonely.repositories.onboarding import OnboardingRepository
+
+logger = logging.getLogger("fonely.services.onboarding")
 
 
 class OnboardingStaleVersionError(OnboardingError):
@@ -226,6 +229,23 @@ class OnboardingService:
 
         service_id_map: dict[str, int] = {}
         resource_id_map: dict[str, int] = {}
+
+        # A commit states the clinic's whole timetable, so retire the current
+        # one before restating it. Without this, activating a second draft
+        # re-inserts openings that already exist and the unique index rejects
+        # the whole commit -- an owner could never change their hours. Both
+        # calls run inside the caller's transaction, behind the schedule locks
+        # taken above, so availability never observes a clinic with no hours.
+        retired_schedules = await self._repo.deactivate_schedules(business_id)
+        removed_exceptions = await self._repo.delete_exceptions(business_id)
+        logger.info(
+            "activation_timetable_replaced",
+            extra={
+                "business_id": business_id,
+                "retired_schedules": retired_schedules,
+                "removed_exceptions": removed_exceptions,
+            },
+        )
 
         for svc in draft.services:
             price = None

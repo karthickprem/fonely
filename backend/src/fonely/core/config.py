@@ -18,11 +18,16 @@ class Settings(BaseSettings):
     sarvam_stt_model: str = "saaras:v3"
     sarvam_llm_model: str = "sarvam-105b"
 
+    # Cartesia — voice synthesis for the call path
+    cartesia_api_key: str = ""
+    cartesia_voice_id: str = ""
+
     # Exotel
     exotel_api_key: str = ""
     exotel_api_token: str = ""
     exotel_sid: str = ""
     exotel_phone_number: str = ""
+    exotel_trial_number: str = ""
     exotel_webhook_secret: str = ""
     exotel_number_mappings: str = ""
 
@@ -72,7 +77,18 @@ class Settings(BaseSettings):
     # Shutdown
     shutdown_timeout_seconds: float = 10.0
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    # The deployment .env is shared with processes that are not this app --
+    # it carries NODE_ENV and similar -- and pydantic-settings forbids unknown
+    # keys by default, so a key belonging to a neighbour used to abort startup
+    # with a validation error. Ignore what we do not declare. The tradeoff is
+    # that a misspelled Fonely key now falls back to its default silently
+    # instead of failing loudly, so settings that must not be defaulted are
+    # checked explicitly at startup rather than trusted to this loader.
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
 
 settings = Settings()

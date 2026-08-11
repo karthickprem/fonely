@@ -4,7 +4,7 @@ from collections.abc import Mapping
 from datetime import time
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -121,6 +121,28 @@ class OnboardingRepository:
         )
         return (await self._session.execute(statement)).scalar_one()
 
+    async def deactivate_schedules(self, business_id: int) -> int:
+        """Retire the tenant's whole timetable so activation can restate it.
+
+        Activation declares what the clinic's hours *are*, not what to add to
+        them, so a day the owner dropped — or a doctor no longer in the draft
+        — has to stop being open. Rows are deactivated rather than deleted:
+        availability already filters on `is_active`, ids survive, and the
+        previous timetable stays readable for anyone auditing what the clinic
+        used to do. The caller re-upserts every opening the draft still
+        declares, which flips those rows back to active in the same
+        transaction.
+        """
+        statement = (
+            update(OperatingSchedule)
+            .where(
+                OperatingSchedule.business_id == business_id,
+                OperatingSchedule.is_active.is_(True),
+            )
+            .values(is_active=False)
+        )
+        return int((await self._session.execute(statement)).rowcount or 0)
+
     async def upsert_schedule(
         self,
         business_id: int,
@@ -129,18 +151,61 @@ class OnboardingRepository:
         open_time: time,
         close_time: time,
     ) -> OperatingSchedule:
-        values: dict[str, Any] = {
-            "business_id": business_id,
-            "resource_id": resource_id,
-            "day_of_week": day_of_week,
-            "open_time": open_time,
-            "close_time": close_time,
-            "is_active": True,
-        }
-        schedule = OperatingSchedule(**values)
-        self._session.add(schedule)
-        await self._session.flush()
-        return schedule
+        """Declare one opening, replacing any existing one that starts then.
+
+        Business-level and resource-level openings live under two different
+        partial unique indexes, so the conflict target has to name the same
+        predicate PostgreSQL used to build the index.
+        """
+        index_where = (
+            OperatingSchedule.resource_id.is_(None)
+            if resource_id is None
+            else OperatingSchedule.resource_id.is_not(None)
+        )
+        index_elements = (
+            [
+                OperatingSchedule.business_id,
+                OperatingSchedule.day_of_week,
+                OperatingSchedule.open_time,
+            ]
+            if resource_id is None
+            else [
+                OperatingSchedule.business_id,
+                OperatingSchedule.resource_id,
+                OperatingSchedule.day_of_week,
+                OperatingSchedule.open_time,
+            ]
+        )
+        statement = (
+            pg_insert(OperatingSchedule)
+            .values(
+                business_id=business_id,
+                resource_id=resource_id,
+                day_of_week=day_of_week,
+                open_time=open_time,
+                close_time=close_time,
+                is_active=True,
+            )
+            .on_conflict_do_update(
+                index_elements=index_elements,
+                index_where=index_where,
+                set_={"close_time": close_time, "is_active": True},
+            )
+            .returning(OperatingSchedule)
+        )
+        return (await self._session.execute(statement)).scalar_one()
+
+    async def delete_exceptions(self, business_id: int) -> int:
+        """Drop the tenant's exceptions so a cancelled holiday really is gone.
+
+        Exceptions carry no `is_active` column, and a withdrawn closure has to
+        stop suppressing bookings, so these are removed outright rather than
+        retired. Nothing references them.
+        """
+        statement = delete(ScheduleException).where(
+            ScheduleException.business_id == business_id,
+        )
+        return int((await self._session.execute(statement)).rowcount or 0)
 
     async def upsert_exception(
         self,
@@ -152,15 +217,42 @@ class OnboardingRepository:
         close_time: time | None = None,
         reason: str | None = None,
     ) -> ScheduleException:
-        exc = ScheduleException(
-            business_id=business_id,
-            resource_id=resource_id,
-            exception_date=exception_date,
-            is_closed=is_closed,
-            open_time=open_time,
-            close_time=close_time,
-            reason=reason,
+        """Declare one dated exception, replacing any existing one that day."""
+        index_where = (
+            ScheduleException.resource_id.is_(None)
+            if resource_id is None
+            else ScheduleException.resource_id.is_not(None)
         )
-        self._session.add(exc)
-        await self._session.flush()
-        return exc
+        index_elements = (
+            [ScheduleException.business_id, ScheduleException.exception_date]
+            if resource_id is None
+            else [
+                ScheduleException.business_id,
+                ScheduleException.resource_id,
+                ScheduleException.exception_date,
+            ]
+        )
+        statement = (
+            pg_insert(ScheduleException)
+            .values(
+                business_id=business_id,
+                resource_id=resource_id,
+                exception_date=exception_date,
+                is_closed=is_closed,
+                open_time=open_time,
+                close_time=close_time,
+                reason=reason,
+            )
+            .on_conflict_do_update(
+                index_elements=index_elements,
+                index_where=index_where,
+                set_={
+                    "is_closed": is_closed,
+                    "open_time": open_time,
+                    "close_time": close_time,
+                    "reason": reason,
+                },
+            )
+            .returning(ScheduleException)
+        )
+        return (await self._session.execute(statement)).scalar_one()

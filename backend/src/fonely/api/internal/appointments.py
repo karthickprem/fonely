@@ -36,6 +36,7 @@ from fonely.domain.pending_actions.errors import (
 )
 from fonely.models.enums import CallerRole
 from fonely.services.appointments import AppointmentService
+from fonely.services.notifications import NotificationConfigurationError
 
 logger = logging.getLogger("fonely.api.internal.appointments")
 
@@ -254,6 +255,24 @@ async def confirm_proposal(
             business_timezone=result.appointment.business_timezone,
             notification_evidence=result.notification_evidence,
         )
+    except NotificationConfigurationError as exc:
+        # The clinic is booked-out-of-reach: we can commit the appointment but
+        # cannot tell anyone about it, so the commit is refused. That is the
+        # right call, but it is the operator's problem, not the patient's, and
+        # a bare 500 sends whoever is on call reading tracebacks. Name the
+        # cause and mark it 503 -- the request was well-formed and will
+        # succeed once the tenant's channel is configured.
+        await session.rollback()
+        logger.error(
+            "confirmation_blocked_by_configuration",
+            extra={
+                "correlation_id": correlation_id,
+                "operation": "confirm_proposal",
+                "business_id": actor.business_id,
+                "error_code": exc.code,
+            },
+        )
+        raise HTTPException(status_code=503, detail=exc.code) from exc
     except PendingActionNotFoundError as exc:
         await session.rollback()
         raise HTTPException(status_code=404, detail="Action not found") from exc

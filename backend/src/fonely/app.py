@@ -76,6 +76,14 @@ def create_app() -> FastAPI:
 
     apply_hardening(app)
 
+    # Each router group is gated on the credential it cannot work without.
+    # An unset credential used to mean the routes simply were not there, and
+    # callers got a 404 that looks exactly like a wrong URL -- an operator can
+    # spend an afternoon on that. Say at startup which groups are off and
+    # which setting turns them on, so a missing capability is visible rather
+    # than merely absent.
+    disabled: list[str] = []
+
     if settings.internal_api_secret:
         from fonely.api.internal.appointments import router as appointment_router
         from fonely.api.internal.conversations import router as conversation_router
@@ -84,11 +92,15 @@ def create_app() -> FastAPI:
         app.include_router(appointment_router)
         app.include_router(conversation_router)
         app.include_router(onboarding_router)
+    else:
+        disabled.append("internal API (booking, conversations, onboarding): INTERNAL_API_SECRET")
 
     if settings.whatsapp_verify_token:
         from fonely.api.channels.whatsapp import router as whatsapp_router
 
         app.include_router(whatsapp_router)
+    else:
+        disabled.append("WhatsApp channel: WHATSAPP_VERIFY_TOKEN")
 
     if settings.exotel_webhook_secret:
         from fonely.api.channels.exotel import router as exotel_router
@@ -96,6 +108,13 @@ def create_app() -> FastAPI:
 
         app.state.exotel_mapping = ExotelNumberMapping()
         app.include_router(exotel_router)
+    else:
+        disabled.append("Exotel voice channel: EXOTEL_WEBHOOK_SECRET")
+
+    if disabled:
+        logger.warning("router_groups_disabled", extra={"missing_settings": disabled})
+        for entry in disabled:
+            logger.warning("router_group_disabled: %s is not set", entry)
 
     @app.get("/metrics")
     async def metrics_endpoint(request: Request) -> Response:

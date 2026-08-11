@@ -277,6 +277,135 @@ class TestPendingActionProtection:
         assert remaining == 1
 
 
+async def _insert_call(
+    session: AsyncSession,
+    *,
+    started_offset_days: int,
+    ended: bool = True,
+    transcript: str | None = '[{"role": "user", "text": "pallu vali"}]',
+) -> int:
+    """A call row with a transcript, aged by started_offset_days."""
+    started = utcnow() - timedelta(days=started_offset_days)
+    result = await session.execute(
+        text(
+            "INSERT INTO calls "
+            "(business_id, caller_phone, outcome, transcript, started_at, ended_at) "
+            "VALUES (1, '+919123456789', 'booked', "
+            " CAST(:transcript AS jsonb), :started, :ended) "
+            "RETURNING id"
+        ),
+        {
+            "transcript": transcript,
+            "started": started,
+            "ended": started + timedelta(minutes=3) if ended else None,
+        },
+    )
+    call_id = result.scalar_one()
+    await session.flush()
+    return call_id
+
+
+async def _transcript_of(session: AsyncSession, call_id: int) -> object:
+    return await session.scalar(
+        text("SELECT transcript FROM calls WHERE id = :id"), {"id": call_id}
+    )
+
+
+class TestCallTranscriptRedaction:
+    """The transcript expires; the call row does not.
+
+    Every case here checks the row survived as well as what happened to the
+    transcript. A retention pass that quietly deleted `calls` rows would
+    destroy the clinic's own record of who rang them, and would still satisfy
+    an assertion that only looked at the transcript.
+    """
+
+    @pytest.mark.asyncio(loop_scope="session")
+    async def test_expired_transcript_is_redacted_and_row_survives(
+        self, pg_session: AsyncSession
+    ) -> None:
+        await _seed_business(pg_session)
+        old_id = await _insert_call(pg_session, started_offset_days=100)
+
+        result = await DataRetentionService(pg_session).run_cleanup()
+        assert result.call_transcripts_redacted == 1
+
+        row = (
+            await pg_session.execute(
+                text("SELECT caller_phone, outcome, transcript FROM calls WHERE id = :id"),
+                {"id": old_id},
+            )
+        ).one()
+        caller_phone, outcome, transcript = row
+
+        # The patient's words are gone...
+        assert "pallu vali" not in str(transcript)
+        assert transcript["redacted"] is True
+        assert transcript["policy"] == "call_transcripts"
+        assert transcript["redacted_at"]
+
+        # ...and the operational record is not.
+        assert outcome == "booked"
+        # caller_phone is deliberately untouched: phone retention is per
+        # clinic instruction, which nobody has configured yet. Redacting it
+        # here would be a policy decision taken by accident.
+        assert caller_phone == "+919123456789"
+
+    @pytest.mark.asyncio(loop_scope="session")
+    async def test_recent_transcript_is_untouched(self, pg_session: AsyncSession) -> None:
+        await _seed_business(pg_session)
+        recent_id = await _insert_call(pg_session, started_offset_days=10)
+
+        result = await DataRetentionService(pg_session).run_cleanup()
+        assert result.call_transcripts_redacted == 0
+        assert "pallu vali" in str(await _transcript_of(pg_session, recent_id))
+
+    @pytest.mark.asyncio(loop_scope="session")
+    async def test_call_that_never_ended_still_expires(self, pg_session: AsyncSession) -> None:
+        """The COALESCE case, and the reason it is not keyed on ended_at.
+
+        A dropped call never gets its completed callback, so ended_at stays
+        NULL forever. Keying retention on ended_at alone would exempt exactly
+        those transcripts permanently, and the exemption would be invisible --
+        the pass would report success every night while never touching them.
+        """
+        await _seed_business(pg_session)
+        stuck_id = await _insert_call(pg_session, started_offset_days=100, ended=False)
+
+        result = await DataRetentionService(pg_session).run_cleanup()
+        assert result.call_transcripts_redacted == 1
+
+        transcript = await _transcript_of(pg_session, stuck_id)
+        assert "pallu vali" not in str(transcript)
+        assert transcript["redacted"] is True  # type: ignore[index]
+
+    @pytest.mark.asyncio(loop_scope="session")
+    async def test_redaction_does_not_repeat(self, pg_session: AsyncSession) -> None:
+        """A second pass must find nothing, not re-redact and re-count.
+
+        Otherwise the nightly job reports the same rows as freshly purged
+        forever, and the count stops meaning anything.
+        """
+        await _seed_business(pg_session)
+        old_id = await _insert_call(pg_session, started_offset_days=100)
+
+        svc = DataRetentionService(pg_session)
+        assert (await svc.run_cleanup()).call_transcripts_redacted == 1
+        first = await _transcript_of(pg_session, old_id)
+
+        assert (await svc.run_cleanup()).call_transcripts_redacted == 0
+        assert await _transcript_of(pg_session, old_id) == first
+
+    @pytest.mark.asyncio(loop_scope="session")
+    async def test_call_without_transcript_is_not_counted(self, pg_session: AsyncSession) -> None:
+        """A call that never recorded anything is not a purge."""
+        await _seed_business(pg_session)
+        await _insert_call(pg_session, started_offset_days=100, transcript=None)
+
+        result = await DataRetentionService(pg_session).run_cleanup()
+        assert result.call_transcripts_redacted == 0
+
+
 class TestBatchSize:
     @pytest.mark.asyncio(loop_scope="session")
     async def test_batch_size_respected(self, pg_session: AsyncSession) -> None:

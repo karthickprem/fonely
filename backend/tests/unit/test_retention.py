@@ -53,6 +53,27 @@ class TestRetentionPolicies:
         for policy in get_retention_policies().values():
             assert policy.description
 
+    def test_default_call_transcript_retention(self) -> None:
+        policies = get_retention_policies()
+        assert policies["call_transcripts"].retention_days == 90
+
+    def test_env_override_call_transcripts(self) -> None:
+        with patch.dict(os.environ, {"RETENTION_CALL_TRANSCRIPTS_DAYS": "30"}):
+            policies = get_retention_policies()
+        assert policies["call_transcripts"].retention_days == 30
+
+    def test_call_transcripts_do_not_outlive_conversations(self) -> None:
+        """The same words reach us by voice and by WhatsApp.
+
+        If the voice copy were kept longer than the chat copy, the retention
+        promise would depend on which channel the patient happened to use,
+        which is not a promise.
+        """
+        policies = get_retention_policies()
+        assert (
+            policies["call_transcripts"].retention_days <= policies["conversations"].retention_days
+        )
+
     def test_turns_match_conversations(self) -> None:
         policies = get_retention_policies()
         assert (
@@ -115,6 +136,7 @@ class TestRetentionResult:
             turns_deleted=12,
             notifications_deleted=3,
             pending_actions_deleted=1,
+            call_transcripts_redacted=7,
             execution_time_ms=45.6,
         )
         d = result.to_dict()
@@ -122,4 +144,5 @@ class TestRetentionResult:
         assert d["turns_deleted"] == 12
         assert d["notifications_deleted"] == 3
         assert d["pending_actions_deleted"] == 1
+        assert d["call_transcripts_redacted"] == 7
         assert d["execution_time_ms"] == 45.6

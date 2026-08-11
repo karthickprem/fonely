@@ -26,6 +26,7 @@ class RetentionResult:
     notifications_deleted: int = 0
     pending_actions_deleted: int = 0
     inbound_events_deleted: int = 0
+    call_transcripts_redacted: int = 0
     execution_time_ms: float = 0.0
 
     def to_dict(self) -> dict[str, object]:
@@ -35,6 +36,7 @@ class RetentionResult:
             "notifications_deleted": self.notifications_deleted,
             "pending_actions_deleted": self.pending_actions_deleted,
             "inbound_events_deleted": self.inbound_events_deleted,
+            "call_transcripts_redacted": self.call_transcripts_redacted,
             "execution_time_ms": round(self.execution_time_ms, 1),
         }
 
@@ -72,6 +74,9 @@ class DataRetentionService:
         result.inbound_events_deleted = await self._cleanup_inbound_events(
             inbound_completed_cutoff, inbound_dead_cutoff
         )
+
+        transcript_cutoff = now - timedelta(days=policies["call_transcripts"].retention_days)
+        result.call_transcripts_redacted = await self._redact_call_transcripts(transcript_cutoff)
 
         result.execution_time_ms = (time.monotonic() - start) * 1000
         return result
@@ -241,3 +246,51 @@ class DataRetentionService:
                 extra={"completed": completed_count, "dead_letter": dead_count},
             )
         return total
+
+    async def _redact_call_transcripts(self, before: datetime) -> int:
+        """Strip the spoken transcript from expired calls, keeping the call row.
+
+        An UPDATE and not a DELETE, unlike everything else here. The call row
+        is operational evidence -- duration, outcome, which clinic -- and none
+        of it is anything the patient said. The transcript is the part that is
+        their words, so it is the part that expires.
+
+        Two details that would each be a quiet hole:
+
+        `COALESCE(ended_at, started_at)`, not `ended_at`. A call whose
+        completed callback never arrived (carrier drop, our own crash) keeps
+        ended_at NULL forever, and keying on ended_at alone would exempt
+        exactly those rows from retention permanently -- the failure mode
+        where a missing record reads as nothing to do.
+
+        The transcript is replaced with a redaction marker rather than SQL
+        NULL. NULL is indistinguishable from a call that never produced a
+        transcript at all, so there would be no way to answer "was this
+        purged?" with anything but a shrug. The marker carries no patient
+        content and needs no migration -- it lives in the existing JSONB
+        column, which matters while 0016 and 0017 are reserved.
+        """
+        result = await self._session.execute(
+            text(
+                "UPDATE calls SET transcript = jsonb_build_object("
+                "  'redacted', true,"
+                "  'redacted_at', NOW(),"
+                "  'policy', 'call_transcripts'"
+                ") "
+                "WHERE transcript IS NOT NULL "
+                "AND (transcript->>'redacted') IS NULL "
+                "AND COALESCE(ended_at, started_at) < :before "
+                "AND ctid = ANY(ARRAY("
+                "  SELECT c.ctid FROM calls c "
+                "  WHERE c.transcript IS NOT NULL "
+                "  AND (c.transcript->>'redacted') IS NULL "
+                "  AND COALESCE(c.ended_at, c.started_at) < :before "
+                "  LIMIT :limit"
+                "))"
+            ),
+            {"before": before, "limit": _BATCH_SIZE},
+        )
+        count = result.rowcount or 0  # type: ignore[attr-defined]
+        if count > 0:
+            logger.info("retention_call_transcripts_redacted", extra={"count": count})
+        return count

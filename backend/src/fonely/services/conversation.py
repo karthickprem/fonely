@@ -459,14 +459,10 @@ class ConversationService:
         pending_date_raw = ctx.collected_facts.get("_pending_date")
         pending_time_raw = ctx.collected_facts.get("_pending_time")
         held_date = (
-            _date.fromisoformat(pending_date_raw)
-            if isinstance(pending_date_raw, str)
-            else None
+            _date.fromisoformat(pending_date_raw) if isinstance(pending_date_raw, str) else None
         )
         held_time = (
-            dt_time.fromisoformat(pending_time_raw)
-            if isinstance(pending_time_raw, str)
-            else None
+            dt_time.fromisoformat(pending_time_raw) if isinstance(pending_time_raw, str) else None
         )
 
         eff_date = said_date or held_date
@@ -493,13 +489,30 @@ class ConversationService:
             if eff_time is not None:
                 ctx.collected_facts["_pending_time"] = eff_time.isoformat()
 
+    def _refine_datetime_gap(self, ctx: ConversationContext, missing: list[str]) -> list[str]:
+        # When start_at is missing but one half was understood, name the half
+        # still needed so the question is precise and we never re-ask for what
+        # the patient already gave. A held time -> ask the date; a held date ->
+        # ask the time.
+        if "start_at" not in missing:
+            return missing
+        has_time = "_pending_time" in ctx.collected_facts
+        has_date = "_pending_date" in ctx.collected_facts
+        if has_time and not has_date:
+            return ["appointment date" if f == "start_at" else f for f in missing]
+        if has_date and not has_time:
+            return ["appointment time" if f == "start_at" else f for f in missing]
+        return missing
+
     def _identify_missing_facts(self, ctx: ConversationContext) -> list[str]:
         operation = ctx.collected_facts.get("_operation", "book")
         if operation == "cancel":
             return []
         if operation == "reschedule":
-            return [f for f in ("start_at",) if f not in ctx.collected_facts]
-        return [f for f in _REQUIRED_FACTS if f not in ctx.collected_facts]
+            base = [f for f in ("start_at",) if f not in ctx.collected_facts]
+            return self._refine_datetime_gap(ctx, base)
+        base = [f for f in _REQUIRED_FACTS if f not in ctx.collected_facts]
+        return self._refine_datetime_gap(ctx, base)
 
     async def _handle_cancel_intent(
         self,

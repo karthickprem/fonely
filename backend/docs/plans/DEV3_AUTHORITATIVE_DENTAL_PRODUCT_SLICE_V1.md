@@ -793,6 +793,42 @@ Three-part checklist frozen by the reviewer. Status:
   (then rebase) or a new targeted on_conflict_do_update schedule write — flagged
   to the reviewer rather than silently scoped out.
 
+### ITEM #19 — REJECT #1 FIX (candidate 936bdee, 2026-08-12)
+
+BLOCKING regression the reviewer found at bb50461: token-overlap scoring in the
+new matcher silently booked the wrong doctor when a time/service word collided
+with a stored name. "aaru mani" (Tanglish 6 o'clock) booked "Dr. Mani";
+"General Consultation" booked "Dr. General" — class-1 silent wrong-doctor. A
+regression: the old substring matcher ("dr. mani" not a substring of "aaru
+mani") did not mis-book here; token-overlap removed the floor under
+over-matching.
+
+FIX — distinguish a token APPEARING from a token used to NAME someone
+(_naming_tokens): a stored-name token counts only when adjacent to a title
+("dr priya") or to another name token ("priya rao", "kumar arun"). A lone name
+token among non-name words ("aaru MANI kaalai") is vocabulary and is ignored.
+This closes the collision WHILE preserving cross-token ambiguity — the reviewer
+warned the same permissiveness produces both, so the fix is not "tighten until
+Mani disappears". Also: _names_a_resource now keys on _NAMING_TITLES
+(dr/doctor/dho/vaidhyar) only, so "miss"/"mr"/"ms" as ordinary words no longer
+false-fire the unknown-doctor re-ask.
+
+PERMANENT REGRESSION GUARDS (per reviewer): the harness roster now permanently
+includes Dr. Mani (time-word collision) and Dr. General (service-word
+collision) — a roster of well-behaved names cannot surface this class, which is
+why 16/16 was green over the live defect. New I6 invariant + forbid_resource_id:
+a forbidden resource_id must NEVER be committed, read off the appointments ROW,
+checked unconditionally. New cases: timeword-collision-mani,
+serviceword-collision-general, title-only, cross-token-ambiguous, no-mention;
+the existing "mani" time cases carry forbid_resource_id=4.
+
+BEFORE/AFTER PROOF: reverting the matcher to bare-overlap FAILS exactly the
+collision cases (serviceword-collision-general: "I6 violated: booked
+resource_id 5"; the mani time cases go ambiguous); the fix passes all. Corpus
+21/21 (private DB); non-PG 1259; ruff + mypy(src) clean. Candidate 936bdee
+(tag d3-item19-936bdee). Same TEXT/MOCK-only evidence boundary as before — no
+audio. Standard terms: no rebase, nothing to main, exact-SHA authorization only.
+
 ### ITEM #19 — SPOKEN RESOURCE-NAME NORMALIZATION (candidate 2026-08-12)
 
 D3-M4 ACCEPTED at exact 4bc395f (reviewer reproduced in isolated worktree +

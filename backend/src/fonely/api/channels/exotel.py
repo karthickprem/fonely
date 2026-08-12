@@ -27,6 +27,7 @@ Before go-live the carrier the account actually sends must be confirmed
 against the Exotel console rather than assumed from this list.
 """
 
+import asyncio
 import base64
 import binascii
 import hmac
@@ -45,7 +46,11 @@ from sqlalchemy import text
 from starlette.status import WS_1008_POLICY_VIOLATION, WS_1011_INTERNAL_ERROR
 
 from fonely.core.config import settings
-from fonely.services.exotel_config import ExotelNumberMapping
+from fonely.repositories.channel_identities import (
+    PROVIDER_EXOTEL,
+    ChannelIdentityRepository,
+)
+from fonely.services.audio_admission import AdmissionResult, admit_audio_stream
 
 logger = logging.getLogger("fonely.api.channels.exotel")
 
@@ -53,12 +58,17 @@ router = APIRouter(prefix="/webhooks/exotel", tags=["exotel"])
 
 _AUTH_QUERY_PARAM = "token"
 
+# Query-string spellings for the provider call id, in preference order. When
+# the console can template it into the media-stream URL we can refuse before
+# completing the handshake, which is strictly better than refusing after.
+_CALL_SID_QUERY_PARAMS = ("CallSid", "call_sid", "callsid")
 
-def _get_mapping(app: object) -> ExotelNumberMapping:
-    mapping = getattr(getattr(app, "state", None), "exotel_mapping", None)
-    if mapping is None:
-        mapping = ExotelNumberMapping()
-    return mapping
+# How long to wait for a socket to identify itself, and how many frames to
+# read while waiting. Exotel sends a "connected" event before "start", so one
+# frame is not enough; an unbounded read would let an authenticated-but-idle
+# socket hold a worker indefinitely.
+_OPENING_FRAME_TIMEOUT_SEC = 5.0
+_MAX_OPENING_FRAMES = 5
 
 
 def _matches(presented: str, expected: str) -> bool:
@@ -180,27 +190,56 @@ async def call_status_webhook(request: Request) -> Response:
     if not call_sid or not status:
         return Response(status_code=400, content="missing CallSid or Status")
 
-    mapping = _get_mapping(request.app)
-    business_id = mapping.get_business_id(exotel_number)
-    if business_id is None:
-        logger.warning(
-            "exotel_unknown_number",
-            extra={"exotel_number": exotel_number, "call_sid": call_sid},
-        )
-        return Response(status_code=404, content="unknown number")
-
     factory = request.app.state.session_factory
     async with factory() as session:
+        # Which clinic this number reaches is a database fact as of migration
+        # 0017. It used to be EXOTEL_NUMBER_MAPPINGS, which meant attaching a
+        # clinic's signboard number required a redeploy and a JSON typo turned
+        # every inbound call into "unknown number".
+        business_id = await ChannelIdentityRepository(session).resolve_business_id(
+            PROVIDER_EXOTEL, exotel_number
+        )
+        if business_id is None:
+            logger.warning(
+                "exotel_unknown_number",
+                extra={"exotel_number": exotel_number, "call_sid": call_sid},
+            )
+            return Response(status_code=404, content="unknown number")
+
         if status == "ringing":
+            # This is the observation the audio stream is later admitted
+            # against, so it must survive provider retries without producing a
+            # second call row. DO NOTHING plus the re-select makes a duplicate
+            # delivery return the original call id rather than a new one.
             result = await session.execute(
                 text(
-                    "INSERT INTO calls (business_id, caller_phone, started_at) "
-                    "VALUES (:bid, :phone, NOW()) "
+                    "INSERT INTO calls "
+                    "(business_id, caller_phone, call_provider, "
+                    " provider_call_sid, started_at) "
+                    "VALUES (:bid, :phone, :provider, :sid, NOW()) "
+                    "ON CONFLICT (call_provider, provider_call_sid) "
+                    "  WHERE provider_call_sid IS NOT NULL DO NOTHING "
                     "RETURNING id"
                 ),
-                {"bid": business_id, "phone": caller_phone},
+                {
+                    "bid": business_id,
+                    "phone": caller_phone,
+                    "provider": PROVIDER_EXOTEL,
+                    "sid": call_sid,
+                },
             )
-            call_id = result.scalar_one()
+            call_id = result.scalar_one_or_none()
+            duplicate = call_id is None
+            if duplicate:
+                existing = await session.execute(
+                    text(
+                        "SELECT id FROM calls "
+                        "WHERE call_provider = :provider "
+                        "  AND provider_call_sid = :sid"
+                    ),
+                    {"provider": PROVIDER_EXOTEL, "sid": call_sid},
+                )
+                call_id = existing.scalar_one_or_none()
             await session.commit()
             logger.info(
                 "exotel_call_ringing",
@@ -208,31 +247,40 @@ async def call_status_webhook(request: Request) -> Response:
                     "business_id": business_id,
                     "call_sid": call_sid,
                     "call_id": call_id,
+                    "duplicate": duplicate,
                 },
             )
 
         elif status == "completed":
             duration = body.get("Duration")
-            await session.execute(
+            # Correlate on the provider's own call id. The previous version
+            # closed "the newest open call from this phone number", which ends
+            # the wrong leg when a patient redials while the first is still
+            # open. ended_at IS NULL keeps a retried completion from
+            # overwriting the original end time and duration.
+            result = await session.execute(
                 text(
                     "UPDATE calls SET ended_at = NOW(), duration_sec = :dur "
-                    "WHERE id = ("
-                    "  SELECT id FROM calls "
-                    "  WHERE business_id = :bid AND caller_phone = :phone "
-                    "  AND ended_at IS NULL "
-                    "  ORDER BY started_at DESC LIMIT 1"
-                    ")"
+                    "WHERE business_id = :bid "
+                    "  AND call_provider = :provider "
+                    "  AND provider_call_sid = :sid "
+                    "  AND ended_at IS NULL"
                 ),
                 {
                     "bid": business_id,
-                    "phone": caller_phone,
+                    "provider": PROVIDER_EXOTEL,
+                    "sid": call_sid,
                     "dur": int(duration) if duration else None,
                 },
             )
             await session.commit()
             logger.info(
                 "exotel_call_completed",
-                extra={"business_id": business_id, "call_sid": call_sid},
+                extra={
+                    "business_id": business_id,
+                    "call_sid": call_sid,
+                    "rows_closed": result.rowcount,
+                },
             )
 
         elif status in ("answered", "failed"):
@@ -248,19 +296,100 @@ async def call_status_webhook(request: Request) -> Response:
     return Response(status_code=200, content="ok")
 
 
+def _call_sid_from_query(websocket: WebSocket) -> str:
+    for name in _CALL_SID_QUERY_PARAMS:
+        value = websocket.query_params.get(name, "")
+        if value:
+            return str(value)
+    return ""
+
+
+def _call_sid_from_frame(raw: str | bytes) -> str:
+    """Pull a call id out of one media-stream control frame, or return "".
+
+    Exotel's frames are JSON and the call id has been observed at the top
+    level and nested under `start`, with more than one spelling. Rather than
+    hard-code one shape and discover the others during a live call, every
+    known spelling is checked at both levels. Anything unparseable yields ""
+    and the caller keeps reading until its frame budget runs out.
+    """
+    try:
+        payload = json.loads(raw)
+    except (ValueError, UnicodeDecodeError):
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+
+    containers: list[dict[str, Any]] = [payload]
+    nested = payload.get("start")
+    if isinstance(nested, dict):
+        containers.append(nested)
+
+    for container in containers:
+        for name in _CALL_SID_QUERY_PARAMS:
+            value = container.get(name)
+            if isinstance(value, str) and value:
+                return value
+    return ""
+
+
+async def _call_sid_from_opening_frames(websocket: WebSocket) -> str:
+    """Read the first few control frames looking for the provider call id.
+
+    Bounded in both time and frames: a socket that holds the shared secret but
+    never identifies itself must not be able to pin a worker open.
+    """
+    for _ in range(_MAX_OPENING_FRAMES):
+        try:
+            message = await asyncio.wait_for(
+                websocket.receive(), timeout=_OPENING_FRAME_TIMEOUT_SEC
+            )
+        except TimeoutError:
+            logger.warning("exotel_audio_stream_identify_timeout")
+            return ""
+        if message.get("type") == "websocket.disconnect":
+            return ""
+        raw = message.get("text") or message.get("bytes")
+        if not raw:
+            continue
+        call_sid = _call_sid_from_frame(raw)
+        if call_sid:
+            return call_sid
+    logger.warning("exotel_audio_stream_identify_exhausted")
+    return ""
+
+
+async def _admit(websocket: WebSocket, call_sid: str) -> AdmissionResult:
+    factory = websocket.app.state.session_factory
+    async with factory() as session:
+        return await admit_audio_stream(
+            session, provider=PROVIDER_EXOTEL, provider_call_sid=call_sid
+        )
+
+
 @router.websocket("/audio-stream")
 async def audio_stream(websocket: WebSocket) -> None:
-    """Accept Exotel audio stream WebSocket.
+    """Admit an Exotel audio stream, bound to the tenant that was dialed.
 
-    For now: authenticate, accept, log, and drain. Actual audio processing
-    will be wired to the Pipecat pipeline by Dev4, behind this same guard --
-    the seam the voice runtime mounts on is the authenticated one, never the
-    bare socket.
+    Two gates, in this order:
 
-    The credential is checked before accept() rather than after. Accepting
-    first and closing on failure would complete the handshake, which both
-    tells an unauthenticated caller the endpoint is real and gives them a
-    connected socket for however long the close takes.
+    1. The shared secret, checked before accept(). Accepting first and closing
+       on failure would complete the handshake, which both tells an
+       unauthenticated caller the endpoint is real and hands them a connected
+       socket for however long the close takes.
+
+    2. Tenant admission, which resolves the clinic from a calls row our own
+       ringing webhook wrote. The secret proves the connection came from the
+       provider; it says nothing about which clinic the patient dialed, and
+       trusting the socket's own claim would let one leaked applet URL reach
+       every clinic in the system. See services/audio_admission.py.
+
+    Where the call id comes from decides whether gate 2 can run before the
+    handshake. If the console can template it into the media-stream URL we
+    refuse without ever accepting; otherwise we accept and read it from the
+    opening frames, which is the weaker form and is why the URL form is the
+    documented configuration. Either way no audio is processed and no tenant
+    context exists until admission succeeds.
     """
     if not settings.exotel_webhook_secret:
         logger.error("exotel_webhook_secret_not_configured")
@@ -275,10 +404,62 @@ async def audio_stream(websocket: WebSocket) -> None:
         await websocket.close(code=WS_1008_POLICY_VIOLATION)
         return
 
-    await websocket.accept()
-    logger.info("exotel_audio_stream_connected")
+    call_sid = _call_sid_from_query(websocket)
+    identified_before_handshake = bool(call_sid)
+
+    if identified_before_handshake:
+        admission = await _admit(websocket, call_sid)
+        if not admission.admitted:
+            logger.warning(
+                "exotel_audio_stream_refused",
+                extra={
+                    "reason": admission.refusal.value if admission.refusal else "",
+                    "before_accept": True,
+                },
+            )
+            await websocket.close(code=WS_1008_POLICY_VIOLATION)
+            return
+        await websocket.accept()
+    else:
+        await websocket.accept()
+        call_sid = await _call_sid_from_opening_frames(websocket)
+        admission = await _admit(websocket, call_sid)
+        if not admission.admitted:
+            logger.warning(
+                "exotel_audio_stream_refused",
+                extra={
+                    "reason": admission.refusal.value if admission.refusal else "",
+                    "before_accept": False,
+                },
+            )
+            await websocket.close(code=WS_1008_POLICY_VIOLATION)
+            return
+
+    session = admission.session
+    assert session is not None  # admitted is exactly "session is not None"
+    logger.info(
+        "exotel_audio_stream_connected",
+        extra={
+            "business_id": session.business_id,
+            "call_id": session.call_id,
+            "identified_before_handshake": identified_before_handshake,
+        },
+    )
+
+    # The voice runtime is mounted by the application, not imported here, so
+    # the telephony adapter stays free of pipeline dependencies and the
+    # runtime is exercised against a typed AudioSession rather than a raw
+    # socket. With nothing mounted the stream is drained, which keeps the
+    # provider happy without pretending a conversation happened.
+    runtime = getattr(websocket.app.state, "voice_audio_runtime", None)
+    if runtime is None:
+        logger.info("exotel_audio_stream_no_runtime", extra={"call_id": session.call_id})
+
     try:
-        while True:
-            await websocket.receive_bytes()
+        if runtime is not None:
+            await runtime.handle_audio_session(websocket, session)
+        else:
+            while True:
+                await websocket.receive_bytes()
     except WebSocketDisconnect:
-        logger.info("exotel_audio_stream_disconnected")
+        logger.info("exotel_audio_stream_disconnected", extra={"call_id": session.call_id})

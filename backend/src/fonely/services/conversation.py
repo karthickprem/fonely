@@ -182,7 +182,9 @@ def _bare_meridiem_word(message: str) -> str | None:
 # English and Tanglish. Spoken speech omits punctuation and reorders these, so
 # "dr priya", "priya doctor", "doctor priya." must all match stored "Dr. Priya".
 # Titles are stripped from BOTH the spoken text and the stored name before
-# comparison, so matching is on the distinctive name tokens only.
+# comparison, so matching is on the distinctive name tokens only, and a title
+# ADJACENT to a name token is the primary evidence the token was used to NAME a
+# doctor (see _match_spoken_resources).
 _RESOURCE_TITLES = frozenset(
     {
         "dr",
@@ -201,6 +203,18 @@ _RESOURCE_TITLES = frozenset(
     }
 )
 
+# The subset of titles that UNAMBIGUOUSLY signal a doctor is being named. Used
+# by _names_a_resource to decide the unknown-doctor re-ask. "mr"/"ms"/"mrs"/
+# "miss" are excluded because they double as ordinary words ("i don't want to
+# MISS my slot") and would trip the refusal on sentences that name no doctor.
+# They remain in _RESOURCE_TITLES for stripping and title-adjacency, so "ms
+# priya" still matches — they just do not, alone, assert a doctor was named.
+_NAMING_TITLES = frozenset({"dr", "dr.", "doctor", "dho", "vaidhyar", "vaidyar"})
+
+
+def _tokenize(text: str) -> list[str]:
+    return re.sub(r"[^\w\s]+", " ", text.lower()).split()
+
 
 def _resource_name_tokens(text: str) -> frozenset[str]:
     """Distinctive lowercase name tokens, with titles and punctuation removed.
@@ -211,47 +225,81 @@ def _resource_name_tokens(text: str) -> frozenset[str]:
     remains, so a bare "doctor" never matches a specific resource — that is an
     unnamed resource and must fail closed upstream, not silently pick one.
     """
-    cleaned = re.sub(r"[^\w\s]+", " ", text.lower())
-    tokens = cleaned.split()
-    return frozenset(tok for tok in tokens if tok and tok not in _RESOURCE_TITLES)
+    return frozenset(tok for tok in _tokenize(text) if tok not in _RESOURCE_TITLES)
 
 
 def _names_a_resource(message: str) -> bool:
-    """True if the message uses a doctor title/honorific ("dr", "doctor", ...).
+    """True if the message uses an unambiguous doctor title ("dr", "doctor", …).
 
     Signals the patient was NAMING a doctor, so a zero-match result is an
     UNKNOWN doctor (fail closed + re-ask) rather than simply no doctor mentioned
-    yet (ask normally). Keyed on the title word so a bare first name that happens
-    to match nothing does not spuriously trip the unknown-doctor path.
+    yet (ask normally). Uses _NAMING_TITLES only, so ordinary words that happen
+    to be honorifics ("miss", "mr") do not spuriously trip the unknown path.
     """
-    tokens = re.sub(r"[^\w\s]+", " ", message.lower()).split()
-    return any(tok in _RESOURCE_TITLES for tok in tokens)
+    return any(tok in _NAMING_TITLES for tok in _tokenize(message))
+
+
+def _naming_tokens(message: str, all_name_tokens: frozenset[str]) -> set[str]:
+    """Message tokens that were plausibly used TO NAME a doctor, not merely to
+    appear.
+
+    The core safety distinction (D3 item #19 rejection): a bare name token that
+    is also ordinary vocabulary — "mani" is Tanglish for o'clock AND a common
+    Tamil name — must NOT count as naming a doctor, or "aaru mani" (6 o'clock)
+    silently books "Dr. Mani". A stored-name token in the message counts as
+    naming only when it carries positional evidence of being a name:
+      - it is adjacent to a title ("dr priya", "priya doctor"), or
+      - it is adjacent to another stored-name token ("priya rao", "kumar arun").
+    A lone name token surrounded by non-name words ("aaru MANI kaalai") is just
+    vocabulary and is ignored. This keeps cross-token ambiguity working while
+    closing the time-word / service-word collision hole.
+    """
+    toks = _tokenize(message)
+    n = len(toks)
+    named: set[str] = set()
+    for i, tok in enumerate(toks):
+        if tok not in all_name_tokens:
+            continue
+        neighbors = []
+        if i > 0:
+            neighbors.append(toks[i - 1])
+        if i < n - 1:
+            neighbors.append(toks[i + 1])
+        if any(nb in _RESOURCE_TITLES for nb in neighbors) or any(
+            nb in all_name_tokens for nb in neighbors
+        ):
+            named.add(tok)
+    return named
 
 
 def _match_spoken_resources(message: str, resources: "list[ResourceInfo]") -> "list[ResourceInfo]":
-    """Return the best-matching active resources named in `message`.
+    """Return the active resources the message NAMES, top-scored.
 
-    Each resource is scored by how many of its distinctive stored-name tokens
-    the message names (title/order/case/punctuation-insensitive). Only the
-    top-scoring resources are returned:
-    - exactly one  -> an unambiguous match, the caller sets it;
-    - more than one -> a TIE at the top score (e.g. the patient said "priya"
-      and both "Dr. Priya Kumar" and "Dr. Priya Rao" score 1) -> the caller
-      MUST fail closed and ask which one; never guess;
-    - none          -> the spoken name matches no active resource -> the caller
-      refuses and re-asks; it never falls through to "any available".
+    A resource is scored by how many of its distinctive stored-name tokens
+    appear in the message AND were used to name someone (see _naming_tokens —
+    adjacent to a title or another name token). Scoring on *naming* tokens, not
+    mere token appearance, is what prevents a time word ("mani") or service word
+    ("general") that collides with a doctor's name from selecting that doctor.
 
-    Scoring by shared-token count (not full-name subset) means a patient who
-    says only the first name still matches when it is unique, and a fuller name
-    ("priya rao") disambiguates by out-scoring the partial matches.
+    Top-scorers only:
+    - exactly one  -> unambiguous match, the caller sets it;
+    - more than one -> a TIE (e.g. "dr priya" with both Priya Kumar and Priya
+      Rao) -> the caller MUST fail closed and ask which one; never guess;
+    - none          -> no doctor named -> caller asks / refuses; never falls
+      through to "any available".
     """
-    msg_tokens = _resource_name_tokens(message)
-    if not msg_tokens:
+    all_name_tokens: frozenset[str] = (
+        frozenset().union(*(_resource_name_tokens(r.name) for r in resources))
+        if resources
+        else frozenset()
+    )
+    named = _naming_tokens(message, all_name_tokens)
+    if not named:
         return []
     scored: list[tuple[int, ResourceInfo]] = []
     for res in resources:
         stored = _resource_name_tokens(res.name)
-        overlap = len(stored & msg_tokens)
+        overlap = len(stored & named)
         if overlap > 0:
             scored.append((overlap, res))
     if not scored:

@@ -19,6 +19,10 @@ Invariants:
       every booking asserts the appointments.resource_id equals the intended
       doctor; ambiguous/unknown spoken names fail closed — book no doctor and
       re-ask, never guess)
+  I6  a time/service word that collides with a doctor's name      (item #19
+      never selects that doctor                                    regression:
+      "aaru mani" must not book Dr. Mani; "General Consultation" must not book
+      Dr. General — asserted via Case.forbid_resource_id off the ROW)
 
 I1 and I3 run on every case; I2 and I5 run on every case that books; I4 runs on
 every case that declares a superseded reading; the I5 fail-closed branch runs on
@@ -88,23 +92,33 @@ async def _seed_split_shift(session: AsyncSession) -> None:
             "VALUES (1, 1, 'General Consultation', 30, 0, 0, 500.00, true)"
         )
     )
-    # Two doctors stored with honorific + capitalisation, both eligible. A
-    # patient who says only the shared first name ("priya") is ambiguous and
-    # must fail closed; a fuller name ("priya rao") disambiguates. "Dr. Arun"
-    # is a distinct name for the unambiguous spoken-form case.
+    # Doctors stored with honorific + capitalisation, all eligible. The roster
+    # is deliberately ADVERSARIAL for name matching:
+    #  - Priya Kumar / Priya Rao share a first name (ambiguity + resolution);
+    #  - Arun is a distinct name (the _LEAD doctor, unambiguous spoken form);
+    #  - Mani collides with the Tanglish time word "mani" (o'clock) — "aaru
+    #    mani" (6 o'clock) must NOT book Dr. Mani. PERMANENT fixture so a matcher
+    #    that treats a time word as a name is caught by 16/16, not just by a
+    #    one-off case (D3 item #19 rejection: a roster of well-behaved names
+    #    cannot surface a name/vocabulary collision).
+    #  - General collides with the service word in "General Consultation" — the
+    #    service phrase must NOT book Dr. General.
     await session.execute(
         text(
             "INSERT INTO resources (id, business_id, name, resource_type, is_active) "
             "VALUES (1, 1, 'Dr. Priya Kumar', 'staff', true), "
             "(2, 1, 'Dr. Priya Rao', 'staff', true), "
-            "(3, 1, 'Dr. Arun', 'staff', true)"
+            "(3, 1, 'Dr. Arun', 'staff', true), "
+            "(4, 1, 'Dr. Mani', 'staff', true), "
+            "(5, 1, 'Dr. General', 'staff', true)"
         )
     )
     await session.execute(
         text(
             "INSERT INTO service_resource_eligibility "
             "(business_id, service_id, resource_id, is_active) VALUES "
-            "(1, 1, 1, true), (1, 1, 2, true), (1, 1, 3, true)"
+            "(1, 1, 1, true), (1, 1, 2, true), (1, 1, 3, true), "
+            "(1, 1, 4, true), (1, 1, 5, true)"
         )
     )
     for open_t, close_t in (("09:30", "13:00"), ("17:00", "20:30")):
@@ -263,6 +277,12 @@ class Case:
     # specific resource. When True, the case must book nothing AND the response
     # must ask which/for the doctor rather than silently choosing.
     expect_resource_refusal: bool = False
+    # I6 (item #19 regression): a resource_id that must NEVER be booked by this
+    # conversation, even if something else books. Guards name/vocabulary
+    # collisions — "aaru mani" must never select Dr. Mani, "General
+    # Consultation" must never select Dr. General. Checked whenever set,
+    # independently of whether the case books at all.
+    forbid_resource_id: int | None = None
 
 
 def _corpus() -> list[Case]:
@@ -306,13 +326,17 @@ def _corpus() -> list[Case]:
         )
     )
 
-    # 4. Tamil / Tanglish / English code-mixing in one utterance.
+    # 4. Tamil / Tanglish / English code-mixing in one utterance. These say
+    # "mani" (o'clock) as a TIME word; the roster has a Dr. Mani, so they double
+    # as regression guards — the committed doctor must be Arun (from _LEAD),
+    # never Dr. Mani (id=4). forbid_resource_id makes that explicit.
     cases.append(
         Case(
             "codemix-tanglish",
             "code_mixing",
             [f"{_LEAD} naalaikku pathu mani kaalai {_PHONE}", "yes confirm"],
             (10, 0),
+            forbid_resource_id=4,
         )
     )
     cases.append(
@@ -321,16 +345,19 @@ def _corpus() -> list[Case]:
             "code_mixing",
             [f"{_LEAD} tomorrow aaru mani {_PHONE}", "maalai", "yes confirm"],
             (18, 0),
+            forbid_resource_id=4,
         )
     )
 
-    # 5. Utterances split across turns (time first, date later).
+    # 5. Utterances split across turns (time first, date later). "6 mani" is a
+    # time word; must not book Dr. Mani (id=4).
     cases.append(
         Case(
             "split-turn",
             "split_turn",
             [f"{_LEAD} at 6 mani {_PHONE}", "naalaikku", "6 pm", "yes confirm"],
             (18, 0),
+            forbid_resource_id=4,
         )
     )
 
@@ -459,6 +486,88 @@ def _corpus() -> list[Case]:
         )
     )
 
+    # 15. REGRESSION (item #19 rejection): a Tanglish TIME word that collides
+    # with a doctor's name. The patient names NO doctor — they say "aaru mani"
+    # (6 o'clock) with Dr. Mani on the roster. The old token-overlap matcher
+    # booked Dr. Mani for every such patient (silent wrong-doctor, class 1).
+    # "mani" is not adjacent to a title/name so it is NOT naming evidence: no
+    # doctor is selected, resource_id stays missing, nothing books, and Dr. Mani
+    # (id=4) must NEVER be the committed resource. FAILS on the pre-fix matcher.
+    # (No refusal re-ask asserted: with no title present this is "no doctor named
+    # yet", handled by the generic missing-fact path, not the unknown-doctor
+    # refusal — the load-bearing guard here is forbid_resource_id + book-nothing.)
+    cases.append(
+        Case(
+            "resource-timeword-collision-mani",
+            "resource_name",
+            [
+                f"i want General Consultation tomorrow aaru mani {_PHONE}",
+                "yes confirm",
+            ],
+            None,
+            forbid_resource_id=4,
+        )
+    )
+
+    # 16. REGRESSION: a SERVICE word that collides with a doctor's name. "General
+    # Consultation" with Dr. General on the roster must select the SERVICE, never
+    # book Dr. General (id=5). "general" is not adjacent to a title/name so it is
+    # not naming evidence. Nothing books; id=5 must never be committed.
+    cases.append(
+        Case(
+            "resource-serviceword-collision-general",
+            "resource_name",
+            [
+                f"i want General Consultation tomorrow 10 30 am {_PHONE}",
+                "yes confirm",
+            ],
+            None,
+            forbid_resource_id=5,
+        )
+    )
+
+    # 17-19. Fold-in of the edge probes the reviewer asked to make permanent.
+    # Title-only: "with doctor" names no specific doctor -> fail closed.
+    cases.append(
+        Case(
+            "resource-title-only",
+            "resource_name",
+            [
+                f"i want General Consultation with doctor tomorrow 10 30 am {_PHONE}",
+                "yes confirm",
+            ],
+            None,
+            expect_resource_refusal=True,
+        )
+    )
+    # Cross-token ambiguity: "dr kumar arun" names tokens of two DIFFERENT
+    # doctors (Priya Kumar and Arun) -> ambiguous, fail closed.
+    cases.append(
+        Case(
+            "resource-cross-token-ambiguous",
+            "resource_name",
+            [
+                f"i want General Consultation with dr kumar arun tomorrow 10 30 am {_PHONE}",
+                "yes confirm",
+            ],
+            None,
+            expect_resource_refusal=True,
+        )
+    )
+    # Empty-ish resource turn: a message with no doctor reference at all must NOT
+    # trip the unknown-doctor refusal (distinct from title-only). It simply asks
+    # normally; here the doctor never gets named so nothing books, but the reply
+    # must NOT be the roster refusal — it should ask for the missing doctor
+    # generically. We assert nothing books and no specific resource is chosen.
+    cases.append(
+        Case(
+            "resource-no-mention",
+            "resource_name",
+            [f"i want General Consultation tomorrow 10 30 am {_PHONE}", "whenever"],
+            None,
+        )
+    )
+
     return cases
 
 
@@ -488,6 +597,19 @@ async def test_speech_corpus_invariants(
     assert _max_identical_repeats(trace.responses) <= 3, (
         f"[{case.cid}] a response repeated unboundedly: {trace.responses}"
     )
+
+    # I6 (item #19 regression): a forbidden resource must NEVER be committed —
+    # the name/vocabulary-collision guard. Checked first and unconditionally
+    # (independent of whether the case books) so a time word "mani" selecting
+    # Dr. Mani, or the service word "general" selecting Dr. General, is caught
+    # even if some other assertion would also fire. Independent detection power:
+    # it reads resource_id off the appointments ROW.
+    if case.forbid_resource_id is not None:
+        assert trace.committed_resource_id != case.forbid_resource_id, (
+            f"[{case.cid}] I6 violated: committed the FORBIDDEN resource_id "
+            f"{case.forbid_resource_id} — a time/service word selected a "
+            "colliding doctor name (silent wrong-doctor booking)"
+        )
 
     # I4: a correction supersedes the earlier reading. For any conversation that
     # rejects/corrects an earlier time, the committed booking must NEVER equal

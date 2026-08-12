@@ -10,8 +10,16 @@ are owned by the admission lane.
 
 This module gives the voice runtime a way to WRITE that evidence without
 depending on the columns existing yet: it talks to a ``DpdpEvidenceWriter``
-port. The runtime is handed a writer; in tests that is ``FakeEvidenceWriter``,
-and once the columns land the application wires ``SqlDpdpEvidenceWriter``.
+port. The runtime is handed a writer; in tests that is ``FakeEvidenceWriter``.
+
+The real SQL-backed writer is deliberately NOT in this module yet. It targets
+the C5 columns, which are not on disk (migration head is 0015, no dpdp_*
+columns), so no test could drive it through its real path — and un-wired
+production code that nothing exercises reads as done while its first real run
+would be in front of a patient. It lands in the PostgreSQL proof step, in the
+same commit as the test that inserts a real call, runs the writer, and asserts
+the persisted row (including ``notice_content_digest``) against the real
+columns. Until then only ``FakeEvidenceWriter`` exists.
 
 The content digest is a stable hash of exactly the notice text, version, and
 locale — the three facts the CHECK pairs with ``completed_at``. It is computed
@@ -25,20 +33,25 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
-# Unit separator between digest components: a byte that cannot appear in the
-# text/version/locale, so "1|en" + "x" and "1" + "en|x" can never collide.
-_SEP = "\x1f"
-
 
 def notice_content_digest(text: str, version: str, locale: str) -> str:
     """Stable sha256 hex of the notice's identifying facts.
 
-    Order-fixed and separator-delimited so no two distinct (version, locale,
-    text) triples share a digest. This is the immutable value the compliance
-    CHECK pairs with completed_at — it changes iff the spoken notice changes.
+    ``text`` MUST be the exact, byte-for-byte notice the patient was read — not
+    a template, id, or re-rendered form. If it were normalized, the digest would
+    prove we stored *something*, not that we read the patient *that thing*, and
+    the evidence trail would be decorative.
+
+    The three fields are LENGTH-PREFIXED (utf-8 byte length + NUL + bytes) rather
+    than joined by a separator: a separator is only unambiguous if it can never
+    occur inside a field, and we cannot guarantee that for an arbitrary locale or
+    version string. Length-prefixing is unconditionally collision-free — no two
+    distinct (version, locale, text) triples can produce the same byte stream —
+    so the digest changes iff the spoken notice truly changes.
     """
-    payload = f"{version}{_SEP}{locale}{_SEP}{text}"
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    parts = (version, locale, text)
+    payload = b"".join(f"{len(b := p.encode('utf-8'))}\x00".encode() + b for p in parts)
+    return hashlib.sha256(payload).hexdigest()
 
 
 class DpdpEvidenceWriter(Protocol):
@@ -92,46 +105,8 @@ class FakeEvidenceWriter:
         )
 
 
-@dataclass
-class SqlDpdpEvidenceWriter:
-    """Writes evidence to the call record's DPDP columns via the injected async
-    session factory. Ships UN-WIRED: the application only constructs this once
-    the admission lane's migration has added the columns + null-safe CHECK.
-
-    The UPDATE sets all four columns in one statement so the CHECK sees a
-    complete row; the DB constraint — not this code — is the guarantee that
-    partial evidence cannot exist.
-    """
-
-    session_factory: object  # Callable[[], AbstractAsyncContextManager[AsyncSession]]
-
-    async def write(
-        self,
-        *,
-        call_id: int,
-        completed_at: datetime,
-        notice_version: str,
-        locale: str,
-        content_digest: str,
-    ) -> None:
-        from sqlalchemy import text as sql_text
-
-        async with self.session_factory() as session:  # type: ignore[operator]
-            await session.execute(
-                sql_text(
-                    "UPDATE calls SET "
-                    "dpdp_completed_at = :completed_at, "
-                    "dpdp_notice_version = :notice_version, "
-                    "dpdp_locale = :locale, "
-                    "dpdp_content_digest = :content_digest "
-                    "WHERE id = :call_id"
-                ),
-                {
-                    "completed_at": completed_at,
-                    "notice_version": notice_version,
-                    "locale": locale,
-                    "content_digest": content_digest,
-                    "call_id": call_id,
-                },
-            )
-            await session.commit()
+# The SQL-backed DpdpEvidenceWriter is intentionally absent until the C5 columns
+# land on disk and the PostgreSQL proof step introduces it together with the test
+# that drives it through its real path against the real columns (asserting the
+# persisted notice_content_digest). Shipping it here now — un-wired, with no test
+# through its real path — would be dead code that reads as done.

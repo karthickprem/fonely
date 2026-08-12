@@ -103,7 +103,10 @@ class RealLLM:
         return headers
 
     async def generate(self, system: str, messages: list[dict]) -> str:
-        loop = asyncio.get_event_loop()
+        # Inside an async method the running loop is always present; use
+        # get_running_loop (not the deprecated get_event_loop, which raises
+        # off-loop on py3.14).
+        loop = asyncio.get_running_loop()
         self.call_count += 1
         msg = await loop.run_in_executor(
             None,

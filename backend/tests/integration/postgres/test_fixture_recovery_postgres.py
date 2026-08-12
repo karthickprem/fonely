@@ -25,6 +25,7 @@ import pytest
 from tests.integration.postgres.conftest import (
     MIGRATION_HEAD,
     PostgresTestDatabaseUnrecoverableError,
+    _alembic,
     _bring_to_clean_head,
     _reset_public_schema,
 )
@@ -196,3 +197,67 @@ async def test_reset_public_schema_truly_empties(scratch_db: str) -> None:
     finally:
         await conn.close()
     assert table_count == 0
+
+
+async def _insert_dpdp_evidence_row(scratch_url: str) -> None:
+    """A calls row carrying complete DPDP notice evidence — the exact data 0018's
+    downgrade guard exists to protect. All four dpdp_notice_* columns set (the
+    all-or-none check) with a valid lowercase-sha256 digest (the hex check)."""
+    dsn = scratch_url.replace("postgresql+asyncpg://", "postgresql://")
+    conn = await asyncpg.connect(dsn)
+    try:
+        await conn.execute(
+            "INSERT INTO businesses (id, name, category, primary_contact_phone, "
+            "timezone, subscription) VALUES (1, 'C', 'dental', '+919000000001', "
+            "'Asia/Kolkata', 'trial')"
+        )
+        await conn.execute(
+            "INSERT INTO calls (business_id, dpdp_notice_completed_at, "
+            "dpdp_notice_version, dpdp_notice_locale, dpdp_notice_content_digest) "
+            "VALUES (1, now(), 'v1', 'ta-IN', $1)",
+            "a" * 64,  # 64-char lowercase hex — satisfies ck_calls_dpdp_notice_digest_hex
+        )
+    finally:
+        await conn.close()
+
+
+async def test_dpdp_downgrade_refusal_is_distinct_from_a_downgrade_regression(
+    scratch_db: str,
+) -> None:
+    """CEO #30 (cofounder2 audit): teardown outcomes must be classified as TWO
+    distinct things, never one green.
+
+    - A downgrade that REFUSES because DPDP evidence exists is the guard working
+      as designed (0018 raises rather than destroy the only proof a patient was
+      read notice). It must be VISIBLE and must NOT be read as "downgrade
+      succeeded".
+    - A downgrade that SUCCEEDS while evidence is present is a REGRESSION — the
+      guard is gone — and must FAIL the gate.
+
+    This test proves the fixture (and the guard) tell those apart: with real
+    evidence present, `downgrade base` MUST fail non-zero AND the stderr must
+    name the DPDP refusal; a zero return here would mean the guard silently let
+    the evidence be dropped.
+    """
+    _bring_to_clean_head(scratch_db)
+    await _insert_dpdp_evidence_row(scratch_db)
+
+    result = _alembic(["downgrade", "base"], scratch_db)
+
+    # OUTCOME A (correct): the guard refuses. Non-zero return, and the reason is
+    # the DPDP refusal — not some unrelated failure that happens to be non-zero.
+    assert result.returncode != 0, (
+        "REGRESSION: 'downgrade base' SUCCEEDED with DPDP notice evidence present. "
+        "The 0018 guard is gone — a downgrade just destroyed the only proof a "
+        "patient was read notice. This must fail the gate, not pass."
+    )
+    assert "refusing lossy downgrade" in result.stderr, (
+        f"downgrade failed, but NOT for the DPDP-evidence reason — the guard's "
+        f"refusal is not what stopped it, so this failure does not prove the guard "
+        f"works. stderr:\n{result.stderr}"
+    )
+    # And the row is still there — the guard protected it, it was not dropped.
+    assert await _current_version(scratch_db) == MIGRATION_HEAD, (
+        "the refused downgrade must leave the schema AT HEAD (nothing dropped), "
+        "not partially torn down"
+    )

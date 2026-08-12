@@ -1,8 +1,11 @@
 """Tests for voice session supervisor state machine."""
 
+import asyncio
+import warnings
+
 import pytest
 
-from fonely.voice.config import SessionState, VoiceSessionConfig
+from fonely.voice.config import SessionLimits, SessionState, VoiceSessionConfig
 from fonely.voice.lifecycle import VoiceSessionSupervisor
 
 
@@ -95,6 +98,66 @@ class TestClose:
         assert "session_created" in names
         assert "session_closed" in names
         assert "session_telemetry_closed" in names
+
+
+class TestTimerLoopSafety:
+    """transition() is synchronous and must be a clean, valid state change even
+    when called outside any event loop. The duration/reconnect timers are
+    background coroutines that require a RUNNING loop; when none exists the
+    transition still succeeds but arms no timer — and crucially constructs no
+    coroutine, so there is no RuntimeError and no unawaited-coroutine warning.
+    Regression for the py3.14 failure where ensure_future built the coroutine
+    before failing on the missing loop.
+    """
+
+    def test_transition_to_active_no_loop_arms_no_timer_no_warning(self):
+        sup = VoiceSessionSupervisor(_config())
+        sup._state = SessionState.CONNECTING
+        with warnings.catch_warnings():
+            # Any "coroutine was never awaited" RuntimeWarning fails the test.
+            warnings.simplefilter("error", RuntimeWarning)
+            assert sup.transition(SessionState.ACTIVE) is True
+        assert sup.state == SessionState.ACTIVE
+        assert sup._duration_timer is None  # no running loop → no timer armed
+
+    def test_reconnect_transition_no_loop_no_warning(self):
+        sup = VoiceSessionSupervisor(_config())
+        sup._state = SessionState.ACTIVE
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            assert sup.transition(SessionState.RECONNECTING) is True
+        assert sup.state == SessionState.RECONNECTING
+        assert sup._reconnect_timer is None
+
+    @pytest.mark.asyncio
+    async def test_active_arms_duration_timer_and_close_cancels(self):
+        # Long limit so the timer stays pending; we assert arm + clean cancel.
+        cfg = _config(limits=SessionLimits(max_duration_seconds=3600))
+        sup = VoiceSessionSupervisor(cfg)
+        sup._state = SessionState.CONNECTING
+        assert sup.transition(SessionState.ACTIVE) is True
+        assert sup._duration_timer is not None
+        assert not sup._duration_timer.done()
+        await sup.close("normal")
+        # close() cancels the timer; give the loop a tick to process it.
+        await asyncio.sleep(0)
+        assert sup._duration_timer.cancelled()
+
+    @pytest.mark.asyncio
+    async def test_reconnect_arms_timer_then_active_cancels_it(self):
+        cfg = _config(limits=SessionLimits(reconnect_grace_seconds=3600))
+        sup = VoiceSessionSupervisor(cfg)
+        sup._state = SessionState.ACTIVE
+        assert sup.transition(SessionState.RECONNECTING) is True
+        reconnect_timer = sup._reconnect_timer
+        assert reconnect_timer is not None
+        assert not reconnect_timer.done()
+        # Returning to ACTIVE must cancel the reconnect-grace timer and clear it.
+        assert sup.transition(SessionState.ACTIVE) is True
+        assert sup._reconnect_timer is None
+        await asyncio.sleep(0)
+        assert reconnect_timer.cancelled()
+        await sup.close("normal")
 
 
 class TestProperties:

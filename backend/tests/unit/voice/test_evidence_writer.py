@@ -39,10 +39,18 @@ class TestNoticeContentDigest:
             "hello", "1", "en-IN"
         )
 
-    def test_separator_prevents_field_collision(self):
-        # Without a real separator, ("1","en","x") and ("1","enx","") could
-        # collide. The unit-separator guarantees they do not.
+    def test_length_prefix_prevents_field_collision(self):
+        # Length-prefixing guarantees no boundary ambiguity: ("x","1","en") and
+        # ("","1","enx") map to distinct byte streams and thus distinct digests,
+        # regardless of any separator convention.
         assert notice_content_digest("x", "1", "en") != notice_content_digest("", "1", "enx")
+
+    def test_field_containing_control_bytes_does_not_collide(self):
+        # Adversarial: a field that CONTAINS the bytes a naive separator scheme
+        # would use must not create a collision. Length-prefixing is immune.
+        a = notice_content_digest("hello", "1", "ta\x00IN")
+        b = notice_content_digest("hello", "1\x00ta", "IN")
+        assert a != b
 
 
 class TestFakeEvidenceWriter:

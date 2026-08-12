@@ -15,6 +15,7 @@ from pipecat.frames.frames import (
     Frame,
     InputAudioRawFrame,
     LLMTextFrame,
+    StartFrame,
 )
 from pipecat.processors.frame_processor import FrameDirection
 
@@ -63,6 +64,26 @@ class TestNoticeInputLatch:
         collector = await _drive(latch, msg)
         assert len(collector.frames) == 1
         assert collector.frames[0] is msg
+
+    @pytest.mark.xfail(
+        reason=(
+            "FrameProcessor.process_frame intercepts StartFrame and schedules "
+            "on the TaskManager, which the bare collector harness has none of; "
+            "StartFrame survival through a closed latch is proven in the "
+            "assembly/transport harness (test_full_media_to_media) that has a "
+            "running TaskManager. This strict xfail keeps the assertion visible "
+            "as a distinct not-executed state and FAILS if it ever starts "
+            "passing here — at which point delete it in the commit that proves "
+            "it in the assembly harness."
+        ),
+        strict=True,
+    )
+    @pytest.mark.asyncio
+    async def test_closed_passes_start_frame_bare_harness_xfail(self):
+        latch = NoticeInputLatch()
+        collector = await _drive(latch, StartFrame())
+        assert len(collector.frames) == 1
+        assert isinstance(collector.frames[0], StartFrame)
 
     @pytest.mark.asyncio
     async def test_open_lets_audio_through(self):

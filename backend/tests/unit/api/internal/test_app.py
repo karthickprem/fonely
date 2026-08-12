@@ -98,6 +98,57 @@ async def test_missing_business_id_returns_400(client: AsyncClient) -> None:
     assert response.status_code == 400
 
 
+async def test_unrecognized_x_channel_is_rejected_not_coerced(client: AsyncClient) -> None:
+    # CEO #33 amendment: a PRESENT-but-unrecognized X-Channel is a claim we
+    # cannot honour and must be REJECTED (400), never silently coerced to TEXT.
+    # Coercion would reproduce the exact silent-wrong-answer the required channel
+    # field exists to prevent — with a header actively asserting otherwise.
+    response = await client.post(
+        "/internal/v1/appointment-proposals",
+        json={
+            "service_id": 1,
+            "resource_id": 1,
+            "start_at": "2026-08-05T10:00:00Z",
+            "customer_phone": "+919123456789",
+            "idempotency_key": "test",
+            "expires_at": "2026-08-05T11:00:00Z",
+        },
+        headers={
+            "X-Business-ID": "1",
+            "X-Actor-Phone": "+919123456789",
+            "X-Channel": "carrier-pigeon",
+            **_auth_headers(),
+        },
+    )
+    assert response.status_code == 400, (
+        "an unrecognized X-Channel must be rejected, not coerced to text"
+    )
+
+
+async def test_absent_x_channel_is_accepted_as_text(client: AsyncClient) -> None:
+    # Absent header = "no claim, assume text" (existing callers are all text).
+    # It must NOT be rejected the way a garbage value is — absent and
+    # unparseable deserve different answers. A valid request with no X-Channel
+    # reaches the service (not a 400 from channel parsing).
+    response = await client.post(
+        "/internal/v1/appointment-proposals",
+        json={
+            "service_id": 1,
+            "resource_id": 1,
+            "start_at": "2026-08-05T10:00:00Z",
+            "customer_phone": "+919123456789",
+            "idempotency_key": "test",
+            "expires_at": "2026-08-05T11:00:00Z",
+        },
+        headers={
+            "X-Business-ID": "1",
+            "X-Actor-Phone": "+919123456789",
+            **_auth_headers(),
+        },
+    )
+    assert response.status_code != 400, "absent X-Channel must be accepted as text, not rejected"
+
+
 async def test_missing_auth_returns_401(client: AsyncClient) -> None:
     response = await client.post(
         "/internal/v1/appointment-proposals",

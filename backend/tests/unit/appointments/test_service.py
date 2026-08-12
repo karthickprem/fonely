@@ -16,7 +16,7 @@ from fonely.domain.pending_actions.payloads import (
     PendingAppointmentEnvelope,
 )
 from fonely.domain.pending_actions.snapshots import canonical_payload_dict
-from fonely.models.enums import CallerRole
+from fonely.models.enums import CallerRole, Channel
 from fonely.services.appointments import AppointmentService
 from fonely.services.notifications import NotificationEvidence
 
@@ -29,6 +29,7 @@ def _actor(business_id: int = 1) -> ActorContext:
         business_id=business_id,
         normalized_phone="+919123456789",
         verified_role=CallerRole.CUSTOMER,
+        channel=Channel.TEXT,
     )
 
 

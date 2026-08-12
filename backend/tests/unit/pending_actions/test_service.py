@@ -29,7 +29,7 @@ from fonely.domain.pending_actions.snapshots import (
     confirmation_snapshot,
     payload_digest,
 )
-from fonely.models.enums import CallerRole, PendingActionStatus, PendingActionType
+from fonely.models.enums import CallerRole, Channel, PendingActionStatus, PendingActionType
 from fonely.models.schema import PendingAction
 from fonely.services.pending_actions import PendingActionService
 
@@ -55,6 +55,7 @@ def actor() -> ActorContext:
         business_id=1,
         normalized_phone="+919123456789",
         verified_role=CallerRole.CUSTOMER,
+        channel=Channel.TEXT,
         session_id="session-1",
     )
 

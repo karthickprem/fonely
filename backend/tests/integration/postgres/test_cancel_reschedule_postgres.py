@@ -26,7 +26,7 @@ from fonely.domain.appointments.results import (
     PreCommitAppointmentSuccess,
 )
 from fonely.domain.pending_actions.commands import ActorContext
-from fonely.models.enums import CallerRole
+from fonely.models.enums import CallerRole, Channel
 from fonely.services.appointments import AppointmentService
 
 pytestmark = pytest.mark.postgres
@@ -53,6 +53,7 @@ def _customer(business_id: int = 1) -> ActorContext:
         business_id=business_id,
         normalized_phone="+919123456789",
         verified_role=CallerRole.CUSTOMER,
+        channel=Channel.TEXT,
     )
 
 
@@ -61,6 +62,7 @@ def _owner(business_id: int = 1) -> ActorContext:
         business_id=business_id,
         normalized_phone="+919000000001",
         verified_role=CallerRole.OWNER,
+        channel=Channel.TEXT,
     )
 
 

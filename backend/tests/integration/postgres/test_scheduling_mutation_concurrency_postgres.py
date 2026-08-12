@@ -18,7 +18,7 @@ from fonely.domain.appointments.commands import (
 )
 from fonely.domain.appointments.results import PreCommitAppointmentSuccess
 from fonely.domain.pending_actions.commands import ActorContext
-from fonely.models.enums import CallerRole
+from fonely.models.enums import CallerRole, Channel
 from fonely.services.appointments import AppointmentService
 from fonely.services.model_gateway import ModelResponse
 from fonely.services.owner_commands import OwnerCommandService
@@ -44,6 +44,7 @@ def _customer() -> ActorContext:
         business_id=1,
         normalized_phone="+919123456789",
         verified_role=CallerRole.CUSTOMER,
+        channel=Channel.TEXT,
     )
 
 

@@ -22,7 +22,7 @@ from fonely.domain.inventory.errors import (
 )
 from fonely.domain.inventory.policies import derive_business_date
 from fonely.domain.pending_actions.commands import ActorContext
-from fonely.models.enums import CallerRole, InventoryMovementType
+from fonely.models.enums import CallerRole, Channel, InventoryMovementType
 
 
 def actor() -> ActorContext:
@@ -30,6 +30,7 @@ def actor() -> ActorContext:
         business_id=1,
         normalized_phone="+919123456789",
         verified_role=CallerRole.OWNER,
+        channel=Channel.TEXT,
     )
 
 

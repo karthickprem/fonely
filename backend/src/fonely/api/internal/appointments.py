@@ -34,7 +34,7 @@ from fonely.domain.pending_actions.errors import (
     PendingActionNotFoundError,
     PendingActionUnauthorizedError,
 )
-from fonely.models.enums import CallerRole
+from fonely.models.enums import CallerRole, Channel
 from fonely.services.appointments import AppointmentService
 
 logger = logging.getLogger("fonely.api.internal.appointments")
@@ -70,10 +70,24 @@ def _trusted_actor(request: Request) -> ActorContext:
     phone = request.headers.get("X-Actor-Phone", "")
     if business_id <= 0 or not phone:
         raise HTTPException(status_code=400, detail="Missing trusted business/actor context")
+    # Channel from the transport header. ABSENT means "no claim" -> assume TEXT
+    # (every existing internal caller is text, and a header is transport, not
+    # model output). A PRESENT-but-unrecognized value is a claim we cannot honour
+    # -> REJECT, never coerce to TEXT: silently downgrading an asserted channel
+    # reproduces the exact silent-wrong-answer the required field exists to stop.
+    channel_raw = request.headers.get("X-Channel")
+    if channel_raw is None:
+        channel = Channel.TEXT
+    else:
+        try:
+            channel = Channel(channel_raw)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Unrecognized X-Channel") from None
     return ActorContext(
         business_id=business_id,
         normalized_phone=phone,
         verified_role=CallerRole(request.headers.get("X-Actor-Role", "customer")),
+        channel=channel,
         session_id=request.headers.get("X-Session-ID"),
     )
 

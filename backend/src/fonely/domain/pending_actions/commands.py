@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from fonely.core.validators import AwareDatetime, E164PhoneNumber
-from fonely.models.enums import CallerRole, PendingActionType
+from fonely.models.enums import CallerRole, Channel, PendingActionType
 
 
 class StrictCommand(BaseModel):
@@ -20,6 +20,12 @@ class ActorContext(StrictCommand):
     business_id: Annotated[int, Field(gt=0)]
     normalized_phone: E164PhoneNumber
     verified_role: CallerRole
+    # Transport the caller reached us on. REQUIRED, no default: a defaulted
+    # trust-boundary field would make "the voice path forgot to set it"
+    # indistinguishable from "this is genuinely text", and the silent failure
+    # lands on a patient (a connected voice caller told to call the clinic).
+    # Every construction site must state it explicitly (CEO #33 amendment 1).
+    channel: Channel
     session_id: Annotated[str | None, Field(default=None, max_length=100)]
 
 

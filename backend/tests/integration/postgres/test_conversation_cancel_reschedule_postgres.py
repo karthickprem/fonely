@@ -12,7 +12,7 @@ from fonely.api.internal.validation import InternalValidationPort
 from fonely.core.validators import utcnow
 from fonely.domain.conversation.state import ConversationState
 from fonely.domain.pending_actions.commands import ActorContext
-from fonely.models.enums import CallerRole
+from fonely.models.enums import CallerRole, Channel
 from fonely.models.schema import Appointment, ResourceAllocation
 from fonely.services.appointments import AppointmentService
 from fonely.services.conversation import _CONVERSATIONS, ConversationService
@@ -36,6 +36,7 @@ def _actor() -> ActorContext:
         business_id=1,
         normalized_phone="+919123456789",
         verified_role=CallerRole.CUSTOMER,
+        channel=Channel.TEXT,
     )
 
 

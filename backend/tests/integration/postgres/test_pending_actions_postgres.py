@@ -38,7 +38,7 @@ from fonely.domain.pending_actions.errors import (
     PendingActionUnauthorizedError,
     TrustedCommitContextError,
 )
-from fonely.models.enums import CallerRole, PendingActionType
+from fonely.models.enums import CallerRole, Channel, PendingActionType
 from fonely.models.schema import PendingAction
 from fonely.services.authorization import require_owner_or_manager
 from fonely.services.pending_actions import PendingActionService
@@ -65,6 +65,7 @@ def actor(business_id: int) -> ActorContext:
         business_id=business_id,
         normalized_phone="+919123456789",
         verified_role=CallerRole.CUSTOMER,
+        channel=Channel.TEXT,
         session_id=f"session-{business_id}",
     )
 
@@ -624,6 +625,7 @@ async def test_active_owner_membership_is_tenant_scoped(pg_session: AsyncSession
         business_id=1,
         normalized_phone="+919123456789",
         verified_role=CallerRole.OWNER,
+        channel=Channel.TEXT,
     )
     user = await require_owner_or_manager(pg_session, owner_actor)
     assert user.business_id == 1
@@ -646,6 +648,7 @@ async def test_inactive_owner_membership_is_rejected(pg_session: AsyncSession) -
         business_id=1,
         normalized_phone="+919123456789",
         verified_role=CallerRole.OWNER,
+        channel=Channel.TEXT,
     )
     with pytest.raises(PendingActionUnauthorizedError):
         await require_owner_or_manager(pg_session, owner_actor)

@@ -30,7 +30,7 @@ from fonely.domain.pending_actions.commands import (
     InternalGetPendingActionQuery,
     MarkAwaitingConfirmationCommand,
 )
-from fonely.models.enums import CallerRole, OrderStatus, PendingActionType
+from fonely.models.enums import CallerRole, Channel, OrderStatus, PendingActionType
 from fonely.services.inventory import InventoryService
 from fonely.services.orders import OrderService
 from fonely.services.pending_actions import PendingActionService
@@ -45,6 +45,7 @@ def owner() -> ActorContext:
         business_id=1,
         normalized_phone="+919123456789",
         verified_role=CallerRole.OWNER,
+        channel=Channel.TEXT,
     )
 
 
@@ -53,6 +54,7 @@ def customer() -> ActorContext:
         business_id=1,
         normalized_phone="+919222222222",
         verified_role=CallerRole.CUSTOMER,
+        channel=Channel.TEXT,
         session_id="session-1",
     )
 
@@ -287,6 +289,7 @@ async def test_cross_tenant_order_read_rejected(pg_session: AsyncSession) -> Non
         business_id=2,
         normalized_phone="+919999999999",
         verified_role=CallerRole.CUSTOMER,
+        channel=Channel.TEXT,
     )
     order_service = OrderService(pg_session)
     from fonely.domain.orders.errors import OrderNotFoundError

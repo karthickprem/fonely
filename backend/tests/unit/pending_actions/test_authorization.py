@@ -8,7 +8,13 @@ from pydantic import ValidationError
 
 from fonely.domain.pending_actions.commands import ActorContext
 from fonely.domain.pending_actions.errors import PendingActionUnauthorizedError
-from fonely.models.enums import BusinessUserRole, CallerRole, PendingActionStatus, PendingActionType
+from fonely.models.enums import (
+    BusinessUserRole,
+    CallerRole,
+    Channel,
+    PendingActionStatus,
+    PendingActionType,
+)
 from fonely.models.schema import BusinessUser, PendingAction
 from fonely.services.authorization import (
     assert_verified_role_permits,
@@ -22,6 +28,7 @@ def actor(role: CallerRole, business_id: int = 1) -> ActorContext:
         business_id=business_id,
         normalized_phone="+919123456789",
         verified_role=role,
+        channel=Channel.TEXT,
         session_id="session-1",
     )
 

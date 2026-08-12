@@ -14,7 +14,7 @@ from fonely.domain.pending_actions.commands import (
 from fonely.domain.pending_actions.errors import PendingActionUnauthorizedError
 from fonely.domain.pending_actions.payloads import validate_payload
 from fonely.domain.pending_actions.snapshots import canonical_payload_dict, payload_digest
-from fonely.models.enums import CallerRole, PendingActionStatus, PendingActionType
+from fonely.models.enums import CallerRole, Channel, PendingActionStatus, PendingActionType
 from fonely.models.schema import PendingAction
 from fonely.repositories.pending_actions import PendingActionRepository
 from fonely.services.pending_actions import PendingActionService
@@ -27,6 +27,7 @@ def actor(phone: str = "+919123456789") -> ActorContext:
         business_id=1,
         normalized_phone=phone,
         verified_role=CallerRole.CUSTOMER,
+        channel=Channel.TEXT,
         session_id="session-1",
     )
 

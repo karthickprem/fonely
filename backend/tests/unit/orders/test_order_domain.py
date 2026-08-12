@@ -15,7 +15,7 @@ from fonely.domain.orders.policies import (
     reservation_is_expired,
 )
 from fonely.domain.pending_actions.commands import ActorContext, CommitResultContext
-from fonely.models.enums import CallerRole, OrderStatus, ProductUnit
+from fonely.models.enums import CallerRole, Channel, OrderStatus, ProductUnit
 
 
 def actor() -> ActorContext:
@@ -23,6 +23,7 @@ def actor() -> ActorContext:
         business_id=1,
         normalized_phone="+919123456789",
         verified_role=CallerRole.CUSTOMER,
+        channel=Channel.TEXT,
     )
 
 

@@ -19,7 +19,7 @@ from fonely.domain.appointments.results import (
     ResourceBlockResult,
 )
 from fonely.domain.pending_actions.commands import ActorContext
-from fonely.models.enums import CallerRole
+from fonely.models.enums import CallerRole, Channel
 
 NOW = datetime(2026, 8, 1, 8, 0, tzinfo=UTC)
 
@@ -42,6 +42,7 @@ def actor() -> ActorContext:
         business_id=1,
         normalized_phone="+919123456789",
         verified_role=CallerRole.CUSTOMER,
+        channel=Channel.TEXT,
         session_id="session",
     )
 
@@ -60,6 +61,7 @@ def test_create_command_is_strict_and_rejects_role_elevation() -> None:
             expires_at=NOW,
             idempotency_key="key",
             verified_role="owner",  # type: ignore[call-arg]
+            channel=Channel.TEXT,
         )
 
 

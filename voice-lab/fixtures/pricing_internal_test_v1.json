@@ -1,0 +1,35 @@
+{
+  "pricing_book_version": "1",
+  "currency": "USD",
+  "note": "INTERNAL-TEST pricing ONLY — placeholder rates for exercising the estimate math in a zero-provider dry run. NOT authoritative, NOT a quoted or contracted price, NOT for billing. Real rates must come from each provider's dated public pricing page or a signed contract before any estimate is presented as real.",
+  "entries": [
+    {
+      "unit_kind": "stt_audio_seconds",
+      "per_unit": "0.0001667",
+      "currency": "USD",
+      "source": "internal-test placeholder (approx $0.01/min; NOT a provider quote)",
+      "retrieved_on": "2026-08-12"
+    },
+    {
+      "unit_kind": "llm_prompt_tokens",
+      "per_unit": "0.0000030",
+      "currency": "USD",
+      "source": "internal-test placeholder ($3/1M input tokens; NOT a provider quote)",
+      "retrieved_on": "2026-08-12"
+    },
+    {
+      "unit_kind": "llm_completion_tokens",
+      "per_unit": "0.0000150",
+      "currency": "USD",
+      "source": "internal-test placeholder ($15/1M output tokens; NOT a provider quote)",
+      "retrieved_on": "2026-08-12"
+    },
+    {
+      "unit_kind": "tts_characters",
+      "per_unit": "0.0000650",
+      "currency": "USD",
+      "source": "internal-test placeholder ($65/1M chars; NOT a provider quote)",
+      "retrieved_on": "2026-08-12"
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "fixture_version": "1",
+  "description": "Raw provider usage captured from one completed cost_meter_proof run (conversation costmeter-1786503897, 4 turns + 1 forced STT retry, one Tamil booking). Frozen for zero-provider dry-run validation of the meter. Contains NO PII, NO transcript, NO audio — only measured billable units and correlation ids. STT audio stored as integer milliseconds. This is meter-design evidence, NOT authorized ongoing spend or invoice evidence.",
+  "source": "internal-test capture 2026-08-12 (cofounder2-accepted meter-design run)",
+  "conversation_id": "costmeter-1786503897",
+  "business_id": 1,
+  "records": [
+    {"turn_index": 0, "provider": "cartesia", "model": "sonic-3.5", "unit_kind": "tts_characters", "unit_count": 24, "attempt": 1, "provider_processed": true},
+    {"turn_index": 0, "provider": "sarvam", "model": "saaras:v3", "unit_kind": "stt_audio_seconds", "unit_count": 1600, "attempt": 1, "provider_processed": true},
+    {"turn_index": 0, "provider": "sarvam", "model": "saaras:v3", "unit_kind": "stt_audio_seconds", "unit_count": 1600, "attempt": 2, "provider_processed": true},
+    {"turn_index": 0, "provider": "gateway", "model": "gpt-5.6-luna", "unit_kind": "llm_prompt_tokens", "unit_count": 34, "attempt": 1, "provider_processed": true},
+    {"turn_index": 0, "provider": "gateway", "model": "gpt-5.6-luna", "unit_kind": "llm_completion_tokens", "unit_count": 60, "attempt": 1, "provider_processed": true},
+
+    {"turn_index": 1, "provider": "cartesia", "model": "sonic-3.5", "unit_kind": "tts_characters", "unit_count": 9, "attempt": 1, "provider_processed": true},
+    {"turn_index": 1, "provider": "sarvam", "model": "saaras:v3", "unit_kind": "stt_audio_seconds", "unit_count": 1760, "attempt": 1, "provider_processed": true},
+    {"turn_index": 1, "provider": "gateway", "model": "gpt-5.6-luna", "unit_kind": "llm_prompt_tokens", "unit_count": 70, "attempt": 1, "provider_processed": true},
+    {"turn_index": 1, "provider": "gateway", "model": "gpt-5.6-luna", "unit_kind": "llm_completion_tokens", "unit_count": 93, "attempt": 1, "provider_processed": true},
+
+    {"turn_index": 2, "provider": "cartesia", "model": "sonic-3.5", "unit_kind": "tts_characters", "unit_count": 10, "attempt": 1, "provider_processed": true},
+    {"turn_index": 2, "provider": "sarvam", "model": "saaras:v3", "unit_kind": "stt_audio_seconds", "unit_count": 880, "attempt": 1, "provider_processed": true},
+    {"turn_index": 2, "provider": "gateway", "model": "gpt-5.6-luna", "unit_kind": "llm_prompt_tokens", "unit_count": 114, "attempt": 1, "provider_processed": true},
+    {"turn_index": 2, "provider": "gateway", "model": "gpt-5.6-luna", "unit_kind": "llm_completion_tokens", "unit_count": 71, "attempt": 1, "provider_processed": true},
+
+    {"turn_index": 3, "provider": "cartesia", "model": "sonic-3.5", "unit_kind": "tts_characters", "unit_count": 7, "attempt": 1, "provider_processed": true},
+    {"turn_index": 3, "provider": "sarvam", "model": "saaras:v3", "unit_kind": "stt_audio_seconds", "unit_count": 1040, "attempt": 1, "provider_processed": true},
+    {"turn_index": 3, "provider": "gateway", "model": "gpt-5.6-luna", "unit_kind": "llm_prompt_tokens", "unit_count": 166, "attempt": 1, "provider_processed": true},
+    {"turn_index": 3, "provider": "gateway", "model": "gpt-5.6-luna", "unit_kind": "llm_completion_tokens", "unit_count": 24, "attempt": 1, "provider_processed": true}
+  ]
+}

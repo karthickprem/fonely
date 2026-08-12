@@ -10,6 +10,7 @@ BACKEND_ROOT = REPO_ROOT / "backend"
 BASE_COMPOSE_PATH = REPO_ROOT / "docker-compose.staging.yml"
 PUBLIC_COMPOSE_PATH = REPO_ROOT / "docker-compose.public.yml"
 ENV_TEMPLATE_PATH = REPO_ROOT / "docs" / "staging-env.template"
+PUBLIC_DEPLOYMENT_PATH = REPO_ROOT / "deploy" / "PUBLIC_DEPLOYMENT.md"
 
 _ENV_REFERENCE = re.compile(r"\$\{([A-Z][A-Z0-9_]*)(?::[^}]*)?}")
 _COPY_LINE = re.compile(r"^COPY\s+(.+?)\s+\./$", re.MULTILINE)
@@ -98,3 +99,27 @@ def test_environment_template_covers_all_compose_references() -> None:
     referenced.extend(_ENV_REFERENCE.findall(PUBLIC_COMPOSE_PATH.read_text()))
 
     assert set(referenced) <= _template_keys()
+
+
+def test_public_registration_uses_private_loopback() -> None:
+    runbook = PUBLIC_DEPLOYMENT_PATH.read_text()
+
+    assert "http://127.0.0.1:8000/internal/v1/businesses/channel-identity" in runbook
+    assert "https://api.example.in/internal/" not in runbook
+    assert "public edge intentionally returns 404 for `/internal/*`" in runbook
+
+
+def test_caddy_healthcheck_uses_public_host_header() -> None:
+    caddy = _service_block(PUBLIC_COMPOSE_PATH, "caddy")
+
+    assert "Host: $${FONELY_PUBLIC_DOMAIN}" in caddy
+    assert "http://127.0.0.1/health/live" in caddy
+    assert "http://localhost:80/health/live" not in caddy
+
+
+def test_public_preflight_requires_selected_capabilities() -> None:
+    runbook = PUBLIC_DEPLOYMENT_PATH.read_text()
+
+    for capability in ("whatsapp", "exotel", "internal"):
+        assert f"--require {capability}" in runbook
+    assert "missing or placeholder gate is a failure" in runbook

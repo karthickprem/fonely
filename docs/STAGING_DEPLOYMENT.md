@@ -70,7 +70,7 @@ A successful local response proves only this running topology. It is not hosted-
 
 Health checks do not exercise trusted identity, onboarding, booking transactions, idempotency, or overlap prevention. The CEO executed this proof on integration SHA `a6cc0a7` using a directly hosted backend and isolated PostgreSQL database; the containerized form remains not executed.
 
-The server and scripts intentionally read different secret names. Set both to the same test value: the application reads `INTERNAL_API_SECRET`, while the proof scripts read `FONELY_INTERNAL_API_SECRET`. Setting only the latter leaves the internal routes unmounted.
+The server and proof scripts use `INTERNAL_API_SECRET`. The scripts retain `FONELY_INTERNAL_API_SECRET` only as a legacy fallback; do not configure two independent values.
 
 Booking confirmation requires an active primary row in `business_whatsapp_channels`. Register the synthetic clinic's provider identity through `POST /internal/v1/businesses/whatsapp-channel` using the same private internal authentication and trusted `X-Business-ID` context. A missing or disabled channel fails safe with `503 whatsapp_mapping_missing` and rolls back the appointment; re-registering restores booking without a process restart.
 
@@ -78,7 +78,6 @@ From a prepared host development environment, seed only the synthetic demo clini
 
 ```bash
 export INTERNAL_API_SECRET='<same non-production test secret used by the server>'
-export FONELY_INTERNAL_API_SECRET="$INTERNAL_API_SECRET"
 HOST_DATABASE_URL='postgresql+asyncpg://fonely:<url-encoded-password>@127.0.0.1:5432/fonely'
 
 backend/.venv/bin/python scripts/seed-demo-clinic.py \

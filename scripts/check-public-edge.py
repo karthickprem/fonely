@@ -45,10 +45,21 @@ MUST_STAY_PRIVATE = {
 # Variables each router mounts on, from create_app(). A router whose variable is
 # absent is silently not mounted — the reason this check exists.
 ROUTER_GATES = {
-    "WHATSAPP_VERIFY_TOKEN": "WhatsApp owner channel",
-    "EXOTEL_WEBHOOK_SECRET": "Exotel telephony",
-    "INTERNAL_API_SECRET": "internal API",
+    "whatsapp": ("WHATSAPP_VERIFY_TOKEN", "WhatsApp owner channel"),
+    "exotel": ("EXOTEL_WEBHOOK_SECRET", "Exotel telephony"),
+    "internal": ("INTERNAL_API_SECRET", "private internal API"),
 }
+
+_PLACEHOLDER_MARKERS = ("changeme", "example", "replace-me", "<", ">")
+
+
+def _is_configured(value: str) -> bool:
+    """Reject empty and documentation-placeholder values as configuration."""
+    normalized = value.strip().lower()
+    return bool(normalized) and not any(
+        marker in normalized for marker in _PLACEHOLDER_MARKERS
+    )
+
 
 EDGE_REQUIRED = {
     "FONELY_PUBLIC_DOMAIN": "DNS name providers will call",
@@ -116,8 +127,11 @@ def caddy_handled_paths(caddyfile: str) -> set[str]:
 def check_edge_config(env: dict[str, str], report: Report) -> None:
     print("\nedge configuration")
     for key, purpose in EDGE_REQUIRED.items():
-        if env.get(key):
+        value = env.get(key, "")
+        if _is_configured(value):
             report.ok(f"{key} set ({purpose})")
+        elif value:
+            report.fail(f"{key} contains a placeholder — {purpose}")
         else:
             report.fail(f"{key} missing — {purpose}")
 
@@ -131,13 +145,19 @@ def check_edge_config(env: dict[str, str], report: Report) -> None:
         report.fail(f"FONELY_PUBLIC_DOMAIN={domain} is not a fully qualified name")
 
 
-def check_router_gates(env: dict[str, str], report: Report) -> None:
+def check_router_gates(
+    env: dict[str, str], report: Report, required_modes: set[str]
+) -> None:
     print("\nrouter mounting")
-    for key, description in ROUTER_GATES.items():
-        if env.get(key):
+    for mode, (key, description) in ROUTER_GATES.items():
+        value = env.get(key, "")
+        if _is_configured(value):
             report.ok(f"{description} will mount ({key} set)")
+        elif mode in required_modes:
+            reason = "placeholder" if value else "unset"
+            report.fail(f"{description} is required but {key} is {reason}")
         else:
-            report.warn(f"{description} will NOT mount — {key} unset")
+            report.not_checked(f"{description} not selected ({key} not required)")
 
 
 def check_number_mappings(env: dict[str, str], report: Report) -> None:
@@ -164,14 +184,14 @@ def check_number_mappings(env: dict[str, str], report: Report) -> None:
         )
         return
 
-    if not env.get("EXOTEL_WEBHOOK_SECRET"):
-        report.warn("telephony not configured (EXOTEL_WEBHOOK_SECRET unset)")
+    if not _is_configured(env.get("EXOTEL_WEBHOOK_SECRET", "")):
+        report.not_checked("telephony tenant binding — Exotel mode is not configured")
         return
 
     report.not_checked(
         "which clinic each dialled number reaches — it is a database row, not "
         "config. Verify against the running system before the first real call:\n"
-        "             psql \"$DATABASE_URL\" -c \"SELECT business_id, "
+        '             psql "$DATABASE_URL" -c "SELECT business_id, '
         "external_identifier, status, is_primary FROM business_channel_identities "
         "WHERE provider = 'exotel'\"\n"
         "           An unregistered number is refused with 404 at the ringing "
@@ -196,7 +216,9 @@ def check_exposure(report: Report) -> None:
             report.fail(f"{path} is NOT forwarded — the provider cannot reach it")
 
     for path, reason in sorted(MUST_STAY_PRIVATE.items()):
-        exposed = [h for h in handled if h == path or h.startswith(path.rstrip("/") + "/")]
+        exposed = [
+            h for h in handled if h == path or h.startswith(path.rstrip("/") + "/")
+        ]
         if exposed:
             report.fail(f"{path} is publicly forwarded — {reason}")
         else:
@@ -209,24 +231,39 @@ def check_exposure(report: Report) -> None:
 def check_stream_transport(report: Report) -> None:
     print("\naudio stream transport")
     text = CADDYFILE.read_text(encoding="utf-8") if CADDYFILE.exists() else ""
-    match = re.search(r"handle /webhooks/exotel/audio-stream\s*\{(.*?)\n\t\}", text, re.DOTALL)
+    match = re.search(
+        r"handle /webhooks/exotel/audio-stream\s*\{(.*?)\n\t\}", text, re.DOTALL
+    )
     if not match:
         report.fail("no handle block for /webhooks/exotel/audio-stream")
         return
     body = match.group(1)
     if "read_timeout 0" in body and "write_timeout 0" in body:
-        report.ok("no read/write timeout — a long call will not be cut off mid-conversation")
+        report.ok(
+            "no read/write timeout — a long call will not be cut off mid-conversation"
+        )
     else:
-        report.fail("audio stream has a finite timeout; a long call would be dropped by the edge")
+        report.fail(
+            "audio stream has a finite timeout; a long call would be dropped by the edge"
+        )
     if "flush_interval -1" in body:
         report.ok("response buffering disabled — audio frames forward immediately")
     else:
-        report.fail("flush_interval not disabled; buffered audio arrives in bursts and the agent stutters")
+        report.fail(
+            "flush_interval not disabled; buffered audio arrives in bursts and the agent stutters"
+        )
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env-file", type=Path, required=True)
+    parser.add_argument(
+        "--require",
+        action="append",
+        choices=sorted(ROUTER_GATES),
+        default=[],
+        help="Capability that must be configured; repeat for each selected mode",
+    )
     args = parser.parse_args()
 
     if not args.env_file.exists():
@@ -237,14 +274,16 @@ def main() -> int:
     report = Report()
 
     check_edge_config(env, report)
-    check_router_gates(env, report)
+    check_router_gates(env, report, set(args.require))
     check_number_mappings(env, report)
     check_exposure(report)
     check_stream_transport(report)
 
     print()
     if report.failures:
-        print(f"{len(report.failures)} failure(s) — do not point a provider at this deployment")
+        print(
+            f"{len(report.failures)} failure(s) — do not point a provider at this deployment"
+        )
         return 1
     parts = []
     if report.warnings:

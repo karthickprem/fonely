@@ -61,8 +61,13 @@ dialled number reaches is tenant data, not process configuration, and since
 migration 0017 it is a row in `business_channel_identities`. Attach a number
 by API rather than by redeploy:
 
+The public edge intentionally returns 404 for `/internal/*`. Register through
+loopback on the host, or open an SSH tunnel from an operator machine:
+
 ```bash
-curl -sS -X POST https://api.example.in/internal/v1/businesses/channel-identity \
+ssh -L 8000:127.0.0.1:8000 <host>
+
+curl -sS -X POST http://127.0.0.1:8000/internal/v1/businesses/channel-identity \
   -H "Authorization: Bearer $INTERNAL_API_SECRET" \
   -H "X-Business-ID: 1" \
   -H "Content-Type: application/json" \
@@ -114,17 +119,24 @@ not on by default on an Exotel account and has to be enabled for the number.
 
 ## Verify before pointing a real phone at it
 
+Select every capability this host is expected to serve. A selected capability
+with a missing or placeholder gate is a failure, not a warning:
+
 ```bash
-python3 scripts/check-public-edge.py --env-file .env.staging
+python3 scripts/check-public-edge.py \
+  --env-file .env.staging \
+  --require whatsapp \
+  --require exotel \
+  --require internal
 ```
 
-It checks configuration coherence — that the variables the routers gate on are
-present, that the number mapping parses and maps to plausible tenant ids, that
-the Caddy allowlist forwards every intended provider path and no private one,
-and that the audio stream has no timeout or buffering that would cut a call
-short. It reads the Caddyfile and the env file; it does not import the
-application, so it cannot notice a route that is renamed in code. It does not
-dial a phone. Only a real call proves a real call works.
+The validator checks selected router gates, rejects documentation placeholders,
+rejects obsolete environment number mappings, verifies the Caddy allowlist, and
+checks that the audio stream has no finite proxy timeout or buffering. Database-
+backed channel identities are reported as **NOT RUN** because this static tool
+deliberately has no database credentials. Verify those rows privately before the
+first call. It does not import the application or dial a phone; only a mounted
+host check and a real call prove those paths work.
 
 The forwarded paths were checked against a booted application on `cc3aa65`:
 `/health/live` → 200, `/webhooks/whatsapp` → 403 without a valid token,
@@ -132,19 +144,24 @@ The forwarded paths were checked against a booted application on `cc3aa65`:
 `/webhooks/exotel/audio-stream` → 404 on GET because it is WebSocket-only.
 Re-check by hand if a channel route is ever renamed.
 
-## Known gaps
+## Current release boundary
 
-These are true of `main` as of migration head 0015 and are being closed:
+The integration branch is at migration head `0018` and includes authenticated
+Exotel callbacks, provider-CallSid correlation, database-bound tenant admission,
+and a typed media-stream handoff. Those facts do not by themselves prove a
+patient can complete a voice call.
 
-- `/webhooks/exotel/call-status` performs **no signature or secret
-  verification**. Anyone who learns the URL can post call events. Do not
-  publish the number to patients until this is fixed.
-- `/webhooks/exotel/audio-stream` accepts the socket and discards every frame.
-  There is no speech pipeline behind it yet.
-- Call-status correlation matches on the most recently opened call for a phone
-  number rather than on the provider call id, which is wrong when the same
-  patient calls twice.
+Before advertising the number, the exact deployed SHA must still prove:
 
-The edge is safe to stand up now — it is how the developers get a reachable URL
-to build against. It is not safe to advertise the number until the three items
-above are closed.
+- the application mounted the canonical voice runtime rather than rejecting or
+  draining the admitted stream;
+- the selected LLM/STT/TTS configuration initialized successfully;
+- DPDP notice playback completed, evidence persisted to the `0018` columns,
+  greeting followed, and only then STT opened;
+- Exotel's real authentication carrier, start-frame shape, codec, sample rate,
+  media output, and interruption behavior match the configured adapter;
+- one human Tamil call committed the correct appointment and produced durable
+  notification evidence.
+
+The edge may be stood up for controlled integration, but it is not a patient-
+ready voice service until those hosted gates execute.

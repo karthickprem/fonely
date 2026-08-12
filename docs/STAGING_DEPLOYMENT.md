@@ -72,7 +72,7 @@ Health checks do not exercise trusted identity, onboarding, booking transactions
 
 The server and scripts intentionally read different secret names. Set both to the same test value: the application reads `INTERNAL_API_SECRET`, while the proof scripts read `FONELY_INTERNAL_API_SECRET`. Setting only the latter leaves the internal routes unmounted.
 
-Booking confirmation also requires `WHATSAPP_BUSINESS_MAPPINGS`, a JSON `{phone_number_id: business_id}` map. `WHATSAPP_PHONE_NUMBER_ID` alone is insufficient. A missing mapping fails safe with `503 whatsapp_mapping_missing` and rolls back the appointment.
+Booking confirmation requires an active primary row in `business_whatsapp_channels`. Register the synthetic clinic's provider identity through `POST /internal/v1/businesses/whatsapp-channel` using the same private internal authentication and trusted `X-Business-ID` context. A missing or disabled channel fails safe with `503 whatsapp_mapping_missing` and rolls back the appointment; re-registering restores booking without a process restart.
 
 From a prepared host development environment, seed only the synthetic demo clinic and run the functional proof:
 
@@ -84,7 +84,8 @@ HOST_DATABASE_URL='postgresql+asyncpg://fonely:<url-encoded-password>@127.0.0.1:
 backend/.venv/bin/python scripts/seed-demo-clinic.py \
   --base-url http://127.0.0.1:8000 \
   --database-url "$HOST_DATABASE_URL" \
-  --provision
+  --provision \
+  --whatsapp-phone-number-id pnid-demo-clinic
 
 backend/.venv/bin/python scripts/prove-booking.py \
   --base-url http://127.0.0.1:8000 \

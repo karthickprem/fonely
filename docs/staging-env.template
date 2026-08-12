@@ -12,8 +12,6 @@ INTERNAL_API_SECRET=changeme-generate-a-real-secret
 # WhatsApp channel — required by the current base Compose topology
 WHATSAPP_VERIFY_TOKEN=changeme-whatsapp-verify-token
 WHATSAPP_ACCESS_TOKEN=changeme-whatsapp-access-token
-WHATSAPP_PHONE_NUMBER_ID=changeme-whatsapp-phone-number-id
-WHATSAPP_BUSINESS_MAPPINGS={"changeme-phone-number-id":1}
 WHATSAPP_APP_SECRET=changeme-whatsapp-app-secret
 
 # Model access — required by inbound-worker; also consumed by the backend

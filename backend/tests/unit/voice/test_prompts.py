@@ -1,5 +1,6 @@
 """Tests for production prompt architecture."""
-from datetime import date, time
+
+from datetime import UTC, date, time
 
 from fonely.voice.context import AvailableSlot, DayAvailability, TrustedClock
 from fonely.voice.prompts import (
@@ -10,9 +11,10 @@ from fonely.voice.prompts import (
 
 
 def _clock() -> TrustedClock:
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     return TrustedClock(
-        now_utc=datetime(2026, 8, 10, 9, 0, tzinfo=timezone.utc),
+        now_utc=datetime(2026, 8, 10, 9, 0, tzinfo=UTC),
         business_timezone="Asia/Kolkata",
         business_date=date(2026, 8, 10),
         day_of_week="monday",
@@ -61,9 +63,7 @@ def test_availability_with_slots():
         is_operating_day=True,
         is_exception_day=False,
         operating_hours=((time(10, 0), time(13, 0)),),
-        available_slots=(
-            AvailableSlot(1, "Dr. Priya", time(10, 0), time(10, 30), "consultation"),
-        ),
+        available_slots=(AvailableSlot(1, "Dr. Priya", time(10, 0), time(10, 30), "consultation"),),
     )
     text = format_availability(avail)
     assert "Dr. Priya" in text

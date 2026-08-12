@@ -8,66 +8,87 @@ No STT/TTS credentials needed. Feature-gated demo mode.
 Launch: python -m fonely.voice.demo_server
 URL: http://localhost:8765
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
 import os
-from datetime import date, datetime, time, timezone
-from pathlib import Path
+from datetime import date, time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
 
 logger = logging.getLogger("fonely.voice.demo_server")
 
 # Inline minimal HTML — no external build needed
-DEMO_HTML = """<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Fonely Voice Demo</title>
-<style>
-body{font-family:system-ui;max-width:700px;margin:40px auto;padding:0 20px;background:#1a1a2e;color:#e0e0e0}
-h1{color:#00d2ff;font-size:1.4em}
-#chat{border:1px solid #333;border-radius:8px;padding:16px;height:400px;overflow-y:auto;background:#16213e;margin-bottom:12px}
-.turn{margin:8px 0;padding:8px 12px;border-radius:6px}
-.caller{background:#0f3460;text-align:right}
-.agent{background:#1a1a2e;border:1px solid #333}
-.meta{font-size:0.75em;color:#888;margin-top:4px}
-.blocked{background:#3d0000;border:1px solid #660000}
-.terminal{background:#1a3d00;border:1px solid #336600}
-#input-row{display:flex;gap:8px}
-#msg{flex:1;padding:10px;border:1px solid #333;border-radius:6px;background:#16213e;color:#e0e0e0;font-size:1em}
-button{padding:10px 20px;border:none;border-radius:6px;background:#00d2ff;color:#000;font-weight:bold;cursor:pointer}
-button:hover{background:#00b8e6}
-.badge{display:inline-block;padding:2px 6px;border-radius:3px;font-size:0.7em;margin-left:4px}
-.badge-allow{background:#1a3d00;color:#66ff66}
-.badge-block{background:#3d0000;color:#ff6666}
-.badge-terminal{background:#3d3d00;color:#ffff66}
-</style></head><body>
-<h1>Fonely Voice Runtime Demo</h1>
-<p style="color:#888;font-size:0.85em">Provider-free text demo wired to production PipelineRuntime. Type Tamil, Tanglish, or English.</p>
-<div id="chat"></div>
-<div id="input-row"><input id="msg" placeholder="Type here... (e.g., இன்னைக்கு doctor free-ஆ?)" autofocus>
-<button onclick="send()">Send</button></div>
-<script>
-const ws=new WebSocket(`ws://${location.host}/ws`);const chat=document.getElementById('chat');
-const inp=document.getElementById('msg');let terminal=false;
-ws.onmessage=e=>{const d=JSON.parse(e.data);
-if(d.type==='greeting'){add('agent',d.text,'greeting');}
-else if(d.type==='turn_result'){
-const cls=d.allowed?'agent':(d.terminal?'terminal':'blocked');
-const badge=d.terminal?'<span class="badge badge-terminal">TERMINAL</span>':
-d.allowed?'<span class="badge badge-allow">ALLOW</span>':'<span class="badge badge-block">BLOCK</span>';
-add(cls,d.response+badge,
-`speech:${d.speech_class} | turn:${d.turn} | avail:${d.availability_queried}`);
-if(d.terminal){terminal=true;inp.disabled=true;inp.placeholder='Session ended';}
-}else if(d.type==='error'){add('blocked','Error: '+d.message,'');}
-};
-ws.onclose=()=>add('blocked','Connection closed','');
-function add(cls,html,meta){chat.innerHTML+=`<div class="turn ${cls}">${html}${meta?'<div class="meta">'+meta+'</div>':''}</div>`;chat.scrollTop=chat.scrollHeight;}
-function send(){if(terminal)return;const t=inp.value.trim();if(!t)return;add('caller',t,'');ws.send(JSON.stringify({text:t}));inp.value='';}
-inp.onkeydown=e=>{if(e.key==='Enter')send();};
-</script></body></html>"""
+DEMO_HTML = (
+    "<!DOCTYPE html>\n"
+    '<html><head><meta charset="utf-8"><title>Fonely Voice Demo</title>\n'
+    "<style>\n"
+    "body{font-family:system-ui;max-width:700px;margin:40px auto;padding:0"
+    " 20px;background:#1a1a2e;color:#e0e0e0}\n"
+    "h1{color:#00d2ff;font-size:1.4em}\n"
+    "#chat{border:1px solid"
+    " #333;border-radius:8px;padding:16px;height:400px;overflow-y:auto;background:#1621"
+    "3e;margin-bottom:12px}\n"
+    ".turn{margin:8px 0;padding:8px 12px;border-radius:6px}\n"
+    ".caller{background:#0f3460;text-align:right}\n"
+    ".agent{background:#1a1a2e;border:1px solid #333}\n"
+    ".meta{font-size:0.75em;color:#888;margin-top:4px}\n"
+    ".blocked{background:#3d0000;border:1px solid #660000}\n"
+    ".terminal{background:#1a3d00;border:1px solid #336600}\n"
+    "#input-row{display:flex;gap:8px}\n"
+    "#msg{flex:1;padding:10px;border:1px solid"
+    " #333;border-radius:6px;background:#16213e;color:#e0e0e0;font-size:1em}\n"
+    "button{padding:10px"
+    " 20px;border:none;border-radius:6px;background:#00d2ff;color:#000;font-weight:bold"
+    ";cursor:pointer}\n"
+    "button:hover{background:#00b8e6}\n"
+    ".badge{display:inline-block;padding:2px"
+    " 6px;border-radius:3px;font-size:0.7em;margin-left:4px}\n"
+    ".badge-allow{background:#1a3d00;color:#66ff66}\n"
+    ".badge-block{background:#3d0000;color:#ff6666}\n"
+    ".badge-terminal{background:#3d3d00;color:#ffff66}\n"
+    "</style></head><body>\n"
+    "<h1>Fonely Voice Runtime Demo</h1>\n"
+    '<p style="color:#888;font-size:0.85em">Provider-free text demo wired to production'
+    " PipelineRuntime. Type Tamil, Tanglish, or English.</p>\n"
+    '<div id="chat"></div>\n'
+    '<div id="input-row"><input id="msg" placeholder="Type here... (e.g., இன்னைக்கு'
+    ' doctor free-ஆ?)" autofocus>\n'
+    '<button onclick="send()">Send</button></div>\n'
+    "<script>\n"
+    "const ws=new WebSocket(`ws://${location.host}/ws`);const"
+    " chat=document.getElementById('chat');\n"
+    "const inp=document.getElementById('msg');let terminal=false;\n"
+    "ws.onmessage=e=>{const d=JSON.parse(e.data);\n"
+    "if(d.type==='greeting'){add('agent',d.text,'greeting');}\n"
+    "else if(d.type==='turn_result'){\n"
+    "const cls=d.allowed?'agent':(d.terminal?'terminal':'blocked');\n"
+    "const badge=d.terminal?'<span class=\"badge badge-terminal\">TERMINAL</span>':\n"
+    "d.allowed?'<span class=\"badge badge-allow\">ALLOW</span>':'<span class=\"badge"
+    " badge-block\">BLOCK</span>';\n"
+    "add(cls,d.response+badge,\n"
+    "`speech:${d.speech_class} | turn:${d.turn} | avail:${d.availability_queried}`);\n"
+    "if(d.terminal){terminal=true;inp.disabled=true;inp.placeholder='Session ended';}\n"
+    "}else if(d.type==='error'){add('blocked','Error: '+d.message,'');}\n"
+    "};\n"
+    "ws.onclose=()=>add('blocked','Connection closed','');\n"
+    'function add(cls,html,meta){chat.innerHTML+=`<div class="turn'
+    " ${cls}\">${html}${meta?'<div"
+    " class=\"meta\">'+meta+'</div>':''}</div>`;chat.scrollTop=chat.scrollHeight;}\n"
+    "function send(){if(terminal)return;const"
+    " t=inp.value.trim();if(!t)return;add('caller',t,'');ws.send(JSON.stringify({text:t"
+    "}));inp.value='';}\n"
+    "inp.onkeydown=e=>{if(e.key==='Enter')send();};\n"
+    "</script></body></html>"
+)
 
 
-def create_demo_app():
+def create_demo_app() -> FastAPI:
     """Create FastAPI app with WebSocket endpoint wired to PipelineRuntime."""
     from fastapi import FastAPI, WebSocket, WebSocketDisconnect
     from fastapi.responses import HTMLResponse
@@ -91,13 +112,17 @@ def create_demo_app():
         dow = target_date.strftime("%A").lower()
         if dow == "sunday":
             return DayAvailability(
-                business_date=target_date, day_of_week=dow,
-                is_operating_day=False, is_exception_day=False,
+                business_date=target_date,
+                day_of_week=dow,
+                is_operating_day=False,
+                is_exception_day=False,
                 reason="Sunday closed",
             )
         return DayAvailability(
-            business_date=target_date, day_of_week=dow,
-            is_operating_day=True, is_exception_day=False,
+            business_date=target_date,
+            day_of_week=dow,
+            is_operating_day=True,
+            is_exception_day=False,
             operating_hours=((time(10, 0), time(13, 0)), (time(17, 0), time(20, 30))),
             available_slots=(
                 AvailableSlot(1, "Dr. Priya", time(10, 0), time(10, 30), "consultation"),
@@ -113,13 +138,17 @@ def create_demo_app():
 
     class TextSTT:
         """Pass-through: text input acts as STT output."""
+
         async def transcribe(self, audio: bytes) -> str:
             return audio.decode("utf-8", errors="replace")
-        async def close(self): pass
+
+        async def close(self) -> None:
+            pass
 
     class TextLLM:
         """Simple rule-based LLM for demo without credentials."""
-        async def generate(self, system: str, messages: list[dict]) -> str:
+
+        async def generate(self, system: str, messages: list[dict[str, str]]) -> str:
             if not messages:
                 return ""
             last = messages[-1].get("content", "").lower()
@@ -138,10 +167,14 @@ def create_demo_app():
 
             if any(w in last for w in ["book", "appointment", "வேணும்", "பண்ணனும்"]):
                 if "demo" in system.lower():
-                    return "இது demo — booking process show பண்ணலாம், ஆனா save ஆகாது. என்ன reason-க்காக visit?"
+                    return (
+                        "இது demo — booking process show பண்ணலாம், ஆனா save ஆகாது. என்ன reason-க்காக visit?"
+                    )
                 return "என்ன reason-க்காக visit?"
 
-            if any(w in last for w in ["scaling", "cleaning", "root canal", "checkup", "pain", "வலி"]):
+            if any(
+                w in last for w in ["scaling", "cleaning", "root canal", "checkup", "pain", "வலி"]
+            ):
                 return "எந்த date-ல வரணும்?"
 
             if any(w in last for w in ["bye", "thanks", "நன்றி", "போறேன்"]):
@@ -149,24 +182,28 @@ def create_demo_app():
 
             return "எப்படி help பண்ணலாம்?"
 
-        async def close(self): pass
+        async def close(self) -> None:
+            pass
 
     class TextTTS:
         """Pass-through: returns text as bytes for display."""
+
         async def synthesize(self, text: str) -> bytes:
             return text.encode("utf-8")
-        async def close(self): pass
+
+        async def close(self) -> None:
+            pass
 
     @app.get("/")
-    async def index():
+    async def index() -> HTMLResponse:
         return HTMLResponse(DEMO_HTML)
 
     @app.get("/health")
-    async def health():
+    async def health() -> dict[str, object]:
         return {"status": "ok", "mode": "demo", "sessions": admission.stats()}
 
     @app.websocket("/ws")
-    async def websocket_endpoint(websocket: WebSocket):
+    async def websocket_endpoint(websocket: WebSocket) -> None:
         nonlocal session_counter
         await websocket.accept()
         session_counter += 1
@@ -185,7 +222,10 @@ def create_demo_app():
             config,
             clock=clock,
             business_name="Smile Dental Clinic",
-            business_context="Dr. Priya: Mon-Sat, general/root canal/scaling. Dr. Arjun: Mon/Wed/Fri, orthodontics. Consultation ₹300, scaling ₹800.",
+            business_context=(
+                "Dr. Priya: Mon-Sat, general/root canal/scaling. Dr. Arjun: Mon/Wed/Fri, "
+                "orthodontics. Consultation ₹300, scaling ₹800."
+            ),
             business_timezone="Asia/Kolkata",
             stt=TextSTT(),
             llm=TextLLM(),
@@ -199,13 +239,14 @@ def create_demo_app():
 
             # Send greeting
             from .prompts import build_greeting
+
             greeting = build_greeting("Smile Dental Clinic")
             await websocket.send_json({"type": "greeting", "text": greeting})
 
             while True:
                 try:
                     data = await asyncio.wait_for(websocket.receive_text(), timeout=300)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     await websocket.send_json({"type": "error", "message": "idle_timeout"})
                     break
 
@@ -220,23 +261,38 @@ def create_demo_app():
                 if result.response_audio:
                     response_text = result.response_audio.decode("utf-8", errors="replace")
 
-                await websocket.send_json({
-                    "type": "turn_result",
-                    "turn": result.turn_number,
-                    "response": response_text,
-                    "speech_class": result.speech_class,
-                    "allowed": result.allowed,
-                    "terminal": result.terminal,
-                    "terminal_reason": result.terminal_reason,
-                    "availability_queried": result.availability_queried,
-                    "commit_evidence": result.commit_receipt is not None,
-                })
+                await websocket.send_json(
+                    {
+                        "type": "turn_result",
+                        "turn": result.turn_number,
+                        "response": response_text,
+                        "speech_class": result.speech_class,
+                        "allowed": result.allowed,
+                        "terminal": result.terminal,
+                        "terminal_reason": result.terminal_reason,
+                        "availability_queried": result.availability_queried,
+                        "commit_evidence": result.commit_receipt is not None,
+                    }
+                )
 
                 if result.terminal:
                     from .dialogue import get_terminal_response
+
                     terminal = get_terminal_response(result.terminal_reason, "ta-Latn")
                     if terminal:
-                        await websocket.send_json({"type": "turn_result", "turn": 0, "response": terminal, "speech_class": "non_consequential", "allowed": True, "terminal": True, "terminal_reason": result.terminal_reason, "availability_queried": False, "commit_evidence": False})
+                        await websocket.send_json(
+                            {
+                                "type": "turn_result",
+                                "turn": 0,
+                                "response": terminal,
+                                "speech_class": "non_consequential",
+                                "allowed": True,
+                                "terminal": True,
+                                "terminal_reason": result.terminal_reason,
+                                "availability_queried": False,
+                                "commit_evidence": False,
+                            }
+                        )
                     break
 
         except WebSocketDisconnect:
@@ -247,12 +303,12 @@ def create_demo_app():
             await runtime.close("demo_end")
             admission.release("demo-tenant")
 
-
     return app
 
 
-def main():
+def main() -> None:
     import uvicorn
+
     app = create_demo_app()
     port = int(os.environ.get("DEMO_PORT", "8765"))
     print(f"\n  Fonely Voice Demo: http://localhost:{port}\n")

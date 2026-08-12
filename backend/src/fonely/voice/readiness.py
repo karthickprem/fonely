@@ -3,6 +3,7 @@
 Extends the backend lifespan/readiness pattern: readiness is false
 until all voice dependencies are verified and a self-check passes.
 """
+
 from __future__ import annotations
 
 import logging
@@ -10,7 +11,6 @@ import threading
 import time
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any
 
 logger = logging.getLogger("fonely.voice.readiness")
 
@@ -72,12 +72,6 @@ class VoiceReadinessGate:
         start = time.monotonic()
         try:
             self._ensure_nltk_data()
-            import fonely.voice.config
-            import fonely.voice.context
-            import fonely.voice.generation
-            import fonely.voice.lifecycle
-            import fonely.voice.telemetry
-            import fonely.voice.validator_port
             from fonely.voice.providers import credentials_ready, probe_credentials
 
             cred_probe = probe_credentials()

@@ -1,5 +1,4 @@
 """Tests for voice session supervisor state machine."""
-import asyncio
 
 import pytest
 
@@ -110,5 +109,6 @@ class TestProperties:
 
     def test_default_validator_is_stub(self):
         from fonely.voice.validator_port import FailClosedValidatorStub
+
         sup = VoiceSessionSupervisor(_config())
         assert isinstance(sup.validator, FailClosedValidatorStub)

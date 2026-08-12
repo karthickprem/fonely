@@ -3,11 +3,12 @@
 Provides coarse session state, provider health, queue depths,
 and aggregate metrics without exposing transcripts or PII.
 """
+
 from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from .config import SessionState

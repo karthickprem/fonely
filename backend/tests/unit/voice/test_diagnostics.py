@@ -1,4 +1,5 @@
 """Tests for operator diagnostics and session registry."""
+
 import time
 
 from fonely.voice.config import SessionState

@@ -5,16 +5,16 @@ context/availability queries per turn, validator classification,
 generation gating, command port, terminal stop, telemetry, and
 close.  This is the actual production orchestrator, not scaffolding.
 """
+
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Protocol
+from typing import Any, ClassVar, Protocol
 
-from .config import CONSEQUENTIAL_CLASSES, SessionState, SpeechClass, VoiceSessionConfig
+from .config import SessionState, SpeechClass, VoiceSessionConfig
 from .context import (
     AvailabilityPort,
     AvailabilityQuery,
@@ -28,13 +28,17 @@ from .dialogue import (
     DialogueState,
     count_questions,
     detect_filler,
-    get_terminal_response,
 )
 from .generation import GenerationClock
 from .lifecycle import VoiceSessionSupervisor
-from .prompts import build_system_prompt, format_availability
+from .prompts import build_system_prompt
 from .telemetry import VoiceTelemetryExporter
-from .validator_port import FailClosedValidatorStub, SpeechValidationResult, ValidationDecision, ValidatorPort
+from .validator_port import (
+    FailClosedValidatorStub,
+    SpeechValidationResult,
+    ValidationDecision,
+    ValidatorPort,
+)
 
 logger = logging.getLogger("fonely.voice.runtime")
 
@@ -57,6 +61,7 @@ class TTSPort(Protocol):
 @dataclass(frozen=True)
 class TrustedCommandContext:
     """Application-injected trusted context for commands. Never caller-supplied."""
+
     business_id: int
     actor_session_id: str
     conversation_id: str
@@ -66,6 +71,7 @@ class TrustedCommandContext:
 @dataclass(frozen=True)
 class ProposeCommand:
     """Typed proposal carrying trusted context and target facts."""
+
     context: TrustedCommandContext
     service_id: int | None = None
     resource_id: int | None = None
@@ -84,6 +90,7 @@ class ProposeCommand:
 @dataclass(frozen=True)
 class ConfirmCommand:
     """Typed confirmation carrying trusted context."""
+
     context: TrustedCommandContext
     proposal_id: int
     idempotency_key: str = ""
@@ -97,6 +104,7 @@ class ConfirmCommand:
 @dataclass(frozen=True)
 class CommitReceipt:
     """Typed unforgeable receipt bound to proposal facts."""
+
     commitment_id: int
     proposal_id: int
     business_id: int
@@ -112,6 +120,7 @@ class CommitReceipt:
 @dataclass(frozen=True)
 class CommandResult:
     """Result of a business command: proposal or typed commit receipt."""
+
     success: bool
     operation: str = ""
     proposal_id: int | None = None
@@ -128,6 +137,7 @@ class CommandPort(Protocol):
     this port.  Without both, mode must be demo with upfront refusal.
     Only committed evidence from this port authorizes confirmation speech.
     """
+
     async def propose(self, cmd: ProposeCommand) -> CommandResult: ...
     async def confirm(self, cmd: ConfirmCommand) -> CommandResult: ...
 
@@ -199,8 +209,9 @@ class PipelineRuntime:
 
         if session_mode == "live" and command_port is None:
             self._session_mode = "demo"
-            logger.warning("live_mode_downgraded_no_command_port",
-                           extra={"session": config.session_id})
+            logger.warning(
+                "live_mode_downgraded_no_command_port", extra={"session": config.session_id}
+            )
 
     @property
     def supervisor(self) -> VoiceSessionSupervisor:
@@ -242,9 +253,11 @@ class PipelineRuntime:
         self._supervisor.transition(SessionState.CONNECTING)
         self._supervisor.transition(SessionState.ACTIVE)
 
-        self._telemetry.emit("runtime_initialized",
-                             business_name=self._business_name,
-                             session_mode=self._session_mode)
+        self._telemetry.emit(
+            "runtime_initialized",
+            business_name=self._business_name,
+            session_mode=self._session_mode,
+        )
 
     async def process_turn(self, caller_audio: bytes) -> TurnResult:
         """Process one caller turn through the corrected pipeline.
@@ -305,12 +318,14 @@ class PipelineRuntime:
                 availability=availability,
                 session_mode=self._session_mode,
             )
-            self._telemetry.emit("availability_queried",
-                                 date=str(resolved),
-                                 turn=token.turn_id)
+            self._telemetry.emit("availability_queried", date=str(resolved), turn=token.turn_id)
 
         # 4. Update non-authoritative booking collection
-        prev_assistant = self._messages[-1]["content"] if self._messages and self._messages[-1]["role"] == "assistant" else ""
+        prev_assistant = (
+            self._messages[-1]["content"]
+            if self._messages and self._messages[-1]["role"] == "assistant"
+            else ""
+        )
         self._booking.update(
             caller_text,
             resolved_date=resolved_date,
@@ -360,9 +375,13 @@ class PipelineRuntime:
 
         # Receipt-aware override: when binding checks passed, receipt has
         # valid commitment_id and timestamp, ALLOW for this turn only.
-        if (not allowed and receipt_validated and commit_receipt is not None
-                and commit_receipt.commitment_id > 0
-                and commit_receipt.committed_at_ns > 0):
+        if (
+            not allowed
+            and receipt_validated
+            and commit_receipt is not None
+            and commit_receipt.commitment_id > 0
+            and commit_receipt.committed_at_ns > 0
+        ):
             allowed = True
             validation = SpeechValidationResult(
                 decision=ValidationDecision.ALLOW,
@@ -371,12 +390,14 @@ class PipelineRuntime:
                 source="receipt_binding",
             )
 
-        self._telemetry.emit("speech_validated",
-                             speech_class=speech_class,
-                             decision=validation.decision,
-                             source=validation.source,
-                             has_commit_receipt=commit_receipt is not None,
-                             receipt_validated=receipt_validated)
+        self._telemetry.emit(
+            "speech_validated",
+            speech_class=speech_class,
+            decision=validation.decision,
+            source=validation.source,
+            has_commit_receipt=commit_receipt is not None,
+            receipt_validated=receipt_validated,
+        )
 
         # 8. Record dialogue state BEFORE TTS (terminal set before synthesis)
         has_filler = detect_filler(response)
@@ -390,7 +411,9 @@ class PipelineRuntime:
         terminal_reason = ""
         if not can_continue or self._dialogue.is_over_budget():
             terminal = True
-            terminal_reason = "max_turns" if self._dialogue.is_over_budget() else self._dialogue.terminal_reason
+            terminal_reason = (
+                "max_turns" if self._dialogue.is_over_budget() else self._dialogue.terminal_reason
+            )
             self._dialogue.set_terminal(terminal_reason)
 
         # 9. Derive confirmation from committed receipt, not model intent
@@ -408,9 +431,9 @@ class PipelineRuntime:
             self._telemetry.record_tts_usage(len(response))
             self._messages.append({"role": "assistant", "content": response})
         elif not allowed:
-            self._telemetry.emit("speech_blocked",
-                                 speech_class=speech_class,
-                                 reason=validation.reason)
+            self._telemetry.emit(
+                "speech_blocked", speech_class=speech_class, reason=validation.reason
+            )
 
         elapsed = (time.monotonic() - t0) * 1000
 
@@ -441,7 +464,12 @@ class PipelineRuntime:
         self._closed = True
 
         errors: list[str] = []
-        for name, client in [("stt", self._stt), ("llm", self._llm), ("tts", self._tts)]:
+        clients: list[tuple[str, STTPort | LLMPort | TTSPort]] = [
+            ("stt", self._stt),
+            ("llm", self._llm),
+            ("tts", self._tts),
+        ]
+        for name, client in clients:
             try:
                 await client.close()
             except Exception as e:
@@ -463,6 +491,7 @@ class PipelineRuntime:
     def _is_user_confirmation(self, caller_text: str) -> bool:
         """Detect explicit user confirmation from caller text."""
         import re
+
         lower = caller_text.lower().strip()
         confirm_patterns = [
             r"^(yes|ஆமா|ஆம்|சரி|correct|confirm|okay|ok|proceed|aamaa|aama|sari)\b",
@@ -487,7 +516,9 @@ class PipelineRuntime:
 
     def _payload_digest(self, **facts: Any) -> str:
         """Compute deterministic digest of command target facts."""
-        import hashlib, json
+        import hashlib
+        import json
+
         canonical = json.dumps(facts, sort_keys=True, default=str)
         return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
@@ -517,53 +548,70 @@ class PipelineRuntime:
         )
 
         try:
-            if speech_class in {SpeechClass.COMMITTED_CREATE, SpeechClass.COMMITTED_CANCEL, SpeechClass.COMMITTED_RESCHEDULE}:
-                proposal = await self._command_port.propose(ProposeCommand(
-                    context=ctx,
-                    service_id=collected.get("service_id"),
-                    resource_id=collected.get("resource_id"),
-                    target_date=collected.get("target_date"),
-                    target_time=collected.get("target_time", ""),
-                    customer_name=collected.get("customer_name", ""),
-                    customer_phone=collected.get("customer_phone", ""),
-                    idempotency_key=propose_key,
-                    payload_digest=digest,
-                ))
+            if speech_class in {
+                SpeechClass.COMMITTED_CREATE,
+                SpeechClass.COMMITTED_CANCEL,
+                SpeechClass.COMMITTED_RESCHEDULE,
+            }:
+                proposal = await self._command_port.propose(
+                    ProposeCommand(
+                        context=ctx,
+                        service_id=collected.get("service_id"),
+                        resource_id=collected.get("resource_id"),
+                        target_date=collected.get("target_date"),
+                        target_time=collected.get("target_time", ""),
+                        customer_name=collected.get("customer_name", ""),
+                        customer_phone=collected.get("customer_phone", ""),
+                        idempotency_key=propose_key,
+                        payload_digest=digest,
+                    )
+                )
                 if not proposal.success or proposal.proposal_id is None:
-                    self._telemetry.emit("command_proposal_failed",
-                                         error=proposal.error, turn=turn_id)
+                    self._telemetry.emit(
+                        "command_proposal_failed", error=proposal.error, turn=turn_id
+                    )
                     return None
 
                 expected_version = proposal.evidence.get("version", 2) if proposal.evidence else 2
 
-                confirmation = await self._command_port.confirm(ConfirmCommand(
-                    context=ctx,
-                    proposal_id=proposal.proposal_id,
-                    idempotency_key=f"{propose_key}-confirm",
-                    expected_version=expected_version,
-                ))
+                confirmation = await self._command_port.confirm(
+                    ConfirmCommand(
+                        context=ctx,
+                        proposal_id=proposal.proposal_id,
+                        idempotency_key=f"{propose_key}-confirm",
+                        expected_version=expected_version,
+                    )
+                )
                 if confirmation.committed and confirmation.receipt is not None:
                     receipt = confirmation.receipt
-                    if (receipt.business_id != self._config.business_id
-                            or receipt.proposal_id != proposal.proposal_id
-                            or (digest and receipt.payload_digest and receipt.payload_digest != digest)):
-                        self._telemetry.emit("receipt_binding_mismatch",
-                                             turn=turn_id,
-                                             expected_digest=digest[:8] if digest else "",
-                                             receipt_digest=receipt.payload_digest[:8] if receipt.payload_digest else "")
+                    if (
+                        receipt.business_id != self._config.business_id
+                        or receipt.proposal_id != proposal.proposal_id
+                        or (digest and receipt.payload_digest and receipt.payload_digest != digest)
+                    ):
+                        self._telemetry.emit(
+                            "receipt_binding_mismatch",
+                            turn=turn_id,
+                            expected_digest=digest[:8] if digest else "",
+                            receipt_digest=receipt.payload_digest[:8]
+                            if receipt.payload_digest
+                            else "",
+                        )
                         return None
-                    self._telemetry.emit("command_committed",
-                                         commitment_id=receipt.commitment_id,
-                                         proposal_id=receipt.proposal_id,
-                                         turn=turn_id)
+                    self._telemetry.emit(
+                        "command_committed",
+                        commitment_id=receipt.commitment_id,
+                        proposal_id=receipt.proposal_id,
+                        turn=turn_id,
+                    )
                     return receipt
                 else:
-                    self._telemetry.emit("command_confirm_failed",
-                                         error=confirmation.error, turn=turn_id)
+                    self._telemetry.emit(
+                        "command_confirm_failed", error=confirmation.error, turn=turn_id
+                    )
                     return None
         except Exception as exc:
-            self._telemetry.emit("command_error",
-                                 error=type(exc).__name__, turn=turn_id)
+            self._telemetry.emit("command_error", error=type(exc).__name__, turn=turn_id)
             return None
 
         return None
@@ -592,7 +640,10 @@ class PipelineRuntime:
                 facts["target_date"] = result.relative_date_resolved
             if result.caller_text:
                 import re
-                time_match = re.search(r"(\d{1,2}):?(\d{2})?\s*(am|pm)?", result.caller_text.lower())
+
+                time_match = re.search(
+                    r"(\d{1,2}):?(\d{2})?\s*(am|pm)?", result.caller_text.lower()
+                )
                 if time_match and "target_time" not in facts:
                     h = int(time_match.group(1))
                     m = int(time_match.group(2) or 0)
@@ -603,7 +654,9 @@ class PipelineRuntime:
                         h = 0
                     facts["target_time"] = f"{h:02d}:{m:02d}"
 
-                name_match = re.search(r"^([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)$", result.caller_text.strip())
+                name_match = re.search(
+                    r"^([A-Z][a-z]+(?:\s[A-Z][a-z]+)*)$", result.caller_text.strip()
+                )
                 if name_match and "customer_name" not in facts:
                     facts["customer_name"] = name_match.group(1)
 
@@ -625,11 +678,9 @@ class PipelineRuntime:
         if start_at:
             from datetime import datetime as dt_mod
             from zoneinfo import ZoneInfo
+
             try:
-                if isinstance(start_at, str):
-                    parsed = dt_mod.fromisoformat(start_at)
-                else:
-                    parsed = start_at
+                parsed = dt_mod.fromisoformat(start_at) if isinstance(start_at, str) else start_at
                 local = parsed.astimezone(ZoneInfo(tz))
                 date_str = local.strftime("%B %d")
                 time_str = local.strftime("%I:%M %p").lstrip("0")
@@ -658,7 +709,7 @@ class PipelineRuntime:
         return await self._availability.query_day_availability(query)
 
     # Pre-compiled safe speech patterns (questions, collection, informational, conversational)
-    _SAFE_PATTERNS = [
+    _SAFE_PATTERNS: ClassVar[list[str]] = [
         r"\?",  # Contains question mark
         r"(available|slot|time|date|நேரம்|தேதி)",  # Availability info
         r"(₹\d|ரூபாய்|rupees?|fee|price|cost)",  # Price info
@@ -676,15 +727,15 @@ class PipelineRuntime:
         r"(note|okay|correct|சரி|ஆமா)",  # Acknowledgement
     ]
 
-    _COMMIT_PATTERNS = [
+    _COMMIT_PATTERNS: ClassVar[list[str]] = [
         r"\b(confirmed|booked|reserved|saved|fixed|scheduled)\b",
         r"(book aayiduchu|fix aayiduchu|confirm aayiduchu|உறுதியாகிவிட்டது|பதிவு செய்யப்பட்டது)",
     ]
-    _NOTIFY_PATTERNS = [
+    _NOTIFY_PATTERNS: ClassVar[list[str]] = [
         r"\b(notified|informed|alerted|alert sent|message sent)\b",
         r"(தகவல் அனுப்பப்பட்டது)",
     ]
-    _HANDOFF_PATTERNS = [
+    _HANDOFF_PATTERNS: ClassVar[list[str]] = [
         r"\b(transferred|connected|call transferred)\b",
         r"(இணைத்துவிட்டேன்)",
     ]
@@ -697,6 +748,7 @@ class PipelineRuntime:
         Only explicitly recognized safe patterns get NON_CONSEQUENTIAL.
         """
         import re
+
         lower = text.lower()
 
         # Check consequential patterns first
@@ -723,17 +775,16 @@ class PipelineRuntime:
     def _infer_asked_field(self, response: str) -> str | None:
         """Infer which field was asked from response text."""
         import re
+
         lower = response.lower()
-        if re.search(r"(reason|service|என்ன|treatment)", lower):
-            if "?" in response or "சொல்லுங்க" in response:
-                return "reason"
-        if re.search(r"(date|நாள்|தேதி|எப்ப|day)", lower):
-            if "?" in response or "வரணும்" in response:
-                return "date"
-        if re.search(r"(time|நேரம்|மணி|slot)", lower):
-            if "?" in response or "சரியா" in response:
-                return "time"
-        if re.search(r"(name|பேரு|பெயர்|நேம்)", lower):
-            if "?" in response or "சொல்லுங்க" in response:
-                return "name"
+        if re.search(r"(reason|service|என்ன|treatment)", lower) and (
+            "?" in response or "சொல்லுங்க" in response
+        ):
+            return "reason"
+        if re.search(r"(date|நாள்|தேதி|எப்ப|day)", lower) and ("?" in response or "வரணும்" in response):
+            return "date"
+        if re.search(r"(time|நேரம்|மணி|slot)", lower) and ("?" in response or "சரியா" in response):
+            return "time"
+        if re.search(r"(name|பேரு|பெயர்|நேம்)", lower) and ("?" in response or "சொல்லுங்க" in response):
+            return "name"
         return None

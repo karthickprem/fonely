@@ -15,6 +15,7 @@ This is transport-neutral: the browser demo and the real telephony path both
 call open_session() to get (spoken_lines, evidence_event) and are responsible
 for speaking the lines before opening the mic and persisting the event.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -34,9 +35,10 @@ class SessionOpening:
     conversational capture begins. notice_event is written to the call record
     as proof this patient heard this exact notice version.
     """
+
     notice_text: str
     greeting_text: str
-    notice_event: dict
+    notice_event: dict[str, object]
     notice_version: str
 
     @property

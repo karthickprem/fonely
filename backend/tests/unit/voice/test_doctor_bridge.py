@@ -1,4 +1,5 @@
 """Tests for the in-memory agent↔doctor bridge."""
+
 from __future__ import annotations
 
 import asyncio
@@ -38,8 +39,9 @@ async def test_ask_wait_respond_cycle():
         await asyncio.sleep(0.05)
         bridge.doctor_responds(0, "5pm to 7pm")
 
-    asyncio.create_task(respond_soon())
+    responder = asyncio.create_task(respond_soon())
     response = await bridge.wait_for_response(query, timeout=2.0)
+    await responder
     assert response == "5pm to 7pm"
 
 

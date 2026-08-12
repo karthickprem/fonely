@@ -6,20 +6,19 @@ a readback's FACTS (date, time value, name) are byte-identical across all three
 languages — only the connective words differ. A readback whose time drifted
 between languages would be a wrong-booking bug, so this is asserted directly.
 """
+
 from __future__ import annotations
 
 from datetime import date, time
 
-import pytest
-
-from fonely.voice.language import (
-    detect_language,
-    get_response,
-    format_time_spoken,
-    RESPONSES,
-    DEFAULT_LANGUAGE,
-)
 from fonely.voice.dialogue import BookingCollection
+from fonely.voice.language import (
+    DEFAULT_LANGUAGE,
+    RESPONSES,
+    detect_language,
+    format_time_spoken,
+    get_response,
+)
 
 
 class TestDetection:

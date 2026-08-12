@@ -4,6 +4,7 @@ Each adapter wraps its Pipecat service with production boundaries:
 connection/synthesis timeouts, error classification, usage event
 emission, and explicit close.  No PII in error frames.
 """
+
 from __future__ import annotations
 
 import logging
@@ -101,6 +102,7 @@ def build_llm(config: LLMConfig, *, evidence_sink: Any = None) -> Any:
     base_url = os.environ.get("ANTHROPIC_BASE_URL")
     if base_url:
         from urllib.parse import urlparse
+
         parsed = urlparse(base_url)
         if parsed.scheme not in ("https",):
             raise RuntimeError("ANTHROPIC_BASE_URL must use HTTPS")

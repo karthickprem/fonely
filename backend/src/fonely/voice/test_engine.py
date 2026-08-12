@@ -5,15 +5,16 @@ validates target facts, and produces verifiable typed receipts.
 Used for provider-free vertical proof; production uses PostgreSQL
 AppointmentService through the same CommandPort interface.
 """
+
 from __future__ import annotations
 
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import date, time as dt_time
+from datetime import date
 from typing import Any
 
-from .runtime import CommandPort, CommandResult, CommitReceipt, ConfirmCommand, ProposeCommand
+from .runtime import CommandResult, CommitReceipt, ConfirmCommand, ProposeCommand
 
 
 @dataclass
@@ -28,6 +29,7 @@ class Proposal:
     idempotency_key: str
     status: str = "pending"
     created_at_ns: int = 0
+    payload_digest: str = ""
 
 
 @dataclass
@@ -70,11 +72,12 @@ class TestBookingEngine:
                     return CommandResult(success=False, error="idempotency_business_mismatch")
                 # Same key + different payload digest = conflict
                 if cmd.payload_digest and existing.idempotency_key == cmd.idempotency_key:
-                    stored_digest = getattr(existing, '_payload_digest', '')
+                    stored_digest = existing.payload_digest
                     if stored_digest and stored_digest != cmd.payload_digest:
                         return CommandResult(success=False, error="idempotency_payload_conflict")
                 return CommandResult(
-                    success=True, operation="create",
+                    success=True,
+                    operation="create",
                     proposal_id=existing.proposal_id,
                 )
 
@@ -97,13 +100,15 @@ class TestBookingEngine:
                 idempotency_key=cmd.idempotency_key,
                 created_at_ns=time.monotonic_ns(),
             )
-            proposal._payload_digest = cmd.payload_digest
+            proposal.payload_digest = cmd.payload_digest
             self._proposals[pid] = proposal
             if cmd.idempotency_key:
                 self._idempotency_index[cmd.idempotency_key] = pid
 
             return CommandResult(
-                success=True, operation="create", proposal_id=pid,
+                success=True,
+                operation="create",
+                proposal_id=pid,
             )
 
     async def confirm(self, cmd: ConfirmCommand) -> CommandResult:
@@ -129,13 +134,15 @@ class TestBookingEngine:
                         operation="create",
                         idempotency_key=proposal.idempotency_key,
                         confirm_idempotency_key=existing.idempotency_key,
-                        payload_digest=getattr(proposal, '_payload_digest', ''),
+                        payload_digest=proposal.payload_digest,
                         committed_at_ns=existing.committed_at_ns,
                         facts=existing.facts,
                     )
                     return CommandResult(
-                        success=True, operation="create",
-                        proposal_id=cmd.proposal_id, committed=True,
+                        success=True,
+                        operation="create",
+                        proposal_id=cmd.proposal_id,
+                        committed=True,
                         receipt=receipt,
                     )
 
@@ -183,13 +190,15 @@ class TestBookingEngine:
                 operation="create",
                 idempotency_key=proposal.idempotency_key,
                 confirm_idempotency_key=cmd.idempotency_key,
-                payload_digest=getattr(proposal, '_payload_digest', ''),
+                payload_digest=proposal.payload_digest,
                 committed_at_ns=committed_at,
                 facts=facts,
             )
             return CommandResult(
-                success=True, operation="create",
-                proposal_id=cmd.proposal_id, committed=True,
+                success=True,
+                operation="create",
+                proposal_id=cmd.proposal_id,
+                committed=True,
                 receipt=receipt,
             )
 

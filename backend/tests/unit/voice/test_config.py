@@ -1,17 +1,11 @@
 """Tests for typed voice session configuration."""
+
 from fonely.voice.config import (
+    _VALID_TRANSITIONS,
     CONSEQUENTIAL_CLASSES,
-    AudioConfig,
-    LLMConfig,
-    STTConfig,
-    SessionLimits,
     SessionState,
     SpeechClass,
-    TTSConfig,
-    TurnConfig,
-    VADConfig,
     VoiceSessionConfig,
-    _VALID_TRANSITIONS,
 )
 
 
@@ -50,6 +44,6 @@ def test_config_immutable():
     cfg = VoiceSessionConfig(session_id="test-1", business_id=1)
     try:
         cfg.session_id = "changed"
-        assert False, "should be frozen"
+        raise AssertionError("should be frozen")
     except AttributeError:
         pass

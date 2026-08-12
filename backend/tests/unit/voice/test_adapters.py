@@ -1,4 +1,5 @@
 """Tests for provider adapters and audio frame buffer."""
+
 from fonely.voice.adapters import AudioFrameBuffer, CartesiaTTSAdapter, SarvamSTTAdapter
 from fonely.voice.config import STTConfig, TTSConfig
 
@@ -6,7 +7,7 @@ from fonely.voice.config import STTConfig, TTSConfig
 class TestAudioFrameBuffer:
     def test_accumulate_and_flush(self):
         buf = AudioFrameBuffer(max_frames=10)
-        for i in range(5):
+        for _i in range(5):
             buf.add_frame(b"\x00" * 320)
         assert buf.frame_count == 5
         assert buf.duration_ms == 100.0
@@ -44,15 +45,17 @@ class TestAudioFrameBuffer:
 class TestAdapterInitialization:
     def test_stt_adapter_fails_without_service(self):
         import asyncio
+
         adapter = SarvamSTTAdapter(STTConfig())
         try:
             asyncio.get_event_loop().run_until_complete(adapter.transcribe(b""))
-            assert False, "should raise"
+            raise AssertionError("should raise")
         except RuntimeError as e:
             assert "not initialized" in str(e)
 
     def test_tts_adapter_tracks_characters(self):
         import asyncio
+
         adapter = CartesiaTTSAdapter(TTSConfig())
         adapter.set_service(object())
         asyncio.get_event_loop().run_until_complete(adapter.synthesize("hello"))

@@ -11,12 +11,23 @@ test, a demo, or a real call without importing a server module. Booking commits
 go through clinic_resolver.book_appointment — the single commit path — never
 directly here.
 """
+
 from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
-from typing import Callable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from datetime import date
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from .context import DayAvailability
+    from .runtime import CommandPort
 
 from pipecat.frames.frames import (
     Frame,
@@ -38,17 +49,38 @@ logger = logging.getLogger("fonely.voice.frame_pipeline")
 # (one source of truth, three language buckets). The gate looks them up via
 # get_response(key, caller_language).
 
-_CONFIRM_WORDS = frozenset({
-    "yes", "yeah", "yep", "ok", "okay", "correct", "right", "sure", "hmm",
-    # Tamil confirmations, INCLUDING the fuller forms real Sarvam STT produces.
-    # A caller saying "ஆமா" is transcribed "ஆமாம்"; "சரி" comes back "சரி" but
-    # often with an adjacent particle. Text-in used the short forms; audio
-    # revealed the STT forms. Missing "ஆமாம்" meant a spoken yes never
-    # confirmed and the booking never committed.
-    "ஆமா", "ஆமாம்", "ஆம்", "ஆமாம",
-    "சரி", "சரிங்க", "சரிதான்", "ரைட்",
-    "aamaa", "aamaam", "sari", "aama", "seri", "seringa",
-})
+_CONFIRM_WORDS = frozenset(
+    {
+        "yes",
+        "yeah",
+        "yep",
+        "ok",
+        "okay",
+        "correct",
+        "right",
+        "sure",
+        "hmm",
+        # Tamil confirmations, INCLUDING the fuller forms real Sarvam STT produces.
+        # A caller saying "ஆமா" is transcribed "ஆமாம்"; "சரி" comes back "சரி" but
+        # often with an adjacent particle. Text-in used the short forms; audio
+        # revealed the STT forms. Missing "ஆமாம்" meant a spoken yes never
+        # confirmed and the booking never committed.
+        "ஆமா",
+        "ஆமாம்",
+        "ஆம்",
+        "ஆமாம",
+        "சரி",
+        "சரிங்க",
+        "சரிதான்",
+        "ரைட்",
+        "aamaa",
+        "aamaam",
+        "sari",
+        "aama",
+        "seri",
+        "seringa",
+    }
+)
 _CLOSURE_WORDS = ("no", "bye", "இல்ல", "போறேன்", "நன்றி", "thanks", "nothing", "வேண்டாம்")
 
 # Words that signal the caller is asking about availability. Used to decide
@@ -97,11 +129,13 @@ class ResolverContext:
 
     Injected by the entrypoint. Holds no per-call mutable state itself.
     """
+
     business_id: int
-    session_factory: Callable  # () -> AsyncSession context manager
-    command_port: object       # CommandPort
+    session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]]
+    command_port: CommandPort
     clock: TrustedClock
-    ask_doctor: Callable | None = None  # async (question, patient_context) -> None
+    # async (question, patient_context) -> None
+    ask_doctor: Callable[[str, str], Awaitable[None]] | None = None
 
 
 class BookingStateInjector(FrameProcessor):
@@ -116,7 +150,7 @@ class BookingStateInjector(FrameProcessor):
         super().__init__()
         self._resolver = resolver
         self._booking = BookingCollection()
-        self._last_availability = None
+        self._last_availability: DayAvailability | None = None
         self.caller_confirmed = False
         self.booking_closed = False
         # Caller's language, updated per turn (sticky). The single propagation
@@ -127,7 +161,7 @@ class BookingStateInjector(FrameProcessor):
     def booking(self) -> BookingCollection:
         return self._booking
 
-    async def process_frame(self, frame: Frame, direction: FrameDirection):
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
         if not isinstance(frame, LLMContextFrame):
             await self.push_frame(frame, direction)
@@ -183,8 +217,9 @@ class BookingStateInjector(FrameProcessor):
 
         state_block = self._booking.render()
         for i in range(len(messages) - 1, -1, -1):
-            if isinstance(messages[i], dict) and messages[i].get("role") == "user":
-                original = messages[i].get("content", "")
+            msg = messages[i]
+            if isinstance(msg, dict) and msg.get("role") == "user":
+                original = msg.get("content", "")
                 messages[i] = {
                     "role": "user",
                     "content": f"{original}\n\n{live_context}\n{state_block}",
@@ -198,16 +233,15 @@ class BookingStateInjector(FrameProcessor):
         )
         await self.push_frame(LLMContextFrame(context=new_context), direction)
 
-    async def _fetch_availability(self, target_date):
+    async def _fetch_availability(self, target_date: date) -> DayAvailability | None:
         """Structured DayAvailability from the DB for the state machine to
         validate the caller's chosen time. Failure degrades to None (the state
         machine then can't confirm a time, which is safe — no false booking)."""
         from . import clinic_resolver
+
         try:
             async with self._resolver.session_factory() as session:
-                biz = await clinic_resolver.resolve_business(
-                    session, self._resolver.business_id
-                )
+                biz = await clinic_resolver.resolve_business(session, self._resolver.business_id)
                 return await clinic_resolver.day_availability(
                     session, self._resolver.business_id, biz.timezone, target_date
                 )
@@ -221,6 +255,7 @@ class BookingStateInjector(FrameProcessor):
         doctor. The precedence here is explicit — a bug in the lab version
         (`A and B or C or D`) grouped wrong and pinged on almost any input."""
         from . import clinic_resolver
+
         try:
             async with self._resolver.session_factory() as session:
                 ctx_text = await clinic_resolver.clinic_context_text(
@@ -265,7 +300,7 @@ class BookingPostLLMGate(FrameProcessor):
         self._booking_done = False
         self._response_frames: list[Frame] | None = None
 
-    async def process_frame(self, frame: Frame, direction: FrameDirection):
+    async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
 
         if isinstance(frame, LLMFullResponseStartFrame):
@@ -351,7 +386,7 @@ class BookingPostLLMGate(FrameProcessor):
         logger.warning("booking_refused: %s", outcome.error)
         return get_response("commit_refused", lang)
 
-    async def _emit(self, text: str, direction: FrameDirection):
+    async def _emit(self, text: str, direction: FrameDirection) -> None:
         await self.push_frame(LLMFullResponseStartFrame(), direction)
         await self.push_frame(LLMTextFrame(text=text), direction)
         await self.push_frame(LLMFullResponseEndFrame(), direction)

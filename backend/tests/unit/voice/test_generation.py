@@ -1,4 +1,5 @@
 """Tests for generation clock and token currency."""
+
 from fonely.voice.generation import GenerationClock
 
 

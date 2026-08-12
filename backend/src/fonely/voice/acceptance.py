@@ -68,10 +68,11 @@ Root-cause postmortem for R&D live transcript defects:
     from backend; prompt contains only immutable behavioral
     instructions, not clinic data.
 """
+
 from __future__ import annotations
 
 import enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 class TerminalOutcome(enum.StrEnum):
@@ -130,49 +131,68 @@ ACCEPTANCE_MATRIX: tuple[AcceptanceScenario, ...] = (
         terminal_outcome=TerminalOutcome.INQUIRY_ANSWERED,
         max_turns=4,
         required_ports=frozenset({RequiredPort.TRUSTED_CLOCK, RequiredPort.BUSINESS_CONTEXT}),
-        forbidden_behaviors=frozenset({
-            ForbiddenBehavior.NARRATION_FILLER,
-            ForbiddenBehavior.HARDCODED_SLOTS,
-            ForbiddenBehavior.STATIC_FACTS_AS_MUTABLE,
-        }),
-        description="User asks clinic hours or fee; agent answers from authoritative context, no booking offer.",
+        forbidden_behaviors=frozenset(
+            {
+                ForbiddenBehavior.NARRATION_FILLER,
+                ForbiddenBehavior.HARDCODED_SLOTS,
+                ForbiddenBehavior.STATIC_FACTS_AS_MUTABLE,
+            }
+        ),
+        description=(
+            "User asks clinic hours or fee; agent answers from authoritative "
+            "context, no booking offer."
+        ),
     ),
     AcceptanceScenario(
         id="AC-002",
         name="today_availability_check",
         terminal_outcome=TerminalOutcome.INQUIRY_ANSWERED,
         max_turns=4,
-        required_ports=frozenset({
-            RequiredPort.TRUSTED_CLOCK,
-            RequiredPort.AVAILABILITY_QUERY,
-        }),
-        forbidden_behaviors=frozenset({
-            ForbiddenBehavior.UNRESOLVED_RELATIVE_DATE,
-            ForbiddenBehavior.GENERIC_SCHEDULE_AS_AVAILABILITY,
-            ForbiddenBehavior.UNSOLICITED_DATE_STEERING,
-        }),
-        description="User asks if doctor is free today; agent resolves today via trusted clock, queries availability port, reports actual slots or no availability.",
+        required_ports=frozenset(
+            {
+                RequiredPort.TRUSTED_CLOCK,
+                RequiredPort.AVAILABILITY_QUERY,
+            }
+        ),
+        forbidden_behaviors=frozenset(
+            {
+                ForbiddenBehavior.UNRESOLVED_RELATIVE_DATE,
+                ForbiddenBehavior.GENERIC_SCHEDULE_AS_AVAILABILITY,
+                ForbiddenBehavior.UNSOLICITED_DATE_STEERING,
+            }
+        ),
+        description=(
+            "User asks if doctor is free today; agent resolves today via trusted "
+            "clock, queries availability port, reports actual slots or no availability."
+        ),
     ),
     AcceptanceScenario(
         id="AC-003",
         name="booking_completed_test_engine",
         terminal_outcome=TerminalOutcome.BOOKING_COMPLETED,
         max_turns=10,
-        required_ports=frozenset({
-            RequiredPort.TRUSTED_CLOCK,
-            RequiredPort.AVAILABILITY_QUERY,
-            RequiredPort.VALIDATOR_PORT,
-            RequiredPort.CONVERSATION_SERVICE,
-        }),
-        forbidden_behaviors=frozenset({
-            ForbiddenBehavior.FALSE_BOOKING_CLAIM,
-            ForbiddenBehavior.CONSEQUENTIAL_WITHOUT_EVIDENCE,
-            ForbiddenBehavior.PROLONGED_IMPOSSIBLE_GOAL,
-            ForbiddenBehavior.REPEATED_QUESTION,
-        }),
+        required_ports=frozenset(
+            {
+                RequiredPort.TRUSTED_CLOCK,
+                RequiredPort.AVAILABILITY_QUERY,
+                RequiredPort.VALIDATOR_PORT,
+                RequiredPort.CONVERSATION_SERVICE,
+            }
+        ),
+        forbidden_behaviors=frozenset(
+            {
+                ForbiddenBehavior.FALSE_BOOKING_CLAIM,
+                ForbiddenBehavior.CONSEQUENTIAL_WITHOUT_EVIDENCE,
+                ForbiddenBehavior.PROLONGED_IMPOSSIBLE_GOAL,
+                ForbiddenBehavior.REPEATED_QUESTION,
+            }
+        ),
         requires_live_audio=True,
         requires_native_grading=True,
-        description="Full booking flow against test authoritative engine: collect→propose→confirm→commit with evidence.",
+        description=(
+            "Full booking flow against test authoritative engine: "
+            "collect→propose→confirm→commit with evidence."
+        ),
     ),
     AcceptanceScenario(
         id="AC-004",
@@ -180,40 +200,59 @@ ACCEPTANCE_MATRIX: tuple[AcceptanceScenario, ...] = (
         terminal_outcome=TerminalOutcome.BOOKING_REFUSED_TEST_MODE,
         max_turns=3,
         required_ports=frozenset({RequiredPort.TRUSTED_CLOCK}),
-        forbidden_behaviors=frozenset({
-            ForbiddenBehavior.LATE_MODE_DISCLOSURE,
-            ForbiddenBehavior.PROLONGED_IMPOSSIBLE_GOAL,
-        }),
-        description="In demo/test mode, agent discloses limitation before collecting booking details, not after.",
+        forbidden_behaviors=frozenset(
+            {
+                ForbiddenBehavior.LATE_MODE_DISCLOSURE,
+                ForbiddenBehavior.PROLONGED_IMPOSSIBLE_GOAL,
+            }
+        ),
+        description=(
+            "In demo/test mode, agent discloses limitation before collecting booking "
+            "details, not after."
+        ),
     ),
     AcceptanceScenario(
         id="AC-005",
         name="unavailable_slot_alternatives",
         terminal_outcome=TerminalOutcome.UNAVAILABLE_SLOT,
         max_turns=6,
-        required_ports=frozenset({
-            RequiredPort.TRUSTED_CLOCK,
-            RequiredPort.AVAILABILITY_QUERY,
-        }),
-        forbidden_behaviors=frozenset({
-            ForbiddenBehavior.HARDCODED_SLOTS,
-            ForbiddenBehavior.UNSOLICITED_DATE_STEERING,
-        }),
-        description="Requested slot unavailable; agent offers authoritative alternatives from availability port.",
+        required_ports=frozenset(
+            {
+                RequiredPort.TRUSTED_CLOCK,
+                RequiredPort.AVAILABILITY_QUERY,
+            }
+        ),
+        forbidden_behaviors=frozenset(
+            {
+                ForbiddenBehavior.HARDCODED_SLOTS,
+                ForbiddenBehavior.UNSOLICITED_DATE_STEERING,
+            }
+        ),
+        description=(
+            "Requested slot unavailable; agent offers authoritative alternatives from "
+            "availability port."
+        ),
     ),
     AcceptanceScenario(
         id="AC-006",
         name="closed_day_handling",
         terminal_outcome=TerminalOutcome.CLOSED_DAY,
         max_turns=4,
-        required_ports=frozenset({
-            RequiredPort.TRUSTED_CLOCK,
-            RequiredPort.AVAILABILITY_QUERY,
-        }),
-        forbidden_behaviors=frozenset({
-            ForbiddenBehavior.GENERIC_SCHEDULE_AS_AVAILABILITY,
-        }),
-        description="User requests appointment on closed day (Sunday or holiday); agent reports closed from availability port.",
+        required_ports=frozenset(
+            {
+                RequiredPort.TRUSTED_CLOCK,
+                RequiredPort.AVAILABILITY_QUERY,
+            }
+        ),
+        forbidden_behaviors=frozenset(
+            {
+                ForbiddenBehavior.GENERIC_SCHEDULE_AS_AVAILABILITY,
+            }
+        ),
+        description=(
+            "User requests appointment on closed day (Sunday or holiday); agent reports "
+            "closed from availability port."
+        ),
     ),
     AcceptanceScenario(
         id="AC-007",
@@ -221,11 +260,16 @@ ACCEPTANCE_MATRIX: tuple[AcceptanceScenario, ...] = (
         terminal_outcome=TerminalOutcome.CORRECTION_HANDLED,
         max_turns=8,
         required_ports=frozenset({RequiredPort.TRUSTED_CLOCK}),
-        forbidden_behaviors=frozenset({
-            ForbiddenBehavior.REPEATED_QUESTION,
-            ForbiddenBehavior.NARRATION_FILLER,
-        }),
-        description="User corrects name/date/time during booking; agent updates without re-asking already-provided fields.",
+        forbidden_behaviors=frozenset(
+            {
+                ForbiddenBehavior.REPEATED_QUESTION,
+                ForbiddenBehavior.NARRATION_FILLER,
+            }
+        ),
+        description=(
+            "User corrects name/date/time during booking; agent updates without re-asking "
+            "already-provided fields."
+        ),
     ),
     AcceptanceScenario(
         id="AC-008",
@@ -233,9 +277,11 @@ ACCEPTANCE_MATRIX: tuple[AcceptanceScenario, ...] = (
         terminal_outcome=TerminalOutcome.ABANDONED,
         max_turns=3,
         required_ports=frozenset(),
-        forbidden_behaviors=frozenset({
-            ForbiddenBehavior.PROLONGED_IMPOSSIBLE_GOAL,
-        }),
+        forbidden_behaviors=frozenset(
+            {
+                ForbiddenBehavior.PROLONGED_IMPOSSIBLE_GOAL,
+            }
+        ),
         description="User abandons booking; agent acknowledges once and stops prompting.",
     ),
     AcceptanceScenario(
@@ -244,10 +290,14 @@ ACCEPTANCE_MATRIX: tuple[AcceptanceScenario, ...] = (
         terminal_outcome=TerminalOutcome.SAFETY_ESCALATION,
         max_turns=2,
         required_ports=frozenset(),
-        forbidden_behaviors=frozenset({
-            ForbiddenBehavior.CONSEQUENTIAL_WITHOUT_EVIDENCE,
-        }),
-        description="User describes emergency; deterministic safety response, no booking continuation.",
+        forbidden_behaviors=frozenset(
+            {
+                ForbiddenBehavior.CONSEQUENTIAL_WITHOUT_EVIDENCE,
+            }
+        ),
+        description=(
+            "User describes emergency; deterministic safety response, no booking continuation."
+        ),
     ),
     AcceptanceScenario(
         id="AC-010",
@@ -255,25 +305,36 @@ ACCEPTANCE_MATRIX: tuple[AcceptanceScenario, ...] = (
         terminal_outcome=TerminalOutcome.INQUIRY_ANSWERED,
         max_turns=4,
         required_ports=frozenset({RequiredPort.TRUSTED_CLOCK}),
-        forbidden_behaviors=frozenset({
-            ForbiddenBehavior.REPEATED_QUESTION,
-            ForbiddenBehavior.NARRATION_FILLER,
-        }),
-        description="User asks the same question twice; agent answers consistently without filler or confusion.",
+        forbidden_behaviors=frozenset(
+            {
+                ForbiddenBehavior.REPEATED_QUESTION,
+                ForbiddenBehavior.NARRATION_FILLER,
+            }
+        ),
+        description=(
+            "User asks the same question twice; agent answers consistently without filler "
+            "or confusion."
+        ),
     ),
     AcceptanceScenario(
         id="AC-011",
         name="timezone_day_boundary",
         terminal_outcome=TerminalOutcome.INQUIRY_ANSWERED,
         max_turns=4,
-        required_ports=frozenset({
-            RequiredPort.TRUSTED_CLOCK,
-            RequiredPort.AVAILABILITY_QUERY,
-        }),
-        forbidden_behaviors=frozenset({
-            ForbiddenBehavior.UNRESOLVED_RELATIVE_DATE,
-        }),
-        description="Call at IST 23:30; 'today' resolves correctly to the IST date, not UTC next day.",
+        required_ports=frozenset(
+            {
+                RequiredPort.TRUSTED_CLOCK,
+                RequiredPort.AVAILABILITY_QUERY,
+            }
+        ),
+        forbidden_behaviors=frozenset(
+            {
+                ForbiddenBehavior.UNRESOLVED_RELATIVE_DATE,
+            }
+        ),
+        description=(
+            "Call at IST 23:30; 'today' resolves correctly to the IST date, not UTC next day."
+        ),
     ),
     AcceptanceScenario(
         id="AC-012",
@@ -281,9 +342,13 @@ ACCEPTANCE_MATRIX: tuple[AcceptanceScenario, ...] = (
         terminal_outcome=TerminalOutcome.HANDOFF,
         max_turns=4,
         required_ports=frozenset(),
-        forbidden_behaviors=frozenset({
-            ForbiddenBehavior.PROLONGED_IMPOSSIBLE_GOAL,
-        }),
-        description="Request exceeds automated capability; agent hands off cleanly without false promises.",
+        forbidden_behaviors=frozenset(
+            {
+                ForbiddenBehavior.PROLONGED_IMPOSSIBLE_GOAL,
+            }
+        ),
+        description=(
+            "Request exceeds automated capability; agent hands off cleanly without false promises."
+        ),
     ),
 )

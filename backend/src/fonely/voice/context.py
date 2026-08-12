@@ -9,12 +9,13 @@ This module injects trusted, immutable temporal context and typed
 read-only query ports that the pipeline consumes without domain
 mutation.
 """
+
 from __future__ import annotations
 
 import enum
 import zoneinfo
-from dataclasses import dataclass, field
-from datetime import date, datetime, time, timezone
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, time
 from typing import Protocol
 
 
@@ -24,6 +25,7 @@ class TrustedClock:
 
     Never derived from model output or caller input.
     """
+
     now_utc: datetime
     business_timezone: str
     business_date: date
@@ -33,7 +35,7 @@ class TrustedClock:
     def from_now(cls, tz_name: str) -> TrustedClock:
         if not tz_name:
             raise ValueError("business_timezone is required; no hardcoded fallback")
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         tz = zoneinfo.ZoneInfo(tz_name)
         local = now.astimezone(tz)
         return cls(
@@ -45,11 +47,19 @@ class TrustedClock:
 
 
 TAMIL_RELATIVE_DATES = {
-    "இன்று": 0, "இன்னைக்கு": 0, "இன்னைக்கே": 0,
-    "today": 0, "innaikku": 0, "innaiku": 0,
-    "நாளை": 1, "நாளைக்கு": 1,
-    "tomorrow": 1, "naalaikku": 1, "naalai": 1,
-    "நாளை மறுநாள்": 2, "day after tomorrow": 2,
+    "இன்று": 0,
+    "இன்னைக்கு": 0,
+    "இன்னைக்கே": 0,
+    "today": 0,
+    "innaikku": 0,
+    "innaiku": 0,
+    "நாளை": 1,
+    "நாளைக்கு": 1,
+    "tomorrow": 1,
+    "naalaikku": 1,
+    "naalai": 1,
+    "நாளை மறுநாள்": 2,
+    "day after tomorrow": 2,
 }
 
 
@@ -63,13 +73,13 @@ def resolve_relative_date(
     Uses only the trusted clock, never invents dates.
     """
     import re
+
     normalized = " ".join(text.casefold().split())
-    for phrase, offset in sorted(
-        TAMIL_RELATIVE_DATES.items(), key=lambda x: -len(x[0])
-    ):
+    for phrase, offset in sorted(TAMIL_RELATIVE_DATES.items(), key=lambda x: -len(x[0])):
         pattern = r"(?<!\w)" + re.escape(phrase.casefold()) + r"(?!\w)"
         if re.search(pattern, normalized):
             from datetime import timedelta
+
             return clock.business_date + timedelta(days=offset)
     return None
 
@@ -106,6 +116,7 @@ class DayAvailability:
 @dataclass(frozen=True)
 class AvailabilityQuery:
     """Typed availability query scoped by trusted business context."""
+
     business_id: int
     target_date: date
     business_timezone: str
@@ -121,6 +132,7 @@ class AvailabilityPort(Protocol):
     Never mutates state.  Returns typed DayAvailability with
     service-specific slots filtered by status.
     """
+
     async def query_day_availability(
         self,
         query: AvailabilityQuery,
@@ -133,6 +145,7 @@ class StubAvailabilityPort:
     Production implementation will query the authoritative backend
     AppointmentService/InventoryService for real slot/stock data.
     """
+
     async def query_day_availability(
         self,
         query: AvailabilityQuery,

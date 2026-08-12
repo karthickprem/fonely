@@ -9,29 +9,37 @@ does not share that defect: date and time are independent fields, a bare time
 only touches selected_time, and the commit combines the two — the date is the
 one held in state, never one a parser invents.
 """
+
 from __future__ import annotations
 
 from datetime import date, time
 
-from fonely.voice.dialogue import BookingCollection, extract_booking_time
 from fonely.voice.context import (
-    AvailableSlot, DayAvailability,
+    AvailableSlot,
+    DayAvailability,
 )
+from fonely.voice.dialogue import BookingCollection, extract_booking_time
 
 
 def _availability(target: date, *times: time) -> DayAvailability:
     from fonely.voice.context import SlotStatus
+
     slots = tuple(
         AvailableSlot(
-            resource_id=1, resource_name="Dr. X",
-            start_time=t, end_time=t, service_name="scaling",
+            resource_id=1,
+            resource_name="Dr. X",
+            start_time=t,
+            end_time=t,
+            service_name="scaling",
             status=SlotStatus.AVAILABLE,
         )
         for t in times
     )
     return DayAvailability(
-        business_date=target, day_of_week=target.strftime("%A").lower(),
-        is_operating_day=True, is_exception_day=False,
+        business_date=target,
+        day_of_week=target.strftime("%A").lower(),
+        is_operating_day=True,
+        is_exception_day=False,
         available_slots=slots,
     )
 

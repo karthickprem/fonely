@@ -4,6 +4,7 @@ Owns one voice session's complete lifecycle: state transitions,
 provider clients, pipeline, generation coordination, telemetry,
 and resource cleanup.  Every exit path converges on close().
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -11,7 +12,7 @@ import logging
 import time
 from typing import Any
 
-from .config import SessionState, VoiceSessionConfig, _VALID_TRANSITIONS
+from .config import _VALID_TRANSITIONS, SessionState, VoiceSessionConfig
 from .generation import GenerationClock
 from .telemetry import VoiceTelemetryExporter
 from .validator_port import FailClosedValidatorStub, ValidatorPort
@@ -90,18 +91,11 @@ class VoiceSessionSupervisor:
         )
 
         if target == SessionState.ACTIVE and self._duration_timer is None:
-            self._duration_timer = asyncio.ensure_future(
-                self._enforce_max_duration()
-            )
+            self._duration_timer = asyncio.ensure_future(self._enforce_max_duration())
 
         if target == SessionState.RECONNECTING:
-            self._reconnect_timer = asyncio.ensure_future(
-                self._enforce_reconnect_grace()
-            )
-        elif (
-            target == SessionState.ACTIVE
-            and self._reconnect_timer is not None
-        ):
+            self._reconnect_timer = asyncio.ensure_future(self._enforce_reconnect_grace())
+        elif target == SessionState.ACTIVE and self._reconnect_timer is not None:
             self._reconnect_timer.cancel()
             self._reconnect_timer = None
 

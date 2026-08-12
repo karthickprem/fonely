@@ -14,16 +14,23 @@ or membership provenance.
 Confirmation speech must be derived from the committed receipt's facts
 (what the database recorded), not from what the model intended to book.
 """
+
 from __future__ import annotations
 
 import logging
 import time
-from datetime import UTC, date, datetime, time as dt_time, timedelta
-from typing import Any, Callable
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
+from datetime import UTC, date, datetime, timedelta
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from fonely.domain.appointments.validation import AppointmentValidationPort
+
 from fonely.domain.appointments.commands import (
-    CheckAvailabilityQuery,
     ConfirmPendingAppointmentCommand,
     CreatePendingAppointmentCommand,
 )
@@ -34,10 +41,17 @@ from fonely.domain.appointments.results import (
 from fonely.domain.pending_actions.commands import ActorContext
 from fonely.models.enums import CallerRole
 
-from .context import AvailabilityQuery, AvailableSlot, DayAvailability, SlotStatus
-from .runtime import CommandPort, CommandResult, CommitReceipt, ConfirmCommand, ProposeCommand
+from .context import AvailabilityQuery, AvailableSlot, DayAvailability
+from .runtime import CommandResult, CommitReceipt, ConfirmCommand, ProposeCommand
 
 logger = logging.getLogger("fonely.voice.backend_ports")
+
+# Factory aliases: the application injects a session factory (opens an async
+# session context manager) and a validation factory (builds the validation port
+# for a given session). Typed here so the port's constructor is not a bare
+# Callable and mypy can check call sites.
+SessionFactory = Callable[[], "AbstractAsyncContextManager[AsyncSession]"]
+ValidationFactory = Callable[["AsyncSession"], "AppointmentValidationPort"]
 
 
 class AppointmentServiceCommandPort:
@@ -53,8 +67,8 @@ class AppointmentServiceCommandPort:
         self,
         *,
         actor: ActorContext,
-        session_factory: Callable,
-        validation_factory: Callable,
+        session_factory: SessionFactory,
+        validation_factory: ValidationFactory,
         business_timezone: str,
         conversation_id: str,
     ) -> None:
@@ -95,6 +109,7 @@ class AppointmentServiceCommandPort:
                         customer_name=cmd.customer_name or None,
                         customer_phone=self._actor.normalized_phone,
                         reason=None,
+                        call_id=None,
                         expires_at=expires_at,
                         idempotency_key=idempotency_key,
                     )
@@ -188,8 +203,12 @@ class AppointmentServiceCommandPort:
         hour, minute = int(parts[0]), int(parts[1]) if len(parts) > 1 else 0
         tz = ZoneInfo(self._business_timezone)
         local_dt = datetime(
-            target_date.year, target_date.month, target_date.day,
-            hour, minute, tzinfo=tz,
+            target_date.year,
+            target_date.month,
+            target_date.day,
+            hour,
+            minute,
+            tzinfo=tz,
         )
         return local_dt
 
@@ -205,7 +224,7 @@ class AvailabilityServiceAdapter:
         self,
         *,
         actor: ActorContext,
-        session_factory: Callable,
+        session_factory: SessionFactory,
         default_service_id: int = 1,
         default_resource_id: int | None = None,
     ) -> None:
@@ -238,7 +257,7 @@ class AvailabilityServiceAdapter:
                     target_date=query.target_date,
                 )
 
-                tz = ZoneInfo(query.timezone) if query.timezone else None
+                tz = ZoneInfo(query.business_timezone) if query.business_timezone else None
                 available_slots = tuple(
                     AvailableSlot(
                         resource_id=s.resource_id,

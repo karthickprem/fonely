@@ -5,13 +5,14 @@ trusted production logic.  This port defines the typed boundary; a
 FailClosedValidatorStub blocks all consequential speech until an
 independently accepted validator is injected.
 """
+
 from __future__ import annotations
 
 import enum
 from dataclasses import dataclass
 from typing import Protocol
 
-from .config import CONSEQUENTIAL_CLASSES, SpeechClass
+from .config import SpeechClass
 
 
 class ValidationDecision(enum.StrEnum):

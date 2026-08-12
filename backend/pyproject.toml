@@ -21,6 +21,15 @@ dependencies = [
     "alembic>=1.15",
     "pydantic>=2.11",
     "pydantic-settings>=2.9",
+    # Voice runtime: the streaming pipeline (FrameProcessors, LLM context
+    # aggregator) and its Anthropic/Cartesia/Sarvam service adapters live in
+    # fonely.voice and import these at module load. Without them declared, the
+    # locked environment cannot import fonely.voice and the voice suite fails
+    # collection. The service extras pull the provider SDKs pipecat wraps.
+    "pipecat-ai[anthropic,cartesia,sarvam]>=1.7,<2",
+    # fonely.voice imports the anthropic SDK directly (not only through
+    # pipecat), so declare it explicitly rather than relying on a transitive.
+    "anthropic>=0.120,<1",
 ]
 
 [project.optional-dependencies]

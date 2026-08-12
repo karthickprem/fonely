@@ -1,4 +1,5 @@
 """Tests for fail-closed validator port and stub."""
+
 from fonely.voice.config import SpeechClass
 from fonely.voice.validator_port import (
     FailClosedValidatorStub,

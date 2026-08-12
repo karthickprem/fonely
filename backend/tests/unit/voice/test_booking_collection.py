@@ -3,14 +3,14 @@
 All tests use runtime-native types only. No legacy voice-lab imports.
 The conformance fake is test-only and impossible to configure in production.
 """
+
 from __future__ import annotations
 
-import time as time_mod
-from datetime import date, time, datetime, timezone
+from datetime import UTC, date, datetime, time
 
 import pytest
 
-from fonely.voice.config import SpeechClass, VoiceSessionConfig
+from fonely.voice.config import VoiceSessionConfig
 from fonely.voice.context import AvailableSlot, DayAvailability, TrustedClock
 from fonely.voice.dialogue import BookingCollection, extract_booking_time
 from fonely.voice.runtime import (
@@ -24,6 +24,7 @@ def _async_avail():
     class A:
         async def query_day_availability(self, q):
             return _avail(q.target_date)
+
     return A()
 
 
@@ -164,7 +165,9 @@ class TestStateContinuity:
             "எனக்கு 05:00 மணிக்கு ஓகே.",
             resolved_date=None,
             availability=avail,
-            previous_assistant_text="12 மணிக்கு slot available இல்ல. 10, 11, 5, 6:30, 7:30 இருக்கு. எந்த time convenient?",
+            previous_assistant_text=(
+                "12 மணிக்கு slot available இல்ல. 10, 11, 5, 6:30, 7:30 இருக்கு. எந்த time convenient?"
+            ),
         )
         assert bc.target_date == today
         assert bc.selected_time == time(17, 0)  # matched 5 PM from offered
@@ -216,10 +219,11 @@ class TestReceiptGatedSpeech:
 
     def _clock(self):
         import zoneinfo
+
         tz = zoneinfo.ZoneInfo("Asia/Kolkata")
         local = datetime(2026, 8, 10, 14, 30, tzinfo=tz)
         return TrustedClock(
-            now_utc=local.astimezone(timezone.utc),
+            now_utc=local.astimezone(UTC),
             business_timezone="Asia/Kolkata",
             business_date=date(2026, 8, 10),
             day_of_week="monday",
@@ -227,27 +231,50 @@ class TestReceiptGatedSpeech:
 
     def _stt(self, texts):
         class S:
-            def __init__(self, t): self._t, self._i = list(t), 0
+            def __init__(self, t):
+                self._t, self._i = list(t), 0
+
             async def transcribe(self, a):
-                if self._i >= len(self._t): return ""
-                t = self._t[self._i]; self._i += 1; return t
-            async def close(self): pass
+                if self._i >= len(self._t):
+                    return ""
+                t = self._t[self._i]
+                self._i += 1
+                return t
+
+            async def close(self):
+                pass
+
         return S(texts)
 
     def _llm(self, responses):
         class L:
-            def __init__(self, r): self._r, self._i = list(r), 0
+            def __init__(self, r):
+                self._r, self._i = list(r), 0
+
             async def generate(self, s, m):
-                if self._i >= len(self._r): return ""
-                r = self._r[self._i]; self._i += 1; return r
-            async def close(self): pass
+                if self._i >= len(self._r):
+                    return ""
+                r = self._r[self._i]
+                self._i += 1
+                return r
+
+            async def close(self):
+                pass
+
         return L(responses)
 
     def _tts(self):
         class T:
-            def __init__(self): self.calls = 0
-            async def synthesize(self, t): self.calls += 1; return t.encode()
-            async def close(self): pass
+            def __init__(self):
+                self.calls = 0
+
+            async def synthesize(self, t):
+                self.calls += 1
+                return t.encode()
+
+            async def close(self):
+                pass
+
         return T()
 
     @pytest.mark.asyncio
@@ -273,6 +300,7 @@ class TestReceiptGatedSpeech:
         class ErrorEngine:
             async def propose(self, cmd):
                 return CommandResult(success=False, error="application_error")
+
             async def confirm(self, cmd):
                 return CommandResult(success=False, error="application_error")
 
@@ -282,14 +310,16 @@ class TestReceiptGatedSpeech:
             business_name="Test",
             business_timezone="Asia/Kolkata",
             stt=self._stt(["reason", "date", "time", "name", "Aamaa"]),
-            llm=self._llm([
-                "என்ன reason?",
-                "எந்த date?",
-                "Time சரியா?",
-                "பேரு?",
-                "Correct-ஆ?",
-                "Booking confirmed.",
-            ]),
+            llm=self._llm(
+                [
+                    "என்ன reason?",
+                    "எந்த date?",
+                    "Time சரியா?",
+                    "பேரு?",
+                    "Correct-ஆ?",
+                    "Booking confirmed.",
+                ]
+            ),
             tts=self._tts(),
             availability_port=_async_avail(),
             command_port=ErrorEngine(),
@@ -308,15 +338,23 @@ class TestReceiptGatedSpeech:
         class StaleEngine:
             async def propose(self, cmd):
                 return CommandResult(success=True, operation="create", proposal_id=1)
+
             async def confirm(self, cmd):
                 return CommandResult(
-                    success=True, operation="create", proposal_id=1,
+                    success=True,
+                    operation="create",
+                    proposal_id=1,
                     committed=True,
                     receipt=CommitReceipt(
-                        commitment_id=1, proposal_id=1, business_id=1,
-                        operation="create", idempotency_key="k",
-                        confirm_idempotency_key="ck", payload_digest="",
-                        committed_at_ns=0, facts={},
+                        commitment_id=1,
+                        proposal_id=1,
+                        business_id=1,
+                        operation="create",
+                        idempotency_key="k",
+                        confirm_idempotency_key="ck",
+                        payload_digest="",
+                        committed_at_ns=0,
+                        facts={},
                     ),
                 )
 
@@ -326,10 +364,16 @@ class TestReceiptGatedSpeech:
             business_name="Test",
             business_timezone="Asia/Kolkata",
             stt=self._stt(["reason", "date", "time", "name", "Aamaa"]),
-            llm=self._llm([
-                "என்ன reason?", "எந்த date?", "Time?", "பேரு?",
-                "Correct-ஆ?", "Booking confirmed.",
-            ]),
+            llm=self._llm(
+                [
+                    "என்ன reason?",
+                    "எந்த date?",
+                    "Time?",
+                    "பேரு?",
+                    "Correct-ஆ?",
+                    "Booking confirmed.",
+                ]
+            ),
             tts=self._tts(),
             availability_port=_async_avail(),
             command_port=StaleEngine(),
@@ -353,10 +397,18 @@ class _ConformanceFakeReceipt:
 
     _SENTINEL = "__test_conformance_only__"
 
-    def __init__(self, *, service_name="Scaling", resource_name="Dr. Priya",
-                 start_at_utc=None, end_at_utc=None, business_timezone="Asia/Kolkata",
-                 notification_intent_state="queued"):
+    def __init__(
+        self,
+        *,
+        service_name="Scaling",
+        resource_name="Dr. Priya",
+        start_at_utc=None,
+        end_at_utc=None,
+        business_timezone="Asia/Kolkata",
+        notification_intent_state="queued",
+    ):
         from datetime import UTC
+
         now = datetime.now(UTC)
         self.status = "committed"
         self.source = self._SENTINEL
@@ -385,11 +437,25 @@ class TestConformanceFake:
     def test_has_all_adr_fields(self):
         r = _ConformanceFakeReceipt()
         for field in [
-            "status", "source", "operation", "business_id", "appointment_id",
-            "proposal_id", "proposal_version", "confirmation_id", "committed_at",
-            "service_name", "resource_name", "start_at_utc", "end_at_utc",
-            "business_timezone", "customer_subject", "payload_digest",
-            "notification_intent_state", "offer_id", "slot_token",
+            "status",
+            "source",
+            "operation",
+            "business_id",
+            "appointment_id",
+            "proposal_id",
+            "proposal_version",
+            "confirmation_id",
+            "committed_at",
+            "service_name",
+            "resource_name",
+            "start_at_utc",
+            "end_at_utc",
+            "business_timezone",
+            "customer_subject",
+            "payload_digest",
+            "notification_intent_state",
+            "offer_id",
+            "slot_token",
         ]:
             assert hasattr(r, field), f"missing field: {field}"
 
@@ -532,7 +598,9 @@ class TestScenario6AmbiguousTimeNoGuessing:
             ),
         )
         bc = BookingCollection()
-        bc.update("appointment புக் பண்ணனும்", resolved_date=date(2026, 8, 10), availability=ambiguous_avail)
+        bc.update(
+            "appointment புக் பண்ணனும்", resolved_date=date(2026, 8, 10), availability=ambiguous_avail
+        )
         bc.update("5 o'clock", resolved_date=None, availability=ambiguous_avail)
         assert bc.selected_time is None  # ambiguous: 5 AM or 5 PM
 
@@ -567,7 +635,11 @@ class TestD4NaalaikkuNotName:
 
     def test_tomorrow_not_captured_as_name(self):
         bc = BookingCollection()
-        bc.update("appointment புக் பண்ணனும்", resolved_date=date(2026, 8, 10), availability=_avail(date(2026, 8, 10)))
+        bc.update(
+            "appointment புக் பண்ணனும்",
+            resolved_date=date(2026, 8, 10),
+            availability=_avail(date(2026, 8, 10)),
+        )
         bc.update(
             "tomorrow",
             resolved_date=None,
@@ -578,7 +650,11 @@ class TestD4NaalaikkuNotName:
 
     def test_innaikku_not_captured_as_name(self):
         bc = BookingCollection()
-        bc.update("appointment புக் பண்ணனும்", resolved_date=date(2026, 8, 10), availability=_avail(date(2026, 8, 10)))
+        bc.update(
+            "appointment புக் பண்ணனும்",
+            resolved_date=date(2026, 8, 10),
+            availability=_avail(date(2026, 8, 10)),
+        )
         bc.update(
             "innaikku",
             resolved_date=None,
@@ -589,7 +665,11 @@ class TestD4NaalaikkuNotName:
 
     def test_real_name_still_captured(self):
         bc = BookingCollection()
-        bc.update("appointment புக் பண்ணனும்", resolved_date=date(2026, 8, 10), availability=_avail(date(2026, 8, 10)))
+        bc.update(
+            "appointment புக் பண்ணனும்",
+            resolved_date=date(2026, 8, 10),
+            availability=_avail(date(2026, 8, 10)),
+        )
         bc.update(
             "Karthick",
             resolved_date=None,
@@ -600,7 +680,11 @@ class TestD4NaalaikkuNotName:
 
     def test_time_word_not_captured_as_name(self):
         bc = BookingCollection()
-        bc.update("appointment புக் பண்ணனும்", resolved_date=date(2026, 8, 10), availability=_avail(date(2026, 8, 10)))
+        bc.update(
+            "appointment புக் பண்ணனும்",
+            resolved_date=date(2026, 8, 10),
+            availability=_avail(date(2026, 8, 10)),
+        )
         bc.update(
             "morning",
             resolved_date=None,
@@ -615,6 +699,7 @@ class TestD1MedicalSafetyEnforcement:
 
     def test_treatment_suggestion_detected(self):
         from fonely.voice.dialogue import contains_medical_advice
+
         assert contains_medical_advice("சொத்தைக்கு root canal தேவைப்படலாம்")
         assert contains_medical_advice("Take Paracetamol 500mg for the pain")
         assert contains_medical_advice("You need an extraction")
@@ -622,6 +707,7 @@ class TestD1MedicalSafetyEnforcement:
 
     def test_safe_referral_not_flagged(self):
         from fonely.voice.dialogue import contains_medical_advice
+
         assert not contains_medical_advice("Doctor பார்த்துதான் சொல்வாங்க")
         assert not contains_medical_advice("Clinic-ஐ நேரடியாக call பண்ணுங்க")
         assert not contains_medical_advice("நாளைக்கு 10:00 slot available")
@@ -702,8 +788,10 @@ class TestReceiptKeyedGate:
 
     def test_success_blocked_without_receipt(self):
         from fonely.voice.dialogue import gate_response
+
         text, suppressed = gate_response(
-            "உங்கள் appointment confirm ஆயிடுச்சு!", has_receipt=False,
+            "உங்கள் appointment confirm ஆயிடுச்சு!",
+            has_receipt=False,
         )
         assert suppressed
         assert "confirm" not in text.lower()
@@ -711,30 +799,37 @@ class TestReceiptKeyedGate:
 
     def test_success_allowed_with_receipt(self):
         from fonely.voice.dialogue import gate_response
+
         text, suppressed = gate_response(
-            "உங்கள் appointment confirm ஆயிடுச்சு!", has_receipt=True,
+            "உங்கள் appointment confirm ஆயிடுச்சு!",
+            has_receipt=True,
         )
         assert not suppressed
         assert "confirm" in text.lower()
 
     def test_non_success_passes_without_receipt(self):
         from fonely.voice.dialogue import gate_response
+
         text, suppressed = gate_response(
-            "எந்த date-ல வரணும்?", has_receipt=False,
+            "எந்த date-ல வரணும்?",
+            has_receipt=False,
         )
         assert not suppressed
         assert text == "எந்த date-ல வரணும்?"
 
     def test_medical_blocked_regardless_of_receipt(self):
         from fonely.voice.dialogue import gate_response
+
         text, suppressed = gate_response(
-            "Take Paracetamol 500mg", has_receipt=True,
+            "Take Paracetamol 500mg",
+            has_receipt=True,
         )
         assert suppressed
         assert "doctor" in text.lower() or "Doctor" in text
 
     def test_recovery_text_is_coherent_tamil(self):
-        from fonely.voice.dialogue import gate_response, SAFE_NO_RECEIPT
+        from fonely.voice.dialogue import SAFE_NO_RECEIPT, gate_response
+
         text, _ = gate_response("Booking confirmed!", has_receipt=False)
         assert text == SAFE_NO_RECEIPT
         assert any("஀" <= c <= "௿" for c in text)
@@ -743,7 +838,8 @@ class TestReceiptKeyedGate:
     def test_preconfirmation_success_blocked(self):
         """The exact defect: model speaks success before caller confirms."""
         from fonely.voice.dialogue import gate_response
-        text, suppressed = gate_response(
+
+        _text, suppressed = gate_response(
             "உங்கள் appointment confirm பண்ணிட்டோம், Karthick.",
             has_receipt=False,
         )
@@ -751,8 +847,10 @@ class TestReceiptKeyedGate:
 
     def test_tanglish_success_blocked(self):
         from fonely.voice.dialogue import gate_response
-        text, suppressed = gate_response(
-            "Booking fix aayiduchu bro!", has_receipt=False,
+
+        _text, suppressed = gate_response(
+            "Booking fix aayiduchu bro!",
+            has_receipt=False,
         )
         assert suppressed
 

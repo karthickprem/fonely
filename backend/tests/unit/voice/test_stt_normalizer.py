@@ -4,7 +4,8 @@ Tests both directions: strings that MUST normalize and strings that
 must NOT. A normalizer is a lossy transform; false normalization is
 a deterministic defect that fires every time.
 """
-from fonely.voice.stt_normalizer import NormalizationResult, normalize, get_table_provenance
+
+from fonely.voice.stt_normalizer import get_table_provenance, normalize
 
 
 class TestMustNormalize:
@@ -26,11 +27,11 @@ class TestMustNormalize:
 
     def test_romanized_number_ainthu(self):
         r = normalize("ainthu mani")
-        assert "5 mani" == r.normalized
+        assert r.normalized == "5 mani"
 
     def test_romanized_number_pathu(self):
         r = normalize("pathu mani")
-        assert "10 mani" == r.normalized
+        assert r.normalized == "10 mani"
 
     def test_spelling_apointment(self):
         r = normalize("apointment book pannanum")
@@ -134,16 +135,18 @@ class TestProvenance:
         report = get_table_provenance()
         for table_name, entries in report.items():
             for entry in entries:
-                assert entry["provenance"] in ("guessed", "observed"), \
+                assert entry["provenance"] in ("guessed", "observed"), (
                     f"{table_name}:{entry['pattern']} has invalid provenance: {entry['provenance']}"
+                )
 
     def test_current_entries_all_guessed(self):
         """Until Tier B runs, all entries should be 'guessed'."""
         report = get_table_provenance()
         for table_name, entries in report.items():
             for entry in entries:
-                assert entry["provenance"] == "guessed", \
+                assert entry["provenance"] == "guessed", (
                     f"{table_name}:{entry['pattern']} marked 'observed' without Tier B evidence"
+                )
 
 
 class TestChangesTracked:

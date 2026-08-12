@@ -4,14 +4,14 @@ Wraps raw Pipecat services into the STTPort/LLMPort/TTSPort protocols
 with timeouts, usage accounting, error classification, and explicit close.
 These are the production adapters; mock ports are used in tests.
 """
+
 from __future__ import annotations
 
-import asyncio
+import contextlib
 import logging
 from typing import Any
 
 from .config import LLMConfig, STTConfig, TTSConfig
-from .runtime import LLMPort, STTPort, TTSPort
 
 logger = logging.getLogger("fonely.voice.adapters")
 
@@ -66,10 +66,8 @@ class AnthropicLLMAdapter:
 
     async def close(self) -> None:
         if self._client is not None:
-            try:
+            with contextlib.suppress(Exception):
                 await self._client.close()
-            except Exception:
-                pass
         self._service = None
         self._client = None
 

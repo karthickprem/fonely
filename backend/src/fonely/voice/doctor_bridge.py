@@ -16,9 +16,11 @@ be wired and demoed against the real behaviour (agent pauses, human answers,
 agent resumes) without waiting on that. The DoctorBridge Protocol is the seam:
 swap the in-memory impl for a WhatsApp-backed one without touching the pipeline.
 """
+
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -41,12 +43,20 @@ class DoctorQuery:
         return self.response is not None
 
 
+class WebSocketLike(Protocol):
+    """Minimal WebSocket seam: the owner panel connection the bridge pushes
+    agent questions to. Any transport with async send_json satisfies it."""
+
+    async def send_json(self, data: dict[str, object]) -> None: ...
+
+
 class DoctorBridge(Protocol):
     """Seam between the pipeline and whatever reaches a human.
 
     The pipeline depends on this Protocol, not the in-memory class, so a
     WhatsApp-backed durable implementation drops in unchanged.
     """
+
     async def ask_doctor(self, question: str, patient_context: str = "") -> DoctorQuery: ...
     async def wait_for_response(self, query: DoctorQuery, timeout: float = 60.0) -> str | None: ...
 
@@ -62,12 +72,12 @@ class InMemoryDoctorBridge:
         self._timezone = timezone
         self._queries: list[DoctorQuery] = []
         self._events: dict[int, asyncio.Event] = {}
-        self._ws_connections: list = []
+        self._ws_connections: list[WebSocketLike] = []
 
-    def register_ws(self, ws) -> None:
+    def register_ws(self, ws: WebSocketLike) -> None:
         self._ws_connections.append(ws)
 
-    def unregister_ws(self, ws) -> None:
+    def unregister_ws(self, ws: WebSocketLike) -> None:
         if ws in self._ws_connections:
             self._ws_connections.remove(ws)
 
@@ -88,11 +98,9 @@ class InMemoryDoctorBridge:
             "query_id": query_id,
         }
         for ws in list(self._ws_connections):
-            try:
+            # A dead socket must not break the agent's turn.
+            with contextlib.suppress(Exception):
                 await ws.send_json(payload)
-            except Exception:
-                # A dead socket must not break the agent's turn.
-                pass
 
         logger.info("agent_asked_doctor query_id=%d", query_id)
         return query
@@ -110,7 +118,7 @@ class InMemoryDoctorBridge:
         try:
             await asyncio.wait_for(event.wait(), timeout=timeout)
             return query.response
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("doctor_no_response query_id=%d", query_id)
             return None
 
@@ -129,7 +137,7 @@ class InMemoryDoctorBridge:
         return True
 
     @property
-    def pending_queries(self) -> list[dict]:
+    def pending_queries(self) -> list[dict[str, object]]:
         return [
             {
                 "id": i,

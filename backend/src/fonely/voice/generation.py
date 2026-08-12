@@ -3,6 +3,7 @@
 Ported from R&D live_poc.py and delegation.py with production
 hardening: typed tokens, bounded state, explicit cleanup.
 """
+
 from __future__ import annotations
 
 import threading

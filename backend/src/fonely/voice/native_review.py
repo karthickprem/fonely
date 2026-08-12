@@ -3,10 +3,29 @@
 Provides deterministic naturalness checks and a structured worksheet
 for human native-speaker review of voice conversation quality.
 """
+
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import NotRequired, TypedDict
+
+
+class Turn(TypedDict):
+    """One conversation turn's evidence: caller/agent text plus the gate that
+    fired (if any). caller/agent are always present strings; gate is optional."""
+
+    caller: str
+    agent: str
+    gate: NotRequired[str | None]
+
+
+class Conversation(TypedDict):
+    """A named conversation with its turns; lang is optional (defaults to mix)."""
+
+    name: str
+    turns: list[Turn]
+    lang: NotRequired[str]
 
 
 @dataclass(frozen=True)
@@ -20,52 +39,80 @@ def check_naturalness(text: str, language: str = "ta-Latn") -> list[NaturalnessC
     """Run deterministic naturalness heuristics on response text."""
     checks: list[NaturalnessCheck] = []
 
-    checks.append(NaturalnessCheck(
-        "no_formal_tamil",
-        not bool(re.search(r"(செய்கிறேன்|செய்கின்றேன்|உள்ளது|இருக்கின்றது)", text)),
-        "Formal literary Tamil detected; use conversational forms",
-    ))
+    checks.append(
+        NaturalnessCheck(
+            "no_formal_tamil",
+            not bool(re.search(r"(செய்கிறேன்|செய்கின்றேன்|உள்ளது|இருக்கின்றது)", text)),
+            "Formal literary Tamil detected; use conversational forms",
+        )
+    )
 
-    checks.append(NaturalnessCheck(
-        "no_isolated_suffix",
-        "ஆ " not in text and not text.endswith("ஆ"),
-        "Isolated ஆ suffix may cause TTS pronunciation issue",
-    ))
+    checks.append(
+        NaturalnessCheck(
+            "no_isolated_suffix",
+            "ஆ " not in text and not text.endswith("ஆ"),
+            "Isolated ஆ suffix may cause TTS pronunciation issue",
+        )
+    )
 
-    checks.append(NaturalnessCheck(
-        "no_telugu_kannada",
-        not bool(re.search(r"[ఀ-౿ಀ-೿ऀ-ॿ]", text)),
-        "Foreign script (Telugu/Kannada/Devanagari) detected",
-    ))
+    checks.append(
+        NaturalnessCheck(
+            "no_telugu_kannada",
+            not bool(re.search(r"[ఀ-౿ಀ-೿ऀ-ॿ]", text)),
+            "Foreign script (Telugu/Kannada/Devanagari) detected",
+        )
+    )
 
-    checks.append(NaturalnessCheck(
-        "no_emoji",
-        not bool(re.search(r"[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF]", text)),
-        "Emoji in spoken text",
-    ))
+    checks.append(
+        NaturalnessCheck(
+            "no_emoji",
+            not bool(
+                re.search(
+                    r"[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF]", text
+                )
+            ),
+            "Emoji in spoken text",
+        )
+    )
 
-    checks.append(NaturalnessCheck(
-        "reasonable_length",
-        5 <= len(text.split()) <= 30,
-        f"Response length {len(text.split())} words outside 5-30 range",
-    ))
+    checks.append(
+        NaturalnessCheck(
+            "reasonable_length",
+            5 <= len(text.split()) <= 30,
+            f"Response length {len(text.split())} words outside 5-30 range",
+        )
+    )
 
-    checks.append(NaturalnessCheck(
-        "no_markdown",
-        not bool(re.search(r"[*_#`\[\]]", text)),
-        "Markdown formatting in spoken text",
-    ))
+    checks.append(
+        NaturalnessCheck(
+            "no_markdown",
+            not bool(re.search(r"[*_#`\[\]]", text)),
+            "Markdown formatting in spoken text",
+        )
+    )
 
-    dental_terms = ["scaling", "root canal", "extraction", "filling",
-                    "crown", "braces", "consultation", "appointment",
-                    "doctor", "clinic", "fee"]
+    dental_terms = [
+        "scaling",
+        "root canal",
+        "extraction",
+        "filling",
+        "crown",
+        "braces",
+        "consultation",
+        "appointment",
+        "doctor",
+        "clinic",
+        "fee",
+    ]
     has_familiar_english = any(t in text.lower() for t in dental_terms)
     has_tamil = bool(re.search(r"[஀-௿]", text))
-    checks.append(NaturalnessCheck(
-        "natural_code_switch",
-        not has_tamil or has_familiar_english or len(text.split()) < 5,
-        "Tamil text without natural English dental/appointment terms",
-    ))
+    checks.append(
+        NaturalnessCheck(
+            "natural_code_switch",
+            not has_tamil or has_familiar_english or len(text.split()) < 5,
+            "Tamil text without natural English dental/appointment terms",
+        )
+    )
 
     return checks
 
@@ -105,10 +152,7 @@ class ReviewWorksheet:
 
     def summary(self) -> dict[str, int]:
         total = len(self.entries)
-        auto_pass = sum(
-            1 for e in self.entries
-            if all(c.passed for c in e.naturalness_checks)
-        )
+        auto_pass = sum(1 for e in self.entries if all(c.passed for c in e.naturalness_checks))
         rated = sum(1 for e in self.entries if e.native_rating is not None)
         return {
             "total_entries": total,
@@ -149,11 +193,7 @@ class ConversationScore:
 
     @property
     def critical_pass(self) -> bool:
-        return (
-            self.no_false_confirmation
-            and self.no_medical_advice
-            and self.no_invented_slots
-        )
+        return self.no_false_confirmation and self.no_medical_advice and self.no_invented_slots
 
     @property
     def automated_score(self) -> float:
@@ -173,26 +213,37 @@ class ConversationScore:
 
     @property
     def native_rated(self) -> bool:
-        return all(s is not None for s in (
-            self.naturalness, self.register_match, self.warmth,
-            self.pronunciation_friendliness,
-        ))
+        return all(
+            s is not None
+            for s in (
+                self.naturalness,
+                self.register_match,
+                self.warmth,
+                self.pronunciation_friendliness,
+            )
+        )
 
     @property
     def native_average(self) -> float | None:
-        scores = [s for s in (
-            self.naturalness, self.register_match, self.warmth,
-            self.pronunciation_friendliness,
-        ) if s is not None]
+        scores = [
+            s
+            for s in (
+                self.naturalness,
+                self.register_match,
+                self.warmth,
+                self.pronunciation_friendliness,
+            )
+            if s is not None
+        ]
         return sum(scores) / len(scores) if scores else None
 
 
-def score_conversation(turns: list[dict]) -> ConversationScore:
+def score_conversation(turns: list[Turn]) -> ConversationScore:
     """Score a conversation from turn evidence.
 
     Each turn dict: {"caller": str, "agent": str, "gate": str|None}
     """
-    from .dialogue import contains_medical_advice, contains_booking_success
+    from .dialogue import contains_booking_success, contains_medical_advice
 
     has_false_confirm = False
     has_medical = False
@@ -233,7 +284,7 @@ def score_conversation(turns: list[dict]) -> ConversationScore:
 
 
 def generate_review_packet(
-    conversations: list[dict],
+    conversations: list[Conversation],
     output_path: str,
 ) -> str:
     """Generate a native review document from conversation evidence.

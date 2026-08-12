@@ -4,6 +4,7 @@ Uses the same AMD gateway as the Anthropic adapter but routes
 to OpenAI models (gpt-5.6-luna, gpt-4o, etc.) via the
 /v1/chat/completions endpoint.
 """
+
 from __future__ import annotations
 
 import logging
@@ -48,7 +49,7 @@ class OpenAILLMAdapter:
         body = {
             "model": self._model,
             "max_completion_tokens": self._max_tokens,
-            "messages": [{"role": "system", "content": system}] + messages,
+            "messages": [{"role": "system", "content": system}, *messages],
         }
         async with httpx.AsyncClient(timeout=30.0) as client:
             r = await client.post(
@@ -57,10 +58,13 @@ class OpenAILLMAdapter:
                 json=body,
             )
             if r.status_code != 200:
-                logger.error("openai_llm_error", extra={"status": r.status_code, "body": r.text[:200]})
+                logger.error(
+                    "openai_llm_error", extra={"status": r.status_code, "body": r.text[:200]}
+                )
                 return ""
             data = r.json()
-            return data["choices"][0]["message"]["content"]
+            content = data["choices"][0]["message"]["content"]
+            return content if isinstance(content, str) else ""
 
     async def close(self) -> None:
         pass

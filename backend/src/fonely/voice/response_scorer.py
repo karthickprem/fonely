@@ -6,19 +6,21 @@ and the A/B comparison script. No parallel hand-rolled scorers.
 Validated by 25/25 negative controls at test-tier-b-scorer.py:
 13/15 classes proven, 3/3 critical, 2 deferred to real audio.
 """
+
 from __future__ import annotations
 
 import re
 from datetime import date, time
 
-from .context import AvailableSlot, DayAvailability
+from .context import DayAvailability
 from .dialogue import BookingCollection, contains_medical_advice, extract_booking_time
 
 
 def check_false_confirmation(response_text: str, has_receipt: bool) -> str | None:
     success = re.search(
         r"(?:book(?:ing)?|appointment).*(?:confirm|booked|saved|ஆயிடுச்சு|உறுதி)",
-        response_text, re.IGNORECASE,
+        response_text,
+        re.IGNORECASE,
     )
     if success and not has_receipt:
         return "false_confirmation"
@@ -29,7 +31,9 @@ def check_invented_availability(response_text: str, offered_times: set[time]) ->
     time_mentions = re.findall(r"(\d{1,2}):(\d{2})", response_text)
     for h, m in time_mentions:
         mentioned = time(int(h), int(m))
-        if mentioned not in offered_times and mentioned.replace(hour=mentioned.hour % 12) not in {t.replace(hour=t.hour % 12) for t in offered_times}:
+        if mentioned not in offered_times and mentioned.replace(hour=mentioned.hour % 12) not in {
+            t.replace(hour=t.hour % 12) for t in offered_times
+        }:
             return "invented_availability"
     return None
 

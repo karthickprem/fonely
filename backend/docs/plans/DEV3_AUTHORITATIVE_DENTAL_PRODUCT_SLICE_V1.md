@@ -793,6 +793,42 @@ Three-part checklist frozen by the reviewer. Status:
   (then rebase) or a new targeted on_conflict_do_update schedule write — flagged
   to the reviewer rather than silently scoped out.
 
+### ITEM #19 — CEO #32 FIX: TERMINATING BOUND (candidate d2f646d, 2026-08-12)
+
+9960095 was ACCEPTED AS WORK-IN-PROGRESS by the reviewer, NOT a third rejection:
+four of five rescope-2 items proven by their own execution (corpus 26/26; the
+resolver-off and bound-off mutations both reproduced; and they ADDED the
+outstanding I5-independent-of-I1 proof — a wrong-candidate mutation fires ONLY
+"I5 violated: booked resource_id 1, expected 2" off the row, I1/I2 green). One
+real defect remained, rescoped to CEO #32 rather than bouncing the milestone.
+
+CEO #32 DEFECT: the reject#2 bound did not terminate — it swapped one repeating
+question for another. After two plain asks it switched to the numbered prompt,
+then emitted THAT text every subsequent turn forever. The reject#2 liveness case
+was only 4 turns, so the numbered text had appeared just twice and the deadlock
+was invisible; the "unconditionally"/"never deadlocks" claims were false. Class:
+liveness on a real call (poor-STT caller gets trapped), not booking correctness.
+
+FIX: a genuinely terminating ladder mirroring the time-selection escape hatch —
+ask 0-1 plain, ask 2 numbered choice, ask >=3 DROP the ambiguity flags and
+_end_turn with a call-the-clinic message. State is genuinely left; no question
+(plain or numbered) can recur. Liveness case renamed disambig-liveness-bound and
+extended 3 -> 6 unresolvable answers (LONGER than the ladder, so a swap-only
+bound breaches I3). I7 docstring corrected: escalates then TERMINATES.
+
+BEFORE/AFTER PROOF: disabling the terminating stage makes disambig-liveness-bound
+fail with the numbered prompt repeated 5x (the exact CEO #32 finding); the fix
+ends the conversation and passes. Reverted; tree clean.
+
+GATES: corpus 26/26 (private DB, dropped); non-PG 1259; ruff + mypy(src) clean.
+Candidate d2f646d (tag d3-item19-d2f646d). Reviewer's standing note: #19 stays
+open and does NOT integrate to main until CEO #32 lands (he will not put a false
+liveness invariant into main). Evidence boundary unchanged: TEXT/MOCK only.
+
+POST-MORTEM internalized: a liveness case whose length matches the bound proves
+only the bound's first step. Choose the length that would catch a non-terminating
+SECOND strategy. Applied here (6 > ladder of 3).
+
 ### ITEM #19 — REJECT #2 FIX (candidate 9960095, 2026-08-12)
 
 REJECT #2 at 936bdee (reviewer's two-rejection rescope; scope now frozen at the

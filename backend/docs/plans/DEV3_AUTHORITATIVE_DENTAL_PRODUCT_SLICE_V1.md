@@ -793,6 +793,25 @@ Three-part checklist frozen by the reviewer. Status:
   (then rebase) or a new targeted on_conflict_do_update schedule write — flagged
   to the reviewer rather than silently scoped out.
 
+### CEO #17 — ACCEPTED at 80c9492 (review 2026-08-12)
+
+Test-only lock of the bare-meridiem gate. Reviewer reproduced independently in
+an isolated worktree (blob-identity check: conversation.py at 80c9492 ==
+d2f646d, NON_TEST_FILES=0) and ran BOTH anchored mutations himself, grepping the
+changed line first to prove each landed:
+- dot-strip neutralized -> 3 fail (PM./pm./am.), negations untouched;
+- "no"/"not" added to _filler -> 7 fail (negations), punctuation untouched.
+The two mutations partition CLEANLY (kill disjoint sets), which is what earned
+acceptance: punctuation-normalization and the negation guard are each
+independently locked, not one assertion wearing two hats. Reviewer did NOT
+re-run the full 1280 suite or PG corpus at 80c9492 — judged covered since the
+only production file is byte-identical to d2f646d and the diff is one test file.
+
+Stale-baseline note: CEO #17's behavior already landed in f3da3dc (an ancestor
+of d2f646d); the assignment was frozen at af451a22. Surfaced rather than
+rebuilt — the rescope to regression-locking + anchored mutations came from Dev3.
+Candidate 80c9492 (tag d3-ceo17-80c9492). Test-only; no runtime change.
+
 ### ITEM #19 + CEO #32 — ACCEPTED at d2f646d (review 2026-08-12)
 
 Reviewer reproduced independently (isolated worktree, import-proven; private DB

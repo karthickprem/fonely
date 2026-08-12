@@ -301,11 +301,18 @@ class TestCleanSyntheticConversation:
     def test_session_lifecycle_clean_close(self):
         import asyncio
 
-        sup = VoiceSessionSupervisor(VoiceSessionConfig(session_id="clean-2", business_id=1))
-        sup.transition(sup.state.__class__("signaling"))
-        sup.transition(sup.state.__class__("connecting"))
-        sup.transition(sup.state.__class__("active"))
+        async def _lifecycle() -> dict:
+            # Run the WHOLE lifecycle inside one running loop so the ACTIVE
+            # transition arms the duration timer and close() cancels it in the
+            # same loop. Doing transitions outside a loop (then only close()
+            # inside) would never arm the timer and, on py3.14, get_event_loop()
+            # raises "no current event loop". No implicit loop creation.
+            sup = VoiceSessionSupervisor(VoiceSessionConfig(session_id="clean-2", business_id=1))
+            sup.transition(sup.state.__class__("signaling"))
+            sup.transition(sup.state.__class__("connecting"))
+            sup.transition(sup.state.__class__("active"))
+            return await sup.close("normal")
 
-        summary = asyncio.get_event_loop().run_until_complete(sup.close("normal"))
+        summary = asyncio.run(_lifecycle())
         assert summary["final_state"] == "closed"
         assert summary["close_reason"] == "normal"

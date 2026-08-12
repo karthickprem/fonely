@@ -130,14 +130,35 @@ async def api_clinic_context():
 
 @app.get("/api/pipeline-info")
 async def pipeline_info():
-    """Confirms which pipeline, LLM, and clinic are active — routing guard.
-    Reads the real demo clinic from the production package."""
+    """Reports which pipeline, LLM, and clinic are active.
+
+    Values are DERIVED, not asserted: the model name comes from the same
+    constant booking_pipeline builds the LLM from (so it cannot drift from the
+    served model), and code_source reports what this lab actually is — a demo
+    harness importing the production voice package over a sys.path insert — not
+    a claim to BE the production package. The old response hardcoded the model
+    as a second literal and labelled itself "(production package)"; both could
+    (and did) diverge from reality.
+    """
     import production_wiring as pw
+    from booking_pipeline import BOOKING_LLM_GATEWAY, BOOKING_LLM_MODEL
+
     return {
         "pipeline": "booking",
-        "llm": "gpt-5.6-luna",
+        "llm": {
+            "model": BOOKING_LLM_MODEL,
+            "gateway": BOOKING_LLM_GATEWAY,
+            "provider": "openai-protocol (non-anthropic)",
+        },
         "live_context": True,
-        "code_source": "backend/src/fonely/voice (production package)",
+        # This lab imports the production voice package (fonely.voice) from the
+        # dev4-voice-runtime worktree via a sys.path insert. It RUNS that code;
+        # it is not itself the shipped package. Reported honestly so a reader is
+        # not told the demo IS production.
+        "code_source": {
+            "role": "lab demo harness",
+            "imports": "fonely.voice (dev4-voice-runtime/backend/src, via sys.path)",
+        },
         "clinic_profile": {
             "business_id": pw.DEMO_BUSINESS_ID,
             "db": "fonely_dev4",

@@ -323,6 +323,13 @@ CRITICAL:
 # split the old three-sentence greeting into three synthesis calls.)
 GREETING = "வணக்கம், Smile Care Dental Clinic-ல இருந்து Fonely பேசுறேன், appointment book பண்ண உதவி பண்ணலாம்"
 
+# The LLM actually driving this pipeline: OpenAI-protocol model served over the
+# AMD Azure-APIM gateway (llm-api.amd.com), NOT an Anthropic/Claude model. Named
+# once here and referenced at the LLM construction site and by /api/pipeline-info
+# so the reported model can never drift from the served model.
+BOOKING_LLM_MODEL = "gpt-5.6-luna"
+BOOKING_LLM_GATEWAY = "amd-azure-apim"
+
 
 async def run_booking_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
     from datetime import datetime, UTC
@@ -378,7 +385,7 @@ async def run_booking_bot(transport: BaseTransport, runner_args: RunnerArguments
             base_url=os.environ.get("ANTHROPIC_BASE_URL", "") + "/v1",
             default_headers=gateway_headers,
             settings=OpenAILLMService.Settings(
-                model="gpt-5.6-luna",
+                model=BOOKING_LLM_MODEL,
                 system_instruction=system_prompt,
                 max_completion_tokens=300,
             ),
@@ -426,8 +433,21 @@ async def run_booking_bot(transport: BaseTransport, runner_args: RunnerArguments
         from production_wiring import build_processors
         state_injector, post_llm_gate = build_processors(runner_args.session_id)
 
+        # DPDP capture gate (production package). NoticeInputLatch starts CLOSED
+        # and drops caller audio until the open order opens it — capture cannot
+        # begin before the notice completes and its evidence persists. Without
+        # this the pipeline fed transport.input() straight to STT, so a failed
+        # (or skipped) notice still captured speech. NoticePlaybackSignal watches
+        # the output for the real BotStoppedSpeakingFrame so the open order waits
+        # for actual playback, not a guessed sleep.
+        from fonely.voice.input_latch import NoticeInputLatch
+        from fonely.voice.playback_signal import NoticePlaybackSignal
+        input_latch = NoticeInputLatch()
+        playback_signal = NoticePlaybackSignal()
+
         pipeline = Pipeline([
             transport.input(),
+            input_latch,       # capture gate: drops caller audio until open()
             stt,
             user_aggregator,
             state_injector,    # pre-LLM: injects BookingCollection state
@@ -435,6 +455,7 @@ async def run_booking_bot(transport: BaseTransport, runner_args: RunnerArguments
             post_llm_gate,     # post-LLM: gates medical/confirmation/closure
             tts,
             transport.output(),
+            playback_signal,   # observes BotStoppedSpeakingFrame (notice done)
             assistant_aggregator,
         ])
 
@@ -455,26 +476,64 @@ async def run_booking_bot(transport: BaseTransport, runner_args: RunnerArguments
         @transport.event_handler("on_client_connected")
         async def on_client_connected(transport, client):
             logger.info("Booking client connected")
-            # DPDP: speak the platform-owned notice BEFORE the greeting and
-            # before any capture. Persist the resolved text+version as evidence.
+            # DPDP enforced open order (production package): notice → real
+            # playback complete → evidence persisted → greeting → capture opens.
+            # The greeting is spoken ONLY on the success path, and the input
+            # latch opens ONLY after evidence persists — a failed persist keeps
+            # capture CLOSED and the caller hears a short failure line instead of
+            # being silently recorded without provable consent.
+            from datetime import datetime
+            from zoneinfo import ZoneInfo
+
+            from fonely.voice.notice_playback import build_notice_open_sequence
+            from fonely.voice.open_order import OpenOutcome
             from fonely.voice.session_open import open_session
+
+            LOCALE = "ta-IN"
             opening = open_session(
                 clinic_name="Smile Care Dental Clinic",
                 greeting_text=GREETING,
-                locale="ta-IN",
+                locale=LOCALE,
             )
-            try:
-                await production_wiring.record_notice_evidence(
-                    conversation_id=runner_args.session_id,
-                    notice_event=opening.notice_event,
+            evidence_writer = production_wiring.build_notice_evidence_writer(
+                conversation_id=runner_args.session_id,
+            )
+
+            def _make_speech_frames(text: str):
+                return [
+                    LLMFullResponseStartFrame(),
+                    LLMTextFrame(text=text),
+                    LLMFullResponseEndFrame(),
+                ]
+
+            async def _await_playback_complete() -> bool:
+                # Wait for the notice to actually finish playing (real
+                # BotStoppedSpeakingFrame), not a guessed duration.
+                return await playback_signal.await_complete(timeout=30.0)
+
+            open_sequence = build_notice_open_sequence(
+                call_id=0,  # transcript-backed writer keys on conversation_id
+                opening=opening,
+                locale=LOCALE,
+                queue_frames=worker.queue_frames,
+                make_speech_frames=_make_speech_frames,
+                await_playback_complete=_await_playback_complete,
+                evidence_writer=evidence_writer,
+                latch=input_latch,
+                now=lambda: datetime.now(ZoneInfo("Asia/Kolkata")),
+                failure_line=(
+                    "மன்னிக்கவும், தொழில்நுட்ப சிக்கல். "
+                    "தயவுசெய்து clinic-ஐ நேரடியாக அழைக்கவும்."
+                ),
+            )
+
+            result = await open_sequence()
+            if result.outcome is not OpenOutcome.OPENED:
+                logger.warning(
+                    "DPDP open failed (%s) — capture stays CLOSED, tearing down",
+                    result.outcome.value,
                 )
-            except Exception as _e:
-                logger.warning(f"notice evidence persist failed: {_e}")
-            frames = [LLMFullResponseStartFrame()]
-            for line in opening.spoken_lines:  # notice first, greeting second
-                frames.append(LLMTextFrame(text=line))
-            frames.append(LLMFullResponseEndFrame())
-            await worker.queue_frames(frames)
+                await worker.cancel()
 
         @transport.event_handler("on_client_disconnected")
         async def on_client_disconnected(transport, client):

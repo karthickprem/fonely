@@ -12,23 +12,28 @@ This module gives the voice runtime a way to WRITE that evidence without
 depending on the columns existing yet: it talks to a ``DpdpEvidenceWriter``
 port. The runtime is handed a writer; in tests that is ``FakeEvidenceWriter``.
 
-The real SQL-backed writer is deliberately NOT in this module yet. It targets
-the CEO #31 columns on ``calls`` — ``dpdp_notice_completed_at`` (timestamptz),
-``dpdp_notice_version`` (varchar10), ``dpdp_notice_locale`` (varchar10), and
+``SqlDpdpEvidenceWriter`` is the real writer. It targets the CEO #31 columns on
+``calls`` — ``dpdp_notice_completed_at`` (timestamptz), ``dpdp_notice_version``
+(varchar10), ``dpdp_notice_locale`` (varchar10), and
 ``dpdp_notice_content_digest`` (varchar64, lowercase sha256) — all nullable
 under a ``num_nonnulls(...) IN (0, 4)`` CHECK (either none or all four, so
 partial evidence is unrepresentable) plus a digest regex CHECK. Those columns
-ARE now on disk, at revision 0018, which landed the migration, the ORM mapping
-and a guarded downgrade — but deliberately NOT the SQL writer. Landing the
-migration alone cannot mislead anyone; un-wired production code that nothing
-exercises is what reads as done while its first real run would be in front of a
-patient. So the SQL writer still lands in the SAME commit as the PostgreSQL
-test that inserts a real call, runs the writer, and asserts the persisted row
-(including the content digest) against the real columns — and until that commit
-lands, the voice runtime writes through ``FakeEvidenceWriter`` only. Read that
-plainly: no patient-facing DPDP evidence is persisted yet. The columns existing
-is not the guarantee; the writer plus a spoken notice is. Migration/writer
-ownership is coordinated with the CEO single directive, not raced here.
+are on disk at revision 0018. The writer landed in the same commit as the
+PostgreSQL test that inserts a real call, runs it, and asserts the persisted row
+including the digest, so it has never existed as un-exercised production code.
+
+READ THIS BEFORE CONCLUDING DPDP IS HANDLED. A working writer is not a spoken
+notice. Nothing on the production path calls it yet, and the reason is bigger
+than this module: no voice runtime is mounted at all. ``api/channels/exotel.py``
+looks up ``app.state.voice_audio_runtime``, nothing in ``src/`` ever assigns it,
+so every admitted call closes 1011 before a word is synthesized. The ordered
+sequence in ``open_order.py`` that would call this writer is itself reachable
+only from its unit test. So: the columns exist, the writer works and is proven
+against them, and still no patient has been read a notice and no evidence row
+has ever been written outside a test. The columns existing is not the guarantee.
+The writer existing is not the guarantee. A patient hearing the notice, on a
+call a mounted runtime actually served, is the guarantee — tracked as CEO #31
+(evidence) and #38 (the unmounted runtime), and not claimed here.
 
 The content digest is a stable hash of exactly the notice text, version, and
 locale — the three facts the CHECK pairs with ``completed_at``. It is computed
@@ -38,9 +43,26 @@ here so the same value is written regardless of writer implementation.
 from __future__ import annotations
 
 import hashlib
+import logging
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+from sqlalchemy import text
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+logger = logging.getLogger("fonely.voice.evidence")
+
+# Same shape as backend_ports.SessionFactory, defined locally rather than
+# imported: that module pulls in the whole command-port graph, and this one is a
+# leaf that the pure open-sequence orchestration depends on. A structural alias
+# duplicated in two places cannot silently diverge -- mypy checks both against
+# the same injected factory at the call site.
+SessionFactory = Callable[[], "AbstractAsyncContextManager[AsyncSession]"]
 
 
 def notice_content_digest(text: str, version: str, locale: str) -> str:
@@ -114,8 +136,126 @@ class FakeEvidenceWriter:
         )
 
 
-# The SQL-backed DpdpEvidenceWriter is intentionally absent until the C5 columns
-# land on disk and the PostgreSQL proof step introduces it together with the test
-# that drives it through its real path against the real columns (asserting the
-# persisted notice_content_digest). Shipping it here now — un-wired, with no test
-# through its real path — would be dead code that reads as done.
+class DpdpEvidenceWriteError(RuntimeError):
+    """The evidence could not be recorded, so consent is not provable.
+
+    Raised rather than returned because the open sequence keeps STT closed on
+    any exception from ``write``. A distinct type so a log or a test can tell
+    "no such call" from "a different notice is already recorded" from a
+    database error, instead of matching on message text.
+    """
+
+
+class SqlDpdpEvidenceWriter:
+    """Production writer: the four ``dpdp_notice_*`` columns on ``calls``.
+
+    Owns its own transaction and commits before returning. This is the point of
+    the whole module, so it is worth being explicit: the guarantee is that the
+    evidence is DURABLE at the instant STT opens. If this writer joined the
+    caller's long-lived session instead, ``write`` would return, the latch would
+    open, the patient would start speaking, and the evidence would still be
+    sitting uncommitted in a transaction that a crash or a rollback later in the
+    call would discard — leaving captured speech with no record of the notice
+    that permitted capturing it. A short transaction that commits here is the
+    only shape that makes the ordering claim true.
+
+    Validation is split on a deliberate line: this class checks only what the
+    database physically cannot, and lets the CHECK constraints enforce the rest.
+    A malformed digest is rejected by ``ck_calls_dpdp_notice_digest_hex`` and a
+    partial write by ``ck_calls_dpdp_notice_all_or_none``, so re-checking them
+    here would add a second copy of a rule that can drift from the schema. A
+    naive ``completed_at`` is the exception: ``timestamptz`` would silently
+    coerce it using the session TimeZone, recording a real timestamp that is
+    simply wrong by hours, with no error anywhere. The database cannot catch
+    that one, so this class does.
+    """
+
+    def __init__(self, *, session_factory: SessionFactory) -> None:
+        self._session_factory = session_factory
+
+    async def write(
+        self,
+        *,
+        call_id: int,
+        completed_at: datetime,
+        notice_version: str,
+        locale: str,
+        content_digest: str,
+    ) -> None:
+        if completed_at.tzinfo is None or completed_at.utcoffset() is None:
+            raise DpdpEvidenceWriteError(
+                f"naive completed_at for call {call_id}: timestamptz would coerce it silently"
+            )
+
+        params = {
+            "call_id": call_id,
+            "completed_at": completed_at,
+            "version": notice_version,
+            "locale": locale,
+            "digest": content_digest,
+        }
+
+        async with self._session_factory() as session:
+            # `AND dpdp_notice_completed_at IS NULL` makes this a claim on
+            # unrecorded evidence rather than a blind overwrite. Two concurrent
+            # writers for one call cannot both win, and a late duplicate cannot
+            # move the recorded completion time to a later instant than the one
+            # the patient actually heard the notice at.
+            result = await session.execute(
+                text(
+                    "UPDATE calls SET "
+                    "  dpdp_notice_completed_at = :completed_at, "
+                    "  dpdp_notice_version = :version, "
+                    "  dpdp_notice_locale = :locale, "
+                    "  dpdp_notice_content_digest = :digest "
+                    "WHERE id = :call_id AND dpdp_notice_completed_at IS NULL"
+                ),
+                params,
+            )
+            if result.rowcount == 1:  # type: ignore[attr-defined]
+                await session.commit()
+                logger.info(
+                    "dpdp_notice_evidence_written",
+                    extra={
+                        "call_id": call_id,
+                        "notice_version": notice_version,
+                        "locale": locale,
+                    },
+                )
+                return
+
+            # Zero rows updated is ambiguous on its own -- no such call, or
+            # evidence already present -- and the two need opposite outcomes, so
+            # read the row rather than guess.
+            existing = await session.execute(
+                text(
+                    "SELECT dpdp_notice_content_digest, dpdp_notice_version, "
+                    "       dpdp_notice_locale "
+                    "FROM calls WHERE id = :call_id"
+                ),
+                {"call_id": call_id},
+            )
+            row = existing.one_or_none()
+
+        if row is None:
+            raise DpdpEvidenceWriteError(f"no call row {call_id} to record notice evidence against")
+
+        if (row[0], row[1], row[2]) == (content_digest, notice_version, locale):
+            # A retry whose first attempt did commit before its response was
+            # lost. Identical evidence is already durable, which is exactly what
+            # this call was asking for, so it succeeds -- and deliberately does
+            # NOT rewrite completed_at, because the first completion is the one
+            # the patient experienced.
+            logger.info(
+                "dpdp_notice_evidence_already_recorded",
+                extra={"call_id": call_id, "notice_version": notice_version},
+            )
+            return
+
+        # Different notice already recorded. Overwriting would replace a true
+        # statement about what this patient heard with a different one, so this
+        # fails and the latch stays closed.
+        raise DpdpEvidenceWriteError(
+            f"call {call_id} already has different notice evidence recorded "
+            f"(stored version {row[1]!r} locale {row[2]!r}, refusing to overwrite)"
+        )

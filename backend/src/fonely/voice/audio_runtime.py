@@ -1,11 +1,9 @@
 """VoiceAudioRuntime: the entry point that turns an admitted media stream into a
 running Pipecat voice call.
 
-Scope of this module (step 4): construct the per-call Exotel serializer and the
-FastAPI websocket transport from the ADMITTED handoff — the validated
-``MediaStreamStart`` — and expose the seam the enforced open-order + lifecycle
-build on next. Identity comes only from the ``AudioSession``; wire parameters
-come only from ``handoff.start``.
+Identity comes only from the ``AudioSession``; wire parameters come only from
+``handoff.start``. The runtime never re-does admission or tenant lookup — it
+trusts the admitted session it is handed.
 
 Two rules, both testable against the CONSTRUCTED objects (never the inputs):
 
@@ -17,10 +15,17 @@ Two rules, both testable against the CONSTRUCTED objects (never the inputs):
   * The outbound stream handle is ``start.stream_sid`` from the typed field,
     quoted back so the provider routes our audio to the right call. It is never
     taken by re-serializing an inbound frame.
+
+Dependency discipline (the injected-instance trap): the command port that
+commits bookings is INJECTED at construction and used as-is per call. The
+runtime builds no port of its own and takes no defaulted port — so a test that
+counts commits on the port it injected is counting the port the call actually
+used, not a different instance the runtime quietly created.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from pipecat.serializers.exotel import ExotelFrameSerializer
@@ -29,10 +34,16 @@ from pipecat.transports.websocket.fastapi import (
     FastAPIWebsocketTransport,
 )
 
+from .call_teardown import OnceRelease
+
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from starlette.websockets import WebSocket
 
-    from .media_stream_types import MediaStreamStart
+    from .frame_pipeline import ResolverContext
+    from .media_stream_types import AudioSession, MediaStreamStart
+    from .runtime import CommandPort
 
 # Outbound audio rate to the provider. Exotel accepts a fixed set; this is the
 # rate WE emit, independent of the inbound wire rate (which comes from the
@@ -67,3 +78,36 @@ def build_transport(websocket: WebSocket, start: MediaStreamStart) -> FastAPIWeb
         audio_out_sample_rate=_AUDIO_OUT_SAMPLE_RATE,
     )
     return FastAPIWebsocketTransport(websocket=websocket, params=params)
+
+
+@dataclass
+class VoiceAudioRuntime:
+    """Holds the injected dependencies a call needs and owns per-call setup +
+    exactly-once teardown.
+
+    The dependencies are set once here, not rebuilt per call and not defaulted:
+      * ``command_port`` — the SOLE commit route's port. Injected as an instance;
+        the runtime never constructs one, so commit-count assertions observe the
+        real object.
+      * ``release_slot`` — how to return this call's admission slot. Wrapped in
+        an ``OnceRelease`` per call so it runs exactly once across every terminal
+        path.
+      * ``resolver_factory`` — builds the per-call ``ResolverContext`` for the
+        admitted session (business_id, session factory, clock). Injected so tests
+        supply a fake and the runtime stays free of DB wiring.
+    """
+
+    command_port: CommandPort
+    resolver_factory: Callable[[AudioSession, CommandPort], ResolverContext]
+    release_slot: Callable[[AudioSession], None]
+
+    def make_release_guard(self, session: AudioSession) -> OnceRelease:
+        """One exactly-once release wrapper for this call. The runtime installs
+        the returned guard in a single ``finally`` and calls it on every
+        terminal path; only the first call returns the slot."""
+        return OnceRelease(lambda: self.release_slot(session))
+
+    def build_call_resolver(self, session: AudioSession) -> ResolverContext:
+        """Build the per-call resolver via the injected factory, threading the
+        INJECTED command port through — never a port built here."""
+        return self.resolver_factory(session, self.command_port)

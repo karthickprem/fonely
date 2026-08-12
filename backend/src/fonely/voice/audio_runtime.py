@@ -43,7 +43,8 @@ if TYPE_CHECKING:
     from starlette.websockets import WebSocket
 
     from .frame_pipeline import ResolverContext
-    from .media_stream_types import AudioSession, MediaStreamStart
+    from .input_latch import NoticeInputLatch
+    from .media_stream_types import AudioSession, AudioStreamHandoff, MediaStreamStart
     from .open_order import OpenResult
     from .runtime import CommandPort
 
@@ -82,6 +83,25 @@ def build_transport(websocket: WebSocket, start: MediaStreamStart) -> FastAPIWeb
     return FastAPIWebsocketTransport(websocket=websocket, params=params)
 
 
+@dataclass(frozen=True)
+class CallComponents:
+    """The per-call handles ``handle_audio_session`` drives, produced by the
+    ``build_call`` composition step from the trusted session + validated handoff.
+
+    ``input_latch`` starts CLOSED; the open sequence opens it only after notice →
+    playback → evidence succeed. ``open_sequence`` is ``run_open_sequence`` bound
+    to this call's notice/greeting/evidence/latch. ``teardown`` closes worker,
+    providers, and socket. The pipeline/task/runner are the composed Pipecat
+    objects (held as ``object`` so this module stays free of runner-type imports
+    at module load)."""
+
+    input_latch: NoticeInputLatch
+    open_sequence: Callable[[], Awaitable[OpenResult]]
+    teardown: Callable[[], Awaitable[None]]
+    pipeline_task: object
+    runner: object
+
+
 @dataclass
 class VoiceAudioRuntime:
     """Holds the injected dependencies a call needs and owns per-call setup +
@@ -113,6 +133,36 @@ class VoiceAudioRuntime:
         """Build the per-call resolver via the injected factory, threading the
         INJECTED command port through — never a port built here."""
         return self.resolver_factory(session, self.command_port)
+
+    async def handle_audio_session(
+        self,
+        session: AudioSession,
+        handoff: AudioStreamHandoff,
+        *,
+        build_call: Callable[[AudioSession, AudioStreamHandoff], CallComponents],
+        run_runner: Callable[[CallComponents], Awaitable[None]],
+    ) -> OpenResult:
+        """Top-level per-call flow: compose the pipeline for this admitted media
+        stream, enforce the open order, run the conversation, converge teardown.
+
+        ``build_call`` composes the transport + assembled pipeline + runner from
+        the trusted ``session`` and validated ``handoff`` — returning the handles
+        this method drives (the closed input latch, the open sequence bound to
+        this call, the runner). ``run_runner`` drives the Pipecat runner to
+        completion. Both are injected so the orchestration is testable with fakes
+        and the real wiring supplies live Pipecat objects.
+
+        Ordering and teardown are delegated to ``run_call_open``: caller audio
+        reaches STT only after the open sequence succeeds, and the admission slot
+        releases exactly once on every path.
+        """
+        components = build_call(session, handoff)
+        return await self.run_call_open(
+            session,
+            open_sequence=components.open_sequence,
+            start_conversation=lambda: run_runner(components),
+            teardown=components.teardown,
+        )
 
     async def run_call_open(
         self,

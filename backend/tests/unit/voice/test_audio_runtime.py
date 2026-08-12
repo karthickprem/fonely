@@ -228,3 +228,96 @@ class TestRunCallOpen:
 
         assert "start_conversation" not in events
         assert len(releases) == 1  # slot still released exactly once
+
+
+class TestHandleAudioSession:
+    """Top-level composition: handle_audio_session builds the call components
+    from the trusted session + handoff and drives run_call_open. The runner runs
+    ONLY on OPENED; a failed open never runs the runner; release once."""
+
+    @dataclass
+    class _Handoff:
+        start: object = None
+        raw_frames: tuple = ()
+
+    def _rt(self, releases: list) -> VoiceAudioRuntime:
+        return VoiceAudioRuntime(
+            command_port=_Port(),
+            resolver_factory=lambda s, p: object(),
+            release_slot=lambda s: releases.append(s),
+        )
+
+    @pytest.mark.asyncio
+    async def test_opened_runs_the_runner_once(self):
+        releases: list = []
+        rt = self._rt(releases)
+        ran: list = []
+
+        def build_call(session, handoff):
+            from fonely.voice.audio_runtime import CallComponents
+
+            async def open_sequence() -> OpenResult:
+                return OpenResult(OpenOutcome.OPENED, stt_opened=True, content_digest="d")
+
+            async def teardown() -> None:
+                ran.append("teardown")
+
+            return CallComponents(
+                input_latch=object(),  # type: ignore[arg-type]
+                open_sequence=open_sequence,
+                teardown=teardown,
+                pipeline_task=object(),
+                runner=object(),
+            )
+
+        async def run_runner(components) -> None:
+            ran.append("run_runner")
+
+        result = await rt.handle_audio_session(
+            _FakeAudioSession(),
+            self._Handoff(),
+            build_call=build_call,
+            run_runner=run_runner,
+        )
+
+        assert result.outcome is OpenOutcome.OPENED
+        assert ran == ["run_runner"]  # runner ran, teardown not called
+        assert len(releases) == 1
+
+    @pytest.mark.asyncio
+    async def test_failed_open_never_runs_the_runner(self):
+        releases: list = []
+        rt = self._rt(releases)
+        ran: list = []
+
+        def build_call(session, handoff):
+            from fonely.voice.audio_runtime import CallComponents
+
+            async def open_sequence() -> OpenResult:
+                return OpenResult(OpenOutcome.EVIDENCE_WRITE_FAILED, stt_opened=False)
+
+            async def teardown() -> None:
+                ran.append("teardown")
+
+            return CallComponents(
+                input_latch=object(),  # type: ignore[arg-type]
+                open_sequence=open_sequence,
+                teardown=teardown,
+                pipeline_task=object(),
+                runner=object(),
+            )
+
+        async def run_runner(components) -> None:
+            ran.append("run_runner")
+
+        result = await rt.handle_audio_session(
+            _FakeAudioSession(),
+            self._Handoff(),
+            build_call=build_call,
+            run_runner=run_runner,
+        )
+
+        assert result.outcome is OpenOutcome.EVIDENCE_WRITE_FAILED
+        assert "run_runner" not in ran  # runner NEVER ran on a failed open
+        assert ran == ["teardown"]
+        assert len(releases) == 1

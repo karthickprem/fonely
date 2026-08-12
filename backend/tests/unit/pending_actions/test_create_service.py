@@ -7,7 +7,7 @@ import pytest
 
 from fonely.domain.pending_actions.commands import ActorContext, CreatePendingActionCommand
 from fonely.domain.pending_actions.errors import PendingActionIdempotencyConflictError
-from fonely.models.enums import CallerRole, PendingActionType
+from fonely.models.enums import CallerRole, Channel, PendingActionType
 from fonely.models.schema import PendingAction
 from fonely.services.pending_actions import PendingActionService
 
@@ -19,6 +19,7 @@ def actor() -> ActorContext:
         business_id=1,
         normalized_phone="+919123456789",
         verified_role=CallerRole.CUSTOMER,
+        channel=Channel.TEXT,
         session_id="session-1",
     )
 

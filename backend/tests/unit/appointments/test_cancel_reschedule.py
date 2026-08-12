@@ -20,7 +20,7 @@ from fonely.domain.pending_actions.payloads import (
     PendingAppointmentEnvelope,
     RescheduleAppointmentData,
 )
-from fonely.models.enums import CallerRole
+from fonely.models.enums import CallerRole, Channel
 from fonely.services.appointments import AppointmentService
 
 START = datetime(2026, 8, 5, 10, 0, tzinfo=UTC)
@@ -34,6 +34,7 @@ def _actor(business_id: int = 1) -> ActorContext:
         business_id=business_id,
         normalized_phone="+919123456789",
         verified_role=CallerRole.CUSTOMER,
+        channel=Channel.TEXT,
     )
 
 

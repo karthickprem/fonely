@@ -7,7 +7,7 @@ import pytest
 from fonely.domain.conversation.safety import ESCALATION_MEDICAL, ESCALATION_URGENT
 from fonely.domain.conversation.state import ConversationState
 from fonely.domain.pending_actions.commands import ActorContext
-from fonely.models.enums import CallerRole
+from fonely.models.enums import CallerRole, Channel
 from fonely.services.conversation import (
     _CONVERSATIONS,
     _MAX_CONVERSATIONS,
@@ -39,6 +39,7 @@ def _actor() -> ActorContext:
         business_id=1,
         normalized_phone="+919123456789",
         verified_role=CallerRole.CUSTOMER,
+        channel=Channel.TEXT,
     )
 
 

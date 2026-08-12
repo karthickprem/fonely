@@ -23,7 +23,7 @@ from fonely.domain.pending_actions.commands import (
     MarkAwaitingConfirmationCommand,
 )
 from fonely.domain.pending_actions.errors import PendingActionConcurrencyError
-from fonely.models.enums import CallerRole, PendingActionType
+from fonely.models.enums import CallerRole, Channel, PendingActionType
 from fonely.services.inventory import InventoryService
 from fonely.services.orders import OrderService
 from fonely.services.pending_actions import PendingActionService
@@ -50,6 +50,7 @@ def owner() -> ActorContext:
         business_id=1,
         normalized_phone="+919123456789",
         verified_role=CallerRole.OWNER,
+        channel=Channel.TEXT,
     )
 
 
@@ -58,6 +59,7 @@ def customer(session_id: str) -> ActorContext:
         business_id=1,
         normalized_phone="+919222222222",
         verified_role=CallerRole.CUSTOMER,
+        channel=Channel.TEXT,
         session_id=session_id,
     )
 

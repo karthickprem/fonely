@@ -3,6 +3,19 @@
 import enum
 
 
+class Channel(enum.StrEnum):
+    """The transport a caller reached us on — an authoritative fact set by the
+    admission/transport layer, never inferred from model output or caller text.
+
+    It selects channel-specific terminal wording (e.g. a give-up message): on
+    TEXT the patient can be told to call the clinic; on VOICE they are already
+    connected, so that instruction would be incoherent (CEO #33).
+    """
+
+    TEXT = "text"
+    VOICE = "voice"
+
+
 class Capability(enum.StrEnum):
     INVENTORY = "inventory"
     APPOINTMENTS = "appointments"

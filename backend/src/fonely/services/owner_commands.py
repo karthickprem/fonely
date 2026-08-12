@@ -18,7 +18,7 @@ from fonely.domain.appointments.availability import (
     schedule_weekday,
     truncate_shifts_at,
 )
-from fonely.models.enums import CallerRole, DailyContextType
+from fonely.models.enums import CallerRole, Channel, DailyContextType
 from fonely.models.schema import (
     Appointment,
     Business,
@@ -594,6 +594,7 @@ class OwnerCommandService:
             business_id=business_id,
             normalized_phone=owner_phone,
             verified_role=CallerRole.OWNER,
+            channel=Channel.TEXT,  # owner commands arrive over WhatsApp (text)
             session_id=None,
         )
 

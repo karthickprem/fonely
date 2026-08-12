@@ -140,7 +140,7 @@ class TestCancelFlowNoAppointments:
     @pytest.mark.asyncio
     async def test_no_appointments_ends_conversation(self):
         from fonely.domain.pending_actions.commands import ActorContext
-        from fonely.models.enums import CallerRole
+        from fonely.models.enums import CallerRole, Channel
 
         session = AsyncMock()
         empty_result = MagicMock(scalars=lambda: MagicMock(all=lambda: []))
@@ -162,6 +162,7 @@ class TestCancelFlowNoAppointments:
             business_id=1,
             normalized_phone="+919123456789",
             verified_role=CallerRole.CUSTOMER,
+            channel=Channel.TEXT,
         )
 
         turn = await service.process_message("cancel-test", 1, actor, "cancel my appointment")
@@ -174,7 +175,7 @@ class TestRescheduleFlowNoAppointments:
     @pytest.mark.asyncio
     async def test_no_appointments_ends_conversation(self):
         from fonely.domain.pending_actions.commands import ActorContext
-        from fonely.models.enums import CallerRole
+        from fonely.models.enums import CallerRole, Channel
 
         session = AsyncMock()
         empty_result = MagicMock(scalars=lambda: MagicMock(all=lambda: []))
@@ -196,6 +197,7 @@ class TestRescheduleFlowNoAppointments:
             business_id=1,
             normalized_phone="+919123456789",
             verified_role=CallerRole.CUSTOMER,
+            channel=Channel.TEXT,
         )
 
         turn = await service.process_message(

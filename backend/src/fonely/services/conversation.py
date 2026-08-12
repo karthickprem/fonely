@@ -27,6 +27,7 @@ from fonely.domain.conversation.state import (
     ConversationTurn,
 )
 from fonely.domain.pending_actions.commands import ActorContext
+from fonely.models.enums import Channel
 from fonely.services.model_gateway import ModelGateway, ModelResponse
 
 if TYPE_CHECKING:
@@ -377,6 +378,31 @@ def _resolve_disambiguation_reply(
     return None
 
 
+# Channel-specific terminal wording for a give-up path (CEO #33). The ladder
+# logic that decides WHEN to give up is channel-agnostic; only the final string
+# varies, so this stays a bounded policy table rather than `if channel == voice`
+# branches scattered through the flow. Each string must be TRUE for its channel
+# given the capabilities that actually exist:
+#   TEXT  -> the patient can be told to call the clinic (they are on WhatsApp).
+#   VOICE -> they are ALREADY connected to the clinic's number, so "call the
+#            clinic" is incoherent. We have NO transfer and NO durable callback
+#            capability today (durable callback is CEO #36, post-freeze), so the
+#            voice wording promises NOTHING it cannot perform: it apologizes and
+#            states plainly the booking did not complete. Saying "transferring
+#            you" or "we'll call back" would be a FALSE PROMISE that leaves a
+#            caller waiting on a dead line — worse than incoherent.
+_DISAMBIGUATION_GIVEUP_TEXT: dict[Channel, str] = {
+    Channel.TEXT: (
+        "I'm sorry, I couldn't tell which doctor you meant. "
+        "Please call the clinic directly and they'll help you book."
+    ),
+    Channel.VOICE: (
+        "I'm sorry, I couldn't tell which doctor you meant, so I wasn't able to "
+        "book the appointment. No appointment has been made."
+    ),
+}
+
+
 class ConversationService:
     def __init__(
         self,
@@ -597,11 +623,14 @@ class ConversationService:
                 ctx.collected_facts.pop("_resource_ambiguous", None)
                 ctx.collected_facts.pop("_resource_ambiguity_asks", None)
                 ctx.collected_facts.pop("_active_offer", None)
+                # Terminal wording is channel-specific (CEO #33): on voice the
+                # caller is already connected, so "call the clinic" is a false
+                # instruction. Keyed off the AUTHORITATIVE actor.channel, never
+                # anything the caller said.
                 turn = self._end_turn(
                     ctx,
                     user_message,
-                    "I'm sorry, I couldn't tell which doctor you meant. "
-                    "Please call the clinic directly and they'll help you book.",
+                    _DISAMBIGUATION_GIVEUP_TEXT[actor.channel],
                     ConversationIntent.UNKNOWN,
                     "administrative",
                 )

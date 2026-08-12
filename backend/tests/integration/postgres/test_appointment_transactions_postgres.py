@@ -27,7 +27,7 @@ from fonely.domain.pending_actions.payloads import (
     CreateAppointmentData,
     PendingAppointmentEnvelope,
 )
-from fonely.models.enums import CallerRole, PendingActionType
+from fonely.models.enums import CallerRole, Channel, PendingActionType
 from fonely.models.schema import Appointment, PendingAction, ResourceAllocation
 from fonely.services.appointments import AppointmentService
 from tests.integration.postgres.conftest import seed_whatsapp_channel
@@ -49,6 +49,7 @@ def _actor(business_id: int = 1, phone: str = "+919123456789") -> ActorContext:
         business_id=business_id,
         normalized_phone=phone,
         verified_role=CallerRole.CUSTOMER,
+        channel=Channel.TEXT,
     )
 
 

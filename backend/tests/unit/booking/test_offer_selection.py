@@ -8,6 +8,8 @@ candidates are genuinely ambiguous, so it must decline and let the caller ask.
 from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from fonely.domain.booking.offers import build_offer, serialize_offer
 from fonely.domain.conversation.state import ConversationContext
 from fonely.services.conversation import ConversationService
@@ -169,3 +171,61 @@ class TestBareMeridiemWord:
 
         assert _bare_meridiem_word("pagal") is None
         assert _bare_meridiem_word("பகல்") is None
+
+    # CEO #17: lock the punctuation/Tanglish-filler forms a real caller (via STT)
+    # actually sends. These already resolve; these assertions keep them resolving.
+    @pytest.mark.parametrize(
+        "message,expected",
+        [
+            ("PM.", "pm"),  # highest value: trailing period is ordinary STT output
+            ("pm.", "pm"),
+            ("am.", "am"),
+            ("pm!", "pm"),
+            ("pm ,", "pm"),
+            ("pm please", "pm"),
+            ("pm ah", "pm"),  # Tanglish filler
+            ("pm da", "pm"),  # Tanglish filler
+            ("am please", "am"),
+        ],
+    )
+    def test_punctuation_and_tanglish_filler_resolve(self, message: str, expected: str) -> None:
+        from fonely.services.conversation import _bare_meridiem_word
+
+        assert _bare_meridiem_word(message) == expected, (
+            f"{message!r} is a clear meridiem answer a caller sends via STT; "
+            f"it must resolve to {expected!r}, not cost a turn and drop to the bound"
+        )
+
+    # CEO #17 — THE LOAD-BEARING ASSET. A negation must NEVER resolve: "not pm"
+    # resolving would book the patient at PM, the exact meridiem they refused —
+    # a silent mis-booking (P0). This set guards against a future edit that
+    # widens the filler set (e.g. for a new Tanglish particle) and quietly lets
+    # "no"/"not" fall through. If this test ever fails, a negation started
+    # resolving: that is a MIS-BOOKING, not a test nit.
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "no am",
+            "not pm",
+            "no pm",
+            "not am",
+            "don't want pm",
+            "no not pm",
+            "not in the pm",
+            "nope pm",
+            "never pm",
+            "no. pm",
+            "not pm please",
+            "i am not sure",  # 'am' as the verb, negated
+        ],
+    )
+    def test_negations_never_resolve(self, message: str) -> None:
+        from fonely.services.conversation import _bare_meridiem_word
+
+        result = _bare_meridiem_word(message)
+        assert result is None, (
+            f"MIS-BOOKING: {message!r} is a NEGATION but resolved to {result!r}. "
+            f"The patient refused that meridiem; resolving it books them at the "
+            f"time they rejected. A widened filler set has let 'no'/'not' fall "
+            f"through — 'no'/'not' must stay OUT of the filler set."
+        )

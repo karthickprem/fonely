@@ -51,6 +51,14 @@ from fonely.repositories.channel_identities import (
     ChannelIdentityRepository,
 )
 from fonely.services.audio_admission import AdmissionResult, admit_audio_stream
+from fonely.services.audio_stream import (
+    AudioStreamHandoff,
+    MediaStreamStart,
+    StreamStartRefusal,
+    StreamStartResult,
+    frame_event,
+    parse_start_frame,
+)
 
 logger = logging.getLogger("fonely.api.channels.exotel")
 
@@ -304,41 +312,19 @@ def _call_sid_from_query(websocket: WebSocket) -> str:
     return ""
 
 
-def _call_sid_from_frame(raw: str | bytes) -> str:
-    """Pull a call id out of one media-stream control frame, or return "".
+async def _read_opening_frames(websocket: WebSocket) -> StreamStartResult:
+    """Read control frames up to and including the start event.
 
-    Exotel's frames are JSON and the call id has been observed at the top
-    level and nested under `start`, with more than one spelling. Rather than
-    hard-code one shape and discover the others during a live call, every
-    known spelling is checked at both levels. Anything unparseable yields ""
-    and the caller keeps reading until its frame budget runs out.
+    Bounded in both time and frame count: a socket holding the shared secret
+    but never identifying itself must not pin a worker open.
+
+    Every frame read is retained on the handoff. This loop is the only place
+    that consumes frames before the runtime takes the socket, so "who ate the
+    start event" has exactly one answer — and the answer is that nobody did,
+    it was parsed and passed on.
     """
-    try:
-        payload = json.loads(raw)
-    except (ValueError, UnicodeDecodeError):
-        return ""
-    if not isinstance(payload, dict):
-        return ""
+    seen: list[str] = []
 
-    containers: list[dict[str, Any]] = [payload]
-    nested = payload.get("start")
-    if isinstance(nested, dict):
-        containers.append(nested)
-
-    for container in containers:
-        for name in _CALL_SID_QUERY_PARAMS:
-            value = container.get(name)
-            if isinstance(value, str) and value:
-                return value
-    return ""
-
-
-async def _call_sid_from_opening_frames(websocket: WebSocket) -> str:
-    """Read the first few control frames looking for the provider call id.
-
-    Bounded in both time and frames: a socket that holds the shared secret but
-    never identifies itself must not be able to pin a worker open.
-    """
     for _ in range(_MAX_OPENING_FRAMES):
         try:
             message = await asyncio.wait_for(
@@ -346,17 +332,46 @@ async def _call_sid_from_opening_frames(websocket: WebSocket) -> str:
             )
         except TimeoutError:
             logger.warning("exotel_audio_stream_identify_timeout")
-            return ""
+            return StreamStartResult(handoff=None, refusal=StreamStartRefusal.NO_START_EVENT)
         if message.get("type") == "websocket.disconnect":
-            return ""
-        raw = message.get("text") or message.get("bytes")
-        if not raw:
+            return StreamStartResult(handoff=None, refusal=StreamStartRefusal.NO_START_EVENT)
+
+        raw = message.get("text")
+        if raw is None:
+            # Exotel's media stream is JSON text with base64 payloads. A binary
+            # frame here is not something we know how to read, and guessing is
+            # how a control frame ends up transcribed as speech.
+            binary = message.get("bytes")
+            if binary is None:
+                continue
+            raw = binary.decode("utf-8", errors="replace")
+
+        seen.append(raw)
+        event = frame_event(raw)
+
+        if event == "media":
+            # Audio before the format was declared. Decoding it means guessing
+            # the sample rate, and a wrong guess is not silence — it is
+            # plausible noise that STT will transcribe as words.
+            logger.warning("exotel_audio_stream_media_before_start")
+            return StreamStartResult(handoff=None, refusal=StreamStartRefusal.MEDIA_BEFORE_START)
+
+        if event != "start":
+            # "connected", and anything else the provider sends ahead of start.
             continue
-        call_sid = _call_sid_from_frame(raw)
-        if call_sid:
-            return call_sid
+
+        parsed = parse_start_frame(raw)
+        if isinstance(parsed, StreamStartRefusal):
+            logger.warning("exotel_audio_stream_bad_start", extra={"reason": parsed.value})
+            return StreamStartResult(handoff=None, refusal=parsed)
+
+        return StreamStartResult(
+            handoff=AudioStreamHandoff(start=parsed, raw_frames=tuple(seen)),
+            refusal=None,
+        )
+
     logger.warning("exotel_audio_stream_identify_exhausted")
-    return ""
+    return StreamStartResult(handoff=None, refusal=StreamStartRefusal.NO_START_EVENT)
 
 
 async def _admit(websocket: WebSocket, call_sid: str) -> AdmissionResult:
@@ -404,9 +419,26 @@ async def audio_stream(websocket: WebSocket) -> None:
         await websocket.close(code=WS_1008_POLICY_VIOLATION)
         return
 
+    # Checked before the handshake, and a refusal rather than a drain. There
+    # is no useful thing to do with a patient's call when no runtime is
+    # mounted: draining it holds the line open, plays nothing, books nothing,
+    # and looks in the logs exactly like a call that went fine. Absence must
+    # not read as success. 1011 because an unmounted runtime is our
+    # misconfiguration, not the caller's, and the applet's own failover should
+    # take the call.
+    runtime = getattr(websocket.app.state, "voice_audio_runtime", None)
+    if runtime is None:
+        logger.error("exotel_audio_stream_no_runtime")
+        await websocket.close(code=WS_1011_INTERNAL_ERROR)
+        return
+
     call_sid = _call_sid_from_query(websocket)
     identified_before_handshake = bool(call_sid)
 
+    # The URL form lets us refuse without ever completing the handshake, which
+    # is strictly better than refusing after. It does not exempt us from
+    # reading the start event: the runtime needs the stream id and the declared
+    # format either way.
     if identified_before_handshake:
         admission = await _admit(websocket, call_sid)
         if not admission.admitted:
@@ -420,9 +452,30 @@ async def audio_stream(websocket: WebSocket) -> None:
             await websocket.close(code=WS_1008_POLICY_VIOLATION)
             return
         await websocket.accept()
+
+        opening = await _read_opening_frames(websocket)
+        if not opening.ok:
+            await websocket.close(code=WS_1008_POLICY_VIOLATION)
+            return
     else:
         await websocket.accept()
-        call_sid = await _call_sid_from_opening_frames(websocket)
+
+        opening = await _read_opening_frames(websocket)
+        if not opening.ok:
+            await websocket.close(code=WS_1008_POLICY_VIOLATION)
+            return
+
+        # The call id in the start event is a lookup key and nothing more:
+        # admission resolves the tenant from the calls row our own ringing
+        # webhook wrote, so a forged sid selects no row and is refused.
+        handoff = opening.handoff
+        assert handoff is not None  # ok is exactly "handoff is not None"
+        # Not falling back to re-reading raw_frames[-1]: parse_start_frame
+        # already pulled the id out of that exact frame, so a fallback could
+        # only ever produce the same value. An empty id is passed through and
+        # refused by admission as NO_CALL_IDENTIFIER, which is the honest
+        # outcome — there is nowhere else on this socket for it to come from.
+        call_sid = handoff.start.provider_call_sid
         admission = await _admit(websocket, call_sid)
         if not admission.admitted:
             logger.warning(
@@ -437,29 +490,29 @@ async def audio_stream(websocket: WebSocket) -> None:
 
     session = admission.session
     assert session is not None  # admitted is exactly "session is not None"
+    handoff = opening.handoff
+    assert handoff is not None
+
+    start: MediaStreamStart = handoff.start
     logger.info(
         "exotel_audio_stream_connected",
         extra={
             "business_id": session.business_id,
             "call_id": session.call_id,
             "identified_before_handshake": identified_before_handshake,
+            "stream_sid": start.stream_sid,
+            "encoding": start.encoding,
+            "sample_rate": start.sample_rate,
         },
     )
 
     # The voice runtime is mounted by the application, not imported here, so
-    # the telephony adapter stays free of pipeline dependencies and the
-    # runtime is exercised against a typed AudioSession rather than a raw
-    # socket. With nothing mounted the stream is drained, which keeps the
-    # provider happy without pretending a conversation happened.
-    runtime = getattr(websocket.app.state, "voice_audio_runtime", None)
-    if runtime is None:
-        logger.info("exotel_audio_stream_no_runtime", extra={"call_id": session.call_id})
-
+    # the telephony adapter stays free of pipeline dependencies and the runtime
+    # is exercised against typed values rather than a raw socket. The handoff
+    # carries the parsed start event and the raw text of every frame this
+    # adapter consumed, so nothing the serializer needs was destroyed on the
+    # way in.
     try:
-        if runtime is not None:
-            await runtime.handle_audio_session(websocket, session)
-        else:
-            while True:
-                await websocket.receive_bytes()
+        await runtime.handle_audio_session(websocket, session, handoff)
     except WebSocketDisconnect:
         logger.info("exotel_audio_stream_disconnected", extra={"call_id": session.call_id})

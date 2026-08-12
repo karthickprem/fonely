@@ -440,8 +440,10 @@ def _exclude_signatures(table: sa.Table) -> set[tuple[str, str, str, tuple[tuple
 
 def test_migration_and_orm_have_identical_application_tables() -> None:
     captured = _capture_upgrade()
+    # The set equality is the assertion. A table-count literal here would be a
+    # second copy of the same fact that has to be edited by every migration;
+    # the explicit inventory lives once, in test_schema.EXPECTED_TABLES.
     assert set(captured.metadata.tables) == set(Base.metadata.tables)
-    assert len(captured.metadata.tables) == 33
 
 
 def test_migration_and_orm_column_parity() -> None:
@@ -507,15 +509,20 @@ def test_migration_downgrade_drops_all_application_tables() -> None:
     recorder = _capture_downgrade()
     expected = set(Base.metadata.tables) | {"whatsapp_processed_messages"}
     assert set(recorder.dropped_tables) == expected
-    assert recorder.dropped_tables[0] == "business_channel_identities"
-    assert recorder.dropped_tables[1] == "business_whatsapp_channels"
-    assert recorder.dropped_tables[2] == "notification_manifests"
-    assert recorder.dropped_tables[3] == "whatsapp_delivery_attempts"
-    assert recorder.dropped_tables[4] == "whatsapp_inbound_events"
-    assert recorder.dropped_tables[5] == "whatsapp_processed_messages"
-    assert recorder.dropped_tables[6] == "business_daily_context"
-    assert recorder.dropped_tables[7] == "conversation_turns"
-    assert recorder.dropped_tables[8] == "conversations"
+    # Drop order is FK-sensitive, so it is pinned explicitly and every new
+    # migration is expected to extend this list at the front. Unlike a table
+    # count, this is not a duplicate of a fact asserted elsewhere.
+    assert recorder.dropped_tables[:9] == [
+        "business_channel_identities",
+        "business_whatsapp_channels",
+        "notification_manifests",
+        "whatsapp_delivery_attempts",
+        "whatsapp_inbound_events",
+        "whatsapp_processed_messages",
+        "business_daily_context",
+        "conversation_turns",
+        "conversations",
+    ]
 
 
 def test_appointment_migration_installs_btree_gist_without_dropping_it() -> None:
@@ -779,26 +786,29 @@ def test_revision_chain_has_single_head() -> None:
     }
     heads = revisions - parent_revisions
 
-    assert heads == {"0017"}
-    assert {migration.revision: migration.down_revision for migration in migrations} == {
-        "0001": None,
-        "0002": "0001",
-        "0003": "0002",
-        "0004": "0003",
-        "0005": "0004",
-        "0006": "0005",
-        "0007": "0006",
-        "0008": "0007",
-        "0009": "0008",
-        "0010": "0009",
-        "0011": "0010",
-        "0012": "0011",
-        "0013": "0012",
-        "0014": "0013",
-        "0015": "0014",
-        "0016": "0015",
-        "0017": "0016",
+    # Derived from disk, not hardcoded. A literal head has to be edited by
+    # every migration that lands, and when one forgets, the failure reads as
+    # "the chain is broken" rather than "the constant is stale" -- which is
+    # exactly how 0017 landed with this file untouched. What is actually worth
+    # asserting is the invariant: one head, and it is the highest revision
+    # present.
+    on_disk = sorted(revisions)
+    assert heads == {on_disk[-1]}, f"expected a single head at {on_disk[-1]}, found {heads}"
+
+    # Strictly sequential and unbranched: revision N descends from N-1, and
+    # only the first has no parent. Expressed structurally for the same reason
+    # -- it catches an accidental re-parent or a gap without going stale.
+    expected_chain: dict[str, str | None] = {
+        revision: (None if index == 0 else on_disk[index - 1])
+        for index, revision in enumerate(on_disk)
     }
+    assert {
+        migration.revision: migration.down_revision for migration in migrations
+    } == expected_chain
+
+    # The numbering itself must be contiguous, which the chain above cannot
+    # see: 0001, 0002, 0004 is a perfectly well-formed chain.
+    assert on_disk == [f"{number:04d}" for number in range(1, len(on_disk) + 1)]
 
 
 def test_runtime_provenance_helpers_precede_and_simplify_create_trigger() -> None:

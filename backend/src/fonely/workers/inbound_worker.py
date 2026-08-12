@@ -23,6 +23,7 @@ from fonely.domain.conversation.state import ConversationState
 from fonely.domain.pending_actions.commands import ActorContext
 from fonely.models.enums import (
     CallerRole,
+    Channel,
     NotificationChannel,
     NotificationEventType,
     NotificationRecipientType,
@@ -264,6 +265,7 @@ async def _process_domain(
         business_id=claimed.business_id,
         normalized_phone=phone,
         verified_role=CallerRole.CUSTOMER,
+        channel=Channel.TEXT,  # WhatsApp inbound is a text transport
         session_id=None,
     )
     validation = InternalValidationPort(session)

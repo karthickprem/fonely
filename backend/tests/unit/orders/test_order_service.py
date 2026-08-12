@@ -34,6 +34,7 @@ from fonely.domain.pending_actions.commands import ActorContext, CommitResultCon
 from fonely.domain.pending_actions.results import PendingActionResult
 from fonely.models.enums import (
     CallerRole,
+    Channel,
     InventoryReservationStatus,
     OrderStatus,
     PendingActionStatus,
@@ -54,6 +55,7 @@ def actor(role: CallerRole = CallerRole.CUSTOMER, business_id: int = 1) -> Actor
         business_id=business_id,
         normalized_phone=phone,
         verified_role=role,
+        channel=Channel.TEXT,
     )
 
 

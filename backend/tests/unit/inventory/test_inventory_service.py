@@ -40,6 +40,7 @@ from fonely.domain.pending_actions.errors import PendingActionUnauthorizedError
 from fonely.domain.pending_actions.results import PendingActionResult
 from fonely.models.enums import (
     CallerRole,
+    Channel,
     InventoryMovementType,
     PendingActionStatus,
     PendingActionType,
@@ -61,6 +62,7 @@ def actor(role: CallerRole = CallerRole.OWNER) -> ActorContext:
         business_id=1,
         normalized_phone=phones[role],
         verified_role=role,
+        channel=Channel.TEXT,
     )
 
 
@@ -497,6 +499,7 @@ def test_cross_tenant_owner_commit_is_rejected_by_command() -> None:
                 business_id=2,
                 normalized_phone="+919123456789",
                 verified_role=CallerRole.OWNER,
+                channel=Channel.TEXT,
             ),
             operation="set",
             quantity="5",

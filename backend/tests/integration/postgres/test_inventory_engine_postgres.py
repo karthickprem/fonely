@@ -18,7 +18,7 @@ from fonely.domain.inventory.errors import (
     ReservedStockViolationError,
 )
 from fonely.domain.pending_actions.commands import ActorContext
-from fonely.models.enums import CallerRole
+from fonely.models.enums import CallerRole, Channel
 from fonely.services.inventory import InventoryService
 
 pytestmark = pytest.mark.postgres
@@ -30,6 +30,7 @@ def owner() -> ActorContext:
         business_id=1,
         normalized_phone="+919123456789",
         verified_role=CallerRole.OWNER,
+        channel=Channel.TEXT,
     )
 
 

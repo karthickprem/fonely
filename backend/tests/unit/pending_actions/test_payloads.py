@@ -18,7 +18,7 @@ from fonely.domain.pending_actions.payloads import (
     PendingOrderEnvelope,
     validate_payload,
 )
-from fonely.models.enums import CallerRole, PendingActionType
+from fonely.models.enums import CallerRole, Channel, PendingActionType
 
 NOW = datetime(2026, 8, 1, 8, 0, tzinfo=UTC)
 
@@ -56,6 +56,7 @@ def actor() -> ActorContext:
         business_id=1,
         normalized_phone="+919123456789",
         verified_role=CallerRole.CUSTOMER,
+        channel=Channel.TEXT,
         session_id="session-1",
     )
 

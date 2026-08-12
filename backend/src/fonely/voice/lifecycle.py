@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Callable, Coroutine
 from typing import Any
 
 from .config import _VALID_TRANSITIONS, SessionState, VoiceSessionConfig
@@ -91,15 +92,38 @@ class VoiceSessionSupervisor:
         )
 
         if target == SessionState.ACTIVE and self._duration_timer is None:
-            self._duration_timer = asyncio.ensure_future(self._enforce_max_duration())
+            self._duration_timer = self._arm_timer(self._enforce_max_duration)
 
         if target == SessionState.RECONNECTING:
-            self._reconnect_timer = asyncio.ensure_future(self._enforce_reconnect_grace())
+            self._reconnect_timer = self._arm_timer(self._enforce_reconnect_grace)
         elif target == SessionState.ACTIVE and self._reconnect_timer is not None:
             self._reconnect_timer.cancel()
             self._reconnect_timer = None
 
         return True
+
+    def _arm_timer(
+        self, coro_factory: Callable[[], Coroutine[Any, Any, None]]
+    ) -> asyncio.Task[None] | None:
+        """Schedule a background timer coroutine on the running event loop.
+
+        Returns the Task, or None when there is no running loop. Critically, the
+        coroutine is constructed ONLY after a running loop is confirmed via
+        get_running_loop() — so calling transition() outside an event loop is a
+        clean, valid state change that simply does not arm the timer, with no
+        RuntimeError and no unawaited-coroutine warning. We deliberately do NOT
+        create or fetch a loop implicitly (no get_event_loop / new_event_loop):
+        timer enforcement requires a real running loop by design.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.debug(
+                "timer_not_armed_no_running_loop",
+                extra={"session": self._config.session_id},
+            )
+            return None
+        return loop.create_task(coro_factory())
 
     async def _enforce_max_duration(self) -> None:
         try:

@@ -43,13 +43,17 @@ EXPECTED_TABLES = [
     "whatsapp_delivery_attempts",
     "notification_manifests",
     "business_whatsapp_channels",
+    "business_channel_identities",
 ]
 
 
 class TestSchemaMetadata:
     def test_expected_table_count(self) -> None:
         tables = list(Base.metadata.tables.keys())
-        assert len(tables) == 32
+        # Counted against the explicit inventory above rather than a second
+        # literal, so adding a table is still a deliberate act but only has to
+        # be declared in one place.
+        assert len(tables) == len(EXPECTED_TABLES)
 
     def test_all_expected_tables_exist(self) -> None:
         tables = set(Base.metadata.tables.keys())

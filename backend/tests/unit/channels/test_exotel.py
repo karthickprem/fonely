@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from fonely.api.channels.exotel import router
+from fonely.api.channels.exotel import _read_opening_frames, router
 from fonely.repositories.channel_identities import (
     PROVIDER_EXOTEL,
     ChannelIdentityRepository,
@@ -22,9 +22,60 @@ from fonely.services.audio_admission import (
     AdmissionResult,
     AudioSession,
 )
+from fonely.services.audio_stream import AudioStreamHandoff, StreamStartRefusal
+
+
+class _ScriptedSocket:
+    """A websocket that yields a fixed script of frames, then disconnects.
+
+    Used where the refusal *reason* is the thing under test. Through
+    TestClient only the close is observable, and every refusal closes — so a
+    socket-level assertion cannot tell "we refused this audio" apart from "the
+    frame budget ran out", which is precisely the distinction that matters
+    here. Driving the reader directly makes the reason assertable.
+    """
+
+    def __init__(self, frames: list[str]) -> None:
+        self._frames = list(frames)
+
+    async def receive(self) -> dict[str, object]:
+        if not self._frames:
+            return {"type": "websocket.disconnect"}
+        return {"type": "websocket.receive", "text": self._frames.pop(0)}
+
 
 _SECRET = "exotel-test-secret"
 _CALL_SID = "call-123"
+_STREAM_SID = "stream-abc"
+
+
+def _start_frame(
+    *,
+    call_sid: str | None = _CALL_SID,
+    stream_sid: str | None = _STREAM_SID,
+    encoding: str | None = "audio/x-l16",
+    sample_rate: object = 8000,
+    channels: object = 1,
+) -> str:
+    """A well-formed Exotel start event, with each field overridable.
+
+    Every negative test below is this frame with exactly one thing wrong, so a
+    refusal can only be attributed to the field that test changed.
+    """
+    media_format: dict[str, object] = {}
+    if encoding is not None:
+        media_format["encoding"] = encoding
+    if sample_rate is not None:
+        media_format["sample_rate"] = sample_rate
+    if channels is not None:
+        media_format["channels"] = channels
+
+    start: dict[str, object] = {"media_format": media_format}
+    if call_sid is not None:
+        start["call_sid"] = call_sid
+    if stream_sid is not None:
+        start["stream_sid"] = stream_sid
+    return json.dumps({"event": "start", "start": start})
 
 
 @pytest.fixture(autouse=True)
@@ -395,21 +446,23 @@ class TestCallStatusAuthentication:
 class TestAudioStreamWebSocket:
     def test_connects_with_valid_credential(self) -> None:
         app = _create_app()
+        app.state.voice_audio_runtime = _RecordingRuntime()
         client = TestClient(app)
         with client.websocket_connect(
             f"/webhooks/exotel/audio-stream?CallSid={_CALL_SID}", headers=_auth()
         ) as ws:
-            ws.send_bytes(b"\x00" * 320)
+            ws.send_text(_start_frame())
             ws.close()
 
     def test_connects_with_query_token(self) -> None:
         """The media-stream applet takes a URL, so this is often the only carrier."""
         app = _create_app()
+        app.state.voice_audio_runtime = _RecordingRuntime()
         client = TestClient(app)
         with client.websocket_connect(
             f"/webhooks/exotel/audio-stream?token={_SECRET}&CallSid={_CALL_SID}"
         ) as ws:
-            ws.send_bytes(b"\x00" * 320)
+            ws.send_text(_start_frame())
             ws.close()
 
     def test_unauthenticated_connection_is_refused(self) -> None:
@@ -462,9 +515,13 @@ class _RecordingRuntime:
 
     def __init__(self) -> None:
         self.sessions: list[AudioSession] = []
+        self.handoffs: list[AudioStreamHandoff] = []
 
-    async def handle_audio_session(self, websocket: object, session: AudioSession) -> None:
+    async def handle_audio_session(
+        self, websocket: object, session: AudioSession, handoff: AudioStreamHandoff
+    ) -> None:
         self.sessions.append(session)
+        self.handoffs.append(handoff)
 
 
 class TestAudioStreamAdmission:
@@ -496,8 +553,8 @@ class TestAudioStreamAdmission:
         client = TestClient(app)
         with client.websocket_connect(
             f"/webhooks/exotel/audio-stream?token={_SECRET}&CallSid={_CALL_SID}"
-        ):
-            pass
+        ) as ws:
+            ws.send_text(_start_frame())
 
         assert len(runtime.sessions) == 1
         session = runtime.sessions[0]
@@ -516,7 +573,7 @@ class TestAudioStreamAdmission:
         app.state.voice_audio_runtime = runtime
         client = TestClient(app)
         with client.websocket_connect(f"/webhooks/exotel/audio-stream?token={_SECRET}") as ws:
-            ws.send_text(json.dumps({"event": "start", "start": {"call_sid": _CALL_SID}}))
+            ws.send_text(_start_frame())
 
         assert len(runtime.sessions) == 1
         assert runtime.sessions[0].business_id == 1
@@ -599,3 +656,194 @@ class TestChannelIdentityResolutionOnWebhook:
         )
         assert response.status_code == 404
         app.state._mock_session.commit.assert_not_awaited()
+
+
+class TestStartMetadataHandoff:
+    """The start event is parsed and passed on, not consumed and discarded.
+
+    The provider does not replay control frames. Whatever this adapter reads
+    off the socket and drops is gone, and the serializer downstream cannot send
+    a single frame back without the stream id, nor decode audio without the
+    declared rate. A seam that admits the call correctly and then makes it
+    unanswerable is not a working seam.
+    """
+
+    def test_runtime_receives_parsed_start_metadata(self) -> None:
+        app = _create_app()
+        runtime = _RecordingRuntime()
+        app.state.voice_audio_runtime = runtime
+        client = TestClient(app)
+        with client.websocket_connect(
+            f"/webhooks/exotel/audio-stream?token={_SECRET}&CallSid={_CALL_SID}"
+        ) as ws:
+            ws.send_text(_start_frame(sample_rate=16000))
+
+        assert len(runtime.handoffs) == 1
+        start = runtime.handoffs[0].start
+        assert start.stream_sid == _STREAM_SID
+        assert start.sample_rate == 16000
+        assert start.encoding == "l16"
+        assert start.channels == 1
+
+    def test_raw_frames_are_retained_for_the_serializer(self) -> None:
+        """A serializer that would rather parse the provider's own frame can.
+
+        Both frames read before handoff are kept in arrival order, so the
+        connected event is not silently lost either.
+        """
+        app = _create_app()
+        runtime = _RecordingRuntime()
+        app.state.voice_audio_runtime = runtime
+        client = TestClient(app)
+        with client.websocket_connect(
+            f"/webhooks/exotel/audio-stream?token={_SECRET}&CallSid={_CALL_SID}"
+        ) as ws:
+            ws.send_text(json.dumps({"event": "connected"}))
+            ws.send_text(_start_frame())
+
+        raw = runtime.handoffs[0].raw_frames
+        assert len(raw) == 2
+        assert json.loads(raw[0])["event"] == "connected"
+        assert json.loads(raw[1])["event"] == "start"
+
+    @pytest.mark.parametrize("rate", [8000, 16000, 24000])
+    def test_declared_rate_is_carried_through_not_assumed(self, rate: int) -> None:
+        """No hardcoded demo rate. What the provider declared is what is passed."""
+        app = _create_app()
+        runtime = _RecordingRuntime()
+        app.state.voice_audio_runtime = runtime
+        client = TestClient(app)
+        with client.websocket_connect(
+            f"/webhooks/exotel/audio-stream?token={_SECRET}&CallSid={_CALL_SID}"
+        ) as ws:
+            ws.send_text(_start_frame(sample_rate=rate))
+
+        assert runtime.handoffs[0].start.sample_rate == rate
+
+    def test_string_sample_rate_is_accepted(self) -> None:
+        """Consoles send these as strings; refusing a valid call over a quote is a defect."""
+        app = _create_app()
+        runtime = _RecordingRuntime()
+        app.state.voice_audio_runtime = runtime
+        client = TestClient(app)
+        with client.websocket_connect(
+            f"/webhooks/exotel/audio-stream?token={_SECRET}&CallSid={_CALL_SID}"
+        ) as ws:
+            ws.send_text(_start_frame(sample_rate="16000"))
+
+        assert runtime.handoffs[0].start.sample_rate == 16000
+
+
+class TestStartValidationFailsClosed:
+    """Each case is the good frame with exactly one thing wrong."""
+
+    def _refused(self, frame: str) -> _RecordingRuntime:
+        app = _create_app()
+        runtime = _RecordingRuntime()
+        app.state.voice_audio_runtime = runtime
+        client = TestClient(app)
+        with client.websocket_connect(
+            f"/webhooks/exotel/audio-stream?token={_SECRET}&CallSid={_CALL_SID}"
+        ) as ws:
+            ws.send_text(frame)
+            message = ws.receive()
+        assert message["type"] == "websocket.close"
+        return runtime
+
+    def test_unsupported_sample_rate_is_refused(self) -> None:
+        """Accepting 44100 and resampling on a guess produces transcribable noise."""
+        assert self._refused(_start_frame(sample_rate=44100)).sessions == []
+
+    def test_unsupported_encoding_is_refused(self) -> None:
+        assert self._refused(_start_frame(encoding="opus")).sessions == []
+
+    def test_stereo_is_refused(self) -> None:
+        """Two interleaved legs would be transcribed as one speaker."""
+        assert self._refused(_start_frame(channels=2)).sessions == []
+
+    def test_missing_stream_sid_is_refused(self) -> None:
+        """Without it no frame can be sent back, so the call is unanswerable."""
+        assert self._refused(_start_frame(stream_sid=None)).sessions == []
+
+    def test_missing_media_format_is_refused(self) -> None:
+        frame = json.dumps({"event": "start", "start": {"call_sid": _CALL_SID}})
+        assert self._refused(frame).sessions == []
+
+    def test_malformed_start_is_refused_not_crashed(self) -> None:
+        assert self._refused('{"event": "start", not json').sessions == []
+
+    @pytest.mark.asyncio
+    async def test_media_before_start_is_refused_by_reason(self) -> None:
+        """Decoding audio before the format is declared means guessing the rate.
+
+        The media frame is followed by a perfectly valid start, so without the
+        guard the stream is *admitted* on that later start with the early audio
+        silently skipped. Asserting only "refused" would pass for the wrong
+        reason too, since a budget-exhausted socket also refuses. The reason is
+        the discriminator, so the reason is what this asserts.
+        """
+        socket = _ScriptedSocket(
+            [
+                json.dumps({"event": "media", "media": {"payload": "AAAA"}}),
+                _start_frame(),
+            ]
+        )
+        result = await _read_opening_frames(socket)  # type: ignore[arg-type]
+
+        assert not result.ok
+        assert result.refusal is StreamStartRefusal.MEDIA_BEFORE_START
+
+    @pytest.mark.asyncio
+    async def test_a_valid_start_alone_is_not_refused(self) -> None:
+        """The negative control for the test above.
+
+        Without this, a reader that refused every stream would satisfy the
+        media-before-start assertion by accident.
+        """
+        result = await _read_opening_frames(
+            _ScriptedSocket([_start_frame()])  # type: ignore[arg-type]
+        )
+
+        assert result.ok
+        assert result.refusal is None
+        assert result.handoff is not None
+        assert result.handoff.start.stream_sid == _STREAM_SID
+
+    def test_media_before_start_closes_the_socket(self) -> None:
+        """The refusal above is actually wired to the live endpoint."""
+        app = _create_app()
+        runtime = _RecordingRuntime()
+        app.state.voice_audio_runtime = runtime
+        client = TestClient(app)
+        with client.websocket_connect(
+            f"/webhooks/exotel/audio-stream?token={_SECRET}&CallSid={_CALL_SID}"
+        ) as ws:
+            ws.send_text(json.dumps({"event": "media", "media": {"payload": "AAAA"}}))
+            message = ws.receive()
+
+        assert message["type"] == "websocket.close"
+        assert runtime.sessions == []
+
+    def test_channels_true_does_not_read_as_mono(self) -> None:
+        """bool is an int in Python; channels=true must not pass as 1."""
+        assert self._refused(_start_frame(channels=True)).sessions == []
+
+
+class TestNoRuntimeIsRefusedNotDrained:
+    def test_unmounted_runtime_refuses_before_handshake(self) -> None:
+        """Draining a patient's call is indistinguishable from serving it.
+
+        The old behaviour accepted the socket and read frames forever: the line
+        stayed open, nothing was said, nothing was booked, and the provider log
+        looked like a normal call. Absence must not read as success.
+        """
+        app = _create_app()
+        assert not hasattr(app.state, "voice_audio_runtime")
+        client = TestClient(app)
+        with (
+            pytest.raises(WebSocketDisconnect),
+            client.websocket_connect(
+                f"/webhooks/exotel/audio-stream?token={_SECRET}&CallSid={_CALL_SID}"
+            ),
+        ):
+            pass

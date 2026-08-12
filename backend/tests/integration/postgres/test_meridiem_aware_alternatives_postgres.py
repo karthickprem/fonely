@@ -18,20 +18,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from fonely.services.conversation import _CONVERSATIONS
 from fonely.services.model_gateway import ModelResponse
 from fonely.workers.inbound_worker import ClaimedEvent, _process_domain
+from tests.integration.postgres.conftest import seed_whatsapp_channel
 
 pytestmark = pytest.mark.postgres
 
 KOLKATA = ZoneInfo("Asia/Kolkata")
-
-
-@pytest.fixture(autouse=True)
-def _whatsapp_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
-    from fonely.services import notifications, whatsapp_config
-
-    mappings = '{"phone-1": 1}'
-    monkeypatch.setattr(whatsapp_config.settings, "whatsapp_business_mappings", mappings)
-    monkeypatch.setattr(notifications.settings, "whatsapp_business_mappings", mappings)
-    monkeypatch.setattr(notifications.settings, "whatsapp_phone_number_id", "phone-1")
 
 
 @pytest.fixture(autouse=True)
@@ -58,6 +49,8 @@ async def _seed_evening_clinic(session: AsyncSession) -> None:
             "VALUES (1, 1, '+919000000001', 'owner', true)"
         )
     )
+    # WhatsApp channel identity moved into business_whatsapp_channels in 0016.
+    await seed_whatsapp_channel(session, phone_number_id="phone-1")
     await session.execute(
         text(
             "INSERT INTO services "
@@ -245,6 +238,8 @@ async def _seed_dual_window(session: AsyncSession) -> None:
             "VALUES (1, 1, '+919000000001', 'owner', true)"
         )
     )
+    # WhatsApp channel identity moved into business_whatsapp_channels in 0016.
+    await seed_whatsapp_channel(session, phone_number_id="phone-1")
     await session.execute(
         text(
             "INSERT INTO services "
@@ -304,6 +299,8 @@ async def _seed_offgrid_evening_clinic(session: AsyncSession) -> None:
             "VALUES (1, 1, '+919000000001', 'owner', true)"
         )
     )
+    # WhatsApp channel identity moved into business_whatsapp_channels in 0016.
+    await seed_whatsapp_channel(session, phone_number_id="phone-1")
     await session.execute(
         text(
             "INSERT INTO services "
@@ -690,6 +687,8 @@ async def _seed_am_and_pm_windows(session: AsyncSession) -> None:
             "VALUES (1, 1, '+919000000001', 'owner', true)"
         )
     )
+    # WhatsApp channel identity moved into business_whatsapp_channels in 0016.
+    await seed_whatsapp_channel(session, phone_number_id="phone-1")
     await session.execute(
         text(
             "INSERT INTO services "

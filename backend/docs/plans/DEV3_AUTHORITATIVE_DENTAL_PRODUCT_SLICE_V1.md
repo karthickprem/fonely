@@ -793,6 +793,34 @@ Three-part checklist frozen by the reviewer. Status:
   (then rebase) or a new targeted on_conflict_do_update schedule write — flagged
   to the reviewer rather than silently scoped out.
 
+### ITEM #19 + CEO #32 — ACCEPTED at d2f646d (review 2026-08-12)
+
+Reviewer reproduced independently (isolated worktree, import-proven; private DB
+fonely_test_ceo32; clean FF chain 9960095 -> 92834c2 -> d2f646d): corpus 26/26,
+non-PG 1259, ruff+format+mypy(src) all exit 0, and the kill_terminate mutation
+(numbered prompt x5) confirmed the liveness test genuinely detects the
+terminating stage. They further stretched the probe to 14 unresolvable answers
+and confirmed the ladder runs exactly ONCE and never restarts — termination
+sticks, invariant closed. #19 verdict stands: 4/5 items were proven earlier,
+item 4 was the gap, this closes it; I5-independent-of-I1 proven (wrong_doctor
+mutation fires I5 alone, I1/I2 pass). #19 unblocked; integration stays reviewer-
+side; nothing to main.
+
+TWO NON-BLOCKING NOTES from the acceptance (do NOT act now):
+1. HARNESS CAVEAT (not a defect): I3 (no-response-repeats-3x) is only meaningful
+   for conversations SHORT enough not to fall through to the mock LLM, which
+   returns a constant "ok" (harness line ~167, gw.complete -> ModelResponse
+   text="ok"). Do NOT lengthen a corpus case beyond the deterministic path and
+   expect I3 to hold — it will fail on the mock's constant, looking like a
+   repetition bug. A genuine long-conversation liveness case needs the mock to
+   vary its response first. (The 6-answer disambig-liveness-bound stays within
+   the deterministic path, so it is valid.)
+2. CEO #33 (filed by reviewer, NOT mine to fix now, NOT blocking): the give-up
+   text "Please call the clinic directly" is coherent on WhatsApp but wrong on
+   voice (the caller already dialled the clinic). Needs a channel-aware string —
+   a shared concern, not dental. Low severity while voice runtime is unwired;
+   demo-visible once M3 lands.
+
 ### ITEM #19 — CEO #32 FIX: TERMINATING BOUND (candidate d2f646d, 2026-08-12)
 
 9960095 was ACCEPTED AS WORK-IN-PROGRESS by the reviewer, NOT a third rejection:

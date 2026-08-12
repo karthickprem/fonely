@@ -23,11 +23,19 @@ Invariants:
       never selects that doctor                                    regression:
       "aaru mani" must not book Dr. Mani; "General Consultation" must not book
       Dr. General — asserted via Case.forbid_resource_id off the ROW)
+  I7  the patient can ANSWER the "which doctor?" question the way  (item #19
+      people answer it — bare surname "rao", "rao please", ordinal              rescope-2:
+      "the second one", numbered "2" — and it resolves + books, row-level; an
+      unresolvable answer re-asks and, past a bound, escalates to a numbered
+      choice — it never deadlocks. The deadlock guard is I3 itself, asserted on
+      every case: no response may repeat more than 3 times in any conversation.)
 
 I1 and I3 run on every case; I2 and I5 run on every case that books; I4 runs on
 every case that declares a superseded reading; the I5 fail-closed branch runs on
-every case that declares expect_resource_refusal. None of these pass vacuously:
-a category that does not apply is simply not in play, not a silent pass.
+every case that declares expect_resource_refusal; I7 is exercised by the
+disambiguation cases (bare-surname/polite/ordinal book; deadlock-bound proves I3
+holds even when an answer never resolves). None of these pass vacuously: a
+category that does not apply is simply not in play, not a silent pass.
 """
 
 import uuid
@@ -564,6 +572,67 @@ def _corpus() -> list[Case]:
             "resource-no-mention",
             "resource_name",
             [f"i want General Consultation tomorrow 10 30 am {_PHONE}", "whenever"],
+            None,
+        )
+    )
+
+    # 20-24. DISAMBIGUATION ANSWERS (rescope-2). After the agent asks "which
+    # doctor?", the patient answers the way people actually answer. Each must
+    # RESOLVE to Dr. Priya Rao (id=2) and book, row-level — the deadlock the
+    # reviewer found (a bare "rao" discarded as vocabulary, question repeating
+    # forever) must not recur. These FAIL before the candidate-set path, pass
+    # after.
+    for cid, answer in (
+        ("disambig-bare-surname", "rao"),
+        ("disambig-surname-polite", "rao please"),
+        ("disambig-ordinal", "the second one"),
+    ):
+        cases.append(
+            Case(
+                cid,
+                "disambiguation",
+                [
+                    f"i want General Consultation with dr priya tomorrow 10 30 am {_PHONE}",
+                    answer,
+                    "yes confirm",
+                ],
+                (10, 30),
+                expect_resource_id=2,
+            )
+        )
+
+    # 23. Disambiguation answered with a NON-match ("dr smith") must re-ask, not
+    # deadlock and not silently pick. Books nothing; the no-repeat-3x invariant
+    # (I3, asserted on every case) guards the deadlock.
+    cases.append(
+        Case(
+            "disambig-nonmatch-reask",
+            "disambiguation",
+            [
+                f"i want General Consultation with dr priya tomorrow 10 30 am {_PHONE}",
+                "dr smith",
+                "dr smith",
+            ],
+            None,
+            expect_resource_refusal=True,
+        )
+    )
+
+    # 24. DEADLOCK BOUND (rescope-2 item 4): repeating an unresolvable answer
+    # must not loop one question forever. "priya" alone stays ambiguous; after
+    # two plain asks the agent escalates to a numbered choice, so no single
+    # response occurs more than 3 times (I3, asserted on every case). Nothing
+    # books because no doctor is ever uniquely chosen.
+    cases.append(
+        Case(
+            "disambig-deadlock-bound",
+            "disambiguation",
+            [
+                f"i want General Consultation with dr priya tomorrow 10 30 am {_PHONE}",
+                "priya",
+                "priya",
+                "priya",
+            ],
             None,
         )
     )

@@ -39,7 +39,7 @@ from fonely.domain.appointments.results import (
     PreCommitAppointmentSuccess,
 )
 from fonely.domain.pending_actions.commands import ActorContext
-from fonely.models.enums import CallerRole
+from fonely.models.enums import CallerRole, Channel
 
 from .context import AvailabilityQuery, AvailableSlot, DayAvailability
 from .runtime import CommandResult, CommitReceipt, ConfirmCommand, ProposeCommand
@@ -301,5 +301,6 @@ def build_actor_context(
         business_id=business_id,
         normalized_phone=phone,
         verified_role=CallerRole.CUSTOMER,
+        channel=Channel.VOICE,  # voice transport: give-up wording must not say "call the clinic"
         session_id=session_id,
     )

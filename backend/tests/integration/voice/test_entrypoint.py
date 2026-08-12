@@ -4,15 +4,15 @@ Invokes the actual run_voice_session entrypoint through a mock
 MediaPort and verifies greeting, turn processing, terminal stop,
 resource cleanup, and event delivery.
 """
+
 from __future__ import annotations
 
-import asyncio
-from datetime import date, datetime, time, timezone
+from datetime import UTC, date, datetime, time
 from typing import Any
 
 import pytest
 
-from fonely.voice.config import VoiceSessionConfig, SessionLimits
+from fonely.voice.config import SessionLimits, VoiceSessionConfig
 from fonely.voice.context import (
     AvailabilityQuery,
     AvailableSlot,
@@ -24,10 +24,11 @@ from fonely.voice.entrypoint import run_voice_session
 
 def _clock():
     import zoneinfo
+
     tz = zoneinfo.ZoneInfo("Asia/Kolkata")
     local = datetime(2026, 8, 10, 14, 30, tzinfo=tz)
     return TrustedClock(
-        now_utc=local.astimezone(timezone.utc),
+        now_utc=local.astimezone(UTC),
         business_timezone="Asia/Kolkata",
         business_date=date(2026, 8, 10),
         day_of_week="monday",
@@ -132,7 +133,7 @@ class TestEntrypointFullSession:
         llm = MockLLM(["Consultation ₹300."])
         tts = MockTTS()
 
-        summary = await run_voice_session(
+        await run_voice_session(
             VoiceSessionConfig(session_id="ep-1", business_id=1),
             clock=_clock(),
             business_name="Test Dental",
@@ -181,7 +182,7 @@ class TestEntrypointFullSession:
         limits = SessionLimits(max_turns=2, max_duration_seconds=600, idle_timeout_seconds=300)
         config = VoiceSessionConfig(session_id="ep-3", business_id=1, limits=limits)
 
-        summary = await run_voice_session(
+        await run_voice_session(
             config,
             clock=_clock(),
             business_name="Test",

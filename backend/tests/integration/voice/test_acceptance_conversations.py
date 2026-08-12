@@ -5,10 +5,10 @@ production runtime's typed ports and verifies turn budget, no filler,
 no repeated questions, max one question per turn, correct terminal
 outcome, and correct validator gate behavior.
 """
+
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -17,7 +17,6 @@ from fonely.voice.mock_providers import (
     ScriptedConversation,
     run_scripted_conversation,
 )
-
 
 AC001 = ScriptedConversation(
     scenario_id="AC-001",
@@ -34,7 +33,9 @@ AC002 = ScriptedConversation(
     expected_terminal="completed",
     expected_max_turns=4,
     turns=[
-        ConversationTurn("இன்னைக்கு doctor free-ஆ?", "இன்றைக்கு Dr. Priya 10:00, 11:00, 18:30 available."),
+        ConversationTurn(
+            "இன்னைக்கு doctor free-ஆ?", "இன்றைக்கு Dr. Priya 10:00, 11:00, 18:30 available."
+        ),
         ConversationTurn("Thanks", "வணக்கம்."),
     ],
 )
@@ -49,7 +50,9 @@ AC003 = ScriptedConversation(
         ConversationTurn("நாளைக்கு", "18:30 available. இந்த time சரியா?", asked_field="time"),
         ConversationTurn("6:30 works", "பேரு சொல்லுங்க?", asked_field="name"),
         ConversationTurn("Karthick", "Scaling, நாளைக்கு 6:30, Karthick. Correct-ஆ?"),
-        ConversationTurn("ஆம்", "Details collect பண்ணிட்டேன், ஆனா save ஆகல. Clinic staff கிட்ட confirm பண்ணுங்க."),
+        ConversationTurn(
+            "ஆம்", "Details collect பண்ணிட்டேன், ஆனா save ஆகல. Clinic staff கிட்ட confirm பண்ணுங்க."
+        ),
     ],
 )
 
@@ -58,7 +61,9 @@ AC004 = ScriptedConversation(
     expected_terminal="completed",
     expected_max_turns=3,
     turns=[
-        ConversationTurn("Appointment book பண்ணனும்", "இது demo — booking process show பண்ணலாம், ஆனா save ஆகாது."),
+        ConversationTurn(
+            "Appointment book பண்ணனும்", "இது demo — booking process show பண்ணலாம், ஆனா save ஆகாது."
+        ),
     ],
 )
 
@@ -67,7 +72,9 @@ AC005 = ScriptedConversation(
     expected_terminal="completed",
     expected_max_turns=6,
     turns=[
-        ConversationTurn("நாளைக்கு 3 மணிக்கு slot இருக்கா?", "3:00 available இல்லை. 10:00, 11:00, 18:30 available."),
+        ConversationTurn(
+            "நாளைக்கு 3 மணிக்கு slot இருக்கா?", "3:00 available இல்லை. 10:00, 11:00, 18:30 available."
+        ),
         ConversationTurn("11 works", "11:00-க்கு note பண்ணிட்டேன்."),
     ],
 )
@@ -90,7 +97,11 @@ AC007 = ScriptedConversation(
         ConversationTurn("Appointment book பண்ணனும்", "என்ன reason-க்காக visit?", asked_field="reason"),
         ConversationTurn("Cleaning", "எந்த date-ல வரணும்?", asked_field="date"),
         ConversationTurn("நாளைக்கு", "18:30 available. Time சரியா?", asked_field="time"),
-        ConversationTurn("No, root canal-க்கு change பண்ணுங்க", "Root canal-க்கு மாத்திட்டேன். எந்த date?", asked_field="corrected_date"),
+        ConversationTurn(
+            "No, root canal-க்கு change பண்ணுங்க",
+            "Root canal-க்கு மாத்திட்டேன். எந்த date?",
+            asked_field="corrected_date",
+        ),
         ConversationTurn("நாளைக்கே", "18:30 available. Time?", asked_field="corrected_time"),
         ConversationTurn("6:30", "பேரு சொல்லுங்க?", asked_field="name"),
     ],
@@ -111,7 +122,10 @@ AC009 = ScriptedConversation(
     expected_terminal="completed",
     expected_max_turns=2,
     turns=[
-        ConversationTurn("Heavy bleeding, can't stop", "இது urgent-ஆ இருக்கலாம். Hospital போங்க அல்லது emergency services call பண்ணுங்க."),
+        ConversationTurn(
+            "Heavy bleeding, can't stop",
+            "இது urgent-ஆ இருக்கலாம். Hospital போங்க அல்லது emergency services call பண்ணுங்க.",
+        ),
     ],
 )
 
@@ -130,7 +144,9 @@ AC011 = ScriptedConversation(
     expected_terminal="completed",
     expected_max_turns=4,
     turns=[
-        ConversationTurn("Today doctor free-ஆ?", "இன்றைக்கு Monday. Dr. Priya 10:00, 11:00, 18:30 available."),
+        ConversationTurn(
+            "Today doctor free-ஆ?", "இன்றைக்கு Monday. Dr. Priya 10:00, 11:00, 18:30 available."
+        ),
     ],
 )
 
@@ -139,7 +155,10 @@ AC012 = ScriptedConversation(
     expected_terminal="completed",
     expected_max_turns=4,
     turns=[
-        ConversationTurn("Insurance claim process explain பண்ணுங்க", "Insurance-க்கு clinic staff கிட்ட பேசுங்க. Automated help இதுக்கு முடியாது."),
+        ConversationTurn(
+            "Insurance claim process explain பண்ணுங்க",
+            "Insurance-க்கு clinic staff கிட்ட பேசுங்க. Automated help இதுக்கு முடியாது.",
+        ),
     ],
 )
 

@@ -3,29 +3,30 @@
 Tests assert ports called, terminal outcomes, blocked speech,
 turn caps, and resource cleanup — not scripted expected text.
 """
+
 from __future__ import annotations
 
-import asyncio
-from datetime import date, datetime, time, timezone
+from datetime import UTC, date, datetime, time
 
 import pytest
 
-from fonely.voice.config import SpeechClass, SessionState, VoiceSessionConfig
+from fonely.voice.config import SessionState, SpeechClass, VoiceSessionConfig
 from fonely.voice.context import (
     AvailabilityQuery,
     AvailableSlot,
     DayAvailability,
     TrustedClock,
 )
-from fonely.voice.runtime import PipelineRuntime, STTPort, LLMPort, TTSPort, CommandPort
+from fonely.voice.runtime import PipelineRuntime
 
 
 def _clock(day=10, hour=14):
     import zoneinfo
+
     tz = zoneinfo.ZoneInfo("Asia/Kolkata")
     local = datetime(2026, 8, day, hour, 30, tzinfo=tz)
     return TrustedClock(
-        now_utc=local.astimezone(timezone.utc),
+        now_utc=local.astimezone(UTC),
         business_timezone="Asia/Kolkata",
         business_date=date(2026, 8, day),
         day_of_week=local.strftime("%A").lower(),
@@ -114,7 +115,11 @@ MONDAY_AVAIL = DayAvailability(
 
 def _runtime(caller_texts, llm_responses, *, availability=MONDAY_AVAIL, mode="demo", max_turns=12):
     return PipelineRuntime(
-        VoiceSessionConfig(session_id="test-rt", business_id=1, limits=VoiceSessionConfig.__dataclass_fields__["limits"].default_factory()),
+        VoiceSessionConfig(
+            session_id="test-rt",
+            business_id=1,
+            limits=VoiceSessionConfig.__dataclass_fields__["limits"].default_factory(),
+        ),
         clock=_clock(),
         business_name="Test Dental",
         business_context="Consultation ₹300.",
@@ -204,7 +209,10 @@ class TestRuntimeTurnProcessing:
         result = await rt.process_turn(b"audio")
         assert not result.allowed
         assert result.speech_class == SpeechClass.COMMITTED_CREATE
-        assert "blocked" in result.blocked_reason.lower() or "consequential" in result.blocked_reason.lower()
+        assert (
+            "blocked" in result.blocked_reason.lower()
+            or "consequential" in result.blocked_reason.lower()
+        )
         assert rt._tts.call_count == 0
         await rt.close()
 
@@ -248,7 +256,9 @@ class TestRuntimeLiveMode:
     @pytest.mark.asyncio
     async def test_live_with_command_port_stays_live(self):
         class DummyCommand:
-            async def submit_command(self, cmd): return {"status": "ok"}
+            async def submit_command(self, cmd):
+                return {"status": "ok"}
+
         rt = PipelineRuntime(
             VoiceSessionConfig(session_id="live-rt", business_id=1),
             clock=_clock(),
@@ -286,8 +296,11 @@ class TestRuntimeResourceCleanup:
     @pytest.mark.asyncio
     async def test_close_with_provider_error(self):
         class FailingTTS:
-            async def synthesize(self, text): return b""
-            async def close(self): raise RuntimeError("TTS close failed")
+            async def synthesize(self, text):
+                return b""
+
+            async def close(self):
+                raise RuntimeError("TTS close failed")
 
         rt = PipelineRuntime(
             VoiceSessionConfig(session_id="err-rt", business_id=1),

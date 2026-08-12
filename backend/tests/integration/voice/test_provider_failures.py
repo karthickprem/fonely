@@ -4,6 +4,7 @@ Tests STT/LLM/TTS timeout, error, and circuit-open scenarios
 through the mock framework.  Verifies the runtime never produces
 partial or corrupted output on provider failure.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -49,9 +50,7 @@ class TestTTSFailure:
 class TestSessionFailureRecovery:
     @pytest.mark.asyncio
     async def test_provider_error_fails_session(self):
-        sup = VoiceSessionSupervisor(
-            VoiceSessionConfig(session_id="fail-1", business_id=1)
-        )
+        sup = VoiceSessionSupervisor(VoiceSessionConfig(session_id="fail-1", business_id=1))
         sup.transition(SessionState.SIGNALING)
         sup.transition(SessionState.CONNECTING)
         sup.transition(SessionState.ACTIVE)
@@ -61,9 +60,7 @@ class TestSessionFailureRecovery:
 
     @pytest.mark.asyncio
     async def test_llm_timeout_fails_session(self):
-        sup = VoiceSessionSupervisor(
-            VoiceSessionConfig(session_id="fail-2", business_id=1)
-        )
+        sup = VoiceSessionSupervisor(VoiceSessionConfig(session_id="fail-2", business_id=1))
         sup.transition(SessionState.SIGNALING)
         sup.transition(SessionState.CONNECTING)
         sup.transition(SessionState.ACTIVE)
@@ -72,9 +69,7 @@ class TestSessionFailureRecovery:
 
     @pytest.mark.asyncio
     async def test_tts_error_fails_session(self):
-        sup = VoiceSessionSupervisor(
-            VoiceSessionConfig(session_id="fail-3", business_id=1)
-        )
+        sup = VoiceSessionSupervisor(VoiceSessionConfig(session_id="fail-3", business_id=1))
         sup.transition(SessionState.SIGNALING)
         sup.transition(SessionState.CONNECTING)
         sup.transition(SessionState.ACTIVE)
@@ -95,6 +90,7 @@ class TestInterruptionAndBargeIn:
 
     def test_stale_output_dropped_after_barge_in(self):
         from fonely.voice.pipeline import PostTTSGenerationGate
+
         clock = GenerationClock("int-2")
         clock.next_turn()
         stale_gen = clock.current().generation_id
@@ -119,13 +115,17 @@ class TestInterruptionAndBargeIn:
 class TestTerminalClosure:
     def test_terminal_response_no_question(self):
         from fonely.voice.dialogue import count_questions
+
         for reason in ["abandoned", "max_turns", "demo_complete", "safety", "handoff"]:
             for lang in ["ta-Latn", "ta", "en"]:
                 r = get_terminal_response(reason, lang)
-                assert count_questions(r) <= 1, f"{reason}/{lang} has {count_questions(r)} questions"
+                assert count_questions(r) <= 1, (
+                    f"{reason}/{lang} has {count_questions(r)} questions"
+                )
 
     def test_terminal_response_no_filler(self):
         from fonely.voice.dialogue import detect_filler
+
         for reason in ["abandoned", "max_turns", "demo_complete", "safety", "handoff"]:
             for lang in ["ta-Latn", "ta", "en"]:
                 r = get_terminal_response(reason, lang)

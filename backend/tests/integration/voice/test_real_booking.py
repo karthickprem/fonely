@@ -1,19 +1,20 @@
 """End-to-end booking through real AppointmentService + PostgreSQL.
 
 NOT a unit test — requires a running PostgreSQL server with seeded data.
-Run with: DATABASE_URL=postgresql+asyncpg://localhost:5432/fonely pytest -m postgres tests/integration/voice/test_real_booking.py -v
+Run with:
+    DATABASE_URL=postgresql+asyncpg://localhost:5432/fonely \
+        pytest -m postgres tests/integration/voice/test_real_booking.py -v
 
 Proves: PipelineRuntime → AppointmentServiceCommandPort → AppointmentService
 → PostgreSQL commit → CommitReceipt with facts from committed row.
 """
+
 from __future__ import annotations
 
-import asyncio
 import os
-import time
 from contextlib import asynccontextmanager
-from datetime import UTC, date, datetime, time as dt_time, timedelta, timezone
-from typing import Any
+from datetime import UTC, date, datetime
+from datetime import time as dt_time
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -30,22 +31,27 @@ if not _db_available():
     pytest.skip("PostgreSQL not available", allow_module_level=True)
 
 
-from fonely.voice.backend_ports import AppointmentServiceCommandPort, build_actor_context
-from fonely.voice.config import SpeechClass, VoiceSessionConfig
-from fonely.voice.context import (
+# Imports deferred below the module-level skip guard so the heavy voice deps are
+# not imported when PostgreSQL is unavailable; E402 is expected and intended.
+from fonely.voice.backend_ports import (  # noqa: E402
+    AppointmentServiceCommandPort,
+    build_actor_context,
+)
+from fonely.voice.config import VoiceSessionConfig  # noqa: E402
+from fonely.voice.context import (  # noqa: E402
     AvailabilityQuery,
     AvailableSlot,
     DayAvailability,
     TrustedClock,
 )
-from fonely.voice.runtime import PipelineRuntime
+from fonely.voice.runtime import PipelineRuntime  # noqa: E402
 
 
 def _clock():
     tz = ZoneInfo("Asia/Kolkata")
     local = datetime(2026, 8, 10, 14, 30, tzinfo=tz)
     return TrustedClock(
-        now_utc=local.astimezone(timezone.utc),
+        now_utc=local.astimezone(UTC),
         business_timezone="Asia/Kolkata",
         business_date=date(2026, 8, 10),
         day_of_week="monday",
@@ -141,22 +147,26 @@ class TestRealBookingPath:
             conversation_id="real-test-conv-1",
         )
 
-        stt = TextSTT([
-            "Appointment book pannanum",
-            "Scaling",
-            "Naalaikku",
-            "6:30",
-            "Karthick",
-            "Aamaa",
-        ])
-        llm = TextLLM([
-            "என்ன reason-க்காக visit?",
-            "எந்த date-ல வரணும்?",
-            "Dr. Priya 18:30 available. Time சரியா?",
-            "பேரு சொல்லுங்க?",
-            "Scaling, Dr. Priya, நாளை 6:30, Karthick. Correct-ஆ?",
-            "Booking confirmed.",
-        ])
+        stt = TextSTT(
+            [
+                "Appointment book pannanum",
+                "Scaling",
+                "Naalaikku",
+                "6:30",
+                "Karthick",
+                "Aamaa",
+            ]
+        )
+        llm = TextLLM(
+            [
+                "என்ன reason-க்காக visit?",
+                "எந்த date-ல வரணும்?",
+                "Dr. Priya 18:30 available. Time சரியா?",
+                "பேரு சொல்லுங்க?",
+                "Scaling, Dr. Priya, நாளை 6:30, Karthick. Correct-ஆ?",
+                "Booking confirmed.",
+            ]
+        )
         tts = TextTTS()
 
         config = VoiceSessionConfig(session_id="real-test-1", business_id=1)
@@ -175,7 +185,7 @@ class TestRealBookingPath:
 
         await rt.initialize()
 
-        for i in range(5):
+        for _i in range(5):
             result = await rt.process_turn(b"x")
 
         result = await rt.process_turn(b"x")
@@ -191,11 +201,15 @@ class TestRealBookingPath:
             assert receipt.facts["resource_name"] == "Dr. Priya"
 
             from sqlalchemy import text as sql_text
+
             from fonely.core.database import async_session
 
             async with async_session() as s:
                 r = await s.execute(
-                    sql_text("SELECT id, service_name_snapshot, resource_name_snapshot, status FROM appointments WHERE id = :id"),
+                    sql_text(
+                        "SELECT id, service_name_snapshot, resource_name_snapshot, "
+                        "status FROM appointments WHERE id = :id"
+                    ),
                     {"id": receipt.commitment_id},
                 )
                 row = r.fetchone()

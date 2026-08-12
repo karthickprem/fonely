@@ -8,35 +8,41 @@ the acceptance matrix.
 No live providers, no browser, no audio.  Uses mock STT/LLM/TTS
 with deterministic text responses.
 """
+
 from __future__ import annotations
 
-import pytest
-from datetime import date, datetime, time, timezone
+from datetime import UTC, date, datetime, time
 
-from fonely.voice.acceptance import ACCEPTANCE_MATRIX, ForbiddenBehavior, TerminalOutcome
+import pytest
+
 from fonely.voice.config import SpeechClass, VoiceSessionConfig
 from fonely.voice.context import (
     AvailableSlot,
     DayAvailability,
-    SlotStatus,
     StubAvailabilityPort,
     TrustedClock,
 )
-from fonely.voice.dialogue import DialogueState, count_questions, detect_filler, get_terminal_response
+from fonely.voice.dialogue import (
+    DialogueState,
+    count_questions,
+    detect_filler,
+    get_terminal_response,
+)
 from fonely.voice.generation import GenerationClock
 from fonely.voice.lifecycle import VoiceSessionSupervisor
 from fonely.voice.pipeline import PostTTSGenerationGate, PreTTSValidatorGate, build_pipeline_context
-from fonely.voice.prompts import build_system_prompt, format_availability
+from fonely.voice.prompts import format_availability
 from fonely.voice.telemetry import VoiceTelemetryExporter
-from fonely.voice.validator_port import FailClosedValidatorStub, ValidationDecision
+from fonely.voice.validator_port import FailClosedValidatorStub
 
 
 def _clock(day=10, hour=14, minute=30):
     import zoneinfo
+
     tz = zoneinfo.ZoneInfo("Asia/Kolkata")
     local = datetime(2026, 8, day, hour, minute, tzinfo=tz)
     return TrustedClock(
-        now_utc=local.astimezone(timezone.utc),
+        now_utc=local.astimezone(UTC),
         business_timezone="Asia/Kolkata",
         business_date=date(2026, 8, day),
         day_of_week=local.strftime("%A").lower(),
@@ -85,6 +91,7 @@ class TestFailedTranscriptRegression:
     def test_today_resolves_to_actual_date(self):
         clock = _clock(day=10)
         from fonely.voice.context import resolve_relative_date
+
         resolved = resolve_relative_date("இன்னைக்கு doctor free-ஆ?", clock)
         assert resolved == date(2026, 8, 10)
 
@@ -214,9 +221,7 @@ class TestAcceptanceScenarioContracts:
             is_operating_day=True,
             is_exception_day=False,
             operating_hours=((time(10, 0), time(13, 0)),),
-            available_slots=(
-                AvailableSlot(1, "Dr. Priya", time(11, 0), time(11, 30), "general"),
-            ),
+            available_slots=(AvailableSlot(1, "Dr. Priya", time(11, 0), time(11, 30), "general"),),
         )
         text = format_availability(avail)
         assert "11:00" in text
@@ -243,8 +248,11 @@ class TestAcceptanceScenarioContracts:
     @pytest.mark.asyncio
     async def test_ac002_stub_returns_not_connected(self):
         from fonely.voice.context import AvailabilityQuery
+
         stub = StubAvailabilityPort()
-        query = AvailabilityQuery(business_id=1, target_date=date(2026, 8, 10), business_timezone="Asia/Kolkata")
+        query = AvailabilityQuery(
+            business_id=1, target_date=date(2026, 8, 10), business_timezone="Asia/Kolkata"
+        )
         result = await stub.query_day_availability(query)
         assert not result.is_operating_day
         assert "not connected" in result.reason
@@ -292,9 +300,8 @@ class TestCleanSyntheticConversation:
 
     def test_session_lifecycle_clean_close(self):
         import asyncio
-        sup = VoiceSessionSupervisor(
-            VoiceSessionConfig(session_id="clean-2", business_id=1)
-        )
+
+        sup = VoiceSessionSupervisor(VoiceSessionConfig(session_id="clean-2", business_id=1))
         sup.transition(sup.state.__class__("signaling"))
         sup.transition(sup.state.__class__("connecting"))
         sup.transition(sup.state.__class__("active"))

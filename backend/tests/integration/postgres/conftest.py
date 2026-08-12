@@ -5,6 +5,7 @@ Destructive execution requires an explicit opt-in, a database named
 All migrations are applied before the session and downgraded afterward.
 """
 
+import asyncio
 import os
 import re
 import subprocess
@@ -23,6 +24,49 @@ from sqlalchemy.ext.asyncio import (
 )
 
 BACKEND_ROOT = Path(__file__).parents[3]
+
+
+class PostgresTestDatabaseUnrecoverableError(RuntimeError):
+    """The test database is in a state the fixture could not repair.
+
+    Raised INSTEAD OF a bare subprocess.CalledProcessError so a poisoned
+    database never masquerades as a product regression. A killed run can leave
+    alembic_version pointing at a partial/unknown revision, or tables present
+    with no version row — states the naive downgrade/upgrade cannot recover
+    from. The message names the database and the exact reset command, because
+    "the database is unusable" and "a test failed" demand different responses
+    from whoever reads the red (CEO #30).
+    """
+
+
+def _reset_public_schema(database_url: str) -> None:
+    """Force a truly empty database: drop and recreate the public schema.
+
+    This is the repair of last resort — it removes every table AND the
+    alembic_version row regardless of which poisoned state the previous run
+    left behind, so the subsequent `upgrade head` starts from a known base.
+    Uses asyncpg directly (the only driver installed) rather than alembic,
+    because alembic itself is what cannot cope with the poisoned state.
+    """
+    import asyncpg  # type: ignore[import-untyped]  # local import: repair path only
+
+    dsn = database_url.replace("postgresql+asyncpg://", "postgresql://")
+
+    async def _run() -> None:
+        conn = await asyncpg.connect(dsn)
+        try:
+            await conn.execute("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+        finally:
+            await conn.close()
+
+    # Run on a dedicated thread with its own event loop, so this works both from
+    # the sync session fixture AND from an async test that already holds a
+    # running loop (asyncio.run would raise "cannot be called from a running
+    # event loop" in the latter).
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(lambda: asyncio.run(_run())).result()
 
 
 def _migration_head() -> str:
@@ -72,36 +116,62 @@ def postgres_database_url() -> str:
     return _test_database_url()
 
 
+def _alembic(command: list[str], database_url: str) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["DATABASE_URL"] = database_url
+    return subprocess.run(
+        [str(BACKEND_ROOT / ".venv" / "bin" / "alembic"), *command],
+        cwd=BACKEND_ROOT,
+        env=env,
+        check=False,  # callers inspect returncode; we never want a bare CalledProcessError
+        capture_output=True,
+        text=True,
+    )
+
+
+def _bring_to_clean_head(database_url: str) -> None:
+    """Migrate the database to a clean head, REPAIRING a poisoned start state.
+
+    A prior run killed mid-migration can leave the database in a state the naive
+    `downgrade base` cannot recover from (unknown alembic_version revision, or
+    tables present with no version row). So:
+      1. Try the normal path: downgrade base -> upgrade head.
+      2. If EITHER step fails, do not trust the database — force a truly empty
+         schema and upgrade from there.
+      3. If the upgrade STILL fails, the database is unrecoverable: raise a
+         distinct, loud error naming it and the reset command — never a generic
+         setup error that reads like a product failure.
+    """
+    down = _alembic(["downgrade", "base"], database_url)
+    if down.returncode == 0:
+        up = _alembic(["upgrade", "head"], database_url)
+        if up.returncode == 0:
+            return  # clean path succeeded
+
+    # Repair path: the poisoned state defeated the normal migrate. Force a truly
+    # empty schema (removes tables AND alembic_version), then upgrade.
+    _reset_public_schema(database_url)
+    repaired = _alembic(["upgrade", "head"], database_url)
+    if repaired.returncode != 0:
+        db_name = urlparse(database_url.replace("+asyncpg", "")).path.lstrip("/")
+        raise PostgresTestDatabaseUnrecoverableError(
+            f"PostgreSQL test database {db_name!r} is UNRECOVERABLE: a schema reset "
+            f"followed by 'alembic upgrade head' still failed. This is a database "
+            f"problem, NOT a product test failure. Reset it manually and re-run:\n"
+            f"    psql '{database_url.replace('+asyncpg', '')}' "
+            f"-c 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;'\n"
+            f"alembic stderr:\n{repaired.stderr}"
+        )
+
+
 @pytest.fixture(scope="session", autouse=True)
 def migrated_postgres(postgres_database_url: str) -> Generator[None, None, None]:
-    env = os.environ.copy()
-    env["DATABASE_URL"] = postgres_database_url
-    alembic = str(BACKEND_ROOT / ".venv" / "bin" / "alembic")
-    subprocess.run(
-        [alembic, "downgrade", "base"],
-        cwd=BACKEND_ROOT,
-        env=env,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    subprocess.run(
-        [alembic, "upgrade", "head"],
-        cwd=BACKEND_ROOT,
-        env=env,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    _bring_to_clean_head(postgres_database_url)
     yield
-    subprocess.run(
-        [alembic, "downgrade", "base"],
-        cwd=BACKEND_ROOT,
-        env=env,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    # Teardown downgrade is best-effort: a repaired/clean DB downgrades fine, but
+    # a run killed DURING teardown must not itself raise a poisoned-state error
+    # over whatever the real failure was. The next run's setup repair handles it.
+    _alembic(["downgrade", "base"], postgres_database_url)
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")

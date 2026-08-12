@@ -584,11 +584,29 @@ class ConversationService:
             asked_raw = ctx.collected_facts.get("_resource_ambiguity_asks", 0)
             asked = asked_raw if isinstance(asked_raw, int) else 0
             cand = [r for r in resource_ambiguous if isinstance(r, dict)]
-            # Bound the loop unconditionally (rescope-2 item 4): no reachable
-            # state may repeat one question without limit. After two plain asks,
-            # switch strategy to a NUMBERED choice — a different response (so it
-            # cannot be the same-text loop) that also gives a crisp path the
-            # relaxed answer path can resolve ("1"/"2" -> ordinal).
+            # Bound the loop so it TERMINATES — not merely swaps one repeating
+            # question for another (CEO #32). Three escalating stages, then the
+            # state is genuinely left so no question can recur:
+            #   ask 0-1: plain "which doctor?"
+            #   ask 2:   numbered choice (a crisp path the relaxed answer path
+            #            resolves via "1"/"2")
+            #   ask >=3: give up disambiguating — DROP the ambiguity flags (so
+            #            this branch cannot re-enter) and route to a terminating
+            #            escape, exactly like the time-selection bound above.
+            if asked >= 3:
+                ctx.collected_facts.pop("_resource_ambiguous", None)
+                ctx.collected_facts.pop("_resource_ambiguity_asks", None)
+                ctx.collected_facts.pop("_active_offer", None)
+                turn = self._end_turn(
+                    ctx,
+                    user_message,
+                    "I'm sorry, I couldn't tell which doctor you meant. "
+                    "Please call the clinic directly and they'll help you book.",
+                    ConversationIntent.UNKNOWN,
+                    "administrative",
+                )
+                self._log_turn(turn, start_time)
+                return turn
             ctx.collected_facts["_resource_ambiguity_asks"] = asked + 1
             if asked >= 2:
                 numbered = "; ".join(f"{i + 1}. {c.get('name', '')}" for i, c in enumerate(cand))

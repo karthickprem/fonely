@@ -25,6 +25,7 @@ from fonely.services.conversation import _CONVERSATIONS
 from fonely.services.model_gateway import ModelResponse
 from fonely.services.owner_command_parser import ParsedOwnerCommand
 from fonely.workers.inbound_worker import ClaimedEvent, _process_domain
+from tests.integration.postgres.conftest import seed_whatsapp_channel
 
 pytestmark = pytest.mark.postgres
 
@@ -33,16 +34,6 @@ KOLKATA = ZoneInfo("Asia/Kolkata")
 OWNER_PHONE = "+919000000001"
 PATIENT_PHONE = "+919123456789"
 OTHER_PATIENT_PHONE = "+919555000222"
-
-
-@pytest.fixture(autouse=True)
-def _whatsapp_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
-    from fonely.services import notifications, whatsapp_config
-
-    mappings = '{"phone-1": 1}'
-    monkeypatch.setattr(whatsapp_config.settings, "whatsapp_business_mappings", mappings)
-    monkeypatch.setattr(notifications.settings, "whatsapp_business_mappings", mappings)
-    monkeypatch.setattr(notifications.settings, "whatsapp_phone_number_id", "phone-1")
 
 
 @pytest.fixture(autouse=True)
@@ -77,6 +68,8 @@ async def _seed(session: AsyncSession) -> None:
         ),
         {"owner": OWNER_PHONE},
     )
+    # WhatsApp channel identity moved into business_whatsapp_channels in 0016.
+    await seed_whatsapp_channel(session, phone_number_id="phone-1")
     await session.execute(
         text(
             "INSERT INTO services "

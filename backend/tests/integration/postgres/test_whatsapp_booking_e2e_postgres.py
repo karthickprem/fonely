@@ -17,6 +17,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from fonely.services.conversation import _CONVERSATIONS
+from tests.integration.postgres.conftest import seed_whatsapp_channel
 
 pytestmark = pytest.mark.postgres
 
@@ -52,6 +53,8 @@ async def _seed_dental_clinic(session: AsyncSession) -> None:
         ),
         {"phone": _OWNER_PHONE},
     )
+    # WhatsApp channel identity moved into business_whatsapp_channels in 0016.
+    await seed_whatsapp_channel(session, phone_number_id=_PHONE_NUMBER_ID)
     await session.execute(
         text(
             "INSERT INTO services "
@@ -131,15 +134,10 @@ async def test_signed_webhook_persists_inbound_event(
     async with pg_session_factory() as session:
         await _seed_dental_clinic(session)
 
-    with (
-        patch("fonely.api.channels.whatsapp.settings") as mock_settings,
-        patch("fonely.services.whatsapp_config.settings") as mock_wa_settings,
-    ):
+    with patch("fonely.api.channels.whatsapp.settings") as mock_settings:
         mock_settings.whatsapp_app_secret = _SECRET
         mock_settings.whatsapp_verify_token = _VERIFY_TOKEN
         mock_settings.whatsapp_phone_number_id = _PHONE_NUMBER_ID
-        mock_settings.whatsapp_business_mappings = f'{{"{_PHONE_NUMBER_ID}": 1}}'
-        mock_wa_settings.whatsapp_business_mappings = f'{{"{_PHONE_NUMBER_ID}": 1}}'
 
         from fonely.app import create_app
 
@@ -190,15 +188,10 @@ async def test_invalid_signature_rejected(
     async with pg_session_factory() as session:
         await _seed_dental_clinic(session)
 
-    with (
-        patch("fonely.api.channels.whatsapp.settings") as mock_settings,
-        patch("fonely.services.whatsapp_config.settings") as mock_wa_settings,
-    ):
+    with patch("fonely.api.channels.whatsapp.settings") as mock_settings:
         mock_settings.whatsapp_app_secret = _SECRET
         mock_settings.whatsapp_verify_token = _VERIFY_TOKEN
         mock_settings.whatsapp_phone_number_id = _PHONE_NUMBER_ID
-        mock_settings.whatsapp_business_mappings = f'{{"{_PHONE_NUMBER_ID}": 1}}'
-        mock_wa_settings.whatsapp_business_mappings = f'{{"{_PHONE_NUMBER_ID}": 1}}'
 
         from fonely.app import create_app
 

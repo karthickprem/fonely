@@ -35,14 +35,17 @@ from pipecat.transports.websocket.fastapi import (
 )
 
 from .call_teardown import OnceRelease
+from .open_order import OpenOutcome
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from starlette.websockets import WebSocket
 
     from .frame_pipeline import ResolverContext
-    from .media_stream_types import AudioSession, MediaStreamStart
+    from .input_latch import NoticeInputLatch
+    from .media_stream_types import AudioSession, AudioStreamHandoff, MediaStreamStart
+    from .open_order import OpenResult
     from .runtime import CommandPort
 
 # Outbound audio rate to the provider. Exotel accepts a fixed set; this is the
@@ -80,6 +83,25 @@ def build_transport(websocket: WebSocket, start: MediaStreamStart) -> FastAPIWeb
     return FastAPIWebsocketTransport(websocket=websocket, params=params)
 
 
+@dataclass(frozen=True)
+class CallComponents:
+    """The per-call handles ``handle_audio_session`` drives, produced by the
+    ``build_call`` composition step from the trusted session + validated handoff.
+
+    ``input_latch`` starts CLOSED; the open sequence opens it only after notice →
+    playback → evidence succeed. ``open_sequence`` is ``run_open_sequence`` bound
+    to this call's notice/greeting/evidence/latch. ``teardown`` closes worker,
+    providers, and socket. The pipeline/task/runner are the composed Pipecat
+    objects (held as ``object`` so this module stays free of runner-type imports
+    at module load)."""
+
+    input_latch: NoticeInputLatch
+    open_sequence: Callable[[], Awaitable[OpenResult]]
+    teardown: Callable[[], Awaitable[None]]
+    pipeline_task: object
+    runner: object
+
+
 @dataclass
 class VoiceAudioRuntime:
     """Holds the injected dependencies a call needs and owns per-call setup +
@@ -111,3 +133,75 @@ class VoiceAudioRuntime:
         """Build the per-call resolver via the injected factory, threading the
         INJECTED command port through — never a port built here."""
         return self.resolver_factory(session, self.command_port)
+
+    async def handle_audio_session(
+        self,
+        session: AudioSession,
+        handoff: AudioStreamHandoff,
+        *,
+        build_call: Callable[[AudioSession, AudioStreamHandoff], CallComponents],
+        run_runner: Callable[[CallComponents], Awaitable[None]],
+    ) -> OpenResult:
+        """Top-level per-call flow: compose the pipeline for this admitted media
+        stream, enforce the open order, run the conversation, converge teardown.
+
+        ``build_call`` composes the transport + assembled pipeline + runner from
+        the trusted ``session`` and validated ``handoff`` — returning the handles
+        this method drives (the closed input latch, the open sequence bound to
+        this call, the runner). ``run_runner`` drives the Pipecat runner to
+        completion. Both are injected so the orchestration is testable with fakes
+        and the real wiring supplies live Pipecat objects.
+
+        Ordering and teardown are delegated to ``run_call_open``: caller audio
+        reaches STT only after the open sequence succeeds, and the admission slot
+        releases exactly once on every path.
+        """
+        components = build_call(session, handoff)
+        return await self.run_call_open(
+            session,
+            open_sequence=components.open_sequence,
+            start_conversation=lambda: run_runner(components),
+            teardown=components.teardown,
+        )
+
+    async def run_call_open(
+        self,
+        session: AudioSession,
+        *,
+        open_sequence: Callable[[], Awaitable[OpenResult]],
+        start_conversation: Callable[[], Awaitable[None]],
+        teardown: Callable[[], Awaitable[None]],
+    ) -> OpenResult:
+        """Drive the enforced open order, then either start the conversation or
+        tear down — with the admission slot released EXACTLY once on every path.
+
+        The compliance ordering lives in ``open_sequence`` (which wraps
+        ``open_order.run_open_sequence``): it opens the input latch ONLY after
+        notice → playback → evidence succeed. This method's job is the outer
+        contract:
+          * caller audio never reaches STT unless the open sequence returned
+            OPENED — the latch stays closed on any failure, so
+            ``start_conversation`` (which lets audio flow) runs only on OPENED;
+          * a failed open tears the call down without starting the conversation;
+          * the admission slot is released exactly once whether the open
+            succeeds, fails, or the whole thing raises — via the OnceRelease
+            guard installed in the single ``finally``.
+
+        This is the outer skeleton ``handle_audio_session`` uses; the transport
+        and pipeline wiring supply the real ``open_sequence`` /
+        ``start_conversation`` / ``teardown`` closures.
+        """
+        guard = self.make_release_guard(session)
+        try:
+            result = await open_sequence()
+            if result.outcome is OpenOutcome.OPENED:
+                await start_conversation()
+            else:
+                # Open failed: STT never opened (the latch is still closed). Tear
+                # down without starting the conversation. The caller already
+                # heard the failure line inside the open sequence.
+                await teardown()
+            return result
+        finally:
+            # Exactly once, on OPENED, on failure, and on any raise above.
+            guard.release()

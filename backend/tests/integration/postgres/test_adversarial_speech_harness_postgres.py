@@ -15,10 +15,15 @@ Invariants:
   I4  a correction supersedes the earlier reading               (correction/
       negation cases: asserted via Case.superseded_local — the committed time
       must never equal the reading the correction overrode)
+  I5  the booked doctor is the one named, read from the ROW      (item #19:
+      every booking asserts the appointments.resource_id equals the intended
+      doctor; ambiguous/unknown spoken names fail closed — book no doctor and
+      re-ask, never guess)
 
-I1 and I3 run on every case; I2 runs on every case that books; I4 runs on every
-case that declares a superseded reading (it does not apply to conversations
-with no correction, and does not silently pass there — it simply is not in play).
+I1 and I3 run on every case; I2 and I5 run on every case that books; I4 runs on
+every case that declares a superseded reading; the I5 fail-closed branch runs on
+every case that declares expect_resource_refusal. None of these pass vacuously:
+a category that does not apply is simply not in play, not a silent pass.
 """
 
 import uuid
@@ -83,16 +88,23 @@ async def _seed_split_shift(session: AsyncSession) -> None:
             "VALUES (1, 1, 'General Consultation', 30, 0, 0, 500.00, true)"
         )
     )
+    # Two doctors stored with honorific + capitalisation, both eligible. A
+    # patient who says only the shared first name ("priya") is ambiguous and
+    # must fail closed; a fuller name ("priya rao") disambiguates. "Dr. Arun"
+    # is a distinct name for the unambiguous spoken-form case.
     await session.execute(
         text(
             "INSERT INTO resources (id, business_id, name, resource_type, is_active) "
-            "VALUES (1, 1, 'Dr. Priya', 'staff', true)"
+            "VALUES (1, 1, 'Dr. Priya Kumar', 'staff', true), "
+            "(2, 1, 'Dr. Priya Rao', 'staff', true), "
+            "(3, 1, 'Dr. Arun', 'staff', true)"
         )
     )
     await session.execute(
         text(
             "INSERT INTO service_resource_eligibility "
-            "(business_id, service_id, resource_id, is_active) VALUES (1, 1, 1, true)"
+            "(business_id, service_id, resource_id, is_active) VALUES "
+            "(1, 1, 1, true), (1, 1, 2, true), (1, 1, 3, true)"
         )
     )
     for open_t, close_t in (("09:30", "13:00"), ("17:00", "20:30")):
@@ -138,6 +150,7 @@ class ConvTrace:
     responses: list[str] = field(default_factory=list)
     offered_slots_utc: set[datetime] = field(default_factory=set)
     committed_start_utc: datetime | None = None
+    committed_resource_id: int | None = None
     conv_id: str | None = None
 
 
@@ -171,7 +184,7 @@ async def run_script(
         row = (
             await verify.execute(
                 text(
-                    "SELECT start_at FROM appointments "
+                    "SELECT start_at, resource_id FROM appointments "
                     "WHERE business_id = 1 AND status = 'confirmed'"
                 )
             )
@@ -181,6 +194,11 @@ async def run_script(
             if committed.tzinfo is None:
                 committed = committed.replace(tzinfo=UTC)
             trace.committed_start_utc = committed.astimezone(UTC)
+            # Read the resource_id straight from the appointments ROW — not the
+            # transcript — so the assertion has independent detection power: it
+            # fails if the wrong doctor is booked even when the reply text looks
+            # right.
+            trace.committed_resource_id = row[1]
     return trace
 
 
@@ -208,11 +226,14 @@ def _max_identical_repeats(responses: list[str]) -> int:
 # so the assertions are deterministic. Where a category is about the TIME half,
 # service/resource/phone are supplied in the first utterance in speech shape.
 
-# The lead establishes service + resource. The resource name uses the stored
-# form "Dr. Priya" so these cases isolate TIME understanding (the milestone
-# focus). The punctuation-in-resource-name gap ("dr priya" not matching
-# "Dr. Priya") is a separate speech finding reported alongside this harness.
-_LEAD = "i want General Consultation with Dr. Priya"
+# The lead establishes service + resource. It now names the doctor in SPOKEN
+# form — lowercase, honorific-as-word, no punctuation ("doctor arun" for stored
+# "Dr. Arun") — so every time-case also drives the spoken resource-name path end
+# to end (item #19), instead of hiding it behind the stored form. "Dr. Arun" is
+# the distinct, unambiguous name (resource id=3); "Dr. Priya Kumar"/"Dr. Priya
+# Rao" exist to exercise ambiguity in dedicated cases.
+_ARUN_ID = 3
+_LEAD = "i want General Consultation with doctor arun"
 _PHONE = "reach me on 9123456789"
 
 
@@ -234,6 +255,14 @@ class Case:
     # (h, m) that must be SUPERSEDED — the committed time must never equal it.
     # None for conversations with no correction (I4 does not apply to them).
     superseded_local: tuple[int, int] | None = None
+    # I5 (item #19): if this case books, the resource_id the appointments row
+    # MUST carry. Defaults to _ARUN_ID because _LEAD names "doctor arun". A case
+    # that must book NOTHING leaves expect_local None and this is not checked.
+    expect_resource_id: int | None = None
+    # I5 negative: a resource-ambiguity/unknown case that must NEVER book a
+    # specific resource. When True, the case must book nothing AND the response
+    # must ask which/for the doctor rather than silently choosing.
+    expect_resource_refusal: bool = False
 
 
 def _corpus() -> list[Case]:
@@ -368,6 +397,68 @@ def _corpus() -> list[Case]:
         )
     )
 
+    # 11. Spoken resource name, reordered honorific — "arun doctor" for stored
+    # "Dr. Arun". Must book, and the ROW's resource_id must be Arun (id=3).
+    cases.append(
+        Case(
+            "resource-spoken-reordered",
+            "resource_name",
+            [
+                f"i want General Consultation with arun doctor tomorrow 10 30 am {_PHONE}",
+                "yes confirm",
+            ],
+            (10, 30),
+            expect_resource_id=_ARUN_ID,
+        )
+    )
+
+    # 12. Ambiguous spoken name — "dr priya" matches BOTH Dr. Priya Kumar and
+    # Dr. Priya Rao. Must FAIL CLOSED: book nothing, ask which doctor. Booking
+    # either would be a silent wrong-doctor mis-booking.
+    cases.append(
+        Case(
+            "resource-ambiguous-priya",
+            "resource_name",
+            [
+                f"i want General Consultation with dr priya tomorrow 10 30 am {_PHONE}",
+                "yes confirm",
+            ],
+            None,
+            expect_resource_refusal=True,
+        )
+    )
+
+    # 13. Ambiguity RESOLVED by a fuller spoken name — "priya rao" out-scores
+    # the partial match and books Dr. Priya Rao (id=2), row-level.
+    cases.append(
+        Case(
+            "resource-ambiguity-resolved",
+            "resource_name",
+            [
+                f"i want General Consultation with dr priya tomorrow 10 30 am {_PHONE}",
+                "priya rao",
+                "yes confirm",
+            ],
+            (10, 30),
+            expect_resource_id=2,
+        )
+    )
+
+    # 14. Unknown spoken name — no active resource named "dr smith". Must refuse
+    # and re-ask; never fall through to "any available".
+    cases.append(
+        Case(
+            "resource-unknown-name",
+            "resource_name",
+            [
+                f"i want General Consultation with dr smith tomorrow 10 30 am {_PHONE}",
+                "yes confirm",
+            ],
+            None,
+            expect_resource_refusal=True,
+        )
+    )
+
     return cases
 
 
@@ -413,6 +504,25 @@ async def test_speech_corpus_invariants(
             f"{time(*case.superseded_local)}; a correction must override it"
         )
 
+    # I5 negative (item #19): an ambiguous or unknown spoken resource name must
+    # fail closed — book NO resource AND ask for the doctor. Two independent
+    # checks: (a) the appointments row has no resource_id (nothing booked), and
+    # (b) the last reply asks which/for the doctor. Check (b) gives this real
+    # detection power: a build that silently picked a doctor would either book
+    # (fails a) or reply without asking (fails b), so the assertion cannot pass
+    # vacuously the way an I1-shadowed check would.
+    if case.expect_resource_refusal:
+        assert trace.committed_resource_id is None, (
+            f"[{case.cid}] I5 violated: booked resource "
+            f"{trace.committed_resource_id} for an ambiguous/unknown spoken name; "
+            "must fail closed"
+        )
+        last = trace.responses[-1].lower() if trace.responses else ""
+        assert "doctor" in last or "which" in last, (
+            f"[{case.cid}] I5 violated: expected a which-doctor re-ask, got {trace.responses[-1]!r}"
+        )
+        return
+
     if expected_utc is None:
         # Must book nothing.
         assert trace.committed_start_utc is None, (
@@ -434,4 +544,15 @@ async def test_speech_corpus_invariants(
         f"[{case.cid}] committed a slot that was never offered: "
         f"{trace.committed_start_utc.astimezone(KOLKATA)} not in "
         f"{sorted(s.astimezone(KOLKATA).strftime('%H:%M') for s in trace.offered_slots_utc)}"
+    )
+
+    # I5 (item #19): the committed appointment's resource_id — read from the ROW,
+    # not the transcript — is the intended doctor. Independent detection power:
+    # a wrong-doctor booking fails here even if the reply text reads correctly
+    # and the time (I1) is right. Every booking case names a doctor, so this is
+    # asserted on all of them; expect_resource_id defaults to _ARUN_ID (_LEAD).
+    expected_rid = case.expect_resource_id if case.expect_resource_id is not None else _ARUN_ID
+    assert trace.committed_resource_id == expected_rid, (
+        f"[{case.cid}] I5 violated: booked resource_id "
+        f"{trace.committed_resource_id}, expected {expected_rid}"
     )

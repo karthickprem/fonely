@@ -157,6 +157,23 @@ jobs:
             VALUES (1, 1, 'Priya', 'staff', true),
                    (2, 2, 'Mira', 'staff', true)
             ON CONFLICT DO NOTHING;
+            INSERT INTO business_whatsapp_channels
+              (id, business_id, phone_number_id, status, is_primary)
+            VALUES (1, 1, 'ci-whatsapp-pnid-1', 'active', true)
+            ON CONFLICT DO NOTHING;
+            INSERT INTO business_channel_identities
+              (id, business_id, provider, external_identifier, status, is_primary)
+            VALUES (1, 1, 'exotel', 'ci-exotel-number-1', 'active', true)
+            ON CONFLICT DO NOTHING;
+            INSERT INTO calls
+              (id, business_id, call_provider, provider_call_sid,
+               dpdp_notice_completed_at, dpdp_notice_version,
+               dpdp_notice_locale, dpdp_notice_content_digest)
+            VALUES
+              (1, 1, 'exotel', 'ci-call-sid-1',
+               '2026-08-12T00:00:00Z', 'v1', 'ta-IN',
+               repeat('a', 64))
+            ON CONFLICT DO NOTHING;
           "
 
           createdb fonely_test_restore

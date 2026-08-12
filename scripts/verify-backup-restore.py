@@ -261,6 +261,28 @@ _EVIDENCE_QUERIES = [
         ),
     ),
     (
+        "whatsapp_channels",
+        (
+            "SELECT id, business_id, phone_number_id, status, is_primary "
+            "FROM business_whatsapp_channels ORDER BY id"
+        ),
+    ),
+    (
+        "channel_identities",
+        (
+            "SELECT id, business_id, provider, external_identifier, status, is_primary "
+            "FROM business_channel_identities ORDER BY id"
+        ),
+    ),
+    (
+        "call_notice_evidence",
+        (
+            "SELECT id, business_id, call_provider, provider_call_sid, "
+            "dpdp_notice_completed_at, dpdp_notice_version, dpdp_notice_locale, "
+            "dpdp_notice_content_digest FROM calls ORDER BY id"
+        ),
+    ),
+    (
         "schema_functions",
         (
             "SELECT p.proname, "
@@ -505,6 +527,9 @@ def main() -> int:
                 "appointments",
                 "pending_actions",
                 "resource_allocations",
+                "calls",
+                "business_whatsapp_channels",
+                "business_channel_identities",
             }
             tables_csv = _query(
                 restore_url,

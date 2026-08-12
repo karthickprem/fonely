@@ -12,7 +12,7 @@ Provider-neutral logical backup-and-restore contract for disposable test databas
 - Source evidence digest is unchanged after backup/restore.
 - Temporary backup files are cleaned up.
 
-The evidence digest covers the bounded synthetic verification dataset (businesses, users, services, resources, and schema objects). It does not prove unchanged state for arbitrary database contents outside that contract.
+The evidence digest covers a bounded synthetic verification dataset: businesses, users, services, resources, WhatsApp routing identity, generic provider channel identity, per-call provider correlation, DPDP notice evidence, and schema objects. It uses synthetic opaque identifiers and digests. Caller phone numbers, transcripts, credentials, tokens, and provider secrets are deliberately excluded. It does not prove unchanged state for arbitrary database contents outside that contract.
 
 ## What a pass does not prove
 
@@ -59,18 +59,18 @@ One stable JSON document on stdout:
   "environment": "github-ci",
   "overall_status": "passed",
   "postgres_major": 16,
-  "source_revision": "0004",
-  "restored_revision": "0004",
+  "source_revision": "0018",
+  "restored_revision": "0018",
   "checks": [
     {"name": "source_version", ...},
-    {"name": "source_revision", ...},
+    {"name": "source_evidence", ...},
     {"name": "backup", ...},
     {"name": "restore", ...},
     {"name": "restored_revision", ...},
     {"name": "schema_objects", ...},
-    {"name": "data_integrity", ...},
+    {"name": "restored_evidence", ...},
     {"name": "source_unchanged", ...},
-    {"name": "cleanup", ...}
+    {"name": "file_cleanup", ...}
   ]
 }
 ```

@@ -15,6 +15,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 SCRIPT = Path(__file__).resolve().parent.parent / "verify-backup-restore.py"
 
 _mod_spec = importlib.util.spec_from_file_location("backup_restore", SCRIPT)
@@ -67,6 +69,11 @@ _BASE_EVIDENCE: dict[str, str] = {
     "business_users": "1|+910000000001|owner|t\n2|+910000000002|owner|t",
     "services": "1|1|General Consultation|30|0|0|500.00|t\n2|2|Teeth Cleaning|45|5|5|800.00|t",
     "resources": "1|1|Dr. Priya|dentist|t\n2|2|Dr. Meera|dentist|t",
+    "whatsapp_channels": "1|1|ci-whatsapp-pnid-1|active|t",
+    "channel_identities": "1|1|exotel|ci-exotel-number-1|active|t",
+    "call_notice_evidence": (
+        "1|1|exotel|ci-call-sid-1|2026-08-12 00:00:00+00|v1|ta-IN|" + "a" * 64
+    ),
     "schema_functions": "myfunc||CREATE FUNCTION myfunc() ...",
     "schema_tables": "businesses|id|integer|NO\nbusinesses|name|varchar|NO",
 }
@@ -444,6 +451,34 @@ class TestProductionEvidenceDigest:
         )
         assert base != swapped
 
+    @pytest.mark.parametrize(
+        ("label", "replacement"),
+        [
+            ("whatsapp_channels", "1|2|ci-whatsapp-pnid-1|active|t"),
+            ("channel_identities", "1|2|exotel|ci-exotel-number-2|active|t"),
+            (
+                "call_notice_evidence",
+                "1|1|exotel|ci-call-sid-2|2026-08-12 00:00:00+00|v2|ta-IN|" + "b" * 64,
+            ),
+        ],
+    )
+    def test_current_identity_or_notice_mutation_changes_digest(
+        self, label: str, replacement: str
+    ) -> None:
+        base = br._compute_digest(br._collect_evidence(_make_query_fn()))
+        changed = br._compute_digest(
+            br._collect_evidence(_make_query_fn({label: replacement}))
+        )
+        assert base != changed
+
+    def test_current_evidence_projections_exclude_patient_content(self) -> None:
+        queries = dict(br._EVIDENCE_QUERIES)
+
+        assert "caller_phone" not in queries["call_notice_evidence"]
+        assert "transcript" not in queries["call_notice_evidence"]
+        assert "display_phone_number" not in queries["whatsapp_channels"]
+        assert "access_token" not in " ".join(queries.values()).lower()
+
     def test_revision_change_different_digest(self) -> None:
         base = br._compute_digest(br._collect_evidence(_make_query_fn()))
         updated = br._compute_digest(
@@ -514,7 +549,9 @@ class TestProductionEvidenceDigest:
         restored = br._compute_digest(
             br._collect_evidence(
                 _make_query_fn(
-                    {"businesses": "1|Changed|dental_clinic|+910000000001|Asia/Kolkata|trial"}
+                    {
+                        "businesses": "1|Changed|dental_clinic|+910000000001|Asia/Kolkata|trial"
+                    }
                 )
             )
         )
@@ -612,7 +649,8 @@ def _run_main_controlled(
 
     _REQUIRED_TABLES = (
         "alembic_version,businesses,business_users,services,resources,"
-        "appointments,pending_actions,resource_allocations"
+        "appointments,pending_actions,resource_allocations,calls,"
+        "business_whatsapp_channels,business_channel_identities"
     )
     default_responses = {
         "SHOW server_version": "16.4",
@@ -756,7 +794,11 @@ class TestMainFlowEvidenceComparison:
             if "alembic_version" in sql:
                 return "0004"
             if "pg_tables" in sql:
-                return "alembic_version,businesses,business_users,services,resources,appointments,pending_actions,resource_allocations"
+                return (
+                    "alembic_version,businesses,business_users,services,resources,"
+                    "appointments,pending_actions,resource_allocations,calls,"
+                    "business_whatsapp_channels,business_channel_identities"
+                )
             if "pg_proc" in sql:
                 return "5"
             return ""

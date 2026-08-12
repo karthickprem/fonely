@@ -48,7 +48,7 @@ class TestAdapterInitialization:
 
         adapter = SarvamSTTAdapter(STTConfig())
         try:
-            asyncio.get_event_loop().run_until_complete(adapter.transcribe(b""))
+            asyncio.run(adapter.transcribe(b""))
             raise AssertionError("should raise")
         except RuntimeError as e:
             assert "not initialized" in str(e)
@@ -58,5 +58,5 @@ class TestAdapterInitialization:
 
         adapter = CartesiaTTSAdapter(TTSConfig())
         adapter.set_service(object())
-        asyncio.get_event_loop().run_until_complete(adapter.synthesize("hello"))
+        asyncio.run(adapter.synthesize("hello"))
         assert adapter.total_characters == 5

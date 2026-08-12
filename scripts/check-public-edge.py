@@ -17,7 +17,6 @@ Exits non-zero on any failure. Never prints a secret value — presence only.
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 from pathlib import Path
@@ -61,6 +60,7 @@ class Report:
     def __init__(self) -> None:
         self.failures: list[str] = []
         self.warnings: list[str] = []
+        self.not_checked_items: list[str] = []
 
     def ok(self, message: str) -> None:
         print(f"  ok       {message}")
@@ -72,6 +72,16 @@ class Report:
     def fail(self, message: str) -> None:
         self.failures.append(message)
         print(f"  FAIL     {message}")
+
+    def not_checked(self, message: str) -> None:
+        """A check this script structurally cannot perform.
+
+        Distinct from ok and from warn on purpose. An operator reading a clean
+        run must be able to tell "verified" from "not verifiable here", or the
+        absence of a check reads as a passing check.
+        """
+        self.not_checked_items.append(message)
+        print(f"  NOT RUN  {message}")
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -131,43 +141,44 @@ def check_router_gates(env: dict[str, str], report: Report) -> None:
 
 
 def check_number_mappings(env: dict[str, str], report: Report) -> None:
-    print("\ntenant binding")
-    raw = env.get("EXOTEL_NUMBER_MAPPINGS", "")
-    if not raw:
-        if env.get("EXOTEL_WEBHOOK_SECRET"):
-            report.fail(
-                "EXOTEL_WEBHOOK_SECRET is set but EXOTEL_NUMBER_MAPPINGS is empty — "
-                "every inbound call would be refused as an unknown number"
-            )
-        else:
-            report.warn("EXOTEL_NUMBER_MAPPINGS unset (telephony not configured)")
-        return
+    """Report on tenant binding, which is no longer an environment concern.
 
-    try:
-        mappings = json.loads(raw)
-    except json.JSONDecodeError as exc:
+    Until migration 0017 this function parsed EXOTEL_NUMBER_MAPPINGS and could
+    tell you, from the env file alone, which number reached which clinic. That
+    binding now lives in business_channel_identities, so this script cannot
+    see it without database credentials it deliberately does not take.
+
+    What it can still do is catch the two ways an operator gets this wrong:
+    leaving the dead variable in place and believing it still binds anything,
+    and registering no numbers at all while telephony is mounted.
+    """
+    print("\ntenant binding")
+
+    if env.get("EXOTEL_NUMBER_MAPPINGS"):
         report.fail(
-            f"EXOTEL_NUMBER_MAPPINGS is not valid JSON ({exc.msg}); "
-            "ExotelNumberMapping logs an error and falls back to an empty map, "
-            "so every call would be refused"
+            "EXOTEL_NUMBER_MAPPINGS is set but no longer read by anything. "
+            "Since migration 0017 the dialled-number binding is a row in "
+            "business_channel_identities. Leaving this variable in place means "
+            "believing calls are bound when they are not — remove it and "
+            "register the number through POST /internal/v1/businesses/channel-identity"
         )
         return
 
-    if not isinstance(mappings, dict) or not mappings:
-        report.fail("EXOTEL_NUMBER_MAPPINGS must be a non-empty JSON object")
+    if not env.get("EXOTEL_WEBHOOK_SECRET"):
+        report.warn("telephony not configured (EXOTEL_WEBHOOK_SECRET unset)")
         return
 
-    for number, business_id in mappings.items():
-        if not isinstance(business_id, int) or business_id <= 0:
-            report.fail(f"number {number} maps to {business_id!r}, not a positive business_id")
-        elif not number.startswith("+"):
-            report.fail(f"number {number} is not in E.164 form; Exotel sends the dialled number with +")
-        else:
-            report.ok(f"{number} bound to business_id {business_id}")
-
-    owners = list(mappings.values())
-    if len(set(owners)) != len(owners):
-        report.warn("two numbers map to the same business_id — intended only for a multi-number clinic")
+    report.not_checked(
+        "which clinic each dialled number reaches — it is a database row, not "
+        "config. Verify against the running system before the first real call:\n"
+        "             psql \"$DATABASE_URL\" -c \"SELECT business_id, "
+        "external_identifier, status, is_primary FROM business_channel_identities "
+        "WHERE provider = 'exotel'\"\n"
+        "           An unregistered number is refused with 404 at the ringing "
+        "webhook and its audio stream is then refused as an unobserved call, so "
+        "the failure is a clinic whose calls do not connect — never a call "
+        "landing in the wrong clinic's diary."
+    )
 
 
 def check_exposure(report: Report) -> None:
@@ -235,10 +246,14 @@ def main() -> int:
     if report.failures:
         print(f"{len(report.failures)} failure(s) — do not point a provider at this deployment")
         return 1
+    parts = []
     if report.warnings:
-        print(f"passed with {len(report.warnings)} warning(s)")
-    else:
-        print("passed")
+        parts.append(f"{len(report.warnings)} warning(s)")
+    if report.not_checked_items:
+        # Named in the summary line, not just inline, so a clean run cannot be
+        # skim-read as "everything verified".
+        parts.append(f"{len(report.not_checked_items)} check(s) NOT RUN")
+    print("passed" + (f" with {' and '.join(parts)}" if parts else ""))
     print("configuration only — a real inbound call is the only proof a call works")
     return 0
 

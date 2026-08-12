@@ -37,7 +37,10 @@ class Settings(BaseSettings):
     exotel_phone_number: str = ""
     exotel_trial_number: str = ""
     exotel_webhook_secret: str = ""
-    exotel_number_mappings: str = ""
+    # No exotel_number_mappings. Which clinic a dialed number reaches lives in
+    # business_channel_identities as of migration 0017 — it is tenant data,
+    # not process configuration, and holding it here meant a clinic could not
+    # be given a phone number without a redeploy.
 
     # Database — async PostgreSQL in production, async SQLite for tests
     database_url: str = "postgresql+asyncpg://localhost:5432/fonely"

@@ -145,7 +145,7 @@ async def clean_database(
             await connection.execute(
                 text(
                     "TRUNCATE TABLE whatsapp_delivery_attempts, "
-                    "business_whatsapp_channels, "
+                    "business_whatsapp_channels, business_channel_identities, "
                     "whatsapp_inbound_events, business_daily_context, "
                     "conversation_turns, conversations, "
                     "notification_outbox, notification_manifests, "

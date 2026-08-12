@@ -182,7 +182,6 @@ def _app_with(**gates: str) -> Iterator[FastAPI]:
             setattr(mock_settings, name, gates.get(name, ""))
         mock_settings.database_url = "postgresql+asyncpg://localhost/test"
         mock_settings.readiness_timeout_seconds = 3.0
-        mock_settings.exotel_number_mappings = ""
         yield create_app()
 
 

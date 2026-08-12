@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 from collections.abc import Iterator
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -12,9 +13,18 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from fonely.api.channels.exotel import router
-from fonely.services.exotel_config import ExotelNumberMapping
+from fonely.repositories.channel_identities import (
+    PROVIDER_EXOTEL,
+    ChannelIdentityRepository,
+)
+from fonely.services.audio_admission import (
+    AdmissionRefusal,
+    AdmissionResult,
+    AudioSession,
+)
 
 _SECRET = "exotel-test-secret"
+_CALL_SID = "call-123"
 
 
 @pytest.fixture(autouse=True)
@@ -31,14 +41,77 @@ def exotel_settings() -> Iterator[MagicMock]:
         yield mock_settings
 
 
-def _create_app(mapping: dict[str, int] | None = None) -> FastAPI:
+@pytest.fixture(autouse=True)
+def channel_numbers() -> Iterator[dict[str, int]]:
+    """Stand in for the business_channel_identities lookup.
+
+    Autouse for the same reason as the secret: number resolution is now a
+    database read, and a test that left it unstubbed would 404 for a reason
+    unrelated to what it is asserting. Tests that want an unknown number
+    mutate the yielded dict.
+    """
+    numbers = {"08012345678": 1}
+
+    async def _resolve(
+        self: ChannelIdentityRepository, provider: str, external_identifier: str
+    ) -> int | None:
+        assert provider == PROVIDER_EXOTEL
+        return numbers.get(external_identifier)
+
+    with patch.object(ChannelIdentityRepository, "resolve_business_id", _resolve):
+        yield numbers
+
+
+_ADMITTED_SESSION = AudioSession(
+    business_id=1,
+    call_id=42,
+    caller_phone="+919876543210",
+    clinic_name="Test Dental Clinic",
+    timezone="Asia/Kolkata",
+    provider=PROVIDER_EXOTEL,
+    provider_call_sid=_CALL_SID,
+)
+
+
+@pytest.fixture(autouse=True)
+def admission() -> Iterator[dict[str, AdmissionResult]]:
+    """Stub the admission seam so these tests cover handler branching only.
+
+    Whether a CallSid resolves to a tenant is decided by real SQL against real
+    constraints, and is proven in the PostgreSQL integration tests. What is
+    unit-testable here is what the handler does with each answer: admit, or
+    close 1008 without ever handing over the socket.
+
+    The stub keeps the two invariants the handler depends on -- an empty
+    identifier never admits, and an unknown one never admits -- so a test
+    cannot pass by accident on a socket that failed to identify itself.
+    """
+    outcomes = {_CALL_SID: AdmissionResult(session=_ADMITTED_SESSION, refusal=None)}
+
+    async def _stub(
+        db_session: object, *, provider: str, provider_call_sid: str
+    ) -> AdmissionResult:
+        assert provider == PROVIDER_EXOTEL
+        if not provider_call_sid:
+            return AdmissionResult(session=None, refusal=AdmissionRefusal.NO_CALL_IDENTIFIER)
+        return outcomes.get(
+            provider_call_sid,
+            AdmissionResult(session=None, refusal=AdmissionRefusal.UNOBSERVED_CALL),
+        )
+
+    with patch("fonely.api.channels.exotel.admit_audio_stream", _stub):
+        yield outcomes
+
+
+def _create_app() -> FastAPI:
     app = FastAPI()
     app.include_router(router)
-    app.state.exotel_mapping = ExotelNumberMapping(mapping or {"08012345678": 1})
 
     mock_session = AsyncMock()
     mock_result = MagicMock()
     mock_result.scalar_one.return_value = 42
+    mock_result.scalar_one_or_none.return_value = 42
+    mock_result.rowcount = 1
     mock_session.execute = AsyncMock(return_value=mock_result)
     mock_session.commit = AsyncMock()
 
@@ -323,7 +396,9 @@ class TestAudioStreamWebSocket:
     def test_connects_with_valid_credential(self) -> None:
         app = _create_app()
         client = TestClient(app)
-        with client.websocket_connect("/webhooks/exotel/audio-stream", headers=_auth()) as ws:
+        with client.websocket_connect(
+            f"/webhooks/exotel/audio-stream?CallSid={_CALL_SID}", headers=_auth()
+        ) as ws:
             ws.send_bytes(b"\x00" * 320)
             ws.close()
 
@@ -331,7 +406,9 @@ class TestAudioStreamWebSocket:
         """The media-stream applet takes a URL, so this is often the only carrier."""
         app = _create_app()
         client = TestClient(app)
-        with client.websocket_connect(f"/webhooks/exotel/audio-stream?token={_SECRET}") as ws:
+        with client.websocket_connect(
+            f"/webhooks/exotel/audio-stream?token={_SECRET}&CallSid={_CALL_SID}"
+        ) as ws:
             ws.send_bytes(b"\x00" * 320)
             ws.close()
 
@@ -380,28 +457,145 @@ class TestAudioStreamWebSocket:
             pass
 
 
-class TestNumberMapping:
-    def test_known_number_returns_business_id(self) -> None:
-        mapping = ExotelNumberMapping({"08012345678": 1, "08087654321": 2})
-        assert mapping.get_business_id("08012345678") == 1
-        assert mapping.get_business_id("08087654321") == 2
+class _RecordingRuntime:
+    """Stands in for the voice runtime and records what it was handed."""
 
-    def test_unknown_number_returns_none(self) -> None:
-        mapping = ExotelNumberMapping({"08012345678": 1})
-        assert mapping.get_business_id("09999999999") is None
+    def __init__(self) -> None:
+        self.sessions: list[AudioSession] = []
 
-    def test_empty_mappings(self) -> None:
-        mapping = ExotelNumberMapping({})
-        assert mapping.get_business_id("08012345678") is None
+    async def handle_audio_session(self, websocket: object, session: AudioSession) -> None:
+        self.sessions.append(session)
 
-    def test_loads_from_settings(self) -> None:
-        with patch("fonely.services.exotel_config.settings") as mock_settings:
-            mock_settings.exotel_number_mappings = '{"080123": 5}'
-            mapping = ExotelNumberMapping()
-            assert mapping.get_business_id("080123") == 5
 
-    def test_invalid_json_falls_back_to_empty(self) -> None:
-        with patch("fonely.services.exotel_config.settings") as mock_settings:
-            mock_settings.exotel_number_mappings = "not json"
-            mapping = ExotelNumberMapping()
-            assert mapping.get_business_id("anything") is None
+class TestAudioStreamAdmission:
+    """The secret proves provenance; admission decides which clinic, if any."""
+
+    def test_unobserved_call_sid_is_refused_before_accept(self) -> None:
+        """A forged or guessed CallSid never reaches a tenant.
+
+        Refusal happens before accept(), so a caller holding a leaked applet
+        URL never gets a connected socket out of a call we never saw ring.
+        """
+        app = _create_app()
+        runtime = _RecordingRuntime()
+        app.state.voice_audio_runtime = runtime
+        client = TestClient(app)
+        with (
+            pytest.raises(WebSocketDisconnect),
+            client.websocket_connect(
+                f"/webhooks/exotel/audio-stream?token={_SECRET}&CallSid=forged-sid"
+            ),
+        ):
+            pass
+        assert runtime.sessions == []
+
+    def test_query_call_sid_admits_and_hands_typed_session_to_runtime(self) -> None:
+        app = _create_app()
+        runtime = _RecordingRuntime()
+        app.state.voice_audio_runtime = runtime
+        client = TestClient(app)
+        with client.websocket_connect(
+            f"/webhooks/exotel/audio-stream?token={_SECRET}&CallSid={_CALL_SID}"
+        ):
+            pass
+
+        assert len(runtime.sessions) == 1
+        session = runtime.sessions[0]
+        # Every one of these was resolved server-side. None of it was read off
+        # the socket, which is the whole point of the seam.
+        assert session.business_id == 1
+        assert session.call_id == 42
+        assert session.clinic_name == "Test Dental Clinic"
+        assert session.timezone == "Asia/Kolkata"
+        assert session.provider_call_sid == _CALL_SID
+
+    def test_opening_frame_call_sid_admits(self) -> None:
+        """Fallback path: the console could not template the id into the URL."""
+        app = _create_app()
+        runtime = _RecordingRuntime()
+        app.state.voice_audio_runtime = runtime
+        client = TestClient(app)
+        with client.websocket_connect(f"/webhooks/exotel/audio-stream?token={_SECRET}") as ws:
+            ws.send_text(json.dumps({"event": "start", "start": {"call_sid": _CALL_SID}}))
+
+        assert len(runtime.sessions) == 1
+        assert runtime.sessions[0].business_id == 1
+
+    def test_unidentifiable_opening_frames_are_refused(self) -> None:
+        """A socket that authenticates but never identifies itself is closed.
+
+        It must not be able to hold a worker open either, which is what the
+        frame budget bounds -- this exhausts it rather than waiting out the
+        timeout.
+        """
+        app = _create_app()
+        runtime = _RecordingRuntime()
+        app.state.voice_audio_runtime = runtime
+        client = TestClient(app)
+        with client.websocket_connect(f"/webhooks/exotel/audio-stream?token={_SECRET}") as ws:
+            for _ in range(6):
+                ws.send_bytes(b"\x00" * 320)
+            message = ws.receive()
+
+        # 1008 is policy violation: we are refusing the caller, not reporting
+        # a fault of our own. The distinction matters when reading provider
+        # logs after a failed call.
+        assert message["type"] == "websocket.close"
+        assert message["code"] == 1008
+        assert runtime.sessions == []
+
+    def test_ended_call_does_not_readmit(self, admission: dict[str, AdmissionResult]) -> None:
+        """A completed conversation is not reopenable by replaying its id."""
+        admission["ended-call"] = AdmissionResult(
+            session=None, refusal=AdmissionRefusal.CALL_ALREADY_ENDED
+        )
+        app = _create_app()
+        runtime = _RecordingRuntime()
+        app.state.voice_audio_runtime = runtime
+        client = TestClient(app)
+        with (
+            pytest.raises(WebSocketDisconnect),
+            client.websocket_connect(
+                f"/webhooks/exotel/audio-stream?token={_SECRET}&CallSid=ended-call"
+            ),
+        ):
+            pass
+        assert runtime.sessions == []
+
+
+class TestChannelIdentityResolutionOnWebhook:
+    def test_resolution_is_scoped_to_the_exotel_provider(self) -> None:
+        """The same digits under another provider must not resolve here."""
+        app = _create_app()
+        client = TestClient(app)
+        response = client.post(
+            "/webhooks/exotel/call-status",
+            json={
+                "CallSid": _CALL_SID,
+                "Status": "ringing",
+                "To": "08012345678",
+                "From": "+919876543210",
+            },
+            headers=_auth(),
+        )
+        # The stub asserts the provider it was called with; a wrong provider
+        # would surface as an error rather than a silent cross-provider hit.
+        assert response.status_code == 200
+
+    def test_disabled_identity_refuses_the_call(self, channel_numbers: dict[str, int]) -> None:
+        """A decommissioned number stops writing into the clinic's records."""
+        channel_numbers.clear()
+        app = _create_app()
+        client = TestClient(app)
+        response = client.post(
+            "/webhooks/exotel/call-status",
+            json={
+                "CallSid": _CALL_SID,
+                "Status": "ringing",
+                "To": "08012345678",
+                "From": "+919876543210",
+            },
+            headers=_auth(),
+        )
+        assert response.status_code == 404
+        app.state._mock_session.commit.assert_not_awaited()

@@ -43,7 +43,10 @@ services:
       # which breaks the WhatsApp verification handshake.
       FORWARDED_ALLOW_IPS: "*"
       EXOTEL_WEBHOOK_SECRET: ${EXOTEL_WEBHOOK_SECRET:?Set EXOTEL_WEBHOOK_SECRET to mount the telephony routes}
-      EXOTEL_NUMBER_MAPPINGS: ${EXOTEL_NUMBER_MAPPINGS:?Map each Exotel number to its business_id}
+      # No EXOTEL_NUMBER_MAPPINGS. Which clinic a dialed number reaches is a
+      # row in business_channel_identities as of migration 0017, registered
+      # through POST /internal/v1/businesses/channel-identity. Attaching a
+      # clinic's number is an API call, not a redeploy.
 
 volumes:
   caddy_data:

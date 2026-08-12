@@ -54,14 +54,29 @@ Add to `.env.staging`, on top of the variables the staging template already list
 FONELY_PUBLIC_DOMAIN=api.example.in
 FONELY_ACME_EMAIL=ops@example.in
 EXOTEL_WEBHOOK_SECRET=<generated secret>
-EXOTEL_NUMBER_MAPPINGS={"+918000000000": 1}
 ```
 
-`EXOTEL_NUMBER_MAPPINGS` maps each Exotel virtual number to the `business_id`
-that owns it. This is how an inbound call is bound to a tenant — from the
-*dialled* number, which the carrier controls, never from anything in the
-request body, which a caller can forge. An unmapped number is refused with 404
-rather than guessed at.
+There is deliberately no number-to-clinic variable here. Which clinic a
+dialled number reaches is tenant data, not process configuration, and since
+migration 0017 it is a row in `business_channel_identities`. Attach a number
+by API rather than by redeploy:
+
+```bash
+curl -sS -X POST https://api.example.in/internal/v1/businesses/channel-identity \
+  -H "Authorization: Bearer $INTERNAL_API_SECRET" \
+  -H "X-Business-ID: 1" \
+  -H "Content-Type: application/json" \
+  -d '{"provider": "exotel", "external_identifier": "+918000000000"}'
+```
+
+That binding is what an inbound call is resolved against — from the *dialled*
+number, which the carrier controls, never from anything in the request body,
+which a caller can forge. An unregistered number is refused with 404 at the
+ringing webhook. Because the audio stream is admitted only against a `calls`
+row that webhook wrote, a refused ringing also refuses the media stream: the
+failure mode is a clinic whose calls do not connect, never a patient booked
+into someone else's diary. Registering a number already held by another
+tenant returns 409 instead of silently re-pointing a live line.
 
 Mounting is conditional on configuration: `create_app()` includes the Exotel
 router only when `EXOTEL_WEBHOOK_SECRET` is set, and the WhatsApp router only

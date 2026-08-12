@@ -103,10 +103,12 @@ def create_app() -> FastAPI:
         disabled.append("WhatsApp channel: WHATSAPP_VERIFY_TOKEN")
 
     if settings.exotel_webhook_secret:
+        # No number mapping is loaded here any more. Which clinic a dialed
+        # number reaches is read per request from business_channel_identities
+        # (migration 0017), so attaching a number is an API call rather than a
+        # redeploy.
         from fonely.api.channels.exotel import router as exotel_router
-        from fonely.services.exotel_config import ExotelNumberMapping
 
-        app.state.exotel_mapping = ExotelNumberMapping()
         app.include_router(exotel_router)
     else:
         disabled.append("Exotel voice channel: EXOTEL_WEBHOOK_SECRET")

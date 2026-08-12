@@ -18,6 +18,10 @@ from fonely.domain.onboarding.commands import (
 from fonely.domain.onboarding.errors import OnboardingError
 from fonely.models.enums import BusinessUserRole
 from fonely.models.schema import Business, BusinessUser
+from fonely.repositories.channel_identities import (
+    ChannelIdentityConflictError,
+    register_channel_identity,
+)
 from fonely.repositories.whatsapp_channels import (
     ChannelOwnershipConflictError,
     register_channel,
@@ -64,6 +68,21 @@ class RegisterWhatsAppChannelResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     business_id: int
     phone_number_id: str
+
+
+class RegisterChannelIdentityRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    provider: str = Field(min_length=1, max_length=30)
+    external_identifier: str = Field(min_length=1, max_length=100)
+    label: str | None = Field(default=None, max_length=100)
+    make_primary: bool = True
+
+
+class RegisterChannelIdentityResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    business_id: int
+    provider: str
+    external_identifier: str
 
 
 class SubmitDraftRequest(BaseModel):
@@ -267,6 +286,60 @@ async def register_whatsapp_channel(
     logger.info("whatsapp_channel_registered", extra={"business_id": business_id})
     return RegisterWhatsAppChannelResponse(
         business_id=business_id, phone_number_id=body.phone_number_id.strip()
+    )
+
+
+@router.post(
+    "/businesses/channel-identity",
+    response_model=RegisterChannelIdentityResponse,
+    status_code=201,
+)
+async def register_channel_identity_route(
+    body: RegisterChannelIdentityRequest, request: Request
+) -> RegisterChannelIdentityResponse:
+    """Attach a provider identifier — a dialed phone number — to the tenant.
+
+    This is what makes a clinic's signboard number reach that clinic. Before
+    migration 0017 it was EXOTEL_NUMBER_MAPPINGS, so giving a clinic a phone
+    number meant editing an environment variable and redeploying.
+
+    As with the WhatsApp route, the tenant comes from the trusted
+    X-Business-ID header and never from the body, and a number already held by
+    another tenant is a 409 rather than an overwrite: silently reassigning a
+    live number starts routing that clinic's patients into this one, and the
+    patients would be the ones to discover it.
+    """
+    _verify_internal_auth(request)
+    business_id = _get_business_id(request)
+    provider = body.provider.strip()
+    identifier = body.external_identifier.strip()
+    async with _get_factory(request)() as session:
+        try:
+            await register_channel_identity(
+                session,
+                business_id=business_id,
+                provider=provider,
+                external_identifier=identifier,
+                label=body.label,
+                make_primary=body.make_primary,
+            )
+        except ChannelIdentityConflictError as exc:
+            await session.rollback()
+            logger.warning(
+                "channel_identity_conflict",
+                extra={"business_id": business_id, "provider": provider},
+            )
+            raise HTTPException(
+                status_code=409,
+                detail="Identifier is registered to another business",
+            ) from exc
+        await session.commit()
+    logger.info(
+        "channel_identity_registered",
+        extra={"business_id": business_id, "provider": provider},
+    )
+    return RegisterChannelIdentityResponse(
+        business_id=business_id, provider=provider, external_identifier=identifier
     )
 
 

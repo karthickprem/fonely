@@ -41,7 +41,6 @@ LOG_LEVEL=INFO
 # FONELY_PUBLIC_DOMAIN=api.example.in
 # FONELY_ACME_EMAIL=ops@example.in
 # EXOTEL_WEBHOOK_SECRET=changeme-exotel-webhook-secret
-# EXOTEL_NUMBER_MAPPINGS={"+918000000000":1}
 
 # Voice runtime — keep disabled until its exact integrated runtime is validated
 # VOICE_PIPELINE_ENABLED=false

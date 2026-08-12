@@ -1041,11 +1041,31 @@ class Call(Base):
             "(language_confidence >= 0 AND language_confidence <= 1)",
             name="ck_call_lang_confidence",
         ),
+        # Both set or both null. A null provider beside a real sid would fall
+        # outside the partial unique index below — Postgres treats nulls as
+        # distinct — so ringing idempotency would quietly not hold for exactly
+        # the rows that depend on it. See migration 0017.
+        CheckConstraint(
+            "(call_provider IS NULL) = (provider_call_sid IS NULL)",
+            name="ck_calls_provider_sid_paired",
+        ),
+        # Makes the ringing webhook idempotent under provider retries and
+        # out-of-order delivery. Browser-demo calls carry neither column and
+        # stay outside the index by design.
+        Index(
+            "uq_calls_provider_call_sid",
+            "call_provider",
+            "provider_call_sid",
+            unique=True,
+            postgresql_where=text("provider_call_sid IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
     caller_phone: Mapped[str | None] = mapped_column(String(20))
+    call_provider: Mapped[str | None] = mapped_column(String(30))
+    provider_call_sid: Mapped[str | None] = mapped_column(String(100))
     caller_role: Mapped[str | None] = mapped_column(enum_type(CallerRole, "caller_role"))
     detected_language: Mapped[str | None] = mapped_column(String(10))
     language_confidence: Mapped[Decimal | None] = mapped_column(Numeric(3, 2))
@@ -1301,6 +1321,69 @@ class BusinessWhatsAppChannel(Base):
     phone_number_id: Mapped[str] = mapped_column(String(100), nullable=False)
     waba_id: Mapped[str | None] = mapped_column(String(100))
     display_phone_number: Mapped[str | None] = mapped_column(String(20))
+    status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="active")
+    is_primary: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=literal_column("false")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class BusinessChannelIdentity(Base):
+    """Which provider-side identifier reaches which tenant, for any provider.
+
+    An inbound call carries the dialed number and nothing else that names the
+    clinic, so this table is the only thing standing between a patient and
+    another clinic's records. Both uniqueness rules are database constraints
+    for the reason given in migration 0017: they are tenant-isolation
+    properties, and application code is the layer most likely to be wrong.
+
+    Generic on purpose. business_whatsapp_channels predates it and still owns
+    the WhatsApp rows; folding those in is a data migration with its own
+    failure mode and does not belong underneath the voice work.
+    """
+
+    __tablename__ = "business_channel_identities"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "external_identifier",
+            name="uq_business_channel_identities_provider_identifier",
+        ),
+        Index(
+            "ix_business_channel_identities_business_active",
+            "business_id",
+            "status",
+        ),
+        # One active primary per (business, provider). Mirrors the partial
+        # unique index in 0017 so create_all-based tests get the same
+        # guarantee as a migrated database.
+        Index(
+            "uq_business_channel_identities_one_active_primary",
+            "business_id",
+            "provider",
+            unique=True,
+            postgresql_where=text("is_primary AND status = 'active'"),
+        ),
+        CheckConstraint(
+            "status IN ('active', 'disabled')",
+            name="ck_business_channel_identities_status",
+        ),
+        CheckConstraint(
+            "length(external_identifier) > 0",
+            name="ck_business_channel_identities_identifier_nonempty",
+        ),
+        CheckConstraint(
+            "length(provider) > 0",
+            name="ck_business_channel_identities_provider_nonempty",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    provider: Mapped[str] = mapped_column(String(30), nullable=False)
+    external_identifier: Mapped[str] = mapped_column(String(100), nullable=False)
+    label: Mapped[str | None] = mapped_column(String(100))
     status: Mapped[str] = mapped_column(String(20), nullable=False, server_default="active")
     is_primary: Mapped[bool] = mapped_column(
         Boolean, nullable=False, server_default=literal_column("false")

@@ -270,7 +270,8 @@ Do not paste credentials into chat. Install them through the approved host secre
 - Exotel number with media streaming enabled and confirmed authentication method.
 - Indian-region host with public IPv4 and authorized access.
 - DNS A record.
-- Sarvam, Anthropic, and Cartesia runtime credentials.
+- Sarvam and Cartesia runtime credentials.
+- One explicitly selected, production-reachable LLM endpoint and credential. GPT-5.6 Luna currently depends on AMD's corporate gateway and is not deployable until that gateway is reachable and approved from the production host; otherwise Karthick must select a reachable Phase 0 provider. Missing or unreachable selected-provider configuration is a deployment failure, never an implicit fallback.
 - WhatsApp Business/Cloud API number and credentials.
 - Approved provider/hosting spend cap.
 - Time for native Tamil and DPDP notice review.

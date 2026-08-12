@@ -8,16 +8,17 @@ terminal cleanup → admission release.
 Asserts command called, receipt ID, one audible response per turn,
 false commit impossible without evidence.
 """
+
 from __future__ import annotations
 
 import asyncio
-from datetime import date, datetime, time, timezone
+from datetime import UTC, date, datetime, time
 from typing import Any
 
 import pytest
 
 from fonely.voice.admission import AdmissionController
-from fonely.voice.config import SessionLimits, SpeechClass, VoiceSessionConfig
+from fonely.voice.config import SessionLimits, VoiceSessionConfig
 from fonely.voice.context import (
     AvailabilityQuery,
     AvailableSlot,
@@ -26,15 +27,15 @@ from fonely.voice.context import (
 )
 from fonely.voice.entrypoint import run_voice_session
 from fonely.voice.runtime import CommandResult, ConfirmCommand, ProposeCommand
-from fonely.voice.validator_port import SpeechValidationResult, ValidationDecision
 
 
 def _clock():
     import zoneinfo
+
     tz = zoneinfo.ZoneInfo("Asia/Kolkata")
     local = datetime(2026, 8, 10, 14, 30, tzinfo=tz)
     return TrustedClock(
-        now_utc=local.astimezone(timezone.utc),
+        now_utc=local.astimezone(UTC),
         business_timezone="Asia/Kolkata",
         business_date=date(2026, 8, 10),
         day_of_week="monday",
@@ -42,8 +43,10 @@ def _clock():
 
 
 MONDAY_AVAIL = DayAvailability(
-    business_date=date(2026, 8, 10), day_of_week="monday",
-    is_operating_day=True, is_exception_day=False,
+    business_date=date(2026, 8, 10),
+    day_of_week="monday",
+    is_operating_day=True,
+    is_exception_day=False,
     operating_hours=((time(10, 0), time(13, 0)), (time(17, 0), time(20, 30))),
     available_slots=(
         AvailableSlot(1, "Dr. Priya", time(10, 0), time(10, 30), "consultation"),
@@ -143,6 +146,7 @@ class TrackingAvailability:
 
 class TrackingCommandPort:
     """Test command port that tracks propose/confirm calls and returns evidence."""
+
     def __init__(self):
         self.proposals: list[ProposeCommand] = []
         self.confirmations: list[ConfirmCommand] = []
@@ -179,12 +183,15 @@ class TestVerticalInquiryJourney:
         tts = TrackingTTS()
         avail = TrackingAvailability()
 
-        summary = await run_voice_session(
+        await run_voice_session(
             VoiceSessionConfig(session_id="vj-1", business_id=1),
             clock=_clock(),
             business_name="Test Dental",
             business_timezone="Asia/Kolkata",
-            media=media, stt=stt, llm=llm, tts=tts,
+            media=media,
+            stt=stt,
+            llm=llm,
+            tts=tts,
             availability_port=avail,
         )
 
@@ -215,12 +222,15 @@ class TestVerticalConsequentialBlockJourney:
         llm = TrackingLLM(["Booking confirmed for tomorrow at 6:30."])
         tts = TrackingTTS()
 
-        summary = await run_voice_session(
+        await run_voice_session(
             VoiceSessionConfig(session_id="vj-block", business_id=1),
             clock=_clock(),
             business_name="Test Dental",
             business_timezone="Asia/Kolkata",
-            media=media, stt=stt, llm=llm, tts=tts,
+            media=media,
+            stt=stt,
+            llm=llm,
+            tts=tts,
         )
 
         turn_events = [e for e in media.events if e["type"] == "turn_complete"]
@@ -248,7 +258,10 @@ class TestVerticalAvailabilityJourney:
             clock=_clock(),
             business_name="Test Dental",
             business_timezone="Asia/Kolkata",
-            media=media, stt=stt, llm=llm, tts=tts,
+            media=media,
+            stt=stt,
+            llm=llm,
+            tts=tts,
             availability_port=avail,
         )
 
@@ -270,12 +283,15 @@ class TestVerticalTerminalJourney:
         tts = TrackingTTS()
         limits = SessionLimits(max_turns=2, max_duration_seconds=600, idle_timeout_seconds=300)
 
-        summary = await run_voice_session(
+        await run_voice_session(
             VoiceSessionConfig(session_id="vj-term", business_id=1, limits=limits),
             clock=_clock(),
             business_name="Test",
             business_timezone="Asia/Kolkata",
-            media=media, stt=stt, llm=llm, tts=tts,
+            media=media,
+            stt=stt,
+            llm=llm,
+            tts=tts,
         )
 
         terminal = [e for e in media.events if e["type"] == "session_terminal"]
@@ -305,7 +321,10 @@ class TestVerticalAdmissionJourney:
             clock=_clock(),
             business_name="Test",
             business_timezone="Asia/Kolkata",
-            media=media, stt=stt, llm=llm, tts=tts,
+            media=media,
+            stt=stt,
+            llm=llm,
+            tts=tts,
         )
 
         ac.release("tenant-1")
@@ -319,25 +338,37 @@ class TestVerticalCancellationJourney:
     async def test_cancellation_closes_cleanly(self):
         class SlowMedia:
             closed = False
+
             async def receive_audio(self):
                 await asyncio.sleep(100)  # Block until cancelled
                 return b"\x00"
-            async def send_audio(self, a): pass
-            async def send_event(self, e): pass
-            async def close(self): self.closed = True
+
+            async def send_audio(self, a):
+                pass
+
+            async def send_event(self, e):
+                pass
+
+            async def close(self):
+                self.closed = True
 
         media = SlowMedia()
         stt = TrackingSTT([])
         llm = TrackingLLM([])
         tts = TrackingTTS()
 
-        task = asyncio.create_task(run_voice_session(
-            VoiceSessionConfig(session_id="vj-cancel", business_id=1),
-            clock=_clock(),
-            business_name="Test",
-            business_timezone="Asia/Kolkata",
-            media=media, stt=stt, llm=llm, tts=tts,
-        ))
+        task = asyncio.create_task(
+            run_voice_session(
+                VoiceSessionConfig(session_id="vj-cancel", business_id=1),
+                clock=_clock(),
+                business_name="Test",
+                business_timezone="Asia/Kolkata",
+                media=media,
+                stt=stt,
+                llm=llm,
+                tts=tts,
+            )
+        )
         await asyncio.sleep(0.01)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):

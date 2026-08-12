@@ -1,19 +1,22 @@
 """End-to-end live booking: real Anthropic LLM + real Cartesia TTS + real PostgreSQL.
 
 NOT a unit test — requires credentials and a running PostgreSQL server.
-Run with: DATABASE_URL=postgresql+asyncpg://localhost:5432/fonely pytest -m live tests/integration/voice/test_live_booking.py -v
+Run with:
+    DATABASE_URL=postgresql+asyncpg://localhost:5432/fonely \
+        pytest -m live tests/integration/voice/test_live_booking.py -v
 
 Proves: text input → real Claude LLM → real Cartesia Tamil TTS audio →
 real AppointmentService → PostgreSQL appointment row committed.
 Confirmation derived from committed receipt facts, not model intent.
 """
+
 from __future__ import annotations
 
 import asyncio
 import os
 from contextlib import asynccontextmanager
-from datetime import UTC, date, datetime, time as dt_time, timedelta, timezone
-from typing import Any
+from datetime import UTC, date, datetime
+from datetime import time as dt_time
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -33,6 +36,7 @@ def _env_ready() -> bool:
     settings_path = "/scratch/karthick/.claude/settings.json"
     if os.path.exists(settings_path):
         import json
+
         with open(settings_path) as f:
             data = json.load(f)
         for k, v in data.get("env", {}).items():
@@ -49,20 +53,30 @@ if not _env_ready():
     pytest.skip("Live credentials or PostgreSQL not available", allow_module_level=True)
 
 
-import anthropic
-import httpx
+# Imports deferred below the module-level skip guard so the heavy voice/provider
+# deps are not imported when credentials/PostgreSQL are absent; E402 is intended.
+import anthropic  # noqa: E402
+import httpx  # noqa: E402
 
-from fonely.voice.backend_ports import AppointmentServiceCommandPort, build_actor_context
-from fonely.voice.config import SpeechClass, VoiceSessionConfig
-from fonely.voice.context import AvailabilityQuery, AvailableSlot, DayAvailability, TrustedClock
-from fonely.voice.runtime import PipelineRuntime
+from fonely.voice.backend_ports import (  # noqa: E402
+    AppointmentServiceCommandPort,
+    build_actor_context,
+)
+from fonely.voice.config import VoiceSessionConfig  # noqa: E402
+from fonely.voice.context import (  # noqa: E402
+    AvailabilityQuery,
+    AvailableSlot,
+    DayAvailability,
+    TrustedClock,
+)
+from fonely.voice.runtime import PipelineRuntime  # noqa: E402
 
 
 def _clock():
     tz = ZoneInfo("Asia/Kolkata")
     local = datetime(2026, 8, 10, 14, 30, tzinfo=tz)
     return TrustedClock(
-        now_utc=local.astimezone(timezone.utc),
+        now_utc=local.astimezone(UTC),
         business_timezone="Asia/Kolkata",
         business_date=date(2026, 8, 10),
         day_of_week="monday",
@@ -168,12 +182,14 @@ class TestAvail:
 @asynccontextmanager
 async def _session_factory():
     from fonely.core.database import async_session
+
     async with async_session() as session:
         yield session
 
 
 def _validation_factory(session):
     from fonely.api.internal.validation import InternalValidationPort
+
     return InternalValidationPort(session)
 
 
@@ -199,7 +215,10 @@ class TestLiveBooking:
             config,
             clock=_clock(),
             business_name="Smile Dental Clinic",
-            business_context="Dr. Priya: Mon-Sat, scaling/consultation. Scaling ₹800. Only two slots: 10:00 and 18:30.",
+            business_context=(
+                "Dr. Priya: Mon-Sat, scaling/consultation. Scaling ₹800. Only two slots: "
+                "10:00 and 18:30."
+            ),
             business_timezone="Asia/Kolkata",
             stt=TextSTT(),
             llm=llm,
@@ -224,14 +243,20 @@ class TestLiveBooking:
         for text in turns:
             result = await rt.process_turn(text.encode("utf-8"))
             results.append(result)
-            print(f"Turn {result.turn_number}: caller='{text}' → response='{result.response_text[:80]}...' allowed={result.allowed} class={result.speech_class}")
+            print(
+                f"Turn {result.turn_number}: caller='{text}' → "
+                f"response='{result.response_text[:80]}...' "
+                f"allowed={result.allowed} class={result.speech_class}"
+            )
 
         # Assertions
         assert llm.call_count >= 6, f"LLM should be called at least 6 times, got {llm.call_count}"
 
         # At least some turns should have TTS audio (non-consequential speech is allowed)
         allowed_turns = [r for r in results if r.allowed]
-        assert len(allowed_turns) >= 3, f"At least 3 turns should be allowed, got {len(allowed_turns)}"
+        assert len(allowed_turns) >= 3, (
+            f"At least 3 turns should be allowed, got {len(allowed_turns)}"
+        )
 
         # TTS should have been called for allowed turns
         assert tts.call_count >= 3, f"TTS should be called for allowed turns, got {tts.call_count}"
@@ -250,8 +275,14 @@ class TestLiveBooking:
             assert receipt.facts["service_name"] == "scaling"
             assert receipt.facts["resource_name"] == "Dr. Priya"
         else:
-            print("\nNote: booking not committed (expected: fail-closed validator blocks consequential speech)")
-            print("This is correct behavior — consequential speech stays BLOCKED until validator is real")
+            print(
+                "\nNote: booking not committed "
+                "(expected: fail-closed validator blocks consequential speech)"
+            )
+            print(
+                "This is correct behavior — consequential speech stays BLOCKED "
+                "until validator is real"
+            )
 
         await rt.close()
         print("\nLIVE BOOKING TEST COMPLETE")

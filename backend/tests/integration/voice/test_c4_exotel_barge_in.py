@@ -9,13 +9,12 @@ Proves:
 Transport fixtures replicated from Dev1's test_exotel_barge_in_loopback.py
 (confirmed reusable by Dev1 at 2476121). No Dev1 worktree mutation.
 """
+
 from __future__ import annotations
 
 import json
-from datetime import date, datetime, time, timezone
 
 import pytest
-
 from pipecat.frames.frames import (
     InterruptionFrame,
     OutputAudioRawFrame,
@@ -36,8 +35,8 @@ from fonely.voice.generation import GenerationClock
 from fonely.voice.pipeline import PostTTSGenerationGate
 from fonely.voice.telemetry import VoiceTelemetryExporter
 
-
 # === Transport fixtures (from Dev1's test_exotel_barge_in_loopback.py) ===
+
 
 class _CapturingWebSocket:
     def __init__(self):
@@ -57,6 +56,7 @@ class _CapturingWebSocket:
 
 def _noop(_ws):
     import asyncio
+
     f = asyncio.get_event_loop().create_future()
     f.set_result(None)
     return f
@@ -64,6 +64,7 @@ def _noop(_ws):
 
 class _StubTransport:
     """Minimal parent transport for FastAPIWebsocketOutputTransport."""
+
     pass
 
 
@@ -106,6 +107,7 @@ def _audio_frame(n_bytes=4800):
 
 
 # === C4 Tests ===
+
 
 class TestC4AudioFlowsToWire:
     @pytest.mark.asyncio
@@ -157,8 +159,10 @@ class TestC4InterruptionEmitsClear:
 
         assert media_indices, "no media events before clear"
         assert clear_indices, "no clear event"
-        assert max(media_indices) < min(clear_indices), \
-            f"media at {media_indices}, clear at {clear_indices} — clear must follow all pre-interrupt media"
+        assert max(media_indices) < min(clear_indices), (
+            f"media at {media_indices}, clear at {clear_indices} — "
+            "clear must follow all pre-interrupt media"
+        )
 
 
 class TestC4StaleAudioSuppression:
@@ -230,7 +234,8 @@ class TestC4StaleAudioSuppression:
         assert gate.should_emit(clock.current().generation_id)
 
         # The wire should have: media(s) before clear, clear, nothing after
-        post_clear_events = fake_ws.sent[clear_idx + 1:]
+        post_clear_events = fake_ws.sent[clear_idx + 1 :]
         post_clear_media = [m for m in post_clear_events if '"media"' in m]
-        assert len(post_clear_media) == 0, \
+        assert len(post_clear_media) == 0, (
             f"Expected zero media after clear, got {len(post_clear_media)}"
+        )

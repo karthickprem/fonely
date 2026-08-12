@@ -51,7 +51,13 @@ class TestBookingEngine:
     - Double confirmation returns existing commitment (idempotent)
     - Receipt is bound to proposal facts, not fabricated
     - Slot conflicts: same resource+date+time cannot be double-booked
+
+    Despite the Test* name (it is the *test-double* booking engine, not a
+    pytest case), this is a production helper. __test__ = False tells pytest not
+    to collect it as a test class, removing the PytestCollectionWarning.
     """
+
+    __test__ = False
 
     def __init__(self) -> None:
         self._lock = threading.Lock()

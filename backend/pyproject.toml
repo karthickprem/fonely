@@ -58,6 +58,7 @@ asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]
 markers = [
     "postgres: requires FONELY_TEST_DATABASE_URL and PostgreSQL",
+    "live: requires live provider credentials (Sarvam/Cartesia/Anthropic) and PostgreSQL",
 ]
 
 [tool.mypy]

@@ -5,15 +5,16 @@ query, validator gate, dialogue state) must work for commerce businesses
 as easily as for dental appointments.  No clinic/patient/dentist
 hardcoding in the core runtime path.
 """
+
 from __future__ import annotations
 
-from datetime import date, datetime, time, timezone
+from datetime import UTC, date, datetime
 
 import pytest
 
 from fonely.voice.config import SpeechClass, VoiceSessionConfig
 from fonely.voice.context import TrustedClock
-from fonely.voice.dialogue import DialogueState, count_questions, detect_filler
+from fonely.voice.dialogue import DialogueState, detect_filler
 from fonely.voice.generation import GenerationClock
 from fonely.voice.mock_providers import (
     ConversationTurn,
@@ -28,7 +29,7 @@ from fonely.voice.validator_port import FailClosedValidatorStub
 
 def _clock():
     return TrustedClock(
-        now_utc=datetime(2026, 8, 10, 9, 0, tzinfo=timezone.utc),
+        now_utc=datetime(2026, 8, 10, 9, 0, tzinfo=UTC),
         business_timezone="Asia/Kolkata",
         business_date=date(2026, 8, 10),
         day_of_week="monday",
@@ -42,7 +43,10 @@ class TestCommerceInquiry:
         prompt = build_system_prompt(
             clock=_clock(),
             clinic_name="Chennai Grocery Store",
-            clinic_context="Products: Rice 5kg ₹350, Dal 1kg ₹120, Oil 1L ₹180. Delivery: 2-hour slot. Payment: cash, UPI.",
+            clinic_context=(
+                "Products: Rice 5kg ₹350, Dal 1kg ₹120, Oil 1L ₹180. Delivery: 2-hour slot. "
+                "Payment: cash, UPI."
+            ),
             availability=None,
             session_mode="live",
         )

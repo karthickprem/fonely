@@ -1,10 +1,12 @@
 """Smoke test for the provider-free demo server."""
-import json
+
 import sys
+
 sys.path.insert(0, "backend/src")
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+
 from fonely.voice.demo_server import create_demo_app
 
 

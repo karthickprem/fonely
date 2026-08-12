@@ -3,6 +3,7 @@
 Tests concurrent session creation, state transitions, turn budgets,
 resource cleanup, and memory stability without live providers.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -16,9 +17,7 @@ from fonely.voice.diagnostics import SessionInfo, SessionRegistry
 from fonely.voice.dialogue import DialogueState
 from fonely.voice.generation import GenerationClock
 from fonely.voice.lifecycle import VoiceSessionSupervisor
-from fonely.voice.pipeline import PreTTSValidatorGate
 from fonely.voice.telemetry import VoiceTelemetryExporter
-from fonely.voice.validator_port import FailClosedValidatorStub
 
 
 def _config(sid: str) -> VoiceSessionConfig:
@@ -103,7 +102,7 @@ class TestConcurrentSessions:
 
 class TestTurnBudgetUnderLoad:
     def test_many_sessions_respect_budget(self):
-        for i in range(20):
+        for _i in range(20):
             ds = DialogueState(max_turns=5)
             for turn in range(6):
                 ds.record_turn(f"response {turn}", asked_field="date" if turn % 2 == 0 else "time")

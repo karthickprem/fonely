@@ -268,7 +268,7 @@ class DataRetentionService:
         transcript at all, so there would be no way to answer "was this
         purged?" with anything but a shrug. The marker carries no patient
         content and needs no migration -- it lives in the existing JSONB
-        column, which matters while 0016 and 0017 are reserved.
+        column, so purging stays available whatever the migration head is.
         """
         result = await self._session.execute(
             text(

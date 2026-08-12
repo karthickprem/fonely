@@ -18,15 +18,17 @@ the CEO #31 columns on ``calls`` — ``dpdp_notice_completed_at`` (timestamptz),
 ``dpdp_notice_content_digest`` (varchar64, lowercase sha256) — all nullable
 under a ``num_nonnulls(...) IN (0, 4)`` CHECK (either none or all four, so
 partial evidence is unrepresentable) plus a digest regex CHECK. Those columns
-are NOT on disk yet (disk migration head is 0017; the DPDP migration is
-authored separately and derives the next revision at authoring time). No test
-could drive the SQL writer through its real path until they exist, and un-wired
-production code that nothing exercises reads as done while its first real run
-would be in front of a patient. The SQL writer lands in the SAME commit as the
-migration and the PostgreSQL test that inserts a real call, runs the writer, and
-asserts the persisted row (including the content digest) against the real
-columns — and migration/writer ownership is coordinated with the CEO single
-directive, not raced here. Until then only ``FakeEvidenceWriter`` exists.
+ARE now on disk, at revision 0018, which landed the migration, the ORM mapping
+and a guarded downgrade — but deliberately NOT the SQL writer. Landing the
+migration alone cannot mislead anyone; un-wired production code that nothing
+exercises is what reads as done while its first real run would be in front of a
+patient. So the SQL writer still lands in the SAME commit as the PostgreSQL
+test that inserts a real call, runs the writer, and asserts the persisted row
+(including the content digest) against the real columns — and until that commit
+lands, the voice runtime writes through ``FakeEvidenceWriter`` only. Read that
+plainly: no patient-facing DPDP evidence is persisted yet. The columns existing
+is not the guarantee; the writer plus a spoken notice is. Migration/writer
+ownership is coordinated with the CEO single directive, not raced here.
 
 The content digest is a stable hash of exactly the notice text, version, and
 locale — the three facts the CHECK pairs with ``completed_at``. It is computed

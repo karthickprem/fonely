@@ -41,6 +41,7 @@ MIGRATION_0014 = MIGRATIONS_DIR / "0014_inbound_event_claim_and_dedup_removal.py
 MIGRATION_0015 = MIGRATIONS_DIR / "0015_notification_manifests.py"
 MIGRATION_0016 = MIGRATIONS_DIR / "0016_business_whatsapp_channels.py"
 MIGRATION_0017 = MIGRATIONS_DIR / "0017_channel_identities_and_call_sid.py"
+MIGRATION_0018 = MIGRATIONS_DIR / "0018_dpdp_notice_evidence.py"
 
 
 class OperationRecorder:
@@ -262,6 +263,7 @@ def _capture_upgrade() -> OperationRecorder:
         (MIGRATION_0015, "fonely_migration_0015"),
         (MIGRATION_0016, "fonely_migration_0016"),
         (MIGRATION_0017, "fonely_migration_0017"),
+        (MIGRATION_0018, "fonely_migration_0018"),
     ):
         module = _load_migration(path, name)
         module.op = recorder
@@ -286,6 +288,10 @@ def _capture_downgrade() -> OperationRecorder:
     recorder = _capture_upgrade()
     recorder.dropped_tables.clear()
     recorder.operations.clear()
+    module_0018 = _load_migration(MIGRATION_0018, "fonely_migration_0018_down")
+    module_0018.op = recorder
+    module_0018.context = SimpleNamespace(is_offline_mode=lambda: True)
+    module_0018.downgrade()
     module_0017 = _load_migration(MIGRATION_0017, "fonely_migration_0017_down")
     module_0017.op = recorder
     module_0017.context = SimpleNamespace(is_offline_mode=lambda: True)

@@ -1059,6 +1059,25 @@ class Call(Base):
             unique=True,
             postgresql_where=text("provider_call_sid IS NOT NULL"),
         ),
+        # DPDP notice evidence is all four facts or none. Partial evidence is
+        # worse than no evidence: a row carrying completed_at and no version
+        # proves only that *something* was played, and would read as consent in
+        # an audit. num_nonnulls is used rather than a chain of paired IS NULL
+        # tests so no unintended combination can satisfy it.
+        CheckConstraint(
+            "num_nonnulls(dpdp_notice_completed_at, dpdp_notice_version, "
+            "dpdp_notice_locale, dpdp_notice_content_digest) IN (0, 4)",
+            name="ck_calls_dpdp_notice_all_or_none",
+        ),
+        # The digest is the only thing tying a stored row to the exact words the
+        # patient heard. Anything that is not a lowercase sha256 hex string is
+        # not that and must not be storable: a truncated or upper-cased digest
+        # would silently fail to match a recomputation years later, at the one
+        # moment the evidence is being questioned.
+        CheckConstraint(
+            "dpdp_notice_content_digest IS NULL OR dpdp_notice_content_digest ~ '^[0-9a-f]{64}$'",
+            name="ck_calls_dpdp_notice_digest_hex",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -1074,6 +1093,23 @@ class Call(Base):
     transcript: Mapped[Any | None] = mapped_column(JSONB, nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Proof that this patient was read notice v<N> in <locale> on <date>.
+    #
+    # Deliberately columns and not an event inside `transcript`. The retention
+    # policy replaces the whole transcript JSONB at 90 days while appointments
+    # are kept for 365, so transcript-borne evidence would be destroyed leaving
+    # a window in which we hold the patient's booking and no proof of the notice
+    # that permitted collecting it. Evidence that expires before the data it
+    # justifies is not evidence. See migration 0018.
+    #
+    # NULL across all four means "notice not completed" — never "unknown". The
+    # runtime keeps STT closed until the write succeeds, so an absent record is
+    # a positive statement that capture did not start.
+    dpdp_notice_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    dpdp_notice_version: Mapped[str | None] = mapped_column(String(10))
+    dpdp_notice_locale: Mapped[str | None] = mapped_column(String(10))
+    dpdp_notice_content_digest: Mapped[str | None] = mapped_column(String(64))
 
     business: Mapped["Business"] = relationship(back_populates="calls")
 

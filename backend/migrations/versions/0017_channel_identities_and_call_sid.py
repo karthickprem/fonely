@@ -121,9 +121,7 @@ def upgrade() -> None:
     )
 
     op.add_column("calls", sa.Column("call_provider", sa.String(30), nullable=True))
-    op.add_column(
-        "calls", sa.Column("provider_call_sid", sa.String(100), nullable=True)
-    )
+    op.add_column("calls", sa.Column("provider_call_sid", sa.String(100), nullable=True))
 
     op.create_check_constraint(
         "ck_calls_provider_sid_paired",
@@ -151,12 +149,8 @@ def downgrade() -> None:
         conn = op.get_bind()
         # Lock before counting so a registration cannot land between the guard
         # and the drop and be destroyed without ever being counted.
-        conn.execute(
-            text("LOCK TABLE business_channel_identities IN ACCESS EXCLUSIVE MODE")
-        )
-        count = conn.execute(
-            text("SELECT count(*) FROM business_channel_identities")
-        ).scalar()
+        conn.execute(text("LOCK TABLE business_channel_identities IN ACCESS EXCLUSIVE MODE"))
+        count = conn.execute(text("SELECT count(*) FROM business_channel_identities")).scalar()
         if count:
             raise RuntimeError(
                 f"refusing lossy downgrade: business_channel_identities holds {count} "

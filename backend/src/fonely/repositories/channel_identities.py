@@ -109,6 +109,13 @@ async def register_channel_identity(
     so it must not happen as a side effect of onboarding, and must not
     silently do nothing either.
     """
+    # Fast path only. This SELECT cannot make the check safe under concurrency:
+    # FOR UPDATE locks rows that exist, and Postgres takes no gap lock for a row
+    # that does not, so two tenants registering the same identifier at the same
+    # instant both read NULL here and both proceed. The authoritative check is
+    # the ON CONFLICT ... WHERE below, which runs under the unique index lock.
+    # This one survives because it produces a clear error before we mutate any
+    # of the caller's own rows in the demote step.
     existing = await session.execute(
         text(
             "SELECT business_id FROM business_channel_identities "
@@ -136,7 +143,18 @@ async def register_channel_identity(
             {"bid": business_id, "provider": provider},
         )
 
-    await session.execute(
+    # The DO UPDATE is deliberately guarded on the row already belonging to this
+    # tenant, and deliberately never assigns business_id. Without the guard, a
+    # tenant that loses the race updates the WINNER's row: business_id stays with
+    # the winner while label/is_primary are overwritten, the statement succeeds,
+    # and the loser is told 201 Created for a number that routes to somebody
+    # else. A caller cannot tell that apart from a real registration, and the
+    # people who would discover it are the patients whose calls land in the
+    # wrong clinic. When the guard rejects the update no row comes back, and
+    # that is the authoritative conflict signal — it is evaluated while this
+    # statement holds the unique index lock, so it is race-free in a way the
+    # SELECT above can never be.
+    upserted = await session.execute(
         text(
             "INSERT INTO business_channel_identities "
             "(business_id, provider, external_identifier, label, "
@@ -147,7 +165,9 @@ async def register_channel_identity(
             "  label = EXCLUDED.label, "
             "  status = 'active', "
             "  is_primary = EXCLUDED.is_primary, "
-            "  updated_at = NOW()"
+            "  updated_at = NOW() "
+            "WHERE business_channel_identities.business_id = EXCLUDED.business_id "
+            "RETURNING business_id"
         ),
         {
             "bid": business_id,
@@ -157,4 +177,9 @@ async def register_channel_identity(
             "primary": make_primary,
         },
     )
+    if upserted.one_or_none() is None:
+        raise ChannelIdentityConflictError(
+            f"{provider} identifier {external_identifier!r} was registered to another "
+            "business concurrently"
+        )
     await session.flush()

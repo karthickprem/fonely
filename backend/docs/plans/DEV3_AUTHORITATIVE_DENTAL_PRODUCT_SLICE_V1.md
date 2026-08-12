@@ -793,6 +793,64 @@ Three-part checklist frozen by the reviewer. Status:
   (then rebase) or a new targeted on_conflict_do_update schedule write — flagged
   to the reviewer rather than silently scoped out.
 
+### ITEM #19 — SPOKEN RESOURCE-NAME NORMALIZATION (candidate 2026-08-12)
+
+D3-M4 ACCEPTED at exact 4bc395f (reviewer reproduced in isolated worktree +
+own PostgreSQL, unit 78 / PG corpus 12 / non-PG 1259 / ruff+format+mypy clean,
+and mutation-proved both fixes). Item #19 is the CALL I reported honestly during
+D3-M4 (spoken "dr priya" vs stored "Dr. Priya"), ruled a separate item because
+patients say the doctor's name aloud on every call.
+
+Frozen scope delivered:
+1. Normalize spoken names on the REAL path (_extract_facts in process_message):
+   _resource_name_tokens strips honorifics (dr/dr./doctor/dho/vaidhyar/mr/ms/…),
+   casing, punctuation, and collapses whitespace; matching is title/word-order
+   /case/punctuation-insensitive. _match_spoken_resources scores by shared-token
+   count and returns the top scorers.
+2. Ambiguity FAILS CLOSED: >1 top-scoring resource -> _resource_ambiguous,
+   clears any provisional resource_id, asks "which doctor". Never picks.
+3. Unknown name FAILS CLOSED: a title word present but zero match (_names_a_
+   resource) -> _resource_unknown, re-asks with the roster; never falls through
+   to any-available. (This was a real gap the harness caught — see below.)
+4. Corpus drives spoken names end to end: _LEAD now says "doctor arun" (stored
+   "Dr. Arun"), so every time-case exercises the spoken path; seed has three
+   eligible doctors incl. two sharing a first name for real ambiguity. Four new
+   cases: spoken-reordered books the right row; ambiguous "dr priya" fails
+   closed; fuller "priya rao" resolves it; unknown "dr smith" refuses.
+5. Row-level assertion (I5): committed resource_id read from the appointments
+   ROW (not transcript) must equal the intended doctor. Independent detection
+   power — a wrong-doctor booking fails I5 even with the right time and reply.
+
+HARNESS FOUND A DEFECT (the point of the harness): an unknown named doctor
+("dr smith") left resource_id unset and fell through to the generic prompt with
+no explicit refusal — the mocked gateway then answered "ok" and a later "yes"
+could proceed without a doctor chosen. Fixed with the _resource_unknown branch.
+The I5 fail-closed assertion (part b: must re-ask for the doctor) is what caught
+it — real detection power, not I1-shadowed.
+
+MUTATION PROOF: forcing _match_spoken_resources to pick-one ([:1]) reproduced
+the silent wrong-doctor booking — resource-ambiguous-priya failed with exactly
+"I5 violated: booked resource 1 for an ambiguous spoken name", while the control
+resource-spoken-reordered still passed. Reverted; tree byte-identical to bb50461.
+
+EVIDENCE BOUNDARY (stated explicitly per reviewer): TEXT/MOCK evidence only —
+unit helper matrix, PG corpus through process_message, row-level resource_id
+assertions, mutation proof. NO audio: no STT output, no real speech, no Tamil
+pronunciation. This does NOT prove the demo call works; real-speech proof stays
+with the voice lane.
+
+GATES: corpus 16/16 (run on a PRIVATE DB fonely_test_res19 — the shared
+fonely_test instance is under concurrent DDL from other sessions and conftest's
+session-scoped downgrade/upgrade races them; a dedicated DB is contention-free
+and satisfies the same conftest name guard). non-PG 1259 passed. ruff + mypy
+src clean. (Pre-existing untyped test-helper mypy notes in the harness file
+predate 4bc395f and are not gated; reviewer runs mypy on src.)
+
+HARD NON-OVERLAP respected: no voice runtime, no task-#27 audio files, no
+migration 0016/0017, no new Alembic revision, no shared integration conftest
+edits. Candidate SHA: bb50461. Standard terms: no rebase, nothing to main,
+exact-SHA authorization from the reviewer only.
+
 ### D3-M4 — BOOKING CONVERSATION SURVIVES REAL SPEECH (candidate 2026-08-11)
 
 Adversarial harness driving the REAL conversation path (`_process_domain` ->

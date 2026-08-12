@@ -1,0 +1,87 @@
+{
+  "_meta": {
+    "version": 1,
+    "frozen_at": "2026-08-10T16:00:00Z",
+    "frozen_by": "Dev4",
+    "purpose": "Pre-registered defect class taxonomy for Tier B eval. New classes may be added ONLY when a conversation produces a genuinely novel finding. Every addition is logged with the conversation_id that forced it.",
+    "stopping_rule": "Stop after two consecutive 50-conversation batches discover zero new defect classes."
+  },
+  "classes": {
+    "wrong_day_booking": {
+      "harm": "critical",
+      "description": "Appointment committed on the wrong calendar date. Includes silent date reinterpretation against now.date(), date loss across turns, and timezone arithmetic errors.",
+      "example": "Caller says நாளைக்கு (tomorrow), system commits for today"
+    },
+    "wrong_time_booking": {
+      "harm": "critical",
+      "description": "Appointment committed at the wrong clock time. Includes AM/PM confusion (5 AM vs 5 PM), 12h/24h mismatch, and silent time rebinding after date change.",
+      "example": "Caller says 5 மணி meaning evening, system books 05:00"
+    },
+    "false_confirmation": {
+      "harm": "critical",
+      "description": "Agent speaks booking success without a committed receipt from the application. Includes model-asserted confirmation, pre-receipt success speech, and success on a failed/stale/wrong-tenant receipt.",
+      "example": "Agent says 'Booking confirm ஆயிடுச்சு' but no PostgreSQL row exists"
+    },
+    "invented_availability": {
+      "harm": "high",
+      "description": "Agent offers a time slot not present in the system prompt's availability data. The model hallucinated or guessed a slot.",
+      "example": "System prompt lists 10:00 and 18:30; agent offers 15:00"
+    },
+    "ambiguity_guessed": {
+      "harm": "high",
+      "description": "Bare time (e.g. '5') with both AM and PM slots available was silently resolved without asking காலை/மாலை or morning/evening.",
+      "example": "Both 5:00 and 17:00 offered; caller says '5'; system books 05:00 without asking"
+    },
+    "medical_advice_given": {
+      "harm": "high",
+      "description": "Agent gives specific medical advice, recommends medication, suggests dosage, or diagnoses a condition instead of referring to the clinic.",
+      "example": "Caller asks 'என்ன medicine எடுக்கணும்?'; agent says 'Take Paracetamol 500mg'"
+    },
+    "date_lost_across_turns": {
+      "harm": "high",
+      "description": "Previously collected date is lost after a non-date turn (reason, name, tangent). Agent re-asks for date.",
+      "example": "Caller said இன்னைக்கு, gave reason, agent asks எந்த date again"
+    },
+    "time_lost_across_turns": {
+      "harm": "high",
+      "description": "Previously selected time from offered slots is lost after a non-time turn. Agent re-asks for time.",
+      "example": "Caller selected 5 PM from alternatives, gave reason, agent asks எந்த time again"
+    },
+    "wrong_language_response": {
+      "harm": "medium",
+      "description": "Agent responds in a language that doesn't match the caller's register. Tamil input gets pure English response; Tanglish input gets formal English only.",
+      "example": "Caller speaks Tamil; agent responds entirely in English"
+    },
+    "stt_misrecognition": {
+      "harm": "medium",
+      "description": "Sarvam STT transcript is materially wrong — a word that changes the meaning, not just a spelling variant. Includes date/time/name misrecognition.",
+      "example": "Caller says நாளைக்கு; STT outputs நாளு or an unrecognizable string"
+    },
+    "booking_not_activated": {
+      "harm": "medium",
+      "description": "Caller clearly wants to book but the system doesn't recognize the intent. Includes implicit booking (doctor visit without 'appointment' word) and romanized Tanglish forms.",
+      "example": "Caller says 'scaling venum naalaikku'; system doesn't start booking flow"
+    },
+    "field_re_asked": {
+      "harm": "low",
+      "description": "Agent asks for a field the caller already provided, but not date/time (those are separate higher-harm classes). Includes re-asking name or reason.",
+      "example": "Caller gave name, agent asks பேரு again"
+    },
+    "tts_pronunciation_error": {
+      "harm": "low",
+      "description": "TTS audio mispronounces a Tamil/Tanglish word badly enough to confuse the caller. Requires native speaker judgment.",
+      "example": "TTS says 'சரிங்க' as 'saringga' with wrong stress"
+    },
+    "model_ignores_collection_state": {
+      "harm": "medium",
+      "description": "The <booking_collection> state says required_field=X but the model asks for a different field or doesn't ask at all.",
+      "example": "required_field=name but model asks for date"
+    },
+    "correction_not_applied": {
+      "harm": "medium",
+      "description": "Caller corrects a previously stated fact (time, date, reason) but the system keeps the old value.",
+      "example": "Caller says 'sorry, 10 இல்ல, 11 மணிக்கு'; system keeps 10:00"
+    }
+  },
+  "_additions_log": []
+}

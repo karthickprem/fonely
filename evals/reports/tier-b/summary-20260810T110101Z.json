@@ -1,0 +1,16 @@
+{
+  "run_id": "20260810T110101Z",
+  "mode": "dry_run",
+  "cases_run": 5,
+  "defect_classes_found": 0,
+  "defect_curve": [
+    {
+      "conversations": 5,
+      "cumulative_defect_classes": 0,
+      "new_this_batch": 0
+    }
+  ],
+  "estimated_cost_inr": 4.050000000000001,
+  "cost_derivation": "per_case_token_arithmetic",
+  "actual_cost_inr": 0
+}

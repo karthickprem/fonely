@@ -1,0 +1,5 @@
+{"case_id": "TBE-0001", "category": "ambiguous_time", "risk_level": "high", "turns": 2, "status": "dry_run", "findings": [], "cost_estimate_inr": 0.81, "cost_derivation": "token_arithmetic"}
+{"case_id": "TBE-0002", "category": "ambiguous_time", "risk_level": "high", "turns": 2, "status": "dry_run", "findings": [], "cost_estimate_inr": 0.81, "cost_derivation": "token_arithmetic"}
+{"case_id": "TBE-0003", "category": "ambiguous_time", "risk_level": "high", "turns": 2, "status": "dry_run", "findings": [], "cost_estimate_inr": 0.81, "cost_derivation": "token_arithmetic"}
+{"case_id": "TBE-0004", "category": "ambiguous_time", "risk_level": "high", "turns": 2, "status": "dry_run", "findings": [], "cost_estimate_inr": 0.81, "cost_derivation": "token_arithmetic"}
+{"case_id": "TBE-0005", "category": "ambiguous_time", "risk_level": "high", "turns": 2, "status": "dry_run", "findings": [], "cost_estimate_inr": 0.81, "cost_derivation": "token_arithmetic"}

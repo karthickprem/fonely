@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import time as _time
 from datetime import UTC, datetime, time, timedelta
 from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
@@ -22,6 +21,10 @@ from fonely.models.enums import CallerRole
 from fonely.services.appointments import AppointmentService
 from fonely.services.model_gateway import ModelResponse
 from fonely.services.owner_commands import OwnerCommandService
+from tests.integration.postgres.concurrency import (
+    install_transaction_timeouts,
+    observe_lock_contention,
+)
 from tests.integration.postgres.conftest import seed_whatsapp_channel
 
 pytestmark = pytest.mark.postgres
@@ -55,57 +58,10 @@ def _gateway(command: str, target_date: str) -> AsyncMock:
     return gateway
 
 
-async def _timeouts(session: AsyncSession) -> None:
-    await session.execute(text("SET LOCAL lock_timeout = '8s'"))
-    await session.execute(text("SET LOCAL statement_timeout = '15s'"))
-    await session.execute(text("SET LOCAL idle_in_transaction_session_timeout = '15s'"))
-
-
 async def _pid(session: AsyncSession) -> int:
     value = await session.scalar(text("SELECT pg_backend_pid()"))
     assert isinstance(value, int)
     return value
-
-
-async def _observe_blocker(
-    factory: async_sessionmaker[AsyncSession], blocked_pid: int, blocker_pid: int
-) -> None:
-    last_observed: tuple[object, ...] | None = None
-    start = _time.monotonic()
-
-    async def observe() -> None:
-        nonlocal last_observed
-        while True:
-            async with factory() as observer:
-                row = (
-                    await observer.execute(
-                        text(
-                            "SELECT :blocker = ANY(pg_blocking_pids(:blocked)), "
-                            "wait_event_type FROM pg_stat_activity WHERE pid = :blocked"
-                        ),
-                        {"blocker": blocker_pid, "blocked": blocked_pid},
-                    )
-                ).one_or_none()
-            last_observed = tuple(row) if row is not None else None
-            if row is not None and row[0] is True:
-                assert row[1] == "Lock", (
-                    f"blocker observed but wait_event_type={row[1]!r} "
-                    f"(expected 'Lock'), blocked_pid={blocked_pid}, "
-                    f"blocker_pid={blocker_pid}, "
-                    f"elapsed={_time.monotonic() - start:.2f}s"
-                )
-                return
-            await asyncio.sleep(0.01)
-
-    try:
-        await asyncio.wait_for(observe(), timeout=5)
-    except TimeoutError:
-        elapsed = _time.monotonic() - start
-        raise AssertionError(
-            f"observer timed out after {elapsed:.2f}s waiting for blocker: "
-            f"blocked_pid={blocked_pid}, blocker_pid={blocker_pid}, "
-            f"last_observed={last_observed!r}"
-        ) from None
 
 
 async def _seed(session: AsyncSession) -> None:
@@ -191,7 +147,7 @@ async def test_schedule_mutation_first_blocks_and_rejects_confirmation(
     _, target_date = _target()
 
     async with pg_session_factory() as owner_session:
-        await _timeouts(owner_session)
+        await install_transaction_timeouts(owner_session)
         owner_pid = await _pid(owner_session)
         await _owner_command(owner_session, command, target_date)
 
@@ -199,7 +155,7 @@ async def test_schedule_mutation_first_blocks_and_rejects_confirmation(
 
         async def confirm() -> Exception | None:
             async with pg_session_factory() as customer_session:
-                await _timeouts(customer_session)
+                await install_transaction_timeouts(customer_session)
                 blocked_pid.set_result(await _pid(customer_session))
                 service = AppointmentService(
                     customer_session, validation=InternalValidationPort(customer_session)
@@ -219,7 +175,11 @@ async def test_schedule_mutation_first_blocks_and_rejects_confirmation(
                 return None
 
         task = asyncio.create_task(confirm())
-        await _observe_blocker(pg_session_factory, await blocked_pid, owner_pid)
+        await observe_lock_contention(
+            pg_session_factory,
+            blocked_pid=await blocked_pid,
+            expected_blocker_pid=owner_pid,
+        )
         assert not task.done(), "contender must still be blocked before holder releases"
         await owner_session.commit()
         result = await task
@@ -263,7 +223,7 @@ async def test_confirmation_first_is_seen_and_cancelled_by_schedule_mutation(
     _, target_date = _target()
 
     async with pg_session_factory() as customer_session:
-        await _timeouts(customer_session)
+        await install_transaction_timeouts(customer_session)
         customer_pid = await _pid(customer_session)
         service = AppointmentService(
             customer_session, validation=InternalValidationPort(customer_session)
@@ -279,14 +239,18 @@ async def test_confirmation_first_is_seen_and_cancelled_by_schedule_mutation(
 
         async def mutate() -> object:
             async with pg_session_factory() as owner_session:
-                await _timeouts(owner_session)
+                await install_transaction_timeouts(owner_session)
                 blocked_pid.set_result(await _pid(owner_session))
                 owner_result = await _owner_command(owner_session, command, target_date)
                 await owner_session.commit()
                 return owner_result
 
         task = asyncio.create_task(mutate())
-        await _observe_blocker(pg_session_factory, await blocked_pid, customer_pid)
+        await observe_lock_contention(
+            pg_session_factory,
+            blocked_pid=await blocked_pid,
+            expected_blocker_pid=customer_pid,
+        )
         assert not task.done(), "contender must still be blocked before holder releases"
         await customer_session.commit()
         owner_result = await task

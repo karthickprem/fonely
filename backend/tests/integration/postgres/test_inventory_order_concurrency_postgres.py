@@ -1,7 +1,6 @@
 """Observed-lock PostgreSQL concurrency contracts for Phase C."""
 
 import asyncio
-import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
@@ -28,6 +27,12 @@ from fonely.models.enums import CallerRole, PendingActionType
 from fonely.services.inventory import InventoryService
 from fonely.services.orders import OrderService
 from fonely.services.pending_actions import PendingActionService
+from tests.integration.postgres.concurrency import (
+    install_transaction_timeouts,
+)
+from tests.integration.postgres.concurrency import (
+    observe_lock_contention as observed_blocker,
+)
 
 pytestmark = pytest.mark.postgres
 NOW = datetime(2026, 8, 1, 6, tzinfo=UTC)
@@ -164,12 +169,6 @@ def confirmation_command(
     )
 
 
-async def install_transaction_timeouts(session: AsyncSession) -> None:
-    await session.execute(text("SET LOCAL lock_timeout = '8s'"))
-    await session.execute(text("SET LOCAL statement_timeout = '15s'"))
-    await session.execute(text("SET LOCAL idle_in_transaction_session_timeout = '15s'"))
-
-
 async def backend_pid(session: AsyncSession) -> int:
     value = await session.scalar(text("SELECT pg_backend_pid()"))
     assert isinstance(value, int)
@@ -216,53 +215,6 @@ async def lock_pending_action(session: AsyncSession, action_id: int) -> int:
     )
     assert locked_id == action_id
     return pid
-
-
-async def observed_blocker(
-    factory: async_sessionmaker[AsyncSession],
-    *,
-    blocked_pid: int,
-    expected_blocker_pid: int,
-) -> None:
-    last_observed: tuple[object, ...] | None = None
-    start = time.monotonic()
-
-    async def observe() -> None:
-        nonlocal last_observed
-        while True:
-            async with factory() as observer:
-                await install_transaction_timeouts(observer)
-                row = (
-                    await observer.execute(
-                        text(
-                            "SELECT :blocker = ANY(pg_blocking_pids(:blocked)), "
-                            "wait_event_type, wait_event "
-                            "FROM pg_stat_activity WHERE pid=:blocked"
-                        ),
-                        {"blocker": expected_blocker_pid, "blocked": blocked_pid},
-                    )
-                ).one_or_none()
-            last_observed = tuple(row) if row is not None else None
-            if row is not None and row[0] is True:
-                assert row[1] == "Lock", (
-                    f"blocker observed but wait_event_type={row[1]!r} "
-                    f"(expected 'Lock'), wait_event={row[2]!r}, "
-                    f"blocked_pid={blocked_pid}, blocker_pid={expected_blocker_pid}, "
-                    f"elapsed={time.monotonic() - start:.2f}s"
-                )
-                assert row[2] is not None
-                return
-            await asyncio.sleep(0.01)
-
-    try:
-        await asyncio.wait_for(observe(), timeout=5)
-    except TimeoutError:
-        elapsed = time.monotonic() - start
-        raise AssertionError(
-            f"observer timed out after {elapsed:.2f}s waiting for blocker: "
-            f"blocked_pid={blocked_pid}, expected_blocker_pid={expected_blocker_pid}, "
-            f"last_observed={last_observed!r}"
-        ) from None
 
 
 async def confirmation_worker(

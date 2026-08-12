@@ -793,6 +793,57 @@ Three-part checklist frozen by the reviewer. Status:
   (then rebase) or a new targeted on_conflict_do_update schedule write — flagged
   to the reviewer rather than silently scoped out.
 
+### ITEM #19 — REJECT #2 FIX (candidate 9960095, 2026-08-12)
+
+REJECT #2 at 936bdee (reviewer's two-rejection rescope; scope now frozen at the
+five-item checklist below). The 936bdee collision fix was confirmed closed AND
+its good behaviors preserved by the reviewer, but it introduced a DEADLOCK:
+requiring naming evidence (title/name adjacency) is correct in open speech but
+wrong once WE have asked "which doctor?" — a bare "rao" answer has no adjacent
+title/name, was discarded as vocabulary, the _resource_ambiguous flag never
+cleared, and the question repeated forever (row-level: resource_id NULL). A dead
+end is not failing closed.
+
+THE LESSON (reviewer, named because it is the same one twice): both defects came
+from changing a matcher's permissiveness GLOBALLY when the right answer was
+CONTEXTUAL. Bare-overlap too loose in open speech; naming-evidence too strict in
+a reply to our own question. No single global threshold is right in both states;
+the conversation already knows which state it is in, so the matcher should too.
+
+FIX (rescope-2, five frozen items):
+1. 936bdee open-speech matcher kept EXACTLY as-is.
+2. New _resolve_disambiguation_reply runs ONLY when _resource_ambiguous is set,
+   matching against the CANDIDATE SET only (2-3 offered doctors). The tiny known
+   surface makes relaxed matching safe: bare surname "rao", "rao please", scored
+   by shared-token count so "priya rao" out-scores the shared "priya"; "priya"
+   alone stays ambiguous; "dr smith" matches none.
+3. Ordinal/positional answers — "the second one"/"first"/"last" and numbered
+   "1"/"2" — resolved against the offered order. (Item 3 implemented, not
+   deferred.)
+4. Loop bounded UNCONDITIONALLY: after two plain asks the agent escalates to a
+   numbered choice (a different response), so no question repeats without limit
+   even if resolution never succeeds. While a disambiguation is pending,
+   open-speech matching is skipped (the turn is an answer, not fresh naming).
+5. Permanent row-level corpus cases: disambig-bare-surname / -surname-polite /
+   -ordinal (all book Dr. Priya Rao id=2 off the ROW), -nonmatch-reask,
+   -deadlock-bound. I3 (no response repeats >3x, asserted on EVERY case) is the
+   deadlock guard. Mani/General stay permanent roster fixtures. New I7 header.
+
+BEFORE/AFTER PROOF (executed, both directions):
+- Disable the resolver -> the three booking answers fail (nothing books) — the
+  reviewer's exact deadlock.
+- Disable the loop bound -> disambig-deadlock-bound fails with 4 identical
+  "which doctor?" responses (I3 breached). Notably the bound holds even with the
+  resolver disabled — item 4 survives when items 2/3 are defeated, which is the
+  property the reviewer said mattered most.
+- Both reverted; fix passes all.
+
+GATES: corpus 26/26 (private DB, dropped after); non-PG 1259; ruff + mypy(src)
+clean. Candidate 9960095 (tag d3-item19-9960095). Evidence boundary unchanged:
+TEXT/MOCK only, no audio. Deferred by reviewer to next SHA (not gating): their
+own reproduction, the pick-one mutation, and I5-independent-of-I1. No rebase,
+nothing to main, exact-SHA authorization only.
+
 ### ITEM #19 — REJECT #1 FIX (candidate 936bdee, 2026-08-12)
 
 BLOCKING regression the reviewer found at bb50461: token-overlap scoring in the

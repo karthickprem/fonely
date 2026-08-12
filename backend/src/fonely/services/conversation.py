@@ -308,6 +308,75 @@ def _match_spoken_resources(message: str, resources: "list[ResourceInfo]") -> "l
     return [res for score, res in scored if score == top]
 
 
+_ORDINAL_WORDS: dict[str, int] = {
+    "first": 1,
+    "1st": 1,
+    "second": 2,
+    "2nd": 2,
+    "third": 3,
+    "3rd": 3,
+    "fourth": 4,
+    "4th": 4,
+    "last": -1,
+}
+
+
+def _resolve_disambiguation_reply(
+    message: str, candidates: "list[dict[str, object]]"
+) -> "int | list[dict[str, object]] | None":
+    """Resolve a reply to a "which doctor?" question against the CANDIDATE SET.
+
+    This runs ONLY when a resource ambiguity is already pending, so the match
+    surface is the two or three offered candidates — not the full roster. That
+    tiny, known surface is what makes relaxed matching safe here where it would
+    be unsafe in open speech: a bare surname ("rao"), a bare surname with filler
+    ("rao please"), or an ordinal/positional reference ("the second one", "the
+    last") is exactly how a person answers this question, and cannot reopen the
+    time-word/service-word collision class because it is scored against the
+    candidates the patient was just offered.
+
+    Returns:
+      - an int resource_id  -> resolved to exactly one candidate;
+      - None                -> the reply matched no candidate (caller re-asks);
+      - the candidates list  -> the reply still matched more than one (re-ask).
+    """
+    toks = _tokenize(message)
+    tok_set = set(toks)
+
+    # 1. Name-token match against candidates (relaxed: bare token, no adjacency
+    # requirement — the pending question is the naming context). Score by how
+    # many stored tokens the reply shares, so a distinguishing token wins even
+    # when a shared one is also present: "priya rao" scores Rao 2 vs Kumar 1.
+    scored = [(len(_resource_name_tokens(str(c.get("name", ""))) & tok_set), c) for c in candidates]
+    scored = [(n, c) for n, c in scored if n > 0]
+    name_hits_multi: list[dict[str, object]] = []
+    if scored:
+        top = max(n for n, _ in scored)
+        top_hits = [c for n, c in scored if n == top]
+        if len(top_hits) == 1:
+            return int(str(top_hits[0]["id"]))
+        # A tie at the top (e.g. only the shared "priya" was said) narrows
+        # nothing; fall through to ordinal, else report still-ambiguous.
+        name_hits_multi = top_hits
+
+    # 2. Ordinal / positional reference against the OFFERED ORDER, including a
+    # bare digit ("1"/"2") for the numbered-choice escalation.
+    for tok in toks:
+        pos: int | None = None
+        if tok in _ORDINAL_WORDS:
+            pos = _ORDINAL_WORDS[tok]
+        elif tok.isdigit():
+            pos = int(tok)
+        if pos is not None:
+            idx = len(candidates) - 1 if pos == -1 else pos - 1
+            if 0 <= idx < len(candidates):
+                return int(str(candidates[idx]["id"]))
+
+    if name_hits_multi:
+        return name_hits_multi
+    return None
+
+
 class ConversationService:
     def __init__(
         self,
@@ -512,16 +581,22 @@ class ConversationService:
         # unambiguously clears the flag in _extract_facts (single match).
         resource_ambiguous = ctx.collected_facts.get("_resource_ambiguous")
         if resource_ambiguous and isinstance(resource_ambiguous, list):
-            names = " or ".join(
-                str(r.get("name", "")) for r in resource_ambiguous if isinstance(r, dict)
-            )
-            turn = self._fact_turn(
-                ctx,
-                user_message,
-                f"We have more than one: {names}. Which doctor would you like?",
-                safety,
-                ["resource_id"],
-            )
+            asked_raw = ctx.collected_facts.get("_resource_ambiguity_asks", 0)
+            asked = asked_raw if isinstance(asked_raw, int) else 0
+            cand = [r for r in resource_ambiguous if isinstance(r, dict)]
+            # Bound the loop unconditionally (rescope-2 item 4): no reachable
+            # state may repeat one question without limit. After two plain asks,
+            # switch strategy to a NUMBERED choice — a different response (so it
+            # cannot be the same-text loop) that also gives a crisp path the
+            # relaxed answer path can resolve ("1"/"2" -> ordinal).
+            ctx.collected_facts["_resource_ambiguity_asks"] = asked + 1
+            if asked >= 2:
+                numbered = "; ".join(f"{i + 1}. {c.get('name', '')}" for i, c in enumerate(cand))
+                amb_prompt = f"Please reply with the number of the doctor you want — {numbered}."
+            else:
+                names = " or ".join(str(c.get("name", "")) for c in cand)
+                amb_prompt = f"We have more than one: {names}. Which doctor would you like?"
+            turn = self._fact_turn(ctx, user_message, amb_prompt, safety, ["resource_id"])
             self._log_turn(turn, start_time)
             return turn
 
@@ -583,13 +658,41 @@ class ConversationService:
                     regex_found = True
                 break
 
+        # If a doctor ambiguity is already pending, THIS turn is the patient's
+        # answer to our own "which doctor?" question. Resolve it against the
+        # CANDIDATE SET with relaxed matching (bare surname, filler, ordinal) —
+        # safe because the surface is the 2-3 offered candidates, not the whole
+        # roster, so it cannot reopen the time/service-word collision class. Open-
+        # speech matching below stays strict. (Rescope-2 item 2/3.)
+        disambiguation_pending = False
+        pending_candidates = ctx.collected_facts.get("_resource_ambiguous")
+        if isinstance(pending_candidates, list) and pending_candidates:
+            disambiguation_pending = True
+            disambig = _resolve_disambiguation_reply(message, pending_candidates)
+            if isinstance(disambig, int):
+                chosen = next((r for r in biz.resources if r.id == disambig), None)
+                if chosen is not None:
+                    self._invalidate_offer_if_changed(ctx, "resource_id", chosen.id)
+                    ctx.collected_facts["resource_id"] = chosen.id
+                    ctx.collected_facts["resource_name"] = chosen.name
+                    ctx.collected_facts.pop("_resource_ambiguous", None)
+                    ctx.collected_facts.pop("_resource_ambiguity_asks", None)
+                    regex_found = True
+            # Unresolved (matched none, or still >1): leave the flag set; the
+            # _process_inner bound escalates after repeated asks.
+
         # Spoken resource-name matching. A patient says "dr priya" / "priya
         # doctor" / "doctor priya." for stored "Dr. Priya"; naive substring
         # matching missed all of these. _match_spoken_resources normalizes both
         # sides (title/case/order/punctuation) and returns EVERY match so we can
         # fail closed on ambiguity instead of silently booking the wrong doctor
         # (a class-1 silent mis-booking, the exact defect this family prevents).
-        matched = _match_spoken_resources(message, biz.resources)
+        # Skipped entirely while a disambiguation is pending: this turn is an
+        # ANSWER to our "which doctor?" question (handled above against the
+        # candidate set), not fresh open-speech naming. Running it here would
+        # re-flag the shared first name ("priya") or spuriously set
+        # _resource_unknown on a non-matching answer.
+        matched = [] if disambiguation_pending else _match_spoken_resources(message, biz.resources)
         if "service_id" in ctx.collected_facts:
             # Once the service is known, only eligible resources are candidates —
             # an ineligible same-named resource must not create false ambiguity.

@@ -24,11 +24,14 @@ Invariants:
       "aaru mani" must not book Dr. Mani; "General Consultation" must not book
       Dr. General — asserted via Case.forbid_resource_id off the ROW)
   I7  the patient can ANSWER the "which doctor?" question the way  (item #19
-      people answer it — bare surname "rao", "rao please", ordinal              rescope-2:
-      "the second one", numbered "2" — and it resolves + books, row-level; an
-      unresolvable answer re-asks and, past a bound, escalates to a numbered
-      choice — it never deadlocks. The deadlock guard is I3 itself, asserted on
-      every case: no response may repeat more than 3 times in any conversation.)
+      people answer it — bare surname "rao", "rao please", ordinal              rescope-2
+      "the second one", numbered "2" — and it resolves + books, row-level. An     + CEO #32:
+      unresolvable answer escalates (plain ask -> numbered choice) and then
+      TERMINATES: past the ladder the ambiguity state is dropped and the
+      conversation ends with a call-the-clinic message, so no question — plain
+      OR numbered — repeats without limit. The guard is I3, asserted on every
+      case: no response may repeat more than 3 times. The liveness case is run
+      LONGER than the ladder so a bound that only swapped questions would breach.)
 
 I1 and I3 run on every case; I2 and I5 run on every case that books; I4 runs on
 every case that declares a superseded reading; the I5 fail-closed branch runs on
@@ -618,17 +621,24 @@ def _corpus() -> list[Case]:
         )
     )
 
-    # 24. DEADLOCK BOUND (rescope-2 item 4): repeating an unresolvable answer
-    # must not loop one question forever. "priya" alone stays ambiguous; after
-    # two plain asks the agent escalates to a numbered choice, so no single
-    # response occurs more than 3 times (I3, asserted on every case). Nothing
-    # books because no doctor is ever uniquely chosen.
+    # 24. LIVENESS BOUND (rescope-2 item 4 / CEO #32): repeating an unresolvable
+    # answer must TERMINATE, not merely swap one repeating question for another.
+    # The length is deliberately LONGER than the escalation ladder (plain, plain,
+    # numbered, then terminate) — six unresolvable "priya" answers — so a bound
+    # that only swapped the plain question for a forever-repeating NUMBERED one
+    # would breach I3 here. (A 4-turn case would only prove the first step; this
+    # length is chosen to catch a non-terminating SECOND strategy.) Nothing books
+    # because no doctor is ever uniquely chosen, and the conversation ends with a
+    # call-the-clinic message rather than looping.
     cases.append(
         Case(
-            "disambig-deadlock-bound",
+            "disambig-liveness-bound",
             "disambiguation",
             [
                 f"i want General Consultation with dr priya tomorrow 10 30 am {_PHONE}",
+                "priya",
+                "priya",
+                "priya",
                 "priya",
                 "priya",
                 "priya",

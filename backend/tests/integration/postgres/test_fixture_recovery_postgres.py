@@ -128,6 +128,27 @@ async def test_fixture_recovers_from_a_killed_run(scratch_db: str, poison) -> No
     assert await _current_version(scratch_db) == MIGRATION_HEAD
 
 
+async def test_reset_surfaces_the_underlying_cause_not_a_silent_wipe(scratch_db: str) -> None:
+    """The reset path must SAY why it fired, so a migration's deliberate
+    downgrade refusal (e.g. a data-protection guard) is visible and never mistaken
+    for a silent no-op. Absence of the guard's message must not read as success.
+    """
+    # Poison so the normal downgrade fails; the recovery then force-resets.
+    await _poison_bad_revision(scratch_db)
+
+    with pytest.warns(UserWarning) as recorded:
+        _bring_to_clean_head(scratch_db)
+
+    messages = "\n".join(str(w.message) for w in recorded)
+    # It announces the force-reset AND names the non-corrupt alternative cause,
+    # AND carries the underlying alembic stderr — so a guard refusal is not swallowed.
+    assert "force-resetting" in messages
+    assert "downgrade refusal" in messages
+    assert "Underlying" in messages
+    # And it still lands the database at a clean head.
+    assert await _current_version(scratch_db) == MIGRATION_HEAD
+
+
 async def test_unrecoverable_database_fails_loud_and_distinct(
     scratch_db: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:

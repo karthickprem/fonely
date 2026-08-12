@@ -24,6 +24,14 @@ class TestNoticeContentDigest:
         assert a == b
         assert len(a) == 64  # sha256 hex
 
+    def test_digest_matches_column_constraint_lowercase_hex64(self):
+        # The CEO #31 dpdp_notice_content_digest column is varchar64 lowercase
+        # sha256 with a regex CHECK; the digest we write must satisfy it.
+        import re
+
+        d = notice_content_digest("வணக்கம் notice text", "1", "ta-IN")
+        assert re.fullmatch(r"[0-9a-f]{64}", d) is not None
+
     def test_changes_with_text(self):
         assert notice_content_digest("hello", "1", "ta-IN") != notice_content_digest(
             "goodbye", "1", "ta-IN"

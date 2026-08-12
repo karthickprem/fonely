@@ -13,13 +13,20 @@ depending on the columns existing yet: it talks to a ``DpdpEvidenceWriter``
 port. The runtime is handed a writer; in tests that is ``FakeEvidenceWriter``.
 
 The real SQL-backed writer is deliberately NOT in this module yet. It targets
-the C5 columns, which are not on disk (migration head is 0015, no dpdp_*
-columns), so no test could drive it through its real path — and un-wired
+the CEO #31 columns on ``calls`` — ``dpdp_notice_completed_at`` (timestamptz),
+``dpdp_notice_version`` (varchar10), ``dpdp_notice_locale`` (varchar10), and
+``dpdp_notice_content_digest`` (varchar64, lowercase sha256) — all nullable
+under a ``num_nonnulls(...) IN (0, 4)`` CHECK (either none or all four, so
+partial evidence is unrepresentable) plus a digest regex CHECK. Those columns
+are NOT on disk yet (disk migration head is 0017; the DPDP migration is
+authored separately and derives the next revision at authoring time). No test
+could drive the SQL writer through its real path until they exist, and un-wired
 production code that nothing exercises reads as done while its first real run
-would be in front of a patient. It lands in the PostgreSQL proof step, in the
-same commit as the test that inserts a real call, runs the writer, and asserts
-the persisted row (including ``notice_content_digest``) against the real
-columns. Until then only ``FakeEvidenceWriter`` exists.
+would be in front of a patient. The SQL writer lands in the SAME commit as the
+migration and the PostgreSQL test that inserts a real call, runs the writer, and
+asserts the persisted row (including the content digest) against the real
+columns — and migration/writer ownership is coordinated with the CEO single
+directive, not raced here. Until then only ``FakeEvidenceWriter`` exists.
 
 The content digest is a stable hash of exactly the notice text, version, and
 locale — the three facts the CHECK pairs with ``completed_at``. It is computed

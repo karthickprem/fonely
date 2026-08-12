@@ -31,6 +31,7 @@ from fonely.services.model_gateway import ModelGateway, ModelResponse
 
 if TYPE_CHECKING:
     from fonely.domain.booking.datetime_parse import TimeSpec
+    from fonely.services.conversation_tools import ResourceInfo
 
 logger = logging.getLogger("fonely.services.conversation")
 
@@ -175,6 +176,78 @@ def _bare_meridiem_word(message: str) -> str | None:
     if am and not pm:
         return "am"
     return None
+
+
+# Honorifics/titles a patient may say (or drop) around a doctor's name, in
+# English and Tanglish. Spoken speech omits punctuation and reorders these, so
+# "dr priya", "priya doctor", "doctor priya." must all match stored "Dr. Priya".
+# Titles are stripped from BOTH the spoken text and the stored name before
+# comparison, so matching is on the distinctive name tokens only.
+_RESOURCE_TITLES = frozenset(
+    {
+        "dr",
+        "dr.",
+        "doctor",
+        "dho",  # common Tanglish transliteration of "doctor"
+        "mr",
+        "mr.",
+        "mrs",
+        "mrs.",
+        "ms",
+        "ms.",
+        "miss",
+        "vaidhyar",  # Tamil: doctor/physician
+        "vaidyar",
+    }
+)
+
+
+def _resource_name_tokens(text: str) -> frozenset[str]:
+    """Distinctive lowercase name tokens, with titles and punctuation removed.
+
+    Used to compare a spoken resource name against a stored one independent of
+    honorific ("dr"/"doctor"), casing, word order, punctuation, and repeated
+    internal whitespace. Returns an EMPTY set if nothing but titles/filler
+    remains, so a bare "doctor" never matches a specific resource — that is an
+    unnamed resource and must fail closed upstream, not silently pick one.
+    """
+    cleaned = re.sub(r"[^\w\s]+", " ", text.lower())
+    tokens = cleaned.split()
+    return frozenset(tok for tok in tokens if tok and tok not in _RESOURCE_TITLES)
+
+
+def _match_spoken_resources(
+    message: str, resources: "list[ResourceInfo]"
+) -> "list[ResourceInfo]":
+    """Return the best-matching active resources named in `message`.
+
+    Each resource is scored by how many of its distinctive stored-name tokens
+    the message names (title/order/case/punctuation-insensitive). Only the
+    top-scoring resources are returned:
+    - exactly one  -> an unambiguous match, the caller sets it;
+    - more than one -> a TIE at the top score (e.g. the patient said "priya"
+      and both "Dr. Priya Kumar" and "Dr. Priya Rao" score 1) -> the caller
+      MUST fail closed and ask which one; never guess;
+    - none          -> the spoken name matches no active resource -> the caller
+      refuses and re-asks; it never falls through to "any available".
+
+    Scoring by shared-token count (not full-name subset) means a patient who
+    says only the first name still matches when it is unique, and a fuller name
+    ("priya rao") disambiguates by out-scoring the partial matches.
+    """
+    msg_tokens = _resource_name_tokens(message)
+    if not msg_tokens:
+        return []
+    scored: list[tuple[int, ResourceInfo]] = []
+    for res in resources:
+        stored = _resource_name_tokens(res.name)
+        overlap = len(stored & msg_tokens)
+        if overlap > 0:
+            scored.append((overlap, res))
+    if not scored:
+        return []
+    top = max(score for score, _ in scored)
+    return [res for score, res in scored if score == top]
 
 
 class ConversationService:
@@ -375,6 +448,25 @@ class ConversationService:
             self._log_turn(turn, start_time)
             return turn
 
+        # A spoken resource name that matched more than one active doctor is
+        # ambiguous: fail closed and ask which one, never pick. Booking the wrong
+        # doctor is a silent mis-booking. A later turn naming one doctor
+        # unambiguously clears the flag in _extract_facts (single match).
+        resource_ambiguous = ctx.collected_facts.get("_resource_ambiguous")
+        if resource_ambiguous and isinstance(resource_ambiguous, list):
+            names = " or ".join(
+                str(r.get("name", "")) for r in resource_ambiguous if isinstance(r, dict)
+            )
+            turn = self._fact_turn(
+                ctx,
+                user_message,
+                f"We have more than one: {names}. Which doctor would you like?",
+                safety,
+                ["resource_id"],
+            )
+            self._log_turn(turn, start_time)
+            return turn
+
         missing = self._identify_missing_facts(ctx)
 
         if not missing and ctx.state == ConversationState.FACT_COLLECTION:
@@ -418,20 +510,37 @@ class ConversationService:
                     regex_found = True
                 break
 
-        for res in biz.resources:
-            if res.name.lower() in msg_lower:
-                eligible = any(
-                    sid == ctx.collected_facts.get("service_id") and rid == res.id
-                    for sid, rid in biz.eligibility
-                )
-                if (
-                    eligible or "service_id" not in ctx.collected_facts
-                ) and ctx.collected_facts.get("resource_id") != res.id:
-                    self._invalidate_offer_if_changed(ctx, "resource_id", res.id)
-                    ctx.collected_facts["resource_id"] = res.id
-                    ctx.collected_facts["resource_name"] = res.name
-                    regex_found = True
-                break
+        # Spoken resource-name matching. A patient says "dr priya" / "priya
+        # doctor" / "doctor priya." for stored "Dr. Priya"; naive substring
+        # matching missed all of these. _match_spoken_resources normalizes both
+        # sides (title/case/order/punctuation) and returns EVERY match so we can
+        # fail closed on ambiguity instead of silently booking the wrong doctor
+        # (a class-1 silent mis-booking, the exact defect this family prevents).
+        matched = _match_spoken_resources(message, biz.resources)
+        if "service_id" in ctx.collected_facts:
+            # Once the service is known, only eligible resources are candidates —
+            # an ineligible same-named resource must not create false ambiguity.
+            sid = ctx.collected_facts["service_id"]
+            eligible_ids = {rid for s, rid in biz.eligibility if s == sid}
+            matched = [r for r in matched if r.id in eligible_ids]
+        if len(matched) > 1:
+            # Fail closed: refuse to guess. Record the candidates so the next
+            # turn asks which doctor, and clear any provisionally-set resource so
+            # we never proceed on an ambiguous name.
+            ctx.collected_facts["_resource_ambiguous"] = [
+                {"id": r.id, "name": r.name} for r in matched
+            ]
+            ctx.collected_facts.pop("resource_id", None)
+            ctx.collected_facts.pop("resource_name", None)
+            ctx.collected_facts.pop("_active_offer", None)
+        elif len(matched) == 1:
+            res = matched[0]
+            ctx.collected_facts.pop("_resource_ambiguous", None)
+            if ctx.collected_facts.get("resource_id") != res.id:
+                self._invalidate_offer_if_changed(ctx, "resource_id", res.id)
+                ctx.collected_facts["resource_id"] = res.id
+                ctx.collected_facts["resource_name"] = res.name
+                regex_found = True
 
         if "customer_phone" not in ctx.collected_facts:
             phone_match = re.search(r"\+?\d{10,13}", message)
@@ -468,8 +577,16 @@ class ConversationService:
                 extractor = FactExtractor(self._model)
                 extracted = await extractor.extract(message, biz, ctx.collected_facts)
                 resolved = FactResolver().resolve(extracted, biz, biz.timezone)
+                # If the deterministic matcher already found the spoken name
+                # ambiguous, the LLM must NOT resolve it to one resource — that
+                # would launder a guess past the fail-closed gate.
+                blocked = (
+                    {"resource_id", "resource_name"}
+                    if ctx.collected_facts.get("_resource_ambiguous")
+                    else set()
+                )
                 for key, value in resolved.to_dict().items():
-                    if key not in ctx.collected_facts:
+                    if key not in ctx.collected_facts and key not in blocked:
                         ctx.collected_facts[key] = value
             except Exception:
                 logger.warning("llm_fact_extraction_failed", exc_info=True)

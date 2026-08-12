@@ -57,7 +57,9 @@ class _CapturingWebSocket:
 def _noop(_ws):
     import asyncio
 
-    f = asyncio.get_event_loop().create_future()
+    # Called only from within the running async test loop; use get_running_loop
+    # (not the deprecated get_event_loop, which raises on py3.14 off-loop).
+    f = asyncio.get_running_loop().create_future()
     f.set_result(None)
     return f
 

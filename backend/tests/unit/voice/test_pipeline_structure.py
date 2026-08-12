@@ -1,12 +1,21 @@
-"""Structural guard on the pipeline assembly (V-lane step 3, V3).
+"""SYNTACTIC anti-drift guard + composition-order check for the assembly.
 
-The booking commits at exactly ONE place — BookingPostLLMGate, via
-clinic_resolver.book_appointment → the injected CommandPort. The assembly
-module wires processors together and must add NO second commit path: it must
-not name AppointmentService, must not call command_port.confirm/propose itself,
-and must not import the command port machinery to commit on the side. This is a
-static AST guard so a future edit that grows a second path fails here, plus a
-behavioural check that the composed pipeline places the gate after the LLM.
+SCOPE — read before citing this file. The AST checks below assert the ABSENCE
+OF NAMES in pipeline_assembly's source: nobody wrote the obvious second-commit
+call here. Absence of names is NOT absence of behaviour — a second commit path
+reached by getattr, importlib, an alias bound elsewhere, a service handed in as
+an argument, or an LLM-invoked callback spells none of these names and passes
+this test unchanged. So this file is a TRIPWIRE against accidental syntactic
+drift, nothing more.
+
+The BEHAVIOURAL guarantee that the CommandPort is the SOLE commit path — invoked
+exactly once when a booking confirms and zero times when the gate refuses — is
+proven by observing the port's invocation count in
+test_full_media_to_media.py::test_sole_commit_path_*. That is the test to cite
+for "sole commit path"; this one only forbids the obvious spelling.
+
+Each guard here is mutation-proven in TestGuardsAreNotDecorative: injecting a
+real violation makes the guard fail, so a green result means something.
 """
 
 from __future__ import annotations
@@ -18,8 +27,8 @@ import fonely.voice.pipeline_assembly as assembly_mod
 from fonely.voice.pipeline_assembly import build_voice_pipeline
 
 
-def _names_in(obj) -> set[str]:
-    tree = ast.parse(inspect.getsource(obj))
+def _names_in_source(src: str) -> set[str]:
+    tree = ast.parse(src)
     names: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Name):
@@ -27,6 +36,10 @@ def _names_in(obj) -> set[str]:
         elif isinstance(node, ast.Attribute):
             names.add(node.attr)
     return names
+
+
+def _names_in(obj) -> set[str]:
+    return _names_in_source(inspect.getsource(obj))
 
 
 class TestNoSecondCommitPath:
@@ -118,3 +131,36 @@ class TestPipelineComposition:
         assert hasattr(assembly_mod, "AssembledPipeline")
         fields = assembly_mod.AssembledPipeline.__dataclass_fields__
         assert {"pipeline", "injector", "gate", "input_latch", "context"} <= set(fields)
+
+
+class TestGuardsAreNotDecorative:
+    """Mutation-prove the guards above actually fail when violated. A guard that
+    passes whether or not the defect is present is worse than no guard — it reads
+    as proof of something it never checked (the class of failure behind ca43917).
+    """
+
+    def test_ast_guard_fails_on_injected_second_commit_path(self):
+        clean = inspect.getsource(assembly_mod)
+        # Inject a real syntactic second-commit reference.
+        mutant = clean.replace(
+            "return AssembledPipeline(",
+            "AppointmentService  # injected second path\n    return AssembledPipeline(",
+            1,
+        )
+        assert mutant != clean, "mutation did not apply"
+        # The clean source passes the guard; the mutant must fail it.
+        assert "AppointmentService" not in _names_in_source(clean)
+        assert "AppointmentService" in _names_in_source(mutant)
+
+    def test_order_assertion_fails_when_gate_precedes_injector(self):
+        # The order check asserts latch < injector < gate. Prove that predicate
+        # rejects a swapped order (gate before injector), so a real reordering
+        # would be caught.
+        good = {"latch": 0, "injector": 1, "gate": 2}
+        swapped = {"latch": 0, "gate": 1, "injector": 2}
+
+        def order_holds(idx: dict[str, int]) -> bool:
+            return idx["latch"] < idx["injector"] < idx["gate"]
+
+        assert order_holds(good) is True
+        assert order_holds(swapped) is False

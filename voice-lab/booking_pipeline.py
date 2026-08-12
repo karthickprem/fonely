@@ -495,9 +495,13 @@ async def run_booking_bot(transport: BaseTransport, runner_args: RunnerArguments
                 greeting_text=GREETING,
                 locale=LOCALE,
             )
-            evidence_writer = production_wiring.build_notice_evidence_writer(
+            # Create the call row FIRST (real telephony: admission does this),
+            # so the SQL evidence writer has a row to UPDATE the dpdp_notice_*
+            # columns on. Thread its id into the open sequence.
+            call_id = await production_wiring.create_call_row(
                 conversation_id=runner_args.session_id,
             )
+            evidence_writer = production_wiring.build_notice_evidence_writer()
 
             def _make_speech_frames(text: str):
                 return [
@@ -512,7 +516,7 @@ async def run_booking_bot(transport: BaseTransport, runner_args: RunnerArguments
                 return await playback_signal.await_complete(timeout=30.0)
 
             open_sequence = build_notice_open_sequence(
-                call_id=0,  # transcript-backed writer keys on conversation_id
+                call_id=call_id,  # real calls row; SQL writer UPDATEs its columns
                 opening=opening,
                 locale=LOCALE,
                 queue_frames=worker.queue_frames,

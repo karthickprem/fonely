@@ -116,84 +116,47 @@ async def clinic_context_text() -> str:
 _CALL_ROWS: dict[str, int] = {}
 
 
-class _TranscriptEvidenceWriter:
-    """A DpdpEvidenceWriter (fonely.voice.evidence port) backed by the current
-    demo DB schema.
+async def create_call_row(*, conversation_id: str) -> int:
+    """Create the call record this session's notice evidence updates, and return
+    its id.
 
-    D3 has two halves. The STRUCTURE half (this): the open order writes evidence
-    through the port, never a raw INSERT inline in the connect handler — so the
-    real SqlDpdpEvidenceWriter drops in unchanged when it lands. The PERSISTENCE
-    half (pending): the authoritative dpdp_notice_* columns don't exist on this
-    database yet — fonely_dev4 is at migration head 0015, those columns land at
-    0018. A writer targeting them would raise UndefinedColumn here. So until the
-    DB is migrated forward and the CEO's SqlDpdpEvidenceWriter integrates, this
-    writes the notice-completion event into the existing calls.transcript JSONB
-    (the only place the current schema can hold it).
-
-    Crucially it is FAIL-LOUD: a write failure RAISES (the port contract), so the
-    open order keeps capture CLOSED. The demo's old record_notice_evidence
-    swallowed the error in a warning and let the call proceed — that was the
-    false-consent defect. This does not swallow.
+    The authoritative SqlDpdpEvidenceWriter UPDATEs the dpdp_notice_* columns on
+    an EXISTING call row (WHERE id=:call_id AND dpdp_notice_completed_at IS NULL)
+    — it does not create the row. On the real telephony path admission creates
+    the call row; the demo has no admission, so this stands in for it: one row
+    per connected session, created before the notice plays, its id threaded into
+    the open sequence so the evidence lands on THIS call.
     """
+    from sqlalchemy import text as sql_text
 
-    def __init__(self, *, conversation_id: str) -> None:
-        self._conversation_id = conversation_id
-
-    async def write(
-        self,
-        *,
-        call_id: int,
-        completed_at,
-        notice_version: str,
-        locale: str,
-        content_digest: str,
-    ) -> None:
-        import json as _json
-
-        from sqlalchemy import text as sql_text
-
-        # The notice-completion evidence event. Includes the content digest so
-        # the same tamper-evident value the authoritative column will hold is
-        # recorded now, alongside the human-readable marker.
-        event = {
-            "role": "system",
-            "kind": "dpdp_notice",
-            "notice_version": notice_version,
-            "locale": locale,
-            "content_digest": content_digest,
-            "completed_at": completed_at.isoformat(),
-        }
-        async with _SessionLocal() as session:
-            row = await session.execute(
-                sql_text(
-                    "INSERT INTO calls (business_id, caller_phone, caller_role, "
-                    "transcript, started_at) "
-                    "VALUES (:b, :phone, 'customer', :tr, now()) RETURNING id"
-                ),
-                {
-                    "b": DEMO_BUSINESS_ID,
-                    "phone": DEMO_CUSTOMER_PHONE,
-                    "tr": _json.dumps([event]),
-                },
-            )
-            row_id = row.scalar()
-            await session.commit()
-        _CALL_ROWS[self._conversation_id] = row_id
-        logger.info(
-            "dpdp_notice_recorded call_id=%s version=%s digest=%s",
-            row_id,
-            notice_version,
-            content_digest[:12],
+    async with _SessionLocal() as session:
+        row = await session.execute(
+            sql_text(
+                "INSERT INTO calls (business_id, caller_phone, caller_role, "
+                "started_at) "
+                "VALUES (:b, :phone, 'customer', now()) RETURNING id"
+            ),
+            {"b": DEMO_BUSINESS_ID, "phone": DEMO_CUSTOMER_PHONE},
         )
+        call_id = row.scalar()
+        await session.commit()
+    _CALL_ROWS[conversation_id] = call_id
+    logger.info("demo_call_row_created call_id=%s conv=%s", call_id, conversation_id)
+    return call_id
 
 
-def build_notice_evidence_writer(*, conversation_id: str):
-    """Return the DpdpEvidenceWriter the open order writes notice evidence
-    through.
+def build_notice_evidence_writer():
+    """Return the authoritative DpdpEvidenceWriter the open order writes through.
 
-    Swap seam: when fonely_dev4 is migrated to the 0018 head and the CEO's
-    SqlDpdpEvidenceWriter integrates, this returns that writer (targeting the
-    authoritative dpdp_notice_* columns) instead of the transcript-backed one —
-    no change to the connect handler, which only knows the port.
+    D3 persistence half: this is the CEO's SqlDpdpEvidenceWriter (SHA2), which
+    UPDATEs the four dpdp_notice_* columns on the call row inside a short
+    committed transaction, so the evidence is DURABLE at the instant STT opens.
+    fonely_dev4 is migrated to head 0018 (columns present), so it no longer
+    raises UndefinedColumn. It is fail-loud by contract: a write failure RAISES,
+    keeping capture CLOSED — the connect handler only knows the port, so this
+    swap needed no handler change beyond threading a real call_id (see
+    create_call_row).
     """
-    return _TranscriptEvidenceWriter(conversation_id=conversation_id)
+    from fonely.voice.evidence import SqlDpdpEvidenceWriter
+
+    return SqlDpdpEvidenceWriter(session_factory=_session_factory)

@@ -125,17 +125,21 @@ def build_grievance_notice(
 
 
 def notice_transcript_event(locale: str, spoken_text: str) -> dict[str, Any]:
-    """The record that this patient was actually read the notice.
+    """A NON-AUTHORITATIVE transcript-context marker that the notice was read.
 
-    Written into the existing `calls.transcript` JSONB rather than a column of
-    its own. Not only to avoid a migration while 0016 and 0017 are reserved:
-    the evidence belongs with the conversation it opened, and a separate
-    consent table that can disagree with the transcript is a way to be wrong
-    in two places.
+    This is human-readable context appended to `calls.transcript` JSONB — NOT
+    the compliance record of authority. Under the finalized CEO #31 contract the
+    authoritative evidence is the explicit `calls` columns
+    (`dpdp_notice_completed_at` / `_version` / `_locale` / `_content_digest`)
+    with a `num_nonnulls(...) IN (0, 4)` CHECK, written via
+    `fonely.voice.evidence.DpdpEvidenceWriter`. A compliance query MUST read
+    those columns, never a transcript substring — a transcript can be redacted
+    for PII retention while the four columns are preserved, so treating the
+    transcript as authority would make redaction look like missing consent.
 
-    `spoken_text` is stored, not just the version number, because the version
-    number only identifies the text if this file's history is intact. What was
-    said is what matters if it is ever questioned.
+    `spoken_text` is included here only as readable context; the tamper-evident
+    proof of exactly-what-was-said is the content digest in the column, computed
+    by `evidence.notice_content_digest` over the same spoken string.
     """
     return {
         "role": "system",

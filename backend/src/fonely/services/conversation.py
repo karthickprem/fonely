@@ -216,9 +216,19 @@ def _resource_name_tokens(text: str) -> frozenset[str]:
     return frozenset(tok for tok in tokens if tok and tok not in _RESOURCE_TITLES)
 
 
-def _match_spoken_resources(
-    message: str, resources: "list[ResourceInfo]"
-) -> "list[ResourceInfo]":
+def _names_a_resource(message: str) -> bool:
+    """True if the message uses a doctor title/honorific ("dr", "doctor", ...).
+
+    Signals the patient was NAMING a doctor, so a zero-match result is an
+    UNKNOWN doctor (fail closed + re-ask) rather than simply no doctor mentioned
+    yet (ask normally). Keyed on the title word so a bare first name that happens
+    to match nothing does not spuriously trip the unknown-doctor path.
+    """
+    tokens = re.sub(r"[^\w\s]+", " ", message.lower()).split()
+    return any(tok in _RESOURCE_TITLES for tok in tokens)
+
+
+def _match_spoken_resources(message: str, resources: "list[ResourceInfo]") -> "list[ResourceInfo]":
     """Return the best-matching active resources named in `message`.
 
     Each resource is scored by how many of its distinctive stored-name tokens
@@ -467,6 +477,21 @@ class ConversationService:
             self._log_turn(turn, start_time)
             return turn
 
+        # A named-but-unknown doctor also fails closed: re-ask with the roster
+        # rather than proceeding to any-available. Cleared once a known name is
+        # matched (see _extract_facts single-match branch).
+        if ctx.collected_facts.get("_resource_unknown"):
+            roster = ", ".join(r.name for r in biz.resources)
+            turn = self._fact_turn(
+                ctx,
+                user_message,
+                f"I couldn't find that doctor. We have: {roster}. Which doctor would you like?",
+                safety,
+                ["resource_id"],
+            )
+            self._log_turn(turn, start_time)
+            return turn
+
         missing = self._identify_missing_facts(ctx)
 
         if not missing and ctx.state == ConversationState.FACT_COLLECTION:
@@ -530,17 +555,26 @@ class ConversationService:
             ctx.collected_facts["_resource_ambiguous"] = [
                 {"id": r.id, "name": r.name} for r in matched
             ]
+            ctx.collected_facts.pop("_resource_unknown", None)
             ctx.collected_facts.pop("resource_id", None)
             ctx.collected_facts.pop("resource_name", None)
             ctx.collected_facts.pop("_active_offer", None)
         elif len(matched) == 1:
             res = matched[0]
             ctx.collected_facts.pop("_resource_ambiguous", None)
+            ctx.collected_facts.pop("_resource_unknown", None)
             if ctx.collected_facts.get("resource_id") != res.id:
                 self._invalidate_offer_if_changed(ctx, "resource_id", res.id)
                 ctx.collected_facts["resource_id"] = res.id
                 ctx.collected_facts["resource_name"] = res.name
                 regex_found = True
+        elif _names_a_resource(message) and "resource_id" not in ctx.collected_facts:
+            # The patient referred to a doctor ("dr smith") but it matches no
+            # active resource. Fail closed with an explicit re-ask instead of
+            # silently proceeding to "any available" — an unknown doctor is a
+            # request we cannot honour, not a blank to fill with a default.
+            ctx.collected_facts["_resource_unknown"] = True
+            ctx.collected_facts.pop("_active_offer", None)
 
         if "customer_phone" not in ctx.collected_facts:
             phone_match = re.search(r"\+?\d{10,13}", message)
@@ -583,6 +617,7 @@ class ConversationService:
                 blocked = (
                     {"resource_id", "resource_name"}
                     if ctx.collected_facts.get("_resource_ambiguous")
+                    or ctx.collected_facts.get("_resource_unknown")
                     else set()
                 )
                 for key, value in resolved.to_dict().items():

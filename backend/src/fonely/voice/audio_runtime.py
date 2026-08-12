@@ -35,14 +35,16 @@ from pipecat.transports.websocket.fastapi import (
 )
 
 from .call_teardown import OnceRelease
+from .open_order import OpenOutcome
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
     from starlette.websockets import WebSocket
 
     from .frame_pipeline import ResolverContext
     from .media_stream_types import AudioSession, MediaStreamStart
+    from .open_order import OpenResult
     from .runtime import CommandPort
 
 # Outbound audio rate to the provider. Exotel accepts a fixed set; this is the
@@ -111,3 +113,45 @@ class VoiceAudioRuntime:
         """Build the per-call resolver via the injected factory, threading the
         INJECTED command port through — never a port built here."""
         return self.resolver_factory(session, self.command_port)
+
+    async def run_call_open(
+        self,
+        session: AudioSession,
+        *,
+        open_sequence: Callable[[], Awaitable[OpenResult]],
+        start_conversation: Callable[[], Awaitable[None]],
+        teardown: Callable[[], Awaitable[None]],
+    ) -> OpenResult:
+        """Drive the enforced open order, then either start the conversation or
+        tear down — with the admission slot released EXACTLY once on every path.
+
+        The compliance ordering lives in ``open_sequence`` (which wraps
+        ``open_order.run_open_sequence``): it opens the input latch ONLY after
+        notice → playback → evidence succeed. This method's job is the outer
+        contract:
+          * caller audio never reaches STT unless the open sequence returned
+            OPENED — the latch stays closed on any failure, so
+            ``start_conversation`` (which lets audio flow) runs only on OPENED;
+          * a failed open tears the call down without starting the conversation;
+          * the admission slot is released exactly once whether the open
+            succeeds, fails, or the whole thing raises — via the OnceRelease
+            guard installed in the single ``finally``.
+
+        This is the outer skeleton ``handle_audio_session`` uses; the transport
+        and pipeline wiring supply the real ``open_sequence`` /
+        ``start_conversation`` / ``teardown`` closures.
+        """
+        guard = self.make_release_guard(session)
+        try:
+            result = await open_sequence()
+            if result.outcome is OpenOutcome.OPENED:
+                await start_conversation()
+            else:
+                # Open failed: STT never opened (the latch is still closed). Tear
+                # down without starting the conversation. The caller already
+                # heard the failure line inside the open sequence.
+                await teardown()
+            return result
+        finally:
+            # Exactly once, on OPENED, on failure, and on any raise above.
+            guard.release()

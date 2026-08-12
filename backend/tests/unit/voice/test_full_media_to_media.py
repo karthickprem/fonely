@@ -15,16 +15,21 @@ full transport/serializer media→media roundtrip lands with the runtime in step
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date, time
 
 import pytest
+from pipecat.clocks.system_clock import SystemClock
 from pipecat.frames.frames import (
     Frame,
+    InputAudioRawFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
     LLMTextFrame,
+    StartFrame,
 )
-from pipecat.processors.frame_processor import FrameDirection
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessorSetup
+from pipecat.utils.asyncio.task_manager import TaskManager
 
 from fonely.voice.context import TrustedClock
 from fonely.voice.frame_pipeline import (
@@ -32,6 +37,7 @@ from fonely.voice.frame_pipeline import (
     BookingStateInjector,
     ResolverContext,
 )
+from fonely.voice.input_latch import NoticeInputLatch
 from fonely.voice.runtime import CommandResult, CommitReceipt
 
 CLOCK = TrustedClock(
@@ -194,3 +200,49 @@ class TestSoleCommitPath:
 
         assert port.propose_count == 1
         assert port.confirm_count == 1
+
+
+class TestProcessorLifecycleNoLeak:
+    """Behavioral regression for CEO #35: a FrameProcessor that is SET UP with a
+    real TaskManager (the production path — Pipeline/PipelineRunner does this)
+    processes a StartFrame and tears down cleanly, with no orphaned task.
+
+    The bare-harness leak came from feeding a StartFrame to a processor that was
+    NEVER set up: the base FrameProcessor schedules an internal task on a
+    TaskManager that does not exist, raises "TaskManager is not initialized"
+    AFTER building the coroutine, and orphans it. Production never hits that
+    condition because setup() always runs first. This proves the set-up path is
+    clean, which is the counterpart to that trace."""
+
+    @pytest.mark.asyncio
+    async def test_setup_startframe_flow_cleanup_no_leak(self):
+        latch = NoticeInputLatch()
+        task_manager = TaskManager(loop=asyncio.get_running_loop())
+        await latch.setup(
+            FrameProcessorSetup(
+                clock=SystemClock(),
+                task_manager=task_manager,
+                pipeline_worker=None,  # type: ignore[arg-type]
+            )
+        )
+        received: list[Frame] = []
+
+        async def sink(frame: Frame, direction: FrameDirection) -> None:
+            received.append(frame)
+
+        latch.push_frame = sink  # type: ignore[method-assign]
+        try:
+            # StartFrame flows through the (closed) latch on the real path.
+            await latch.process_frame(StartFrame(), FrameDirection.DOWNSTREAM)
+            await asyncio.sleep(0)  # let the scheduled internal task run
+            assert any(isinstance(f, StartFrame) for f in received)
+            # And a caller-audio frame is still dropped while closed.
+            audio = InputAudioRawFrame(audio=b"\x00\x00", sample_rate=16000, num_channels=1)
+            before = len(received)
+            await latch.process_frame(audio, FrameDirection.DOWNSTREAM)
+            await asyncio.sleep(0)
+            assert len(received) == before  # audio suppressed, latch still closed
+        finally:
+            # Deterministic teardown — no orphaned task survives. The suite-level
+            # PytestUnraisableExceptionWarning=error filter fails if one does.
+            await latch.cleanup()

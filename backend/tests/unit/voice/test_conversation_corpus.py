@@ -7,30 +7,30 @@ medical safety, corrections, ambiguity, and adversarial cases.
 
 Each case: caller turns → expected state transitions → expected gate behavior.
 """
+
 from __future__ import annotations
 
-import pytest
-from datetime import date, time as dt_time
+from datetime import date
+from datetime import time as dt_time
 
-from fonely.voice.dialogue import (
-    BookingCollection,
-    gate_response,
-    contains_medical_advice,
-    contains_booking_success,
-    extract_booking_time,
-    get_terminal_response,
-    detect_filler,
-    count_questions,
-    SAFE_NO_RECEIPT,
-    _assistant_asks_name,
-)
 from fonely.voice.context import (
     AvailableSlot,
     DayAvailability,
     TrustedClock,
     resolve_relative_date,
 )
-
+from fonely.voice.dialogue import (
+    SAFE_NO_RECEIPT,
+    BookingCollection,
+    _assistant_asks_name,
+    contains_booking_success,
+    contains_medical_advice,
+    count_questions,
+    detect_filler,
+    extract_booking_time,
+    gate_response,
+    get_terminal_response,
+)
 
 # Shared test fixtures
 CLOCK = TrustedClock(
@@ -55,7 +55,9 @@ AVAIL = DayAvailability(
 
 def step(bc, text, prev_assistant=""):
     resolved = resolve_relative_date(text, CLOCK)
-    bc.update(text, resolved_date=resolved, availability=AVAIL, previous_assistant_text=prev_assistant)
+    bc.update(
+        text, resolved_date=resolved, availability=AVAIL, previous_assistant_text=prev_assistant
+    )
 
 
 # ============================================================
@@ -475,7 +477,7 @@ class TestReceiptGate:
         assert gated == "Booking confirmed!"
 
     def test_g03_tamil_success_blocked(self):
-        gated, sup = gate_response("Appointment confirm ஆயிடுச்சு!", has_receipt=False)
+        _gated, sup = gate_response("Appointment confirm ஆயிடுச்சு!", has_receipt=False)
         assert sup
 
     def test_g04_non_success_passes(self):
@@ -484,19 +486,23 @@ class TestReceiptGate:
         assert gated == "எந்த date-ல வரணும்?"
 
     def test_g05_readback_question_passes(self):
-        gated, sup = gate_response("Scaling, 2026-08-11 17:00, Karthick. இது correct-ஆ?", has_receipt=False)
+        _gated, sup = gate_response(
+            "Scaling, 2026-08-11 17:00, Karthick. இது correct-ஆ?", has_receipt=False
+        )
         assert not sup
 
     def test_g06_embedded_success_blocked(self):
-        gated, sup = gate_response("Karthick, appointment confirmed for tomorrow", has_receipt=False)
+        _gated, sup = gate_response(
+            "Karthick, appointment confirmed for tomorrow", has_receipt=False
+        )
         assert sup
 
     def test_g07_saved_blocked(self):
-        gated, sup = gate_response("Booking saved ஆயிடுச்சு", has_receipt=False)
+        _gated, sup = gate_response("Booking saved ஆயிடுச்சு", has_receipt=False)
         assert sup
 
     def test_g08_scheduled_blocked(self):
-        gated, sup = gate_response("Your appointment is scheduled", has_receipt=False)
+        _gated, sup = gate_response("Your appointment is scheduled", has_receipt=False)
         assert sup
 
     def test_g09_recovery_text_stable(self):

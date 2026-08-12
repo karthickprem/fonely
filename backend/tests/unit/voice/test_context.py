@@ -1,23 +1,26 @@
 """Tests for trusted clock, relative date resolution, and availability ports."""
-from datetime import date, datetime, time, timezone
+
+from datetime import UTC, date, datetime, time
 
 import pytest
 
 from fonely.voice.context import (
     AvailableSlot,
     DayAvailability,
-    SlotStatus,
     StubAvailabilityPort,
     TrustedClock,
     resolve_relative_date,
 )
 
 
-def _clock(tz: str = "Asia/Kolkata", year: int = 2026, month: int = 8, day: int = 10) -> TrustedClock:
+def _clock(
+    tz: str = "Asia/Kolkata", year: int = 2026, month: int = 8, day: int = 10
+) -> TrustedClock:
     import zoneinfo
+
     local = datetime(year, month, day, 14, 30, tzinfo=zoneinfo.ZoneInfo(tz))
     return TrustedClock(
-        now_utc=local.astimezone(timezone.utc),
+        now_utc=local.astimezone(UTC),
         business_timezone=tz,
         business_date=date(year, month, day),
         day_of_week=local.strftime("%A").lower(),
@@ -30,8 +33,13 @@ class TestTrustedClock:
         assert clock.business_timezone == "Asia/Kolkata"
         assert isinstance(clock.business_date, date)
         assert clock.day_of_week in {
-            "monday", "tuesday", "wednesday", "thursday",
-            "friday", "saturday", "sunday",
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday",
+            "friday",
+            "saturday",
+            "sunday",
         }
 
     def test_immutable(self):
@@ -132,8 +140,11 @@ class TestStubAvailabilityPort:
     @pytest.mark.asyncio
     async def test_stub_returns_not_connected(self):
         from fonely.voice.context import AvailabilityQuery
+
         stub = StubAvailabilityPort()
-        query = AvailabilityQuery(business_id=1, target_date=date(2026, 8, 10), business_timezone="Asia/Kolkata")
+        query = AvailabilityQuery(
+            business_id=1, target_date=date(2026, 8, 10), business_timezone="Asia/Kolkata"
+        )
         result = await stub.query_day_availability(query)
         assert not result.is_operating_day
         assert "not connected" in result.reason

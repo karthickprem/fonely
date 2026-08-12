@@ -1,8 +1,15 @@
 """Typed immutable voice session and provider configuration."""
+
 from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
+from typing import Literal
+
+# Sarvam STT recognition modes, matching the provider SDK's accepted values.
+# Typing the config field with this Literal makes an invalid mode a type error
+# at the source rather than an arg-type error at the provider call site.
+SttMode = Literal["transcribe", "translate", "verbatim", "translit", "codemix"]
 
 
 class SpeechClass(enum.StrEnum):
@@ -36,7 +43,9 @@ _VALID_TRANSITIONS: dict[SessionState, frozenset[SessionState]] = {
     SessionState.CREATED: frozenset({SessionState.SIGNALING, SessionState.FAILED}),
     SessionState.SIGNALING: frozenset({SessionState.CONNECTING, SessionState.FAILED}),
     SessionState.CONNECTING: frozenset({SessionState.ACTIVE, SessionState.FAILED}),
-    SessionState.ACTIVE: frozenset({SessionState.RECONNECTING, SessionState.DRAINING, SessionState.FAILED}),
+    SessionState.ACTIVE: frozenset(
+        {SessionState.RECONNECTING, SessionState.DRAINING, SessionState.FAILED}
+    ),
     SessionState.RECONNECTING: frozenset({SessionState.ACTIVE, SessionState.FAILED}),
     SessionState.DRAINING: frozenset({SessionState.CLOSED, SessionState.FAILED}),
     SessionState.CLOSED: frozenset(),
@@ -48,7 +57,7 @@ _VALID_TRANSITIONS: dict[SessionState, frozenset[SessionState]] = {
 class STTConfig:
     provider: str = "sarvam"
     model: str = "saaras:v3"
-    mode: str = "codemix"
+    mode: SttMode = "codemix"
     sample_rate: int = 16000
     input_codec: str = "wav"
     connection_timeout_seconds: float = 10.0

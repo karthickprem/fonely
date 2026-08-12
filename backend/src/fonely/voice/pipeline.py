@@ -5,18 +5,23 @@ TrustedClock, AvailabilityPort, ValidatorPort, and
 production prompt architecture.  No hardcoded slots or
 static facts.
 """
+
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
 
 from .config import SpeechClass, VoiceSessionConfig
-from .context import AvailabilityPort, AvailabilityQuery, DayAvailability, StubAvailabilityPort, TrustedClock
+from .context import (
+    AvailabilityPort,
+    AvailabilityQuery,
+    DayAvailability,
+    TrustedClock,
+)
 from .generation import GenerationClock
 from .prompts import build_greeting, build_system_prompt
 from .telemetry import VoiceTelemetryExporter
-from .validator_port import FailClosedValidatorStub, ValidationDecision, ValidatorPort
+from .validator_port import ValidationDecision, ValidatorPort
 
 logger = logging.getLogger("fonely.voice.pipeline")
 
@@ -24,6 +29,7 @@ logger = logging.getLogger("fonely.voice.pipeline")
 @dataclass(frozen=True)
 class PipelineContext:
     """Immutable context for one pipeline invocation."""
+
     config: VoiceSessionConfig
     clock: TrustedClock
     availability: DayAvailability | None

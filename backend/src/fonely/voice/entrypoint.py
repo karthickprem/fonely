@@ -4,9 +4,11 @@ Wires PipelineRuntime end-to-end through a typed MediaPort.
 Production callers (WebRTC, WebSocket, test harness) implement
 MediaPort to supply audio and receive synthesized output.
 """
+
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import Any, Protocol
 
@@ -23,6 +25,7 @@ class MediaPort(Protocol):
     Production implementations: WebRTC track adapter, WebSocket
     audio stream, or test audio fixture feeder.
     """
+
     async def receive_audio(self) -> bytes | None:
         """Return next audio chunk, or None when caller disconnects."""
         ...
@@ -79,6 +82,7 @@ async def run_voice_session(
 
         # Send greeting (single TTS call at entrypoint level)
         from .prompts import build_greeting
+
         greeting = build_greeting(business_name)
         greeting_audio = await tts.synthesize(greeting)
         await media.send_audio(greeting_audio)
@@ -96,41 +100,47 @@ async def run_voice_session(
             if result.response_audio:
                 await media.send_audio(result.response_audio)
 
-            await media.send_event({
-                "type": "turn_complete",
-                "turn": result.turn_number,
-                "allowed": result.allowed,
-                "terminal": result.terminal,
-                "speech_class": result.speech_class,
-                "has_audio": len(result.response_audio) > 0,
-                "commit_receipt": result.commit_receipt is not None,
-            })
+            await media.send_event(
+                {
+                    "type": "turn_complete",
+                    "turn": result.turn_number,
+                    "allowed": result.allowed,
+                    "terminal": result.terminal,
+                    "speech_class": result.speech_class,
+                    "has_audio": len(result.response_audio) > 0,
+                    "commit_receipt": result.commit_receipt is not None,
+                }
+            )
 
             if result.terminal:
                 from .dialogue import get_terminal_response
+
                 terminal_text = get_terminal_response(result.terminal_reason)
                 if terminal_text:
                     terminal_audio = await tts.synthesize(terminal_text)
                     await media.send_audio(terminal_audio)
-                await media.send_event({
-                    "type": "session_terminal",
-                    "reason": result.terminal_reason,
-                })
+                await media.send_event(
+                    {
+                        "type": "session_terminal",
+                        "reason": result.terminal_reason,
+                    }
+                )
                 break
 
         return await runtime.close("normal")
 
     except asyncio.CancelledError:
-        summary = await runtime.close("cancelled")
+        await runtime.close("cancelled")
         raise  # Re-raise CancelledError after cleanup
     except Exception as exc:
-        logger.error("session_error", extra={
-            "session": config.session_id,
-            "error": type(exc).__name__,
-        })
+        logger.error(
+            "session_error",
+            extra={
+                "session": config.session_id,
+                "error": type(exc).__name__,
+            },
+        )
         return await runtime.close(f"error:{type(exc).__name__}")
     finally:
-        try:
+        with contextlib.suppress(Exception):
             await media.close()
-        except Exception:
-            pass

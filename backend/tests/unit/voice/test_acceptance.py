@@ -1,4 +1,5 @@
 """Tests for acceptance matrix contract completeness."""
+
 from fonely.voice.acceptance import (
     ACCEPTANCE_MATRIX,
     ForbiddenBehavior,

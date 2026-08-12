@@ -1,4 +1,5 @@
 """Tests for tenant admission control."""
+
 import threading
 
 from fonely.voice.admission import AdmissionController

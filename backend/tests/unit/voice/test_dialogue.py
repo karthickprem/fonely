@@ -1,4 +1,5 @@
 """Tests for dialogue state, turn budgets, repetition, and terminal responses."""
+
 from fonely.voice.dialogue import (
     DialogueState,
     count_questions,

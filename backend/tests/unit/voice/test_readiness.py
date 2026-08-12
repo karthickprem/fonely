@@ -1,4 +1,5 @@
 """Tests for voice readiness gate."""
+
 from fonely.voice.readiness import ReadinessState, VoiceReadinessGate
 
 

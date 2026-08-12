@@ -3,6 +3,7 @@
 Each mock produces realistic typed outputs from scripted conversation
 flows without network calls or credentials.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -32,7 +33,7 @@ class MockTTSResult:
     characters: int = 0
     duration_ms: float = 0.0
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.characters = len(self.text)
         self.audio_bytes = self.characters * 40
         self.duration_ms = self.characters * 15.0
@@ -58,6 +59,7 @@ class ScriptedConversation:
 
 class MockSTT:
     """Returns scripted transcriptions in order."""
+
     def __init__(self, texts: list[str]) -> None:
         self._texts = list(texts)
         self._index = 0
@@ -78,6 +80,7 @@ class MockSTT:
 
 class MockLLM:
     """Returns scripted responses in order."""
+
     def __init__(self, responses: list[str]) -> None:
         self._responses = list(responses)
         self._index = 0
@@ -89,7 +92,9 @@ class MockLLM:
             return MockLLMResult(text="")
         text = self._responses[self._index]
         self._index += 1
-        result = MockLLMResult(text=text, input_tokens=len(context.split()), output_tokens=len(text.split()))
+        result = MockLLMResult(
+            text=text, input_tokens=len(context.split()), output_tokens=len(text.split())
+        )
         self._total_input += result.input_tokens
         self._total_output += result.output_tokens
         return result
@@ -101,6 +106,7 @@ class MockLLM:
 
 class MockTTS:
     """Simulates TTS synthesis from text."""
+
     def __init__(self) -> None:
         self._total_characters = 0
         self._total_audio_bytes = 0
@@ -160,7 +166,11 @@ def run_scripted_conversation(
         if q_count > 1:
             multi_question_count += 1
 
-        speech_class = SpeechClass(turn.speech_class) if turn.speech_class != "non_consequential" else SpeechClass.NON_CONSEQUENTIAL
+        speech_class = (
+            SpeechClass(turn.speech_class)
+            if turn.speech_class != "non_consequential"
+            else SpeechClass.NON_CONSEQUENTIAL
+        )
         allowed = gate.check(response, speech_class)
         if not allowed:
             blocked_count += 1
@@ -174,16 +184,18 @@ def run_scripted_conversation(
 
         ds.record_turn(response, asked_field=turn.asked_field)
 
-        turn_evidence.append({
-            "turn": i + 1,
-            "caller_length": len(turn.caller_text),
-            "response_length": len(response),
-            "speech_class": turn.speech_class,
-            "allowed": allowed,
-            "filler": has_filler,
-            "questions": q_count,
-            "asked_field": turn.asked_field,
-        })
+        turn_evidence.append(
+            {
+                "turn": i + 1,
+                "caller_length": len(turn.caller_text),
+                "response_length": len(response),
+                "speech_class": turn.speech_class,
+                "allowed": allowed,
+                "filler": has_filler,
+                "questions": q_count,
+                "asked_field": turn.asked_field,
+            }
+        )
 
         if ds.is_over_budget():
             ds.set_terminal("max_turns")

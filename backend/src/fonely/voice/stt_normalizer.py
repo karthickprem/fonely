@@ -10,6 +10,7 @@ Five binding constraints (CEO ruling):
 4. Provenance on every entry — "guessed" or "observed"
 5. Score on RAW transcript, never normalized
 """
+
 from __future__ import annotations
 
 import re
@@ -19,6 +20,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class NormalizationResult:
     """Carries both raw and normalized text. Raw is the evidence."""
+
     raw: str
     normalized: str
     changes: tuple[str, ...]
@@ -122,10 +124,12 @@ def get_table_provenance() -> dict[str, list[dict[str, str]]]:
     for table_name, table in _ALL_TABLES:
         entries = []
         for pattern, replacement, provenance in table:
-            entries.append({
-                "pattern": pattern,
-                "replacement": replacement,
-                "provenance": provenance,
-            })
+            entries.append(
+                {
+                    "pattern": pattern,
+                    "replacement": replacement,
+                    "provenance": provenance,
+                }
+            )
         report[table_name] = entries
     return report

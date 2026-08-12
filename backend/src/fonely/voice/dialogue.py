@@ -4,6 +4,7 @@ Deterministic dialogue-state constraints that do not depend on the LLM
 or provider calls.  These enforce the acceptance matrix turn limits,
 prevent repeated questions, and produce deterministic terminal responses.
 """
+
 from __future__ import annotations
 
 import re
@@ -16,6 +17,7 @@ from .context import DayAvailability
 @dataclass
 class DialogueState:
     """Mutable per-session dialogue tracking."""
+
     turn_count: int = 0
     max_turns: int = 12
     asked_fields: list[str] = field(default_factory=list)
@@ -50,7 +52,10 @@ class DialogueState:
         self.terminal_reason = reason
 
 
-_REQUESTING_VERBS = r"(?:book|புக்|வேணும்|வேண்டும்|பண்ணனும்|venum|pannanum|போடணும்|podanum|எடுக்கணும்|fix|need|want|schedule)"
+_REQUESTING_VERBS = (
+    r"(?:book|புக்|வேணும்|வேண்டும்|பண்ணனும்|venum|pannanum|போடணும்|podanum|"
+    r"எடுக்கணும்|fix|need|want|schedule)"
+)
 # Tamil-script transliterations real Sarvam STT emits when a Tamil caller says
 # an English service word ("cleaning" → "கிளீனிங்"). Defined ONCE and shared by
 # every service-recognizing regex below — booking activation (_SERVICES),
@@ -63,7 +68,8 @@ _TAMIL_SERVICE_FORMS = (
 )
 _SERVICES = (
     r"(?:scaling|cleaning|checkup|root\s*canal|extraction|consultation|filling|treatment|"
-    + _TAMIL_SERVICE_FORMS + r")"
+    + _TAMIL_SERVICE_FORMS
+    + r")"
 )
 _APPOINTMENT = r"(?:appointment|அப்பாயிண்ட்மெண்ட்)"
 
@@ -72,9 +78,15 @@ _BOOKING_ACTIVATORS: list[re.Pattern[str]] = [
     re.compile(_APPOINTMENT + r".*" + _REQUESTING_VERBS, re.IGNORECASE),
     re.compile(_REQUESTING_VERBS + r".*" + _APPOINTMENT, re.IGNORECASE),
     # English intent: "I need/want/schedule a/an (dental) appointment"
-    re.compile(r"(?:need|want|schedule|get|make)\s+(?:a\s+|an\s+)?(?:dental\s+)?" + _APPOINTMENT, re.IGNORECASE),
+    re.compile(
+        r"(?:need|want|schedule|get|make)\s+(?:a\s+|an\s+)?(?:dental\s+)?" + _APPOINTMENT,
+        re.IGNORECASE,
+    ),
     # Doctor visit intent
-    re.compile(r"(?:doctor|டாக்டர்|dentist).*(?:பாக்கணும்|paakkanum|போகணும்|poganum|visit|appointment)", re.IGNORECASE),
+    re.compile(
+        r"(?:doctor|டாக்டர்|dentist).*(?:பாக்கணும்|paakkanum|போகணும்|poganum|visit|appointment)",
+        re.IGNORECASE,
+    ),
     # Service + requesting verb
     re.compile(_SERVICES + r".*" + _REQUESTING_VERBS, re.IGNORECASE),
     re.compile(_REQUESTING_VERBS + r".*" + _SERVICES, re.IGNORECASE),
@@ -100,9 +112,14 @@ _NAME = re.compile(r"(?:[A-Za-z][A-Za-z .'-]{0,79}|[஀-௿][஀-௿ .'-]{0,79})
 
 
 _SERVICE_NAMES = {
-    "scaling": "Scaling", "cleaning": "Cleaning", "checkup": "Checkup",
-    "root canal": "Root canal", "extraction": "Extraction",
-    "filling": "Filling", "consultation": "Consultation", "treatment": "Treatment",
+    "scaling": "Scaling",
+    "cleaning": "Cleaning",
+    "checkup": "Checkup",
+    "root canal": "Root canal",
+    "extraction": "Extraction",
+    "filling": "Filling",
+    "consultation": "Consultation",
+    "treatment": "Treatment",
 }
 
 
@@ -115,8 +132,20 @@ def _normalize_service(raw_reason: str) -> str:
 
 
 def _format_spoken_date(d: date) -> str:
-    months = ["January", "February", "March", "April", "May", "June",
-              "July", "August", "September", "October", "November", "December"]
+    months = [
+        "January",
+        "February",
+        "March",
+        "April",
+        "May",
+        "June",
+        "July",
+        "August",
+        "September",
+        "October",
+        "November",
+        "December",
+    ]
     return f"{months[d.month - 1]} {d.day}"
 
 
@@ -216,6 +245,7 @@ class BookingCollection:
         # This keeps the readback's date/time byte-identical to what commit
         # uses — a readback whose facts drifted per language would book wrong.
         from .language import format_time_spoken, get_response
+
         service = _normalize_service(self.reason) if self.reason else "?"
         date_str = _format_spoken_date(self.target_date) if self.target_date else "?"
         time_str = format_time_spoken(self.selected_time, lang) if self.selected_time else "?"
@@ -232,15 +262,25 @@ class BookingCollection:
             f"selected_time: {selected}\n"
             f"patient_name: {self.patient_name or 'missing'}\n"
             f"required_field: {self.required_field or 'none'}\n"
-            "Caller candidates only; this state cannot authorize availability, proposal, or commit.\n"
+            "Caller candidates only; this state cannot authorize availability, "
+            "proposal, or commit.\n"
             "</booking_collection>"
         )
 
 
 _TAMIL_NUMERALS = {
-    "ஒன்று": 1, "ரெண்டு": 2, "மூன்று": 3, "நான்கு": 4,
-    "ஐந்து": 5, "ஆறு": 6, "ஏழு": 7, "எட்டு": 8,
-    "ஒன்பது": 9, "பத்து": 10, "பதினொன்று": 11, "பன்னிரெண்டு": 12,
+    "ஒன்று": 1,
+    "ரெண்டு": 2,
+    "மூன்று": 3,
+    "நான்கு": 4,
+    "ஐந்து": 5,
+    "ஆறு": 6,
+    "ஏழு": 7,
+    "எட்டு": 8,
+    "ஒன்பது": 9,
+    "பத்து": 10,
+    "பதினொன்று": 11,
+    "பன்னிரெண்டு": 12,
 }
 _TAMIL_NUMERAL_RE = re.compile(
     r"(?:" + "|".join(re.escape(k) for k in sorted(_TAMIL_NUMERALS, key=len, reverse=True)) + r")"
@@ -257,16 +297,33 @@ _TAMIL_NUMERAL_RE = re.compile(
 # and the row lands at 07:30. Each form here was seen from real STT or is a
 # common spoken variant.
 _PM_PERIOD_MARKERS = (
-    "மாலை", "அந்தி", "சாயங்கால", "இரவு", "ராத்திரி", "ராத்ரி", "மதியம்", "மத்தியான",
-    "maalai", "malai", "andhi", "saayangaalam", "iravu", "raathiri", "raatri",
-    "madhiyam", "mathiyam", "evening", "night", "afternoon",
+    "மாலை",
+    "அந்தி",
+    "சாயங்கால",
+    "இரவு",
+    "ராத்திரி",
+    "ராத்ரி",
+    "மதியம்",
+    "மத்தியான",
+    "maalai",
+    "malai",
+    "andhi",
+    "saayangaalam",
+    "iravu",
+    "raathiri",
+    "raatri",
+    "madhiyam",
+    "mathiyam",
+    "evening",
+    "night",
+    "afternoon",
 )
 # Morning words: force a spoken "12" back to 00 only when explicitly morning.
 _AM_PERIOD_MARKERS = ("காலை", "kaalai", "kalai", "morning")
 
 
 def _apply_period_marker(hour: int, text: str) -> int:
-    """Shift a 1–12 hour to PM when the surrounding text carries an evening /
+    """Shift a 1-12 hour to PM when the surrounding text carries an evening /
     night / afternoon marker. Noon '12' with such a marker stays 12 (midday),
     never 24. Morning '12' becomes 0. This is the single place the Tamil period
     word turns into 24-hour time, applied to both extraction branches."""
@@ -321,13 +378,40 @@ def _match_offered_time(candidate: time, offered: set[time]) -> time | None:
     return next(iter(matches)) if len(matches) == 1 else None
 
 
-_DATE_TIME_WORDS = frozenset({
-    "today", "tomorrow", "innaikku", "innaiku", "naalaikku", "naalai",
-    "இன்று", "இன்னைக்கு", "இன்னைக்கே", "நாளை", "நாளைக்கு",
-    "morning", "evening", "காலை", "மாலை", "சாயங்காலம்",
-    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
-    "திங்கள்", "செவ்வாய்", "புதன்", "வியாழன்", "வெள்ளி", "சனி", "ஞாயிறு",
-})
+_DATE_TIME_WORDS = frozenset(
+    {
+        "today",
+        "tomorrow",
+        "innaikku",
+        "innaiku",
+        "naalaikku",
+        "naalai",
+        "இன்று",
+        "இன்னைக்கு",
+        "இன்னைக்கே",
+        "நாளை",
+        "நாளைக்கு",
+        "morning",
+        "evening",
+        "காலை",
+        "மாலை",
+        "சாயங்காலம்",
+        "monday",
+        "tuesday",
+        "wednesday",
+        "thursday",
+        "friday",
+        "saturday",
+        "sunday",
+        "திங்கள்",
+        "செவ்வாய்",
+        "புதன்",
+        "வியாழன்",
+        "வெள்ளி",
+        "சனி",
+        "ஞாயிறு",
+    }
+)
 
 
 def _is_date_or_time_word(normalized: str) -> bool:
@@ -336,16 +420,31 @@ def _is_date_or_time_word(normalized: str) -> bool:
 
 def _assistant_asks_name(text: str) -> bool:
     lower = text.casefold()
-    return any(term in lower for term in (
-        "name", "பேரு", "பெயர்", "பெயர", "நேம்", "நேம",
-    ))
+    return any(
+        term in lower
+        for term in (
+            "name",
+            "பேரு",
+            "பெயர்",
+            "பெயர",
+            "நேம்",
+            "நேம",
+        )
+    )
 
 
-_DRUG_NAMES = r"(?:paracetamol|ibuprofen|amoxicillin|crocin|combiflam|antibiotic|dolo(?:\s*\d+)?|meftal|brufen)"
+_DRUG_NAMES = (
+    r"(?:paracetamol|ibuprofen|amoxicillin|crocin|combiflam|antibiotic|"
+    r"dolo(?:\s*\d+)?|meftal|brufen)"
+)
 _MEDICAL_ADVICE = re.compile(
-    r"\b(?:take|use|apply|need)\s+" + _DRUG_NAMES
-    + r"|\b" + _DRUG_NAMES + r"\s+(?:எடு|எடுக்க|எடுத்து|போட|போடு|சாப்பிடு|குடி)"
-    + r"|(?:எடு|எடுக்க|எடுத்து|போட|போடு|சாப்பிடு)\w*\s+" + _DRUG_NAMES
+    r"\b(?:take|use|apply|need)\s+"
+    + _DRUG_NAMES
+    + r"|\b"
+    + _DRUG_NAMES
+    + r"\s+(?:எடு|எடுக்க|எடுத்து|போட|போடு|சாப்பிடு|குடி)"
+    + r"|(?:எடு|எடுக்க|எடுத்து|போட|போடு|சாப்பிடு)\w*\s+"
+    + _DRUG_NAMES
     + r"|\b\d+\s*(?:mg|ml)\b.*(?:daily|twice|once|thrice)"
     + r"|(?:root canal|extraction|filling|surgery|implant)\s+(?:தேவை|need|required|வேணும்)"
     + r"|(?:you |நீங்க )?\s*need\s+(?:a |an )?(?:root canal|extraction|filling|surgery|implant)"
@@ -416,7 +515,9 @@ TERMINAL_RESPONSES = {
         "en": "Please contact clinic staff directly for further help.",
     },
     "demo_complete": {
-        "ta-Latn": "Details collect pannitten, aanaa save aagala. Clinic staff-kitta confirm pannunga.",
+        "ta-Latn": (
+            "Details collect pannitten, aanaa save aagala. Clinic staff-kitta confirm pannunga."
+        ),
         "ta": "Details collect பண்ணிட்டேன், ஆனா save ஆகல. Clinic staff கிட்ட confirm பண்ணுங்க.",
         "en": "Details collected but not saved. Please confirm with clinic staff.",
     },
@@ -450,10 +551,7 @@ def detect_filler(text: str) -> bool:
         r"\bplease wait\b",
         r"\bjust a second\b",
     ]
-    for pattern in filler_patterns:
-        if re.search(pattern, text, re.IGNORECASE):
-            return True
-    return False
+    return any(re.search(pattern, text, re.IGNORECASE) for pattern in filler_patterns)
 
 
 def count_questions(text: str) -> int:

@@ -1,4 +1,5 @@
 """Tests for bounded voice telemetry exporter."""
+
 from fonely.voice.telemetry import VoiceTelemetryExporter
 
 

@@ -10,6 +10,7 @@ Two independent checks:
      and AppointmentService constructed during the call is a violation.
   2. Static — book_appointment's source must not name AppointmentService.
 """
+
 from __future__ import annotations
 
 import ast
@@ -18,8 +19,7 @@ from datetime import date, time
 
 import pytest
 
-from fonely.voice import clinic_resolver
-from fonely.voice.clinic_resolver import book_appointment, BookingOutcome
+from fonely.voice.clinic_resolver import book_appointment
 from fonely.voice.runtime import CommandResult, CommitReceipt
 
 
@@ -37,22 +37,32 @@ class _RecordingPort:
     async def propose(self, cmd):
         self.propose_calls.append(cmd)
         return CommandResult(
-            success=True, operation="create", proposal_id=42,
+            success=True,
+            operation="create",
+            proposal_id=42,
             evidence={"version": 2},
         )
 
     async def confirm(self, cmd):
         self.confirm_calls.append(cmd)
         receipt = CommitReceipt(
-            commitment_id=777, proposal_id=42, business_id=1,
-            operation="create", idempotency_key=cmd.idempotency_key,
-            confirm_idempotency_key=cmd.idempotency_key, payload_digest="",
-            committed_at_ns=1, source="appointment_service",
+            commitment_id=777,
+            proposal_id=42,
+            business_id=1,
+            operation="create",
+            idempotency_key=cmd.idempotency_key,
+            confirm_idempotency_key=cmd.idempotency_key,
+            payload_digest="",
+            committed_at_ns=1,
+            source="appointment_service",
             facts={"service_name": "Scaling", "resource_name": "Dr. Priya"},
         )
         return CommandResult(
-            success=True, operation="create", proposal_id=42,
-            committed=True, receipt=receipt,
+            success=True,
+            operation="create",
+            proposal_id=42,
+            committed=True,
+            receipt=receipt,
         )
 
 

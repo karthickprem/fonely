@@ -3,11 +3,12 @@
 Everything needed to start a live browser STT→LLM→TTS conversation
 the moment credentials arrive.  No provider values in source.
 """
+
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 
@@ -44,11 +45,13 @@ def validate_credentials() -> tuple[bool, list[dict[str, str]]]:
         else:
             status = "SET"
             meets_min = True
-        results.append({
-            "name": cred.name,
-            "status": status,
-            "meets_minimum_length": str(meets_min),
-        })
+        results.append(
+            {
+                "name": cred.name,
+                "status": status,
+                "meets_minimum_length": str(meets_min),
+            }
+        )
         if not meets_min:
             all_ready = False
     return all_ready, results
@@ -57,6 +60,7 @@ def validate_credentials() -> tuple[bool, list[dict[str, str]]]:
 @dataclass(frozen=True)
 class RecordingPaths:
     """Sanitized artifact paths for live conversation recording."""
+
     base_dir: str
     session_id: str
     transcript_path: str = ""
@@ -65,8 +69,10 @@ class RecordingPaths:
     native_review_path: str = ""
 
     @classmethod
-    def for_session(cls, session_id: str, base: str = "/tmp/fonely-voice-evidence") -> RecordingPaths:
-        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    def for_session(
+        cls, session_id: str, base: str = "/tmp/fonely-voice-evidence"
+    ) -> RecordingPaths:
+        ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         base_dir = f"{base}/{ts}-{session_id}"
         return cls(
             base_dir=base_dir,
@@ -85,7 +91,9 @@ LIVE_RUN_CHECKLIST = """
 FONELY LIVE VOICE CONVERSATION — PRE-RUN CHECKLIST
 ====================================================
 
-1. CREDENTIALS (run: python -c "from fonely.voice.runbook import validate_credentials; print(validate_credentials())")
+1. CREDENTIALS
+   (run: python -c
+    "from fonely.voice.runbook import validate_credentials; print(validate_credentials())")
    - SARVAM_API_KEY:    must be SET (>=20 chars)
    - ANTHROPIC_API_KEY: must be SET (>=20 chars)
    - CARTESIA_API_KEY:  must be SET (>=20 chars)

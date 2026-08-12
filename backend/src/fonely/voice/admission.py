@@ -3,10 +3,10 @@
 Bounded concurrent sessions per tenant and global.  Integrates
 with readiness gate — no sessions admitted before ready.
 """
+
 from __future__ import annotations
 
 import threading
-import time
 from dataclasses import dataclass
 
 

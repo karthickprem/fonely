@@ -21,15 +21,21 @@ Four invariants, all load-bearing:
      out of the receipt, not out of here.
   4. One commit path, proven structurally (see test_single_commit_path).
 """
+
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
+from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+if TYPE_CHECKING:
+    from .context import AvailableSlot, DayAvailability
+    from .runtime import CommandPort
 
 logger = logging.getLogger("fonely.voice.clinic_resolver")
 
@@ -44,15 +50,21 @@ _SERVICE_ALIASES: dict[str, tuple[str, ...]] = {
     # Without these, a real caller saying "cleaning" — which STT returns as
     # "கிளீனிங்" — gets a valid service refused: the classic works-on-text,
     # dies-on-audio failure. Each Tamil form here was observed from real STT.
-    "scaling": ("cleaning", "polish", "scal", "clean",
-                "ஸ்கேலிங்", "ஸ்கேலிங", "கிளீனிங்", "கிளீனிங", "க்ளீனிங்"),
-    "cleaning": ("scaling", "polish", "scal",
-                 "கிளீனிங்", "கிளீனிங", "க்ளீனிங்", "ஸ்கேலிங்"),
-    "consultation": ("checkup", "check up", "consult", "review",
-                     "கன்சல்டேஷன்", "செக்கப்", "கன்சல்ட்"),
+    "scaling": (
+        "cleaning",
+        "polish",
+        "scal",
+        "clean",
+        "ஸ்கேலிங்",
+        "ஸ்கேலிங",
+        "கிளீனிங்",
+        "கிளீனிங",
+        "க்ளீனிங்",
+    ),
+    "cleaning": ("scaling", "polish", "scal", "கிளீனிங்", "கிளீனிங", "க்ளீனிங்", "ஸ்கேலிங்"),
+    "consultation": ("checkup", "check up", "consult", "review", "கன்சல்டேஷன்", "செக்கப்", "கன்சல்ட்"),
     "checkup": ("consultation", "consult", "செக்கப்", "செக் அப்"),
-    "extraction": ("remove", "pull", "extract",
-                   "எக்ஸ்ட்ராக்ஷன்", "பல் எடு", "பல்லு எடு"),
+    "extraction": ("remove", "pull", "extract", "எக்ஸ்ட்ராக்ஷன்", "பல் எடு", "பல்லு எடு"),
     "filling": ("cavity", "fill", "ஃபில்லிங்", "பில்லிங்", "ஃபில்லிங"),
     "root canal": ("rct", "canal", "ரூட் கேனால்", "ரூட்கேனால்", "ரூட் கனால்"),
     "braces": ("braces review", "orthodontic", "பிரேஸ்", "ப்ரேஸ்"),
@@ -104,10 +116,7 @@ async def resolve_service(
         return None
 
     rows = await session.execute(
-        sql_text(
-            "SELECT id, name FROM services "
-            "WHERE business_id = :bid AND is_active = true"
-        ),
+        sql_text("SELECT id, name FROM services WHERE business_id = :bid AND is_active = true"),
         {"bid": business_id},
     )
     services = [(r[0], r[1]) for r in rows.fetchall()]
@@ -151,7 +160,7 @@ async def resolve_resource_for_service(
 
 async def day_availability(
     session: AsyncSession, business_id: int, timezone: str, target_date: date
-):
+) -> DayAvailability:
     """Structured DayAvailability from the DB — the shape the BookingCollection
     state machine needs to VALIDATE a caller's chosen time against real slots.
 
@@ -161,6 +170,7 @@ async def day_availability(
     across all service→resource pairings for the day.
     """
     from fonely.services.availability import AvailabilityService
+
     from .context import AvailableSlot, DayAvailability, SlotStatus
 
     tz = ZoneInfo(timezone)
@@ -177,12 +187,14 @@ async def day_availability(
     pairings = [(r[0], r[1], r[2]) for r in rows.fetchall()]
 
     svc = AvailabilityService(session)
-    seen: set = set()
-    slots: list = []
+    seen: set[tuple[int, time]] = set()
+    slots: list[AvailableSlot] = []
     for service_id, resource_id, resource_name in pairings:
         for s in await svc.get_available_slots(
-            business_id=business_id, service_id=service_id,
-            resource_id=resource_id, target_date=target_date,
+            business_id=business_id,
+            service_id=service_id,
+            resource_id=resource_id,
+            target_date=target_date,
         ):
             local_start = s.start_at.astimezone(tz).time()
             local_end = s.end_at.astimezone(tz).time()
@@ -190,11 +202,16 @@ async def day_availability(
             if key in seen:
                 continue
             seen.add(key)
-            slots.append(AvailableSlot(
-                resource_id=resource_id, resource_name=resource_name,
-                start_time=local_start, end_time=local_end,
-                service_name="", status=SlotStatus.AVAILABLE,
-            ))
+            slots.append(
+                AvailableSlot(
+                    resource_id=resource_id,
+                    resource_name=resource_name,
+                    start_time=local_start,
+                    end_time=local_end,
+                    service_name="",
+                    status=SlotStatus.AVAILABLE,
+                )
+            )
 
     return DayAvailability(
         business_date=target_date,
@@ -249,8 +266,7 @@ async def available_slots_text(
         )
 
     lines = [
-        f"  {name}: {', '.join(sorted(resource_slots[name]))}"
-        for name in sorted(resource_slots)
+        f"  {name}: {', '.join(sorted(resource_slots[name]))}" for name in sorted(resource_slots)
     ]
     return f"Available slots for {target_date.strftime('%A %B %d')}:\n" + "\n".join(lines)
 
@@ -272,10 +288,7 @@ async def clinic_context_text(session: AsyncSession, business_id: int) -> str:
     doctors = [r[0] for r in rows.fetchall()]
 
     rows = await session.execute(
-        sql_text(
-            "SELECT name, price FROM services "
-            "WHERE business_id = :id AND is_active = true"
-        ),
+        sql_text("SELECT name, price FROM services WHERE business_id = :id AND is_active = true"),
         {"id": business_id},
     )
     services = [(r[0], float(r[1]) if r[1] else 0) for r in rows.fetchall()]
@@ -304,7 +317,7 @@ class BookingOutcome:
 
 async def book_appointment(
     *,
-    command_port,
+    command_port: CommandPort,
     session: AsyncSession,
     business_id: int,
     service_phrase: str,
@@ -324,7 +337,7 @@ async def book_appointment(
     (e.g. the requested time is outside operating hours — the refusal that
     matters). Confirmation facts are read from the receipt, never inferred.
     """
-    from .runtime import ProposeCommand, ConfirmCommand, TrustedCommandContext
+    from .runtime import ConfirmCommand, ProposeCommand, TrustedCommandContext
 
     svc = await resolve_service(session, business_id, service_phrase)
     if svc is None:
@@ -350,7 +363,7 @@ async def book_appointment(
             idempotency_key=idempotency_key,
         )
     )
-    if not propose_result.success:
+    if not propose_result.success or propose_result.proposal_id is None:
         return BookingOutcome(success=False, error=propose_result.error or "propose_failed")
 
     confirm_result = await command_port.confirm(

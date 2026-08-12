@@ -20,6 +20,7 @@ in all three buckets. Only wording changes across languages, never whether a
 gate fires. A missing variant would silently fall back to English at a safety
 moment, so every key carries all three (asserted in tests).
 """
+
 from __future__ import annotations
 
 import re
@@ -32,16 +33,38 @@ _TAMIL_BLOCK = re.compile(r"[஀-௿]")
 # the package (stt_normalizer romanized tables, context.TAMIL_RELATIVE_DATES,
 # dialogue._CONFIRM_WORDS) so this is not a new invented word list. A Latin-only
 # turn containing any of these reads as Tanglish, not English.
-_ROMANIZED_TAMIL = frozenset({
-    # verbs / requests
-    "venum", "vendum", "pannunga", "pannanum", "pannitten", "panniten",
-    "sollunga", "podunga", "podanum", "paakkanum", "poganum",
-    # dates (romanized)
-    "innaikku", "innaiku", "naalaikku", "naalai",
-    # confirmations / particles
-    "aama", "aamaa", "sari", "seri", "seringa", "illa",
-    "da", "pa", "nga", "bro",  # Chennai colloquial particles
-})
+_ROMANIZED_TAMIL = frozenset(
+    {
+        # verbs / requests
+        "venum",
+        "vendum",
+        "pannunga",
+        "pannanum",
+        "pannitten",
+        "panniten",
+        "sollunga",
+        "podunga",
+        "podanum",
+        "paakkanum",
+        "poganum",
+        # dates (romanized)
+        "innaikku",
+        "innaiku",
+        "naalaikku",
+        "naalai",
+        # confirmations / particles
+        "aama",
+        "aamaa",
+        "sari",
+        "seri",
+        "seringa",
+        "illa",
+        "da",
+        "pa",
+        "nga",
+        "bro",  # Chennai colloquial particles
+    }
+)
 
 # The default bucket before any caller language is known (first turn). Warm
 # Chennai Tanglish, matching the greeting.
@@ -176,4 +199,5 @@ def format_time_spoken(t: time, lang: str) -> str:
 
     # ta / ta-Latn: reuse the established Tamil period words.
     from .dialogue import _format_spoken_time
+
     return _format_spoken_time(t)

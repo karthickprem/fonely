@@ -4,12 +4,12 @@ Covers the deterministic gate order, the single-commit path wiring, and the
 precedence-bug case the lab version got wrong (`A and B or C or D` pinged the
 doctor on almost any input).
 """
+
 from __future__ import annotations
 
 from datetime import date, time
 
 import pytest
-
 from pipecat.frames.frames import (
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
@@ -19,18 +19,18 @@ from pipecat.processors.frame_processor import FrameDirection
 
 from fonely.voice.context import TrustedClock
 from fonely.voice.frame_pipeline import (
-    BookingStateInjector,
     BookingPostLLMGate,
+    BookingStateInjector,
     ResolverContext,
     _is_confirmation,
-    _AVAILABILITY_WORDS,
 )
-from fonely.voice.language import get_response, DEFAULT_LANGUAGE
-
+from fonely.voice.language import DEFAULT_LANGUAGE, get_response
 
 CLOCK = TrustedClock(
-    now_utc=None, business_timezone="Asia/Kolkata",
-    business_date=date(2026, 8, 12), day_of_week="wednesday",
+    now_utc=None,
+    business_timezone="Asia/Kolkata",
+    business_date=date(2026, 8, 12),
+    day_of_week="wednesday",
 )
 
 
@@ -46,6 +46,7 @@ def _resolver(ask_doctor=None):
 
 class _Collector:
     """Captures frames a processor pushes downstream."""
+
     def __init__(self):
         self.frames = []
 
@@ -169,6 +170,7 @@ class TestPrecedenceBugCase:
 
         # A session_factory whose clinic_context reports CONFIRMED slots.
         import fonely.voice.clinic_resolver as cr
+
         orig = cr.clinic_context_text
 
         async def fake_ctx(session, business_id):
@@ -176,17 +178,23 @@ class TestPrecedenceBugCase:
 
         cr.clinic_context_text = fake_ctx
         try:
-            class _NullSession:
-                async def __aenter__(self): return self
-                async def __aexit__(self, *a): return False
 
-            injector = BookingStateInjector(ResolverContext(
-                business_id=1,
-                session_factory=lambda: _NullSession(),
-                command_port=None,
-                clock=CLOCK,
-                ask_doctor=fake_ask,
-            ))
+            class _NullSession:
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, *a):
+                    return False
+
+            injector = BookingStateInjector(
+                ResolverContext(
+                    business_id=1,
+                    session_factory=lambda: _NullSession(),
+                    command_port=None,
+                    clock=CLOCK,
+                    ask_doctor=fake_ask,
+                )
+            )
             # Caller message contains "time" — one of the words that alone
             # triggered the buggy ping. With slots confirmed, must NOT ping.
             ctx = await injector._build_live_context("what time works")
@@ -206,6 +214,7 @@ class TestPrecedenceBugCase:
             pinged.append((question, ctx))
 
         import fonely.voice.clinic_resolver as cr
+
         orig = cr.clinic_context_text
 
         async def fake_ctx(session, business_id):
@@ -213,17 +222,23 @@ class TestPrecedenceBugCase:
 
         cr.clinic_context_text = fake_ctx
         try:
-            class _NullSession:
-                async def __aenter__(self): return self
-                async def __aexit__(self, *a): return False
 
-            injector = BookingStateInjector(ResolverContext(
-                business_id=1,
-                session_factory=lambda: _NullSession(),
-                command_port=None,
-                clock=CLOCK,
-                ask_doctor=fake_ask,
-            ))
+            class _NullSession:
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, *a):
+                    return False
+
+            injector = BookingStateInjector(
+                ResolverContext(
+                    business_id=1,
+                    session_factory=lambda: _NullSession(),
+                    command_port=None,
+                    clock=CLOCK,
+                    ask_doctor=fake_ask,
+                )
+            )
             await injector._build_live_context("do you have any slots")
             assert len(pinged) == 1
         finally:
@@ -239,6 +254,7 @@ class TestPrecedenceBugCase:
             pinged.append(1)
 
         import fonely.voice.clinic_resolver as cr
+
         orig = cr.clinic_context_text
 
         async def fake_ctx(session, business_id):
@@ -246,17 +262,23 @@ class TestPrecedenceBugCase:
 
         cr.clinic_context_text = fake_ctx
         try:
-            class _NullSession:
-                async def __aenter__(self): return self
-                async def __aexit__(self, *a): return False
 
-            injector = BookingStateInjector(ResolverContext(
-                business_id=1,
-                session_factory=lambda: _NullSession(),
-                command_port=None,
-                clock=CLOCK,
-                ask_doctor=fake_ask,
-            ))
+            class _NullSession:
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, *a):
+                    return False
+
+            injector = BookingStateInjector(
+                ResolverContext(
+                    business_id=1,
+                    session_factory=lambda: _NullSession(),
+                    command_port=None,
+                    clock=CLOCK,
+                    ask_doctor=fake_ask,
+                )
+            )
             await injector._build_live_context("my name is Karthick")
             assert pinged == []
         finally:

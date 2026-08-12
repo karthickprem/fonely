@@ -1,9 +1,11 @@
 """Tests for pipeline builder, pre-TTS validator gate, and post-TTS generation gate."""
+
+from datetime import UTC, date, datetime
+
 import pytest
-from datetime import date, datetime, time, timezone
 
 from fonely.voice.config import SpeechClass, VoiceSessionConfig
-from fonely.voice.context import AvailableSlot, DayAvailability, TrustedClock
+from fonely.voice.context import TrustedClock
 from fonely.voice.generation import GenerationClock
 from fonely.voice.pipeline import (
     PostTTSGenerationGate,
@@ -11,12 +13,12 @@ from fonely.voice.pipeline import (
     build_pipeline_context,
 )
 from fonely.voice.telemetry import VoiceTelemetryExporter
-from fonely.voice.validator_port import FailClosedValidatorStub, ValidationDecision
+from fonely.voice.validator_port import FailClosedValidatorStub
 
 
 def _clock():
     return TrustedClock(
-        now_utc=datetime(2026, 8, 10, 9, 0, tzinfo=timezone.utc),
+        now_utc=datetime(2026, 8, 10, 9, 0, tzinfo=UTC),
         business_timezone="Asia/Kolkata",
         business_date=date(2026, 8, 10),
         day_of_week="monday",
@@ -38,7 +40,9 @@ class TestPipelineContext:
 
     @pytest.mark.asyncio
     async def test_demo_mode_in_prompt(self):
-        ctx = await build_pipeline_context(_config(), clock=_clock(), business_name="Test", session_mode="demo")
+        ctx = await build_pipeline_context(
+            _config(), clock=_clock(), business_name="Test", session_mode="demo"
+        )
         assert "demo" in ctx.system_prompt.lower()
         assert "cannot" in ctx.system_prompt.lower() or "CANNOT" in ctx.system_prompt
 
@@ -52,7 +56,7 @@ class TestPipelineContext:
         ctx = await build_pipeline_context(_config(), clock=_clock(), business_name="Test")
         try:
             ctx.session_mode = "live"
-            assert False, "should be frozen"
+            raise AssertionError("should be frozen")
         except AttributeError:
             pass
 

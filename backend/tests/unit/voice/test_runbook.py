@@ -1,16 +1,22 @@
 """Tests for live run preparation and credential validation."""
+
 from fonely.voice.runbook import (
-    RecordingPaths,
-    validate_credentials,
     LIVE_RUN_CHECKLIST,
     NATIVE_REVIEW_PROCEDURE,
+    RecordingPaths,
+    validate_credentials,
 )
 
 
 def test_validate_credentials_reports_unset():
-    ready, results = validate_credentials()
+    _ready, results = validate_credentials()
     for r in results:
-        assert r["name"] in {"SARVAM_API_KEY", "ANTHROPIC_API_KEY", "CARTESIA_API_KEY", "CARTESIA_VOICE_ID"}
+        assert r["name"] in {
+            "SARVAM_API_KEY",
+            "ANTHROPIC_API_KEY",
+            "CARTESIA_API_KEY",
+            "CARTESIA_VOICE_ID",
+        }
         assert r["status"] in {"SET", "UNSET", "SET_SHORT"}
         assert "value" not in str(r).lower()
 
@@ -28,7 +34,7 @@ def test_recording_paths_immutable():
     paths = RecordingPaths.for_session("test")
     try:
         paths.session_id = "changed"
-        assert False, "should be frozen"
+        raise AssertionError("should be frozen")
     except AttributeError:
         pass
 
@@ -52,7 +58,9 @@ def test_native_review_procedure_complete():
 
 def test_no_credential_values_in_source():
     import inspect
+
     import fonely.voice.runbook as module
+
     source = inspect.getsource(module)
     assert "sk-" not in source
     assert "api_key=" not in source.lower() or "os.environ" in source

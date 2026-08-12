@@ -4,9 +4,9 @@ Replaces synchronous JSONL file writes with a non-blocking bounded
 queue.  PII-safe: no transcript text, audio, phone, SDP, or provider
 error bodies are emitted.
 """
+
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from collections import deque

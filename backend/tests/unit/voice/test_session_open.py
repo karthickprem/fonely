@@ -1,11 +1,11 @@
 """Tests for the session-open sequence (DPDP notice before capture)."""
+
 from __future__ import annotations
 
 import pytest
 
-from fonely.voice.session_open import open_session, SessionOpening
 from fonely.domain.compliance.consent import NOTICE_VERSION
-
+from fonely.voice.session_open import open_session
 
 CLINIC = "Smile Care Dental Clinic"
 

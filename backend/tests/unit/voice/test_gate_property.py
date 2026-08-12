@@ -6,13 +6,13 @@ sample size.
 
 The 60-conversation run proves the WIRING. This test proves the RULE.
 """
+
 from fonely.voice.dialogue import (
-    gate_response,
+    SAFE_NO_RECEIPT,
     contains_booking_success,
     contains_medical_advice,
-    SAFE_NO_RECEIPT,
+    gate_response,
 )
-
 
 # Every known success pattern the models have produced in testing
 SUCCESS_VARIANTS = [

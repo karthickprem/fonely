@@ -9,6 +9,7 @@ import asyncio
 import os
 import re
 import subprocess
+import warnings
 from collections.abc import AsyncGenerator, Generator
 from pathlib import Path
 from urllib.parse import urlparse
@@ -141,19 +142,38 @@ def _bring_to_clean_head(database_url: str) -> None:
       3. If the upgrade STILL fails, the database is unrecoverable: raise a
          distinct, loud error naming it and the reset command — never a generic
          setup error that reads like a product failure.
+
+    IMPORTANT — the reset is not silent. A downgrade can fail for a LEGITIMATE,
+    non-corrupt reason: a migration may deliberately REFUSE its own downgrade to
+    protect data (e.g. 0018 raises rather than drop DPDP notice-evidence
+    columns). Force-resetting answers that refusal with DROP SCHEMA, which is
+    fine on a private test DB but must never read as "there was nothing to
+    protect". So the underlying downgrade/upgrade stderr is surfaced on the reset
+    path — absence of the guard's message must not read as the guard passing.
     """
     down = _alembic(["downgrade", "base"], database_url)
     if down.returncode == 0:
         up = _alembic(["upgrade", "head"], database_url)
         if up.returncode == 0:
             return  # clean path succeeded
+        reset_cause = f"'upgrade head' failed after a clean downgrade:\n{up.stderr}"
+    else:
+        reset_cause = f"'downgrade base' failed:\n{down.stderr}"
 
-    # Repair path: the poisoned state defeated the normal migrate. Force a truly
-    # empty schema (removes tables AND alembic_version), then upgrade.
+    # Repair path: the poisoned state (or a deliberate downgrade refusal) defeated
+    # the normal migrate. Surface WHY before we force-reset, so a guarded-schema
+    # refusal is visible and not mistaken for a silent no-op.
+    db_name = urlparse(database_url.replace("+asyncpg", "")).path.lstrip("/")
+    warnings.warn(
+        f"[pg-fixture] force-resetting test database {db_name!r} via "
+        f"DROP SCHEMA public CASCADE. This can be a poisoned start state OR a "
+        f"migration's DELIBERATE downgrade refusal — read the cause and do not "
+        f"assume the guard passed. Underlying {reset_cause}",
+        stacklevel=2,
+    )
     _reset_public_schema(database_url)
     repaired = _alembic(["upgrade", "head"], database_url)
     if repaired.returncode != 0:
-        db_name = urlparse(database_url.replace("+asyncpg", "")).path.lstrip("/")
         raise PostgresTestDatabaseUnrecoverableError(
             f"PostgreSQL test database {db_name!r} is UNRECOVERABLE: a schema reset "
             f"followed by 'alembic upgrade head' still failed. This is a database "

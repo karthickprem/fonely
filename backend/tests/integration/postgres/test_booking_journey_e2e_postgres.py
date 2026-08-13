@@ -25,7 +25,6 @@ pytestmark = pytest.mark.postgres
 KOLKATA = ZoneInfo("Asia/Kolkata")
 
 
-
 @pytest.fixture(autouse=True)
 def _clear_conversations():
     _CONVERSATIONS.clear()

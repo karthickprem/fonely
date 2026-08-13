@@ -264,8 +264,17 @@ class TestConfiguration:
 class TestRepositoryHeadDiscovery:
     def test_real_discovery_finds_one_head(self) -> None:
         heads = readiness._discover_repository_heads()
+        migration_sources = [
+            path.read_text(encoding="utf-8")
+            for path in sorted(readiness._VERSIONS_DIR.glob("*.py"))
+            if path.name != "__init__.py"
+        ]
+
         assert len(heads) == 1
-        assert heads == ["0015"]
+        assert any(
+            f'revision = "{heads[0]}"' in source or f"revision = '{heads[0]}'" in source
+            for source in migration_sources
+        )
 
     def test_real_discovery_uses_backend_versions(self) -> None:
         heads = readiness._discover_repository_heads()

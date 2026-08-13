@@ -575,7 +575,7 @@ class ConversationService:
                 # ask for the time plainly so the turn cannot recur.
                 ctx.collected_facts.pop("_selection_ambiguous", None)
                 ctx.collected_facts.pop("_ambiguity_asks", None)
-                ctx.collected_facts.pop("_active_offer", None)
+                self._drop_active_offer(ctx)
                 ctx.collected_facts.pop("start_at", None)
                 turn = self._fact_turn(
                     ctx,
@@ -622,7 +622,7 @@ class ConversationService:
             if asked >= 3:
                 ctx.collected_facts.pop("_resource_ambiguous", None)
                 ctx.collected_facts.pop("_resource_ambiguity_asks", None)
-                ctx.collected_facts.pop("_active_offer", None)
+                self._drop_active_offer(ctx)
                 # Terminal wording is channel-specific (CEO #33): on voice the
                 # caller is already connected, so "call the clinic" is a false
                 # instruction. Keyed off the AUTHORITATIVE actor.channel, never
@@ -681,12 +681,57 @@ class ConversationService:
         return turn
 
     @staticmethod
+    def _drop_active_offer(ctx: ConversationContext) -> None:
+        """Discard the active offer AND its selection pointers together.
+
+        _active_offer, _selected_token and _selected_offer_id are logically
+        inseparable: a selection pointer without the offer it indexes is ALWAYS
+        invalid — the token/offer_id name a slot in an offer that no longer
+        exists. Every abandon/invalidation site must clear all three, or the
+        pointers go stale and leak into the persisted conversation row (they are
+        written at _try_offer_selection and never read again, so nothing catches
+        the staleness at runtime — but a persisted snapshot would show a
+        selection at a slot whose offer is gone, and any future consumer that
+        trusts them, e.g. resume-selection or audit/repair, would read a lie).
+
+        This clears ONLY those three. It deliberately does NOT touch the other
+        co-state (_selection_ambiguous, _resource_ambiguous, start_at, …): the
+        call sites clear DIFFERENT subsets of that state on purpose, and a
+        blanket clear here would over-clear state some sites intentionally keep.
+        Each site keeps its own additional pops; this only replaces the bare
+        pop("_active_offer") and adds the two pointer clears.
+        """
+        ctx.collected_facts.pop("_active_offer", None)
+        ConversationService._clear_selection_pointers(ctx)
+
+    @staticmethod
+    def _clear_selection_pointers(ctx: ConversationContext) -> None:
+        """Clear ONLY the selection pointers, KEEPING the active offer.
+
+        Distinct from _drop_active_offer: this is for the one abandon event where
+        the offer legitimately SURVIVES but the current SELECTION is rejected — a
+        bare "no" to a proposed slot at AWAITING_CONFIRMATION. The caller may
+        still pick a DIFFERENT slot from the same offer (verified reselection
+        flow: "no" keeps _active_offer, then "the first one" re-selects and
+        re-proposes), so dropping the offer would break reject-then-reselect.
+
+        But the rejected slot's pointers must not linger: if the caller does NOT
+        reselect (asks something else, goes quiet), the old _selected_token /
+        _selected_offer_id point at the slot they just refused and leak into the
+        persisted conversation row. The reselect path is self-healing (it
+        overwrites the pointers), so this only matters for the no-reselect case —
+        which is exactly the case that strands stale state.
+        """
+        ctx.collected_facts.pop("_selected_token", None)
+        ctx.collected_facts.pop("_selected_offer_id", None)
+
+    @staticmethod
     def _invalidate_offer_if_changed(
         ctx: ConversationContext, fact_key: str, new_value: object
     ) -> None:
         old = ctx.collected_facts.get(fact_key)
         if old is not None and old != new_value:
-            ctx.collected_facts.pop("_active_offer", None)
+            ConversationService._drop_active_offer(ctx)
 
     async def _extract_facts(self, ctx: ConversationContext, message: str, biz: object) -> None:
         from fonely.services.conversation_tools import BusinessContext
@@ -756,7 +801,7 @@ class ConversationService:
             ctx.collected_facts.pop("_resource_unknown", None)
             ctx.collected_facts.pop("resource_id", None)
             ctx.collected_facts.pop("resource_name", None)
-            ctx.collected_facts.pop("_active_offer", None)
+            self._drop_active_offer(ctx)
         elif len(matched) == 1:
             res = matched[0]
             ctx.collected_facts.pop("_resource_ambiguous", None)
@@ -772,7 +817,7 @@ class ConversationService:
             # silently proceeding to "any available" — an unknown doctor is a
             # request we cannot honour, not a blank to fill with a default.
             ctx.collected_facts["_resource_unknown"] = True
-            ctx.collected_facts.pop("_active_offer", None)
+            self._drop_active_offer(ctx)
 
         if "customer_phone" not in ctx.collected_facts:
             phone_match = re.search(r"\+?\d{10,13}", message)
@@ -859,10 +904,10 @@ class ConversationService:
         try:
             offer = deserialize_offer(offer_data)
         except OfferValidationError:
-            ctx.collected_facts.pop("_active_offer", None)
+            self._drop_active_offer(ctx)
             return False
         if offer is None:
-            ctx.collected_facts.pop("_active_offer", None)
+            self._drop_active_offer(ctx)
             return False
 
         from fonely.domain.booking.datetime_parse import parse_time_spec
@@ -951,7 +996,7 @@ class ConversationService:
                 conversation_id=ctx.conversation_id,
             )
         except OfferValidationError:
-            ctx.collected_facts.pop("_active_offer", None)
+            self._drop_active_offer(ctx)
             return False
 
         ctx.collected_facts["start_at"] = selected.start_at_utc
@@ -1075,7 +1120,7 @@ class ConversationService:
             said_time = replacement_spec.time if replacement_spec is not None else None
             if said_time is None:
                 ctx.collected_facts.pop("start_at", None)
-                ctx.collected_facts.pop("_active_offer", None)
+                self._drop_active_offer(ctx)
                 ctx.collected_facts.pop("_pending_time", None)
                 ctx.collected_facts.pop("_pending_time_explicit", None)
 
@@ -1109,7 +1154,7 @@ class ConversationService:
 
         # A newly named time/date makes any active offer stale.
         if said_time is not None or said_date is not None:
-            ctx.collected_facts.pop("_active_offer", None)
+            self._drop_active_offer(ctx)
             ctx.collected_facts.pop("_selection_ambiguous", None)
             ctx.collected_facts.pop("_ambiguity_asks", None)
 
@@ -1523,7 +1568,7 @@ class ConversationService:
                     f"{', '.join(alt_texts)}. Which one works?"
                 )
             else:
-                ctx.collected_facts.pop("_active_offer", None)
+                self._drop_active_offer(ctx)
                 response = "That time isn't available. Would you like to try another date?"
             return self._fact_turn(
                 ctx,
@@ -1625,6 +1670,12 @@ class ConversationService:
             ctx.booking_attempt += 1
             ctx.proposal_id = None
             ctx.proposal_version = None
+            # The rejected slot's selection pointers are now stale — the caller
+            # said no to THAT slot. Keep _active_offer (they may pick another of
+            # its slots) but drop the pointers so a no-reselect turn does not
+            # leak a selection at a refused slot into the persisted row. Reselect
+            # overwrites them anyway, so this only bites the no-reselect case.
+            self._clear_selection_pointers(ctx)
             # A rejection that ALSO names a new time is a correction ("no no,
             # make it 6 pm"). The correction typically names only the time, not
             # the date — the date was already composed into the rejected

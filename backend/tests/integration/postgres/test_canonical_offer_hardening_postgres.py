@@ -37,8 +37,9 @@ import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-# Import-origin assertion (venv discipline): this test must exercise WORKTREE src,
-# not the main-checkout src the shared .venv resolves without PYTHONPATH.
+# Import-origin assertion (venv discipline): this test must exercise THIS
+# checkout's src, not the main-checkout src the shared .venv resolves without
+# PYTHONPATH.
 import fonely.domain.booking.offers as _offers_mod
 from fonely.api.internal.validation import (
     AppointmentAvailabilityError,
@@ -59,11 +60,13 @@ from fonely.services.appointments import AppointmentService
 from fonely.services.availability import AvailabilityReason
 from tests.integration.postgres.concurrency import install_transaction_timeouts
 from tests.integration.postgres.conftest import seed_whatsapp_channel
+from tests.integration.postgres.import_origin import assert_module_from_this_checkout
 
-assert "/dev3-dental-e2e/" in _offers_mod.__file__, (
-    f"offers.py resolved from {_offers_mod.__file__!r} — not the worktree; "
-    "run with PYTHONPATH=$PWD/src or the test exercises stale code"
-)
+# Assert offers.py resolves under THIS checkout's backend/src — portable across
+# worktrees/CI, unlike a hardcoded branch name. Still fails on a stale/external
+# import (the real thing this guards); see import_origin.py for the negative
+# proof that keeps its teeth.
+assert_module_from_this_checkout(_offers_mod, __file__)
 
 pytestmark = pytest.mark.postgres
 

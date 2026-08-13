@@ -45,18 +45,19 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-# Import-origin assertion (venv discipline): exercise WORKTREE src, not the
-# main-checkout src the shared .venv resolves without PYTHONPATH.
+# Import-origin assertion (venv discipline): exercise THIS checkout's src, not
+# the main-checkout src the shared .venv resolves without PYTHONPATH.
 import fonely.services.conversation as _conv_mod
 from fonely.services.conversation import _CONVERSATIONS, ConversationService
 from fonely.services.model_gateway import ModelResponse
 from fonely.workers.inbound_worker import ClaimedEvent, _process_domain
 from tests.integration.postgres.conftest import seed_whatsapp_channel
+from tests.integration.postgres.import_origin import assert_module_from_this_checkout
 
-assert "/dev3-dental-e2e/" in _conv_mod.__file__, (
-    f"conversation.py resolved from {_conv_mod.__file__!r} — not the worktree; "
-    "run with PYTHONPATH=$PWD/src or the test exercises stale code"
-)
+# Assert conversation.py resolves under THIS checkout's backend/src — portable
+# across worktrees/CI, unlike a hardcoded branch name; still fails on a
+# stale/external import (see import_origin.py + test_import_origin_guard.py).
+assert_module_from_this_checkout(_conv_mod, __file__)
 
 pytestmark = pytest.mark.postgres
 

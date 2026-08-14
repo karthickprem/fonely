@@ -24,16 +24,32 @@ import pytest
 pytestmark = pytest.mark.live
 
 
-def _env_ready() -> bool:
-    env_path = "/scratch/karthick/fonely/.env"
+# Credentials for the live path come from the process env. Optionally they are
+# loaded from a local .env / Claude settings.json, but the PATHS are config, not
+# hardcoded to one developer's machine: FONELY_LIVE_ENV_FILE and
+# FONELY_LIVE_SETTINGS_FILE override the defaults. On any other host, the
+# defaults simply do not exist and are skipped — see the distinct skip reasons
+# below so "wrong host" never reads the same as "creds absent".
+_DEFAULT_ENV_FILE = "/scratch/karthick/fonely/.env"
+_DEFAULT_SETTINGS_FILE = "/scratch/karthick/.claude/settings.json"
+
+_REQUIRED_LIVE_KEYS = ("SARVAM_API_KEY", "CARTESIA_API_KEY", "CARTESIA_VOICE_ID")
+
+
+def _load_env_files() -> None:
+    """Best-effort load of credential files into os.environ (setdefault, so the
+    real env always wins). Paths are config-overridable; a missing file is not
+    an error here — the readiness check below reports what actually resolved."""
+    env_path = os.environ.get("FONELY_LIVE_ENV_FILE", _DEFAULT_ENV_FILE)
     if os.path.exists(env_path):
         with open(env_path) as f:
-            for line in f:
-                line = line.strip()
+            for raw in f:
+                line = raw.strip()
                 if "=" in line and not line.startswith("#"):
                     k, v = line.split("=", 1)
                     os.environ.setdefault(k, v)
-    settings_path = "/scratch/karthick/.claude/settings.json"
+
+    settings_path = os.environ.get("FONELY_LIVE_SETTINGS_FILE", _DEFAULT_SETTINGS_FILE)
     if os.path.exists(settings_path):
         import json
 
@@ -42,15 +58,58 @@ def _env_ready() -> bool:
         for k, v in data.get("env", {}).items():
             os.environ.setdefault(k, v)
 
+
+def _live_skip_reason() -> str | None:
+    """Return None if the live path can run, else a SPECIFIC reason.
+
+    The reasons are deliberately distinct so a skip is never ambiguous:
+      * the live gate being off (FONELY_RUN_LIVE unset) is a chosen "not now",
+      * a missing DATABASE_URL / non-postgres URL is an infra gap,
+      * missing STT/TTS credentials is a creds gap,
+      * the SELECTED LLM provider missing its config is a distinct provider gap,
+        named via validate_llm_startup so it reads "provider X missing key",
+    and none of them is silently conflated with "we're on a host where the
+    default credential file path didn't exist". Absence must not read as
+    success, and a skip for the wrong reason must not read as the right one."""
+    if os.environ.get("FONELY_RUN_LIVE", "").strip() not in ("1", "true", "yes"):
+        return "live gate disabled (set FONELY_RUN_LIVE=1 to enable the live path)"
+
+    _load_env_files()
+
     db_url = os.environ.get("DATABASE_URL", "")
-    sarvam = os.environ.get("SARVAM_API_KEY", "")
-    cartesia = os.environ.get("CARTESIA_API_KEY", "")
-    voice = os.environ.get("CARTESIA_VOICE_ID", "")
-    return "postgresql" in db_url and len(sarvam) > 5 and len(cartesia) > 5 and len(voice) > 5
+    if "postgresql" not in db_url:
+        return (
+            "live gate enabled but DATABASE_URL is not a PostgreSQL URL "
+            f"(got {db_url!r}); the live booking proof needs a real PostgreSQL"
+        )
+
+    missing = [k for k in _REQUIRED_LIVE_KEYS if len(os.environ.get(k, "")) <= 5]
+    if missing:
+        return (
+            "live gate enabled but STT/TTS credentials missing/short: "
+            f"{missing}. Set them in the env or point FONELY_LIVE_ENV_FILE / "
+            "FONELY_LIVE_SETTINGS_FILE at a file that defines them"
+        )
+
+    # The SELECTED LLM provider's config is a DISTINCT gap from missing STT/TTS
+    # creds — validate_llm_startup names which provider and what it lacks, so a
+    # config gap (selected provider missing its key) never reads the same as the
+    # expected-in-CI live-gate-disabled skip. This test exercises the default
+    # anthropic provider; a different selection is honored via LLMConfig.
+    from fonely.voice.config import LLMConfig
+    from fonely.voice.llm_selection import LLMConfigError, validate_llm_startup
+
+    try:
+        validate_llm_startup(LLMConfig())
+    except LLMConfigError as exc:
+        return f"live gate enabled but selected LLM provider not configured: {exc}"
+
+    return None
 
 
-if not _env_ready():
-    pytest.skip("Live credentials or PostgreSQL not available", allow_module_level=True)
+_skip_reason = _live_skip_reason()
+if _skip_reason is not None:
+    pytest.skip(_skip_reason, allow_module_level=True)
 
 
 # Imports deferred below the module-level skip guard so the heavy voice/provider

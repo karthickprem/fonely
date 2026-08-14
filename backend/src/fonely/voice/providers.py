@@ -80,6 +80,23 @@ def build_stt(config: STTConfig) -> Any:
 
 
 def build_llm(config: LLMConfig, *, evidence_sink: Any = None) -> Any:
+    """Build the selected LLM service, provider-neutral.
+
+    Dispatches on ``config.provider``: ``anthropic`` builds the native Anthropic
+    service (unchanged); ``openai_compatible`` builds an OpenAI-protocol service
+    against any endpoint named in config. Startup validation
+    (``llm_selection.validate_llm_startup``) is the fail-closed gate that should
+    run BEFORE this — this builder assumes a validated selection and raises via
+    the same ``validate_api_key`` path if a key is somehow still missing."""
+    builder = _LLM_BUILDERS.get(config.provider)
+    if builder is None:
+        from .llm_selection import LLMConfigError
+
+        raise LLMConfigError(f"no LLM builder for provider {config.provider!r}")
+    return builder(config)
+
+
+def build_anthropic_llm(config: LLMConfig) -> Any:
     """Build AnthropicLLMService with gateway support and usage metrics."""
     from anthropic import AsyncAnthropic, DefaultAsyncHttpxClient
     from pipecat.services.anthropic.llm import AnthropicLLMService
@@ -127,6 +144,58 @@ def build_llm(config: LLMConfig, *, evidence_sink: Any = None) -> Any:
         client=client,
         settings=AnthropicLLMService.Settings(**settings_kwargs),
     )
+
+
+def build_openai_compatible_llm(config: LLMConfig) -> Any:
+    """Build an OpenAI-protocol LLM service against any endpoint named in config.
+
+    Provider-neutral: the model, base_url, API-key env var, and auth header name
+    all come from ``config`` (resolved via ``llm_selection``), so a gateway is
+    expressed as data — no ANTHROPIC_* env var and no gateway-specific header
+    name is baked in here. Assumes ``validate_llm_startup`` already passed; still
+    fails loud if the key env is unset (never silently sends an empty key)."""
+    from pipecat.services.openai.llm import OpenAILLMService
+
+    from .llm_selection import resolve_llm_selection
+
+    resolved = resolve_llm_selection(config)
+    if not resolved.api_key_env:
+        raise RuntimeError("openai_compatible provider requires api_key_env in config")
+    api_key = validate_api_key(resolved.api_key_env)
+
+    # The auth header: send the key under the configured header name, formatted
+    # by the configured template (e.g. "Bearer {key}") or raw. Only added when
+    # the header name is not the OpenAI SDK's own Authorization default, so a
+    # gateway using a custom header (e.g. Ocp-Apim-Subscription-Key) works
+    # without duplicating the standard bearer auth.
+    default_headers: dict[str, str] = {}
+    if resolved.auth_header_name and resolved.auth_header_name.casefold() != "authorization":
+        header_value = (
+            resolved.auth_header_format.format(key=api_key)
+            if resolved.auth_header_format
+            else api_key
+        )
+        default_headers[resolved.auth_header_name] = header_value
+
+    settings_kwargs: dict[str, Any] = {"max_completion_tokens": config.max_tokens}
+    if config.model:
+        settings_kwargs["model"] = config.model
+
+    return OpenAILLMService(
+        api_key=api_key,
+        base_url=resolved.base_url or None,
+        default_headers=default_headers or None,
+        settings=OpenAILLMService.Settings(**settings_kwargs),
+    )
+
+
+# Provider -> builder registry. build_llm dispatches through this, so adding a
+# provider is one entry here plus a builder — the anthropic path stays available
+# and is never privileged over the neutral one.
+_LLM_BUILDERS: dict[str, Any] = {
+    "anthropic": build_anthropic_llm,
+    "openai_compatible": build_openai_compatible_llm,
+}
 
 
 def validate_cartesia_speed(speed: float) -> float:

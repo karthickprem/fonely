@@ -64,13 +64,42 @@ class STTConfig:
     stream_timeout_seconds: float = 30.0
 
 
+# LLM providers the runtime can build. "anthropic" is the native Anthropic
+# service; "openai_compatible" is any OpenAI-protocol endpoint (a gateway, a
+# self-hosted model, a third-party OpenAI-compatible API) selected purely by
+# config — no provider name is hardcoded into the adapter. Kept as a Literal so
+# an unknown provider is a type error at the config site, and validated again at
+# build time for values that arrive dynamically (env/JSON).
+LlmProvider = Literal["anthropic", "openai_compatible"]
+
+LLM_PROVIDERS: frozenset[str] = frozenset({"anthropic", "openai_compatible"})
+
+
 @dataclass(frozen=True)
 class LLMConfig:
-    provider: str = "anthropic"
+    provider: LlmProvider = "anthropic"
     model: str = ""  # Use project default; no hardcoded model version
     max_tokens: int = 1024
     per_turn_timeout_seconds: float = 15.0
     session_token_budget: int = 50_000
+    # Provider-neutral endpoint + auth config. Empty means "read from the
+    # provider's conventional env at build time" (backwards-compatible with the
+    # Anthropic path). None of these names an Anthropic-specific env var or a
+    # specific gateway's header — the header NAME is itself configurable, so a
+    # gateway that authenticates with (say) "Ocp-Apim-Subscription-Key" or
+    # "X-Api-Key" is expressed as data, not baked into code.
+    base_url: str = ""
+    # Env var whose VALUE is the API key/token for the selected provider. The
+    # value is never stored in config — only the name of the env var to read, so
+    # a secret never lands in a frozen dataclass or a log.
+    api_key_env: str = ""
+    # Auth header name to send the key under (e.g. "Authorization",
+    # "x-api-key", "Ocp-Apim-Subscription-Key"). Empty = the provider adapter's
+    # conventional default.
+    auth_header_name: str = ""
+    # Optional format template for the header value, e.g. "Bearer {key}". Empty
+    # = send the raw key value.
+    auth_header_format: str = ""
 
 
 @dataclass(frozen=True)

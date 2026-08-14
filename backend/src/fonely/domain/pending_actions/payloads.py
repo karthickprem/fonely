@@ -160,6 +160,45 @@ class PendingAppointmentEnvelope(FrozenStrictModel):
     data: AppointmentOperationData
 
 
+class CallbackData(StrictModel):
+    """Partial booking facts a human needs to RESUME a booking the caller could
+    not finish on a voice call. Carries enough to complete the booking, NOT the
+    raw dialogue.
+
+    Tenant identity (business_id) and the authoritative caller identity are bound
+    on the PendingAction record from the TRUSTED actor context (business_id
+    column, initiated_by), never from this payload — so nothing here is trusted
+    for tenant isolation. caller_phone is carried only as the number to dial back
+    and is set from the verified session, not a model-extracted value.
+    """
+
+    reason_code: Literal[
+        "doctor_disambiguation_exhausted",
+        "slot_disambiguation_exhausted",
+    ]
+    caller_phone: E164PhoneNumber
+    # Resolved-if-known booking facts. Optional because the give-up happens
+    # precisely when something could NOT be resolved — a human resumes from
+    # whatever we DID capture, rather than the caller re-explaining everything.
+    service_id: Annotated[int | None, Field(default=None, gt=0)]
+    service_name: Annotated[str | None, Field(default=None, min_length=1, max_length=200)]
+    target_date: ISODate | None = None
+    # The candidates we could not disambiguate between (the doctors or slots the
+    # caller's words matched more than one of). Bounded; display strings only, no
+    # tokens or internal ids beyond what a human needs to pick.
+    attempted_candidates: Annotated[
+        list[Annotated[str, Field(min_length=1, max_length=200)]],
+        Field(default_factory=list, max_length=20),
+    ]
+    requested_at: AwareDatetime
+
+
+class PendingCallbackEnvelope(StrictModel):
+    schema_version: Literal[1] = 1
+    action_type: Literal[PendingActionType.CALLBACK] = PendingActionType.CALLBACK
+    data: CallbackData
+
+
 class PendingOrderEnvelope(StrictModel):
     schema_version: Literal[1] = 1
     action_type: Literal[PendingActionType.ORDER] = PendingActionType.ORDER
@@ -174,12 +213,20 @@ class OwnerStockUpdateEnvelope(StrictModel):
     data: OwnerStockUpdateData
 
 
-type PayloadEnvelope = PendingOrderEnvelope | PendingAppointmentEnvelope | OwnerStockUpdateEnvelope
+type PayloadEnvelope = (
+    PendingOrderEnvelope
+    | PendingAppointmentEnvelope
+    | OwnerStockUpdateEnvelope
+    | PendingCallbackEnvelope
+)
 type PayloadEnvelopeAdapter = Annotated[PayloadEnvelope, Field(discriminator="action_type")]
 
 _PAYLOAD_REGISTRY: dict[
     tuple[PendingActionType, int],
-    type[PendingOrderEnvelope] | type[PendingAppointmentEnvelope] | type[OwnerStockUpdateEnvelope],
+    type[PendingOrderEnvelope]
+    | type[PendingAppointmentEnvelope]
+    | type[OwnerStockUpdateEnvelope]
+    | type[PendingCallbackEnvelope],
 ] = {
     (PendingActionType.ORDER, PAYLOAD_SCHEMA_VERSION): PendingOrderEnvelope,
     (PendingActionType.APPOINTMENT, PAYLOAD_SCHEMA_VERSION): PendingAppointmentEnvelope,
@@ -187,6 +234,7 @@ _PAYLOAD_REGISTRY: dict[
         PendingActionType.OWNER_STOCK_UPDATE,
         PAYLOAD_SCHEMA_VERSION,
     ): OwnerStockUpdateEnvelope,
+    (PendingActionType.CALLBACK, PAYLOAD_SCHEMA_VERSION): PendingCallbackEnvelope,
 }
 
 

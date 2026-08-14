@@ -610,3 +610,167 @@ class TestBatchSize:
             select(func.count()).select_from(Conversation).where(Conversation.state == "completed")
         )
         assert count_after_second == 0
+
+
+async def _insert_callback(
+    session: AsyncSession,
+    *,
+    idempotency_key: str,
+    updated_at_offset_days: int,
+    status: str = "awaiting_confirmation",
+) -> int:
+    """A callback pending action (action_type='callback', committed_entity_id
+    NULL — it never commits) aged `updated_at_offset_days` in the past."""
+    now = utcnow()
+    updated = now - timedelta(days=updated_at_offset_days)
+    result = await session.execute(
+        text(
+            "INSERT INTO pending_actions "
+            "(business_id, action_type, payload_schema_version, proposed_payload, "
+            " payload_digest, status, committed_entity_type, committed_entity_id, "
+            " expires_at, idempotency_key, initiated_by, created_at, updated_at, version) "
+            "VALUES (1, 'callback', 1, '{}'::jsonb, :digest, :status, NULL, NULL, "
+            " :expires, :idem, '+919123456789', :updated, :updated, 1) "
+            "RETURNING id"
+        ),
+        {
+            "digest": f"digest-{idempotency_key}",
+            "status": status,
+            "expires": now + timedelta(hours=1),
+            "idem": idempotency_key,
+            "updated": updated,
+        },
+    )
+    return int(result.scalar_one())
+
+
+class TestCallbackRetention:
+    """The callback sweep is the SOLE PII bound for callbacks (expires_at cannot
+    delete, and is capped at 24h). So the sweep must (a) actually delete aged
+    callbacks, (b) keep fresh ones, (c) be REACHED by the top-level retention
+    entry point — a sweep that works but is never wired is 'the deleter never
+    runs', and (d) never touch committed booking PAs (the over-clear guard)."""
+
+    async def test_run_cleanup_deletes_aged_callback_end_to_end(
+        self, pg_session: AsyncSession
+    ) -> None:
+        # REACHABILITY: drive the PUBLIC run_cleanup(), not _cleanup_callbacks
+        # directly — proves the sweep is wired into the scheduled entry point.
+        await _seed_business(pg_session)
+        old_id = await _insert_callback(
+            pg_session, idempotency_key="cb-old", updated_at_offset_days=100
+        )
+        await pg_session.flush()
+
+        result = await DataRetentionService(pg_session).run_cleanup()
+
+        assert result.callbacks_deleted == 1, (
+            "the top-level retention run must reach the callback sweep — a callback "
+            "aged past CALLBACK_TTL_DAYS must be deleted through run_cleanup(), not "
+            "only via a direct _cleanup_callbacks call"
+        )
+        survived = await pg_session.scalar(
+            select(func.count()).select_from(PendingAction).where(PendingAction.id == old_id)
+        )
+        assert survived == 0, "aged callback PII must be gone after the retention run"
+
+    async def test_run_cleanup_keeps_fresh_callback(self, pg_session: AsyncSession) -> None:
+        await _seed_business(pg_session)
+        fresh_id = await _insert_callback(
+            pg_session, idempotency_key="cb-fresh", updated_at_offset_days=1
+        )
+        await pg_session.flush()
+
+        result = await DataRetentionService(pg_session).run_cleanup()
+
+        assert result.callbacks_deleted == 0
+        alive = await pg_session.scalar(
+            select(func.count()).select_from(PendingAction).where(PendingAction.id == fresh_id)
+        )
+        assert alive == 1, "a within-horizon callback must be kept"
+
+    async def test_expired_status_callback_is_still_swept(self, pg_session: AsyncSession) -> None:
+        # An UNWORKED callback flips to status='expired' after 24h but its ROW
+        # lives until the sweep. The sweep must delete it regardless of status —
+        # the never-worked path is exactly where PII would otherwise leak.
+        await _seed_business(pg_session)
+        await _insert_callback(
+            pg_session,
+            idempotency_key="cb-expired",
+            updated_at_offset_days=100,
+            status="expired",
+        )
+        await pg_session.flush()
+
+        result = await DataRetentionService(pg_session).run_cleanup()
+        assert result.callbacks_deleted == 1, (
+            "an aged callback in status='expired' (the unworked path) must still be "
+            "swept — status must not exempt it from PII deletion"
+        )
+
+    async def test_sweep_is_load_bearing_mutation_proof(
+        self, pg_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Neutralize the callback branch → the aged callback SURVIVES the run,
+        # proving the sweep is what deletes it (single mechanism, load-bearing).
+        await _seed_business(pg_session)
+        old_id = await _insert_callback(
+            pg_session, idempotency_key="cb-mut", updated_at_offset_days=100
+        )
+        await pg_session.flush()
+
+        async def _noop(self: object, before: object) -> int:
+            return 0
+
+        monkeypatch.setattr(DataRetentionService, "_cleanup_callbacks", _noop)
+        result = await DataRetentionService(pg_session).run_cleanup()
+
+        assert result.callbacks_deleted == 0
+        survived = await pg_session.scalar(
+            select(func.count()).select_from(PendingAction).where(PendingAction.id == old_id)
+        )
+        assert survived == 1, (
+            "MUTATION: with the callback sweep neutralized, the aged callback must "
+            "SURVIVE — proving the sweep is the load-bearing (and only) PII deleter "
+            "for callbacks. If it were deleted anyway, the sweep would be decorative."
+        )
+
+    async def test_booking_pa_gate_untouched_no_overclear(self, pg_session: AsyncSession) -> None:
+        # OVER-CLEAR GUARD: the callback branch must not delete a booking PA. A
+        # confirmed, committed appointment PA aged past the horizon but WITHOUT a
+        # referencing appointment row is protected by the booking sweep's
+        # committed_entity_id gate; the callback branch (action_type='callback')
+        # must not reach it. Insert a non-callback PA and assert it is untouched
+        # by the callbacks counter.
+        await _seed_business(pg_session)
+        now = utcnow()
+        old = now - timedelta(days=100)
+        pa_result = await pg_session.execute(
+            text(
+                "INSERT INTO pending_actions "
+                "(business_id, action_type, payload_schema_version, proposed_payload, "
+                " payload_digest, status, committed_entity_type, committed_entity_id, "
+                " expires_at, idempotency_key, initiated_by, created_at, updated_at, version) "
+                "VALUES (1, 'appointment', 1, '{}'::jsonb, 'd-book', 'rejected', NULL, NULL, "
+                " :expires, 'book-pa', '+919123456789', :old, :old, 1) "
+                "RETURNING id"
+            ),
+            {"old": old, "expires": now + timedelta(hours=1)},
+        )
+        book_id = int(pa_result.scalar_one())
+        await pg_session.flush()
+
+        result = await DataRetentionService(pg_session).run_cleanup()
+
+        # The callback branch must NOT have counted or deleted the booking PA.
+        assert result.callbacks_deleted == 0, (
+            "the callback sweep must only touch action_type='callback' rows, never a "
+            "booking pending action"
+        )
+        # (This 'rejected' non-committed booking PA is protected by the booking
+        # sweep's own committed_entity_id gate — the point here is the CALLBACK
+        # branch did not reach across to it.)
+        still_there = await pg_session.scalar(
+            select(func.count()).select_from(PendingAction).where(PendingAction.id == book_id)
+        )
+        assert still_there == 1

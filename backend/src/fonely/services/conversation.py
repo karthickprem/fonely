@@ -27,7 +27,7 @@ from fonely.domain.conversation.state import (
     ConversationTurn,
 )
 from fonely.domain.pending_actions.commands import ActorContext
-from fonely.models.enums import Channel
+from fonely.models.enums import Channel, PendingActionType
 from fonely.services.model_gateway import ModelGateway, ModelResponse
 
 if TYPE_CHECKING:
@@ -623,6 +623,19 @@ class ConversationService:
                 ctx.collected_facts.pop("_resource_ambiguous", None)
                 ctx.collected_facts.pop("_resource_ambiguity_asks", None)
                 self._drop_active_offer(ctx)
+                # On VOICE the caller is on a live call with no channel to return
+                # to — a give-up that persists nothing leaves them with no
+                # follow-up (#36). Leave a durable callback carrying the partial
+                # facts so a human can call back and finish the booking. Text
+                # callers keep a WhatsApp thread they can resume, so no callback
+                # there. Best-effort: never fail the give-up on a callback error.
+                if actor.channel == Channel.VOICE:
+                    await self._persist_voice_callback(
+                        ctx,
+                        actor,
+                        reason_code="doctor_disambiguation_exhausted",
+                        attempted_candidates=[str(c.get("name", "")) for c in cand],
+                    )
                 # Terminal wording is channel-specific (CEO #33): on voice the
                 # caller is already connected, so "call the clinic" is a false
                 # instruction. Keyed off the AUTHORITATIVE actor.channel, never
@@ -2102,6 +2115,97 @@ class ConversationService:
         )
         ctx.turns.append(turn)
         return turn
+
+    async def _persist_voice_callback(
+        self,
+        ctx: ConversationContext,
+        actor: ActorContext,
+        reason_code: str,
+        attempted_candidates: list[str],
+    ) -> None:
+        """Leave a durable callback so a voice give-up is followed up, not lost.
+
+        Called only on the VOICE terminal give-up (the caller is on a live call
+        and we could not disambiguate). Persists the partial booking facts a
+        human needs to call back and finish the booking.
+
+        TENANT SAFETY: business_id and the authoritative caller identity come
+        from the TRUSTED actor context (PendingActionService.create binds
+        business_id and initiated_by from command.actor, never the payload). The
+        payload's caller_phone is only the number to dial back, taken from the
+        verified actor — not a model/caller-supplied value. A callback therefore
+        cannot be created under another tenant's scope.
+
+        Best-effort within its own savepoint: a callback that fails to persist
+        must not turn the give-up itself into an error to the caller (they still
+        get the honest give-up message). But the FAILURE is logged loudly — a
+        silently-dropped callback is the "absence reads as success" trap.
+
+        NOTE (follow-on, not in this scope): the callback is PERSISTED but not
+        yet surfaced to any owner/worklist consumer. It is durable but invisible
+        until such a consumer exists — bounded by expires_at so it is at least
+        compliance-safe (PII self-expires) while unworked. A notification/
+        worklist consumer is required before this is a real production follow-up.
+        """
+        from datetime import UTC
+
+        from fonely.domain.pending_actions.commands import CreatePendingActionCommand
+        from fonely.services.pending_actions import MAX_EXPIRY_HORIZON, PendingActionService
+
+        service_id = ctx.collected_facts.get("service_id")
+        service_name = ctx.collected_facts.get("service_name")
+        start_at = ctx.collected_facts.get("start_at")
+        target_date: str | None = None
+        if isinstance(start_at, datetime):
+            from zoneinfo import ZoneInfo
+
+            biz_tz = ctx.collected_facts.get("_business_timezone")
+            tz = ZoneInfo(biz_tz) if isinstance(biz_tz, str) else UTC
+            target_date = start_at.astimezone(tz).date().isoformat()
+
+        now = utcnow()
+        payload: dict[str, object] = {
+            "schema_version": 1,
+            "action_type": PendingActionType.CALLBACK.value,
+            "data": {
+                "reason_code": reason_code,
+                # From the TRUSTED actor, never a model field — the number we dial.
+                "caller_phone": actor.normalized_phone,
+                "service_id": service_id if isinstance(service_id, int) else None,
+                "service_name": service_name if isinstance(service_name, str) else None,
+                "target_date": target_date,
+                "attempted_candidates": attempted_candidates[:20],
+                "requested_at": now.isoformat(),
+            },
+        }
+        try:
+            async with self._session.begin_nested():
+                service = PendingActionService(self._session)
+                await service.create(
+                    CreatePendingActionCommand(
+                        actor=actor,
+                        action_type=PendingActionType.CALLBACK,
+                        payload_schema_version=1,
+                        payload=payload,
+                        # expires_at is the PA-LIFECYCLE staleness marker (this
+                        # callback is a stale actionable item after a day), NOT
+                        # the PII bound. Pending actions cap at MAX_EXPIRY_HORIZON
+                        # (24h) and expiry only flips status→EXPIRED, never
+                        # deletes. The PII bound is the retention sweep alone
+                        # (CALLBACK_TTL_DAYS=90d, data_retention._cleanup_callbacks)
+                        # — this codebase's only row-deleter, which sweeps a
+                        # callback whether it is worked, unworked, or expired.
+                        expires_at=now + MAX_EXPIRY_HORIZON,
+                        idempotency_key=f"callback-{ctx.conversation_id}-{reason_code}",
+                    )
+                )
+        except Exception:
+            # A dropped callback must not fail the give-up, but must be visible.
+            logger.warning(
+                "voice_callback_persist_failed",
+                exc_info=True,
+                extra={"business_id": actor.business_id, "reason_code": reason_code},
+            )
 
 
 def get_conversation(

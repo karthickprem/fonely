@@ -46,6 +46,11 @@ class PendingActionType(enum.StrEnum):
     OWNER_STOCK_UPDATE = "owner_stock_update"
     OWNER_PRICE_UPDATE = "owner_price_update"
     OWNER_SCHEDULE_UPDATE = "owner_schedule_update"
+    # A durable follow-up record left when the agent gives up mid-booking on a
+    # voice call (e.g. doctor/slot disambiguation exhausted) so the caller can be
+    # called back to complete the booking. Carries the partial booking facts, not
+    # the raw dialogue. Never commits an entity of its own.
+    CALLBACK = "callback"
 
 
 class PendingActionStatus(enum.StrEnum):

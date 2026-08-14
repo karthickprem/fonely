@@ -42,6 +42,7 @@ MIGRATION_0015 = MIGRATIONS_DIR / "0015_notification_manifests.py"
 MIGRATION_0016 = MIGRATIONS_DIR / "0016_business_whatsapp_channels.py"
 MIGRATION_0017 = MIGRATIONS_DIR / "0017_channel_identities_and_call_sid.py"
 MIGRATION_0018 = MIGRATIONS_DIR / "0018_dpdp_notice_evidence.py"
+MIGRATION_0019 = MIGRATIONS_DIR / "0019_pending_action_callback_type.py"
 
 
 class OperationRecorder:
@@ -264,6 +265,14 @@ def _capture_upgrade() -> OperationRecorder:
         (MIGRATION_0016, "fonely_migration_0016"),
         (MIGRATION_0017, "fonely_migration_0017"),
         (MIGRATION_0018, "fonely_migration_0018"),
+        # 0019 is intentionally NOT replayed here. It only DROPs and RECREATEs
+        # the existing ``action_type`` CHECK constraint to add a value; it adds
+        # no columns/tables. Replaying it would make this capture hold a literal
+        # ``action_type IN (...6 values...)`` while the ORM models the same column
+        # as a native-enum-style constraint rendered as POSTCOMPILE — a
+        # representation mismatch, not a real drift. The constraint-value parity
+        # 0019 DOES need (the migration's set equals PendingActionType) is asserted
+        # directly in test_callback_constraint_matches_enum below.
     ):
         module = _load_migration(path, name)
         module.op = recorder
@@ -815,6 +824,32 @@ def test_revision_chain_has_single_head() -> None:
     # The numbering itself must be contiguous, which the chain above cannot
     # see: 0001, 0002, 0004 is a perfectly well-formed chain.
     assert on_disk == [f"{number:04d}" for number in range(1, len(on_disk) + 1)]
+
+
+def test_callback_constraint_matches_enum() -> None:
+    """0019's action_type CHECK value set must be DERIVED from PendingActionType,
+    never a hand-typed list that could drift from the enum.
+
+    0019 is not replayed in _capture_upgrade (it re-expresses an enum constraint
+    the ORM renders as POSTCOMPILE, which that structural capture cannot compare).
+    So the invariant it actually needs — the constraint mirrors the model exactly,
+    upgrade includes every enum value and downgrade includes every value except
+    callback — is asserted here directly against the migration module.
+    """
+    from fonely.models.enums import PendingActionType
+
+    module = _load_migration(MIGRATION_0019, "fonely_migration_0019_parity")
+    all_values = set(module._ALL_VALUES)
+    without_callback = set(module._WITHOUT_CALLBACK)
+
+    assert all_values == {member.value for member in PendingActionType}, (
+        "0019 upgrade constraint must include EXACTLY the PendingActionType values "
+        "(derived from the enum, not a literal list) so it cannot drift"
+    )
+    assert "callback" in all_values
+    assert without_callback == all_values - {"callback"}, (
+        "0019 downgrade constraint must be the enum value set minus 'callback'"
+    )
 
 
 def test_runtime_provenance_helpers_precede_and_simplify_create_trigger() -> None:

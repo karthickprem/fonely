@@ -172,3 +172,70 @@ class TestCommandBoundary:
                 expected_version=2,
                 engine="caller",  # type: ignore[arg-type]
             )
+
+
+def callback_payload() -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "action_type": "callback",
+        "data": {
+            "reason_code": "doctor_disambiguation_exhausted",
+            "caller_phone": "+919123456789",
+            "service_id": 3,
+            "service_name": "General Consultation",
+            "target_date": "2026-08-15",
+            "attempted_candidates": ["Dr. Priya", "Dr. Preethi"],
+            "requested_at": "2026-08-13T09:00:00Z",
+        },
+    }
+
+
+class TestCallbackPayload:
+    def test_valid_callback_payload(self) -> None:
+        from fonely.domain.pending_actions.payloads import PendingCallbackEnvelope
+
+        result = validate_payload(PendingActionType.CALLBACK, 1, callback_payload())
+        assert isinstance(result, PendingCallbackEnvelope)
+        assert result.data.reason_code == "doctor_disambiguation_exhausted"
+        assert result.data.caller_phone == "+919123456789"
+
+    def test_callback_optional_facts_absent_ok(self) -> None:
+        # The give-up happens precisely when facts could not be resolved, so
+        # service/date/candidates are optional — a minimal callback still validates.
+        payload = callback_payload()
+        payload["data"] = {
+            "reason_code": "slot_disambiguation_exhausted",
+            "caller_phone": "+919123456789",
+            "requested_at": "2026-08-13T09:00:00Z",
+        }
+        result = validate_payload(PendingActionType.CALLBACK, 1, payload)
+        assert result.data.service_id is None
+        assert result.data.target_date is None
+        assert result.data.attempted_candidates == []
+
+    def test_callback_rejects_unknown_reason_code(self) -> None:
+        payload = callback_payload()
+        payload["data"]["reason_code"] = "something_else"  # type: ignore[index]
+        with pytest.raises(ValidationError):
+            validate_payload(PendingActionType.CALLBACK, 1, payload)
+
+    def test_callback_rejects_extra_fields(self) -> None:
+        # extra=forbid: an unexpected field (e.g. a smuggled business_id) is rejected.
+        payload = callback_payload()
+        payload["data"]["business_id"] = 999  # type: ignore[index]
+        with pytest.raises(ValidationError):
+            validate_payload(PendingActionType.CALLBACK, 1, payload)
+
+    def test_callback_rejects_bad_phone(self) -> None:
+        payload = callback_payload()
+        payload["data"]["caller_phone"] = "not-a-phone"  # type: ignore[index]
+        with pytest.raises(ValidationError):
+            validate_payload(PendingActionType.CALLBACK, 1, payload)
+
+    def test_callback_caps_candidate_list(self) -> None:
+        payload = callback_payload()
+        payload["data"]["attempted_candidates"] = [  # type: ignore[index]
+            f"Dr. {i}" for i in range(21)
+        ]
+        with pytest.raises(ValidationError):
+            validate_payload(PendingActionType.CALLBACK, 1, payload)

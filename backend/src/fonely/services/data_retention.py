@@ -25,6 +25,7 @@ class RetentionResult:
     turns_deleted: int = 0
     notifications_deleted: int = 0
     pending_actions_deleted: int = 0
+    callbacks_deleted: int = 0
     inbound_events_deleted: int = 0
     call_transcripts_redacted: int = 0
     execution_time_ms: float = 0.0
@@ -35,6 +36,7 @@ class RetentionResult:
             "turns_deleted": self.turns_deleted,
             "notifications_deleted": self.notifications_deleted,
             "pending_actions_deleted": self.pending_actions_deleted,
+            "callbacks_deleted": self.callbacks_deleted,
             "inbound_events_deleted": self.inbound_events_deleted,
             "call_transcripts_redacted": self.call_transcripts_redacted,
             "execution_time_ms": round(self.execution_time_ms, 1),
@@ -64,6 +66,9 @@ class DataRetentionService:
 
         pa_cutoff = now - timedelta(days=policies["pending_actions"].retention_days)
         result.pending_actions_deleted = await self._cleanup_pending_actions(pa_cutoff)
+
+        callback_cutoff = now - timedelta(days=policies["callbacks"].retention_days)
+        result.callbacks_deleted = await self._cleanup_callbacks(callback_cutoff)
 
         inbound_completed_cutoff = now - timedelta(
             days=policies["whatsapp_inbound_completed"].retention_days
@@ -202,6 +207,40 @@ class DataRetentionService:
                 "retention_pending_actions_cleaned",
                 extra={"count": count},
             )
+        return count
+
+    async def _cleanup_callbacks(self, before: datetime) -> int:
+        """Sweep aged callback pending actions.
+
+        A callback (action_type='callback') is a voice give-up follow-up record
+        carrying caller phone + booking intent. It NEVER commits an entity, so
+        the booking-PA sweep above — which requires committed_entity_id IS NOT
+        NULL to protect committed bookings — can never reach it, leaving it
+        structurally immortal. This branch deletes callbacks past their horizon
+        WITHOUT that gate (callbacks legitimately have no committed entity),
+        which is the correct rule for this row type and only this row type. The
+        booking-PA sweep is deliberately left untouched: its gate is right for
+        bookings.
+
+        No committed-booking cross-checks are needed here because a callback is
+        never referenced by an appointment or an appointment_commit — it exists
+        precisely because no appointment was created.
+        """
+        result = await self._session.execute(
+            text(
+                "DELETE FROM pending_actions "
+                "WHERE action_type = 'callback' AND updated_at < :before "
+                "AND ctid = ANY(ARRAY("
+                "  SELECT pa.ctid FROM pending_actions pa "
+                "  WHERE pa.action_type = 'callback' AND pa.updated_at < :before "
+                "  LIMIT :limit"
+                "))"
+            ),
+            {"before": before, "limit": _BATCH_SIZE},
+        )
+        count = result.rowcount or 0  # type: ignore[attr-defined]
+        if count > 0:
+            logger.info("retention_callbacks_cleaned", extra={"count": count})
         return count
 
     async def _cleanup_inbound_events(

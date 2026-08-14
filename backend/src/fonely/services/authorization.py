@@ -15,7 +15,19 @@ _OWNER_ACTIONS = frozenset(
         PendingActionType.OWNER_SCHEDULE_UPDATE,
     }
 )
-_CUSTOMER_ACTIONS = frozenset({PendingActionType.ORDER, PendingActionType.APPOINTMENT})
+# CALLBACK is a customer-context action: it is created for a customer who was on
+# a voice call and could not finish booking. Like ORDER/APPOINTMENT it is scoped
+# to the verified business and the customer's own session (business_id from the
+# trusted actor, initiated_by from the verified phone), never owner-privileged.
+# Classifying it here keeps the same tenant/role gate those actions get, rather
+# than inventing a new permission class or (worse) leaving it in the reject path.
+_CUSTOMER_ACTIONS = frozenset(
+    {
+        PendingActionType.ORDER,
+        PendingActionType.APPOINTMENT,
+        PendingActionType.CALLBACK,
+    }
+)
 
 
 def assert_verified_role_permits(

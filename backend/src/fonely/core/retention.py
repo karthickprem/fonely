@@ -24,6 +24,18 @@ def _env_days(key: str, default: int) -> int:
         return default
 
 
+def callback_ttl_days() -> int:
+    """Days a voice give-up callback lives before it self-expires.
+
+    Single source for BOTH expiry paths: the callback's ``expires_at`` at
+    creation and the ``callbacks`` retention sweep window read the SAME value,
+    so a callback dies by whichever fires first and neither can outlive this
+    horizon. Own env key (not RETENTION_CONVERSATIONS_DAYS / OFFER_TTL) so ops
+    can tune callback PII lifetime independently.
+    """
+    return _env_days("CALLBACK_TTL_DAYS", 90)
+
+
 def get_retention_policies() -> dict[str, RetentionPolicy]:
     return {
         "conversations": RetentionPolicy(
@@ -40,6 +52,20 @@ def get_retention_policies() -> dict[str, RetentionPolicy]:
             data_type="pending_actions",
             retention_days=_env_days("RETENTION_CONVERSATIONS_DAYS", 90),
             description="Terminal booking proposals with customer details",
+        ),
+        # Callbacks are pending_actions too, but the existing pending_actions
+        # sweep only deletes rows that COMMITTED an entity (committed_entity_id
+        # IS NOT NULL) — correct for bookings, but a callback never commits one,
+        # so it would be structurally immortal under that policy. It carries
+        # caller PII + booking intent, so it needs its own bounded horizon and a
+        # sweep branch that does not require a committed entity. Own env key so
+        # ops can tune callback lifetime independently; the same value governs
+        # the callback's expires_at (belt-and-suspenders: a callback dies by its
+        # own expiry OR this sweep, whichever fires first).
+        "callbacks": RetentionPolicy(
+            data_type="callbacks",
+            retention_days=callback_ttl_days(),
+            description="Voice give-up callbacks with caller phone + booking intent",
         ),
         "appointments": RetentionPolicy(
             data_type="appointments",

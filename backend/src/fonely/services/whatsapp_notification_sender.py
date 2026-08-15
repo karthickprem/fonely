@@ -128,8 +128,44 @@ class WhatsAppNotificationSender:
         if event_type == "whatsapp_inbound_response":
             return str(payload.get("response_text", ""))
 
+        if event_type == "callback_requested" and recipient_type == "owner":
+            return self._format_owner_callback(payload)
+
         clinic = payload.get("clinic_name", "your clinic")
         return f"Notification from {clinic}."
+
+    @staticmethod
+    def _format_owner_callback(p: dict[str, Any]) -> str:
+        """Owner-facing 'call this caller back' message. Renders the partial
+        booking facts the owner needs to complete the booking by phone. Every
+        fact is optional (the give-up happens precisely when facts could not be
+        resolved), so each line is included only when present — the message
+        degrades gracefully to just the phone number rather than printing blanks.
+        """
+        caller = str(p.get("caller_phone", "")).strip()
+        lines = [
+            "📞 A caller couldn't finish booking on the phone.",
+        ]
+        if caller:
+            lines.append(f"Please call them back: {caller}")
+        else:
+            lines.append("Please follow up with the caller.")
+
+        service = p.get("service_name")
+        date = p.get("target_date")
+        if service and date:
+            lines.append(f"They wanted: {service} on {date}")
+        elif service:
+            lines.append(f"They wanted: {service}")
+        elif date:
+            lines.append(f"They wanted an appointment on {date}")
+
+        candidates = p.get("attempted_candidates")
+        if isinstance(candidates, list) and candidates:
+            names = ", ".join(str(c) for c in candidates)
+            lines.append(f"(couldn't pick between: {names})")
+
+        return "\n".join(lines)
 
     @staticmethod
     def _format_patient_confirmation(p: dict[str, Any]) -> str:

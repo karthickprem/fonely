@@ -51,6 +51,14 @@ class PendingActionType(enum.StrEnum):
     # called back to complete the booking. Carries the partial booking facts, not
     # the raw dialogue. Never commits an entity of its own.
     CALLBACK = "callback"
+    # A durable correlation marker left when the agent ESCALATES to the owner
+    # mid-call (asked availability it cannot confirm) and SUSPENDS the live call
+    # awaiting an answer. Distinct from CALLBACK: CALLBACK is "call the caller
+    # back LATER"; this is "resume THIS live call NOW when the owner replies".
+    # Carries call_id + business_id (from the trusted admitted session) so an
+    # out-of-band owner reply, arriving in a separate process, can be correlated
+    # back to the exact suspended call. Never commits an entity of its own.
+    AWAITING_OWNER_REPLY = "awaiting_owner_reply"
 
 
 class PendingActionStatus(enum.StrEnum):
@@ -61,6 +69,19 @@ class PendingActionStatus(enum.StrEnum):
     REJECTED = "rejected"
     CANCELLED = "cancelled"
     EXPIRED = "expired"
+    # Owner-reply-resume lifecycle (action_type=awaiting_owner_reply). A distinct
+    # value, NOT reused from AWAITING_CONFIRMATION, so the expiry sweeper and other
+    # pending-action consumers never confuse a suspended-call wait with a booking
+    # confirmation. Lifecycle: AWAITING_OWNER_REPLY -> RESUME_REQUESTED (owner
+    # replied, answer persisted, not yet delivered) -> RESUMED (voice proc spoke
+    # the reconciled answer into the call; terminal). A wait that is never
+    # answered ages to EXPIRED via the shared expiry sweep (that IS its timed_out
+    # — no separate value); a hung-up/abandoned wait goes to CANCELLED. Both
+    # non-terminal states are sweep-eligible (see bulk_expire), so an owner who
+    # never replies cannot leave a marker stuck forever.
+    AWAITING_OWNER_REPLY = "awaiting_owner_reply"
+    RESUME_REQUESTED = "resume_requested"
+    RESUMED = "resumed"
 
 
 class OrderStatus(enum.StrEnum):

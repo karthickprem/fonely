@@ -32,6 +32,18 @@ EXPECTED = {
     PendingActionStatus.REJECTED: set(),
     PendingActionStatus.CANCELLED: set(),
     PendingActionStatus.EXPIRED: set(),
+    # #43 owner-reply-resume lifecycle.
+    PendingActionStatus.AWAITING_OWNER_REPLY: {
+        PendingActionStatus.RESUME_REQUESTED,
+        PendingActionStatus.CANCELLED,
+        PendingActionStatus.EXPIRED,
+    },
+    PendingActionStatus.RESUME_REQUESTED: {
+        PendingActionStatus.RESUMED,
+        PendingActionStatus.CANCELLED,
+        PendingActionStatus.EXPIRED,
+    },
+    PendingActionStatus.RESUMED: set(),
 }
 
 

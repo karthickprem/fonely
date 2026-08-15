@@ -146,6 +146,12 @@ class PendingActionRepository:
         eligible = (
             PendingActionStatus.COLLECTING_DETAILS.value,
             PendingActionStatus.AWAITING_CONFIRMATION.value,
+            # Owner-reply-resume waits (#43): a suspended-call marker whose owner
+            # never replies MUST age to EXPIRED here — this sweep IS its
+            # authoritative timed_out. Both non-terminal wait states are eligible;
+            # RESUMED/CANCELLED are terminal and excluded.
+            PendingActionStatus.AWAITING_OWNER_REPLY.value,
+            PendingActionStatus.RESUME_REQUESTED.value,
         )
         ids_statement = (
             select(PendingAction.id)

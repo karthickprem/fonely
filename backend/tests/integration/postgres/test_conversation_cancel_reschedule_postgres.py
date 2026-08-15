@@ -9,7 +9,6 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from fonely.api.internal.validation import InternalValidationPort
-from fonely.core.validators import utcnow
 from fonely.domain.conversation.state import ConversationState
 from fonely.domain.pending_actions.commands import ActorContext
 from fonely.models.enums import CallerRole, Channel
@@ -94,13 +93,26 @@ async def _seed_dental_clinic(session: AsyncSession) -> None:
     await session.commit()
 
 
+# Monday = weekday() 0 = the next-occurrence a caller reaches by saying
+# _DATE_WORD ("monday"). Naming the weekday keeps the spoken date and the
+# expected slot ONE value: parse_relative_date("monday", today) returns exactly
+# this same Monday on any day of the week. The old helper skipped Sunday and the
+# utterances said "tomorrow" — those diverge on a Saturday ("tomorrow" is the
+# closed Sunday), which is what turned the CI gate red on 2026-08-15.
+_TARGET_DOW = 0  # Monday, always seeded open
+_DATE_WORD = "monday"
+
+
 def _next_weekday_slot(hour: int = 10, minute: int = 30) -> datetime:
-    now = utcnow()
-    target = now + timedelta(days=1)
-    if target.isoweekday() == 7:
-        target += timedelta(days=1)
+    """The next open Monday at hour:minute (clinic tz) as UTC — the same day the
+    utterance names via _DATE_WORD, so the engine and the test never diverge."""
+    now = datetime.now(ZoneInfo("Asia/Kolkata"))
+    days_ahead = (_TARGET_DOW - now.weekday()) % 7
+    if days_ahead == 0:
+        days_ahead = 7
+    target = (now + timedelta(days=days_ahead)).date()
     clinic_tz = ZoneInfo("Asia/Kolkata")
-    return datetime.combine(target.date(), time(hour, minute), tzinfo=clinic_tz).astimezone(UTC)
+    return datetime.combine(target, time(hour, minute), tzinfo=clinic_tz).astimezone(UTC)
 
 
 async def _book_appointment(
@@ -242,7 +254,7 @@ async def test_reschedule_flow_moves_appointment(
         ctx.collected_facts["start_at"] = new_slot
 
         turn2 = await conv_service.process_message(
-            "reschedule-flow", 1, _actor(), "5:30 PM tomorrow"
+            "reschedule-flow", 1, _actor(), f"5:30 PM {_DATE_WORD}"
         )
         assert ctx.proposal_id is not None
         assert turn2.state == ConversationState.AWAITING_CONFIRMATION

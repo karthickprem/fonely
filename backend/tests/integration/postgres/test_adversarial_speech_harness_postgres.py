@@ -242,9 +242,21 @@ def _max_identical_repeats(responses: list[str]) -> int:
 # time (or None = must book nothing). A slot the patient names/selects must be
 # in the split-shift windows (09:30-13:00, 17:00-20:30) to be bookable.
 #
-# The date is always driven to a known future weekday via "tomorrow"/"naalai"
-# so the assertions are deterministic. Where a category is about the TIME half,
-# service/resource/phone are supplied in the first utterance in speech shape.
+# The date is driven to a known-open weekday by NAMING that weekday
+# ("monday"/…) in the utterance, and computing the expected instant from the
+# SAME target date — never the word "tomorrow".
+#
+# WHY NOT "tomorrow": the engine's parse_relative_date reads "tomorrow" as the
+# literal next calendar day, but the expected date used to be computed by a
+# skip-Sunday helper. Those two agree on every weekday EXCEPT Saturday, when
+# "tomorrow" is Sunday (clinic closed) while the helper skipped to Monday — so
+# on a Saturday CI run every "tomorrow" case booked nothing and failed against a
+# Monday expectation (the 2026-08-15 red gate). The fix removes the divergence
+# at the source: the spoken date and the expected date are one value. Naming the
+# weekday is a parser-supported form (parse_relative_date maps "monday" → its
+# next occurrence) and, crucially, it means the same thing to the engine and to
+# the test, on any day of the week. See test_datetime_parse for the parser-level
+# Saturday-anchored proof that "tomorrow"→closed-Sunday is (correctly) refused.
 
 # The lead establishes service + resource. It now names the doctor in SPOKEN
 # form — lowercase, honorific-as-word, no punctuation ("doctor arun" for stored
@@ -256,12 +268,35 @@ _ARUN_ID = 3
 _LEAD = "i want General Consultation with doctor arun"
 _PHONE = "reach me on 9123456789"
 
+# Monday = weekday() 0 = isoweekday 1 = schedule_weekday 1 (seeded open). The
+# utterances name this same day (via _DATE_WORD) so the engine and the test
+# agree by construction.
+_TARGET_DOW = 0  # Monday
+_DATE_WORD = "monday"
+# Tamil/Tanglish weekday name for the SAME target day (Monday), so the cases
+# that exercise the Tamil date-parsing path keep doing so — naming the weekday
+# in Tamil ("thingal") instead of the Tamil word for "tomorrow" ("naalaikku"),
+# which had the identical skip-Sunday divergence.
+_DATE_WORD_TA = "thingal"
 
-def _tomorrow_weekday() -> datetime:
-    d = datetime.now(KOLKATA) + timedelta(days=1)
-    while d.isoweekday() == 7:  # skip Sunday (clinic closed)
-        d += timedelta(days=1)
-    return d
+
+def _target_weekday() -> datetime:
+    """The next occurrence of a KNOWN-OPEN weekday (Monday), matching exactly
+    what parse_relative_date("monday", today) returns for the engine.
+
+    Monday is always seeded open and is unambiguous. The utterances name this
+    same weekday (via _DATE_WORD), so the date the engine parses and the date
+    the test expects are derived from ONE computation and cannot diverge on any
+    day of the week. Deterministic without touching the clock beyond "now".
+    """
+    d = datetime.now(KOLKATA)
+    # (target_dow - today_dow) % 7, with 0 meaning "said on that day = next
+    # week" — identical to parse_relative_date's weekday rule, so the expected
+    # date equals the engine's parsed date exactly.
+    days_ahead = (_TARGET_DOW - d.weekday()) % 7
+    if days_ahead == 0:
+        days_ahead = 7
+    return d + timedelta(days=days_ahead)
 
 
 @dataclass
@@ -299,7 +334,7 @@ def _corpus() -> list[Case]:
         Case(
             "nopunct-morning",
             "no_punctuation",
-            [f"{_LEAD} tomorrow at 10 30 am {_PHONE}", "yes confirm"],
+            [f"{_LEAD} {_DATE_WORD} at 10 30 am {_PHONE}", "yes confirm"],
             (10, 30),
         )
     )
@@ -307,7 +342,7 @@ def _corpus() -> list[Case]:
         Case(
             "nopunct-evening-offer",
             "no_punctuation",
-            [f"{_LEAD} tomorrow 5 15 pm {_PHONE}", "5 30 pm", "yes confirm"],
+            [f"{_LEAD} {_DATE_WORD} 5 15 pm {_PHONE}", "5 30 pm", "yes confirm"],
             (17, 30),
         )
     )
@@ -317,7 +352,7 @@ def _corpus() -> list[Case]:
         Case(
             "disfluency",
             "disfluency",
-            [f"{_LEAD} tomorrow um at ten thirty am {_PHONE}", "yes confirm"],
+            [f"{_LEAD} {_DATE_WORD} um at ten thirty am {_PHONE}", "yes confirm"],
             (10, 30),
         )
     )
@@ -327,7 +362,7 @@ def _corpus() -> list[Case]:
         Case(
             "stt-trailing-period",
             "stt_artifact",
-            [f"{_LEAD} tomorrow 5 15 {_PHONE}", "5:30 PM.", "yes confirm"],
+            [f"{_LEAD} {_DATE_WORD} 5 15 {_PHONE}", "5:30 PM.", "yes confirm"],
             (17, 30),
         )
     )
@@ -340,7 +375,7 @@ def _corpus() -> list[Case]:
         Case(
             "codemix-tanglish",
             "code_mixing",
-            [f"{_LEAD} naalaikku pathu mani kaalai {_PHONE}", "yes confirm"],
+            [f"{_LEAD} {_DATE_WORD_TA} pathu mani kaalai {_PHONE}", "yes confirm"],
             (10, 0),
             forbid_resource_id=4,
         )
@@ -349,7 +384,7 @@ def _corpus() -> list[Case]:
         Case(
             "codemix-evening-word",
             "code_mixing",
-            [f"{_LEAD} tomorrow aaru mani {_PHONE}", "maalai", "yes confirm"],
+            [f"{_LEAD} {_DATE_WORD} aaru mani {_PHONE}", "maalai", "yes confirm"],
             (18, 0),
             forbid_resource_id=4,
         )
@@ -361,7 +396,7 @@ def _corpus() -> list[Case]:
         Case(
             "split-turn",
             "split_turn",
-            [f"{_LEAD} at 6 mani {_PHONE}", "naalaikku", "6 pm", "yes confirm"],
+            [f"{_LEAD} at 6 mani {_PHONE}", _DATE_WORD_TA, "6 pm", "yes confirm"],
             (18, 0),
             forbid_resource_id=4,
         )
@@ -372,7 +407,7 @@ def _corpus() -> list[Case]:
         Case(
             "negation-no-time",
             "negation",
-            [f"{_LEAD} tomorrow {_PHONE}", "not 5 pm", "6 pm", "yes confirm"],
+            [f"{_LEAD} {_DATE_WORD} {_PHONE}", "not 5 pm", "6 pm", "yes confirm"],
             (18, 0),
             superseded_local=(17, 0),
         )
@@ -385,7 +420,7 @@ def _corpus() -> list[Case]:
             "correction-evening",
             "correction",
             [
-                f"{_LEAD} tomorrow 10 30 am {_PHONE}",
+                f"{_LEAD} {_DATE_WORD} 10 30 am {_PHONE}",
                 "no no make it 6 pm",
                 "yes confirm",
             ],
@@ -399,7 +434,7 @@ def _corpus() -> list[Case]:
         Case(
             "vague-time",
             "vague",
-            [f"{_LEAD} tomorrow sometime {_PHONE}", "whenever"],
+            [f"{_LEAD} {_DATE_WORD} sometime {_PHONE}", "whenever"],
             None,
         )
     )
@@ -411,7 +446,7 @@ def _corpus() -> list[Case]:
         Case(
             "ordinal-one-no-time",
             "ordinal_one",
-            [f"{_LEAD} tomorrow {_PHONE}", "the evening one", "whenever"],
+            [f"{_LEAD} {_DATE_WORD} {_PHONE}", "the evening one", "whenever"],
             None,
         )
     )
@@ -425,7 +460,7 @@ def _corpus() -> list[Case]:
         Case(
             "one-thirty-out-of-hours",
             "ordinal_one",
-            [f"{_LEAD} tomorrow one thirty {_PHONE}", "whenever"],
+            [f"{_LEAD} {_DATE_WORD} one thirty {_PHONE}", "whenever"],
             None,
         )
     )
@@ -437,7 +472,7 @@ def _corpus() -> list[Case]:
             "resource-spoken-reordered",
             "resource_name",
             [
-                f"i want General Consultation with arun doctor tomorrow 10 30 am {_PHONE}",
+                f"i want General Consultation with arun doctor {_DATE_WORD} 10 30 am {_PHONE}",
                 "yes confirm",
             ],
             (10, 30),
@@ -453,7 +488,7 @@ def _corpus() -> list[Case]:
             "resource-ambiguous-priya",
             "resource_name",
             [
-                f"i want General Consultation with dr priya tomorrow 10 30 am {_PHONE}",
+                f"i want General Consultation with dr priya {_DATE_WORD} 10 30 am {_PHONE}",
                 "yes confirm",
             ],
             None,
@@ -468,7 +503,7 @@ def _corpus() -> list[Case]:
             "resource-ambiguity-resolved",
             "resource_name",
             [
-                f"i want General Consultation with dr priya tomorrow 10 30 am {_PHONE}",
+                f"i want General Consultation with dr priya {_DATE_WORD} 10 30 am {_PHONE}",
                 "priya rao",
                 "yes confirm",
             ],
@@ -484,7 +519,7 @@ def _corpus() -> list[Case]:
             "resource-unknown-name",
             "resource_name",
             [
-                f"i want General Consultation with dr smith tomorrow 10 30 am {_PHONE}",
+                f"i want General Consultation with dr smith {_DATE_WORD} 10 30 am {_PHONE}",
                 "yes confirm",
             ],
             None,
@@ -507,7 +542,7 @@ def _corpus() -> list[Case]:
             "resource-timeword-collision-mani",
             "resource_name",
             [
-                f"i want General Consultation tomorrow aaru mani {_PHONE}",
+                f"i want General Consultation {_DATE_WORD} aaru mani {_PHONE}",
                 "yes confirm",
             ],
             None,
@@ -524,7 +559,7 @@ def _corpus() -> list[Case]:
             "resource-serviceword-collision-general",
             "resource_name",
             [
-                f"i want General Consultation tomorrow 10 30 am {_PHONE}",
+                f"i want General Consultation {_DATE_WORD} 10 30 am {_PHONE}",
                 "yes confirm",
             ],
             None,
@@ -539,7 +574,7 @@ def _corpus() -> list[Case]:
             "resource-title-only",
             "resource_name",
             [
-                f"i want General Consultation with doctor tomorrow 10 30 am {_PHONE}",
+                f"i want General Consultation with doctor {_DATE_WORD} 10 30 am {_PHONE}",
                 "yes confirm",
             ],
             None,
@@ -553,7 +588,7 @@ def _corpus() -> list[Case]:
             "resource-cross-token-ambiguous",
             "resource_name",
             [
-                f"i want General Consultation with dr kumar arun tomorrow 10 30 am {_PHONE}",
+                f"i want General Consultation with dr kumar arun {_DATE_WORD} 10 30 am {_PHONE}",
                 "yes confirm",
             ],
             None,
@@ -569,7 +604,7 @@ def _corpus() -> list[Case]:
         Case(
             "resource-no-mention",
             "resource_name",
-            [f"i want General Consultation tomorrow 10 30 am {_PHONE}", "whenever"],
+            [f"i want General Consultation {_DATE_WORD} 10 30 am {_PHONE}", "whenever"],
             None,
         )
     )
@@ -590,7 +625,7 @@ def _corpus() -> list[Case]:
                 cid,
                 "disambiguation",
                 [
-                    f"i want General Consultation with dr priya tomorrow 10 30 am {_PHONE}",
+                    f"i want General Consultation with dr priya {_DATE_WORD} 10 30 am {_PHONE}",
                     answer,
                     "yes confirm",
                 ],
@@ -607,7 +642,7 @@ def _corpus() -> list[Case]:
             "disambig-nonmatch-reask",
             "disambiguation",
             [
-                f"i want General Consultation with dr priya tomorrow 10 30 am {_PHONE}",
+                f"i want General Consultation with dr priya {_DATE_WORD} 10 30 am {_PHONE}",
                 "dr smith",
                 "dr smith",
             ],
@@ -630,7 +665,7 @@ def _corpus() -> list[Case]:
             "disambig-liveness-bound",
             "disambiguation",
             [
-                f"i want General Consultation with dr priya tomorrow 10 30 am {_PHONE}",
+                f"i want General Consultation with dr priya {_DATE_WORD} 10 30 am {_PHONE}",
                 "priya",
                 "priya",
                 "priya",
@@ -658,11 +693,11 @@ async def test_speech_corpus_invariants(
 
     trace = await run_script(pg_session_factory, case.utterances)
 
-    tomorrow = _tomorrow_weekday().date()
+    target_day = _target_weekday().date()
     expected_utc = None
     if case.expect_local is not None:
         expected_utc = datetime.combine(
-            tomorrow, time(*case.expect_local), tzinfo=KOLKATA
+            target_day, time(*case.expect_local), tzinfo=KOLKATA
         ).astimezone(UTC)
 
     # I3: no question repeats unboundedly. The ambiguity/date questions are
@@ -693,7 +728,7 @@ async def test_speech_corpus_invariants(
     # I1/I2 checks, so the invariant runs on every case that declares one.
     if case.superseded_local is not None:
         superseded_utc = datetime.combine(
-            tomorrow, time(*case.superseded_local), tzinfo=KOLKATA
+            target_day, time(*case.superseded_local), tzinfo=KOLKATA
         ).astimezone(UTC)
         assert trace.committed_start_utc != superseded_utc, (
             f"[{case.cid}] I4 violated: booked the SUPERSEDED reading "
@@ -751,4 +786,75 @@ async def test_speech_corpus_invariants(
     assert trace.committed_resource_id == expected_rid, (
         f"[{case.cid}] I5 violated: booked resource_id "
         f"{trace.committed_resource_id}, expected {expected_rid}"
+    )
+
+
+# --- Regression: the closed-day divergence, proven end-to-end and deterministically.
+# The corpus above proves the HAPPY path (naming an open weekday books) on every
+# run day. These two prove the OTHER half the old "tomorrow" bug accidentally
+# relied on: a day-relative utterance that lands on a CLOSED day is correctly
+# refused — the product behaviour the red gate was actually exercising. Made
+# deterministic by seeding the clinic CLOSED on the exact weekday the utterance
+# resolves to, so it does not depend on which day CI runs.
+
+
+async def _seed_clinic_closed_on(session: AsyncSession, closed_dow: int) -> None:
+    """The split-shift clinic, but CLOSED on schedule_weekday `closed_dow` — used
+    to prove a booking on that day is refused regardless of the run date."""
+    await _seed_split_shift(session)
+    await session.execute(
+        text("DELETE FROM operating_schedules WHERE business_id = 1 AND day_of_week = :d"),
+        {"d": closed_dow},
+    )
+    await session.commit()
+
+
+async def test_named_open_weekday_books_regardless_of_run_day(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # HAPPY path, isolated and explicit: naming the open weekday (_DATE_WORD)
+    # books the intended slot, on any day of the week the test runs. This is the
+    # invariant the corpus relies on; asserting it directly guards the fix.
+    async with pg_session_factory() as setup:
+        await _seed_split_shift(setup)
+
+    trace = await run_script(
+        pg_session_factory,
+        [f"{_LEAD} {_DATE_WORD} at 10 30 am {_PHONE}", "yes confirm"],
+    )
+    target = _target_weekday().date()
+    expected = datetime.combine(target, time(10, 30), tzinfo=KOLKATA).astimezone(UTC)
+    assert trace.committed_start_utc == expected, (
+        f"naming the open weekday must book it; booked {trace.committed_start_utc}, "
+        f"expected {expected}"
+    )
+
+
+async def test_relative_date_on_a_closed_day_is_refused(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    # The behaviour the Saturday red gate was actually exercising: a day-relative
+    # utterance ("tomorrow") that resolves to a CLOSED day must book NOTHING and
+    # offer to try another date — the product is correct to refuse. Deterministic:
+    # we compute tomorrow's actual weekday and seed the clinic closed on exactly
+    # that day, so the refusal is proven on any run date, not only on Saturdays.
+    from zoneinfo import ZoneInfo
+
+    tomorrow = (datetime.now(ZoneInfo("Asia/Kolkata")) + timedelta(days=1)).date()
+    closed_dow = tomorrow.isoweekday() % 7  # schedule_weekday convention
+
+    async with pg_session_factory() as setup:
+        await _seed_clinic_closed_on(setup, closed_dow)
+
+    trace = await run_script(
+        pg_session_factory,
+        [f"{_LEAD} tomorrow at 10 30 am {_PHONE}", "yes confirm"],
+    )
+    assert trace.committed_start_utc is None, (
+        "a booking on a CLOSED day must be refused, not committed; "
+        f"booked {trace.committed_start_utc}"
+    )
+    joined = " ".join(trace.responses).lower()
+    assert "available" in joined or "another" in joined or "which" in joined, (
+        f"expected a not-available / try-another-date reply, got {trace.responses}"
     )

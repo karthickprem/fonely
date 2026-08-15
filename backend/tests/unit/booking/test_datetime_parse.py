@@ -6,7 +6,7 @@ Two invariants under test:
   caller asks rather than booking the wrong slot.
 """
 
-from datetime import date, time
+from datetime import date, time, timedelta
 
 import pytest
 
@@ -231,3 +231,96 @@ class TestRelativeDate:
         # Same input + same injected today is deterministic regardless of wall time.
         a = parse_relative_date("tomorrow", date(2020, 1, 1))
         assert a == date(2020, 1, 2)
+
+
+class TestSaturdayAnchoredDivergence:
+    """Deterministic proof of the 2026-08-15 (Saturday) CI-red mechanism, and of
+    why naming the weekday (not "tomorrow") is the fix.
+
+    A clinic closed on Sunday seeds operating_schedules for day_of_week 1..6
+    (schedule_weekday = isoweekday() % 7, so Sunday=0 is unseeded/closed). Tests
+    that SPOKE "tomorrow" but EXPECTED a skip-Sunday date diverged only on a
+    Saturday: "tomorrow" is the closed Sunday (engine refuses), while the helper
+    skipped to Monday. Anchoring today to a fixed Saturday (never the wall clock)
+    makes this reproducible and guards against a regression to the "tomorrow"
+    pattern.
+    """
+
+    # 2026-08-15 is the actual Saturday the CI gate went red on. Fixed, injected,
+    # never read from the clock — this test means the same thing on any run day.
+    SATURDAY = date(2026, 8, 15)
+
+    def test_saturday_tomorrow_is_the_closed_sunday(self) -> None:
+        # (1) Literal "tomorrow" on a Saturday resolves to Sunday — the day the
+        # clinic is CLOSED. This is the input that made the availability layer
+        # correctly refuse to book, which the old tests mis-expected as a booking.
+        # The product behaviour is correct; the test expectation was wrong.
+        got = parse_relative_date("tomorrow", self.SATURDAY)
+        assert got == date(2026, 8, 16)
+        assert got.isoweekday() == 7, "Saturday's 'tomorrow' is Sunday (clinic closed)"
+
+    def test_saturday_named_open_weekday_is_a_seeded_day(self) -> None:
+        # (2) The FIX pattern: naming the weekday ("monday") resolves to the next
+        # open Monday regardless of what day today is — including a Saturday. This
+        # is the day the corrected utterances name, and it equals what the test's
+        # own _next_weekday helper computes, so they cannot diverge.
+        got = parse_relative_date("monday", self.SATURDAY)
+        assert got == date(2026, 8, 17)
+        # schedule_weekday = isoweekday() % 7; Monday=1 is within the seeded 1..6.
+        assert got.isoweekday() % 7 == 1
+        # Tamil weekday name for the same day resolves identically (the Tamil
+        # cases in the harness use this instead of "naalaikku").
+        assert parse_relative_date("thingal", self.SATURDAY) == got
+
+    @staticmethod
+    def _old_skip_sunday_helper(today: date) -> date:
+        # The exact OLD buggy helper: tomorrow, skipping Sunday. Reproduced here
+        # (not imported — the source was removed by the fix) as the negative
+        # control, so this test proves what the OLD helper did vs what the engine
+        # did with the word "tomorrow".
+        d = today + timedelta(days=1)
+        while d.isoweekday() == 7:  # skip Sunday
+            d += timedelta(days=1)
+        return d
+
+    def test_old_helper_and_literal_tomorrow_diverge_only_on_saturday(self) -> None:
+        # THE ROOT CAUSE, precisely: the OLD skip-Sunday helper (what the tests
+        # EXPECTED) and literal "tomorrow" (what the engine PARSED) agree on every
+        # anchor day EXCEPT Saturday. On a Saturday the helper skips to Monday
+        # while "tomorrow" is the closed Sunday — that one-day gap is the whole
+        # bug. Proven across a full week deterministically.
+        for offset in range(7):
+            today = date(2026, 8, 10) + timedelta(days=offset)  # Mon..Sun
+            engine_parsed = parse_relative_date("tomorrow", today)
+            old_expected = self._old_skip_sunday_helper(today)
+            assert engine_parsed is not None
+            if today.isoweekday() == 6:  # Saturday
+                assert engine_parsed != old_expected, (
+                    "the bug: on Saturday the engine parses 'tomorrow'=Sunday but "
+                    "the old helper expected Monday"
+                )
+                assert engine_parsed.isoweekday() == 7  # the closed Sunday
+                assert old_expected.isoweekday() == 1  # helper's Monday
+            else:
+                assert engine_parsed == old_expected, (
+                    "off Saturday the two agreed, which is why the bug stayed hidden"
+                )
+
+    def test_named_weekday_always_parses_back_to_its_target(self) -> None:
+        # THE FIX, precisely: naming a weekday makes the utterance and the
+        # expected date ONE value on EVERY anchor day. For every possible "today",
+        # parse_relative_date(name) equals a same-rule recomputation of that
+        # weekday's next occurrence — so the engine and the test can never diverge,
+        # unlike the old "tomorrow"-vs-skip-helper pair which diverged on Saturday.
+        for offset in range(7):
+            today = date(2026, 8, 10) + timedelta(days=offset)  # Mon..Sun anchor
+            for name, dow in (("monday", 0), ("thingal", 0), ("friday", 4)):
+                got = parse_relative_date(name, today)
+                assert got is not None
+                # Same next-occurrence rule the harness helpers use.
+                days_ahead = (dow - today.weekday()) % 7 or 7
+                assert got == today + timedelta(days=days_ahead), (
+                    f"named weekday {name!r} on {today} must parse to its next "
+                    "occurrence — the single source of truth the fix relies on"
+                )
+                assert got > today, "the target is always strictly in the future"

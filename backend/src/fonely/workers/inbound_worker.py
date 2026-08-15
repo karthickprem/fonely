@@ -253,6 +253,28 @@ async def _process_domain(
 
     phone = _normalized_phone(claimed)
     if await _is_owner(claimed.business_id, phone, session):
+        # #43 owner-reply resume seam: an authenticated owner's text may be the
+        # ANSWER to an outstanding voice-call wait (a durable AWAITING_OWNER_REPLY
+        # marker) rather than a new command. Resolve that FIRST; only a genuine
+        # non-resume reply (zero outstanding waits) falls through to the command
+        # path. A resume-looking reply we can't resolve (ambiguous / bad code) is
+        # answered with a reminder and must NOT trigger a generic owner command.
+        from fonely.services.owner_reply_resume import (
+            DisambiguationReminder,
+            OwnerReplyResumeService,
+            Resumed,
+        )
+
+        outcome = await OwnerReplyResumeService(session).try_resolve_owner_reply(
+            business_id=claimed.business_id,
+            owner_phone=phone,
+            message_text=claimed.message_body,
+        )
+        if isinstance(outcome, Resumed):
+            return outcome.ack_text, NotificationRecipientType.OWNER.value
+        if isinstance(outcome, DisambiguationReminder):
+            return outcome.text, NotificationRecipientType.OWNER.value
+
         from fonely.services.owner_commands import OwnerCommandService
 
         result = await OwnerCommandService(session, gateway).process_command(

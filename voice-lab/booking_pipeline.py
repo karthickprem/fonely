@@ -76,6 +76,54 @@ def _is_confirmation(text: str) -> bool:
     return text.strip().casefold().rstrip(".!") in _CONFIRM_WORDS
 
 
+# Words that signal the caller is ASKING WHAT SLOTS/TIMES ARE OPEN — the only
+# case that warrants escalating to the owner when the day is unconfirmed.
+_AVAILABILITY_WORDS = frozenset(
+    {
+        "availability",
+        "available",
+        "slot",
+        "slots",
+        "free",
+        "open",
+        "booking",
+        "appointment",
+        "அவைலபிள",  # romanized "available"
+        "நேரம்",  # "time" — kept, but gated by the duration-exclusion below
+        "டைம்",  # "time" (transliterated)
+        "இருக்கா",  # "is it there / available?"
+    }
+)
+
+# Phrases that CONTAIN a time word but are NOT availability questions: they ask
+# HOW LONG something takes (procedure duration) or how long the caller must WAIT
+# for a callback. "எவ்வளவு நேரம் ஆகும்" = "how long will it take" — impatience /
+# duration, not "what slots are open". Escalating to the owner on these is the
+# over-broad-keyword bug the live demo surfaced.
+_DURATION_PHRASES = (
+    "எவ்வளவு நேரம்",  # "how much time / how long"
+    "எத்தன நேரம்",  # colloquial "how long"
+    "how long",
+    "how much time",
+    "evvalavu neram",
+)
+
+
+def _is_availability_question(user_text: str) -> bool:
+    """True only when the caller is asking WHICH SLOTS/TIMES ARE OPEN.
+
+    Excludes duration/impatience phrasings ("how long will it take?", "எவ்வளவு
+    நேரம் ஆகும்?") that merely contain a time word — those must NOT trigger an
+    owner escalation. This is the intent gate; the caller asking availability on
+    an unconfirmed day is the only thing that should ask the owner."""
+    lowered = user_text.casefold()
+    # A duration/impatience phrase is never an availability question, even though
+    # it contains "நேரம்/time".
+    if any(phrase in lowered for phrase in _DURATION_PHRASES):
+        return False
+    return any(word.casefold() in lowered for word in _AVAILABILITY_WORDS)
+
+
 class BookingStateInjector(FrameProcessor):
     """Pre-LLM: injects BookingCollection state into the LLM context.
 
@@ -142,8 +190,14 @@ class BookingStateInjector(FrameProcessor):
             ctx_text = await _get_ctx()
             live_context = f"\n<live_clinic_context>\n{ctx_text}\n</live_clinic_context>\n"
 
-            # If no availability confirmed, ask the doctor
-            if "No confirmed availability" in ctx_text and "availability" in user_text.lower() or "slot" in user_text.lower() or "available" in user_text.lower() or "time" in user_text.lower() or "அவைலபிள" in user_text.lower() or "நேரம்" in user_text.lower():
+            # Escalate to the owner ONLY when BOTH hold: the day has no confirmed
+            # availability AND the caller is actually asking what slots are open.
+            # (The old inline condition had an operator-precedence bug — `and`
+            # binds tighter than `or`, so the "No confirmed availability" guard
+            # only gated the first term and a bare "time"/"நேரம்" escalated on
+            # ANY day. _is_availability_question also excludes "how long" duration
+            # questions that merely contain a time word.)
+            if "No confirmed availability" in ctx_text and _is_availability_question(user_text):
                 from doctor_bridge import BRIDGE
                 await BRIDGE.ask_doctor(
                     "Patient is asking about today's availability. What are your available slots today?",

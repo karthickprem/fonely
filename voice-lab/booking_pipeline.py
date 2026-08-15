@@ -499,19 +499,79 @@ async def run_booking_bot(transport: BaseTransport, runner_args: RunnerArguments
         input_latch = NoticeInputLatch()
         playback_signal = NoticePlaybackSignal()
 
-        pipeline = Pipeline([
-            transport.input(),
-            input_latch,       # capture gate: drops caller audio until open()
-            stt,
+        # --- SAFE diagnostics (no PII): count caller audio frames and a coarse RMS
+        # bucket immediately BEFORE and AFTER the DPDP latch, so we can tell where
+        # audio stops flowing: frames zero before the latch → browser mic capture;
+        # nonzero before but zero after → latch stayed closed / open-order; nonzero
+        # after but no STT → Sarvam. Logs counts/bytes/RMS-bucket only, never audio
+        # samples. Toggle with FONELY_AUDIO_DIAG=1; off by default so it adds
+        # nothing to normal runs.
+        import struct as _struct
+
+        from pipecat.frames.frames import InputAudioRawFrame as _InAudio
+
+        class _AudioFrameCounter(FrameProcessor):
+            def __init__(self, tag: str) -> None:
+                super().__init__()
+                self._tag = tag
+                self._n = 0
+                self._bytes = 0
+                self._buckets = {"quiet": 0, "low": 0, "mid": 0, "high": 0}
+
+            @staticmethod
+            def _rms_bucket(pcm: bytes) -> str:
+                if not pcm or len(pcm) < 2:
+                    return "quiet"
+                n = len(pcm) // 2
+                vals = _struct.unpack(f"<{n}h", pcm[: n * 2])
+                rms = (sum(v * v for v in vals) / n) ** 0.5
+                if rms < 100:
+                    return "quiet"
+                if rms < 800:
+                    return "low"
+                if rms < 4000:
+                    return "mid"
+                return "high"
+
+            async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
+                await super().process_frame(frame, direction)
+                if isinstance(frame, _InAudio):
+                    self._n += 1
+                    audio = getattr(frame, "audio", b"") or b""
+                    self._bytes += len(audio)
+                    self._buckets[self._rms_bucket(audio)] += 1
+                    if self._n % 50 == 0:  # ~1s at 20ms frames; counts/RMS only
+                        logger.info(
+                            "audio_diag[{}]: frames={} bytes={} rms_buckets={}",
+                            self._tag,
+                            self._n,
+                            self._bytes,
+                            self._buckets,
+                        )
+                await self.push_frame(frame, direction)
+
+        _diag_on = os.environ.get("FONELY_AUDIO_DIAG") == "1"
+        pre_latch_counter = _AudioFrameCounter("pre-latch") if _diag_on else None
+        post_latch_counter = _AudioFrameCounter("post-latch") if _diag_on else None
+
+        _stages = [transport.input()]
+        if pre_latch_counter is not None:
+            _stages.append(pre_latch_counter)
+        _stages.append(input_latch)  # capture gate: drops caller audio until open()
+        if post_latch_counter is not None:
+            _stages.append(post_latch_counter)
+        _stages.append(stt)
+        _stages += [
             user_aggregator,
-            state_injector,    # pre-LLM: injects BookingCollection state
+            state_injector,
             llm,
-            post_llm_gate,     # post-LLM: gates medical/confirmation/closure
+            post_llm_gate,
             tts,
             transport.output(),
-            playback_signal,   # observes BotStoppedSpeakingFrame (notice done)
+            playback_signal,
             assistant_aggregator,
-        ])
+        ]
+        pipeline = Pipeline(_stages)
 
         worker = PipelineWorker(
             pipeline,
@@ -588,6 +648,15 @@ async def run_booking_bot(transport: BaseTransport, runner_args: RunnerArguments
             )
 
             result = await open_sequence()
+            # SAFE diagnostics (IDs/state only, no PII): record the DPDP open
+            # outcome and the resulting latch state so we can prove whether caller
+            # audio is allowed to flow to STT after the notice.
+            logger.info(
+                "dpdp_open: outcome={} latch_is_open={} call_id={}",
+                result.outcome.value,
+                input_latch.is_open,
+                call_id,
+            )
             if result.outcome is not OpenOutcome.OPENED:
                 logger.warning(
                     "DPDP open failed (%s) — capture stays CLOSED, tearing down",

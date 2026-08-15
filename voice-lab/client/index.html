@@ -54,6 +54,16 @@
         <dl>
           <div><dt>Transport</dt><dd id="transport">SmallWebRTC</dd></div>
           <div><dt>Mic</dt><dd id="mic-state">Off</dd></div>
+          <div><dt>Mic input</dt><dd id="mic-input-device">—</dd></div>
+          <div>
+            <dt>Mic level</dt>
+            <dd>
+              <div id="mic-level-track" style="position:relative;width:120px;height:8px;background:#1a3a5c;border-radius:4px;overflow:hidden;display:inline-block;vertical-align:middle">
+                <div id="mic-level-bar" style="position:absolute;left:0;top:0;bottom:0;width:0%;background:#22c55e;transition:width 0.08s linear"></div>
+              </div>
+              <span id="mic-level-warn" style="display:none;color:#ef4444;font-size:0.8em;margin-left:8px">No microphone signal — check mute/input device</span>
+            </dd>
+          </div>
           <div><dt>Playback</dt><dd id="playback-state">Idle</dd></div>
           <div><dt>Delegate</dt><dd id="delegate-state">Off</dd></div>
           <div><dt>Transcript</dt><dd id="transcript-stage">—</dd></div>

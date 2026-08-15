@@ -1,8 +1,12 @@
 import { PipecatClient, RTVIEvent } from '@pipecat-ai/client-js';
 import { SmallWebRTCTransport } from '@pipecat-ai/small-webrtc-transport';
+import { SignalMonitor, computeRms, inputDeviceLabel } from './mic-signal.js';
 
 const connectButton = document.querySelector('#connect');
 const micButton = document.querySelector('#mic');
+const micInputDeviceEl = document.querySelector('#mic-input-device');
+const micLevelBar = document.querySelector('#mic-level-bar');
+const micLevelWarn = document.querySelector('#mic-level-warn');
 const status = document.querySelector('#status');
 const orb = document.querySelector('#orb');
 const transcript = document.querySelector('#transcript');
@@ -36,6 +40,55 @@ let interruptionMarker = null;
 let botStopCallbackMs = null;
 let activeBotMessageKey = null;
 let activeBotText = '';
+let micMeterContext = null;
+let micMeterRaf = 0;
+
+// Live local-mic input meter. The server proves caller frames flow; this makes a
+// SILENT selected device/OS-muted mic visible instead of a demo that never
+// responds. Reduces the mic to a single RMS number for the bar + a signal status
+// — no audio is stored or sent anywhere beyond the existing WebRTC path.
+async function startMicMeter(track) {
+  stopMicMeter();
+  if (micInputDeviceEl) micInputDeviceEl.textContent = inputDeviceLabel(track);
+  let ctx;
+  try {
+    ctx = new AudioContext();
+    const source = ctx.createMediaStreamSource(new MediaStream([track]));
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 2048;
+    source.connect(analyser);
+    micMeterContext = ctx;
+    const buf = new Float32Array(analyser.fftSize);
+    const monitor = new SignalMonitor();
+    const tick = () => {
+      analyser.getFloatTimeDomainData(buf);
+      const rms = computeRms(buf);
+      if (micLevelBar) {
+        // Map RMS to a 0–100% bar with mild gain so normal speech fills it.
+        const pct = Math.min(100, Math.round(rms * 400 * 100));
+        micLevelBar.style.width = `${pct}%`;
+      }
+      const st = monitor.push(rms);
+      if (micLevelWarn) micLevelWarn.style.display = st === 'no-signal' ? 'inline' : 'none';
+      micMeterRaf = requestAnimationFrame(tick);
+    };
+    micMeterRaf = requestAnimationFrame(tick);
+  } catch (error) {
+    console.warn('Mic meter unavailable:', error);
+    if (ctx) ctx.close().catch(() => {});
+    micMeterContext = null;
+  }
+}
+
+function stopMicMeter() {
+  if (micMeterRaf) cancelAnimationFrame(micMeterRaf);
+  micMeterRaf = 0;
+  if (micMeterContext) micMeterContext.close().catch(() => {});
+  micMeterContext = null;
+  if (micLevelBar) micLevelBar.style.width = '0%';
+  if (micLevelWarn) micLevelWarn.style.display = 'none';
+  if (micInputDeviceEl) micInputDeviceEl.textContent = '—';
+}
 
 function setState(text, className = '') {
   status.textContent = text;
@@ -171,6 +224,7 @@ async function connect() {
         playbackState.textContent = 'Idle';
         micState.textContent = 'Off';
         clearInterval(statsTimer);
+        stopMicMeter();
         playbackContext?.close();
         playbackContext = null;
         playbackMeter = null;
@@ -241,6 +295,12 @@ async function connect() {
   });
 
   client.on(RTVIEvent.TrackStarted, (track, participant) => {
+    if (participant?.local && track.kind === 'audio') {
+      // Local mic: show the selected input device + a live level meter so a
+      // silent/muted device is immediately obvious.
+      startMicMeter(track).catch((error) => console.warn('Mic meter setup failed:', error));
+      return;
+    }
     if (!participant?.local && track.kind === 'audio') {
       attachMeasuredPlayback(track).catch((error) => {
         console.warn('Measured playback unavailable:', error);

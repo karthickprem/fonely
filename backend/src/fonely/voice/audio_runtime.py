@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from .input_latch import NoticeInputLatch
     from .media_stream_types import AudioSession, AudioStreamHandoff, MediaStreamStart
     from .open_order import OpenResult
+    from .resume_registry import ResumeRegistry
     from .runtime import CommandPort
 
 # Outbound audio rate to the provider. Exotel accepts a fixed set; this is the
@@ -142,6 +143,13 @@ class VoiceAudioRuntime:
     # composing nothing.
     compose: Callable[[WebSocket, AudioSession, AudioStreamHandoff], CallComponents] | None = None
     run_runner: Callable[[CallComponents], Awaitable[None]] | None = None
+    # The cross-call resume registry (#43): maps a live call's trusted
+    # (business_id, call_id) to a handle an out-of-band owner reply uses to speak
+    # into it. Lives HERE because the runtime outlives individual calls — it is
+    # the one process-wide object an owner-reply handler can reach. Defaulted so
+    # existing runtime tests need not supply one; when present, a call registers
+    # after its open sequence succeeds and deregisters on every terminal path.
+    resume_registry: ResumeRegistry | None = None
 
     def make_release_guard(self, session: AudioSession) -> OnceRelease:
         """One exactly-once release wrapper for this call. The runtime installs
@@ -211,8 +219,19 @@ class VoiceAudioRuntime:
                 start_conversation=lambda: run_runner(components),
                 teardown=components.teardown,
                 release_guard=guard,
+                # Registered ONLY after the open sequence returns OPENED (the
+                # latch is open, the call is live and serviceable) — a call that
+                # never opened must never be resumable. Deregistered below on
+                # EVERY terminal path.
+                on_opened=lambda: self._register_resume(session, components),
             )
         finally:
+            # Deregister on every terminal path (graceful end, hangup, open/
+            # compose failure, any raise) — the SAME finally that releases the
+            # slot. This single point is what makes the stale + hangup guards
+            # free: after this, a late owner reply finds no handle and no-ops.
+            # Deregistration also cancels-and-awaits the call's timeout awaiter.
+            await self._deregister_resume(session)
             guard.release()
 
     async def run_call_open(
@@ -223,6 +242,7 @@ class VoiceAudioRuntime:
         start_conversation: Callable[[], Awaitable[None]],
         teardown: Callable[[], Awaitable[None]],
         release_guard: OnceRelease | None = None,
+        on_opened: Callable[[], Awaitable[None]] | None = None,
     ) -> OpenResult:
         """Drive the enforced open order, then either start the conversation or
         tear down — with the admission slot released EXACTLY once on every path.
@@ -250,6 +270,12 @@ class VoiceAudioRuntime:
         try:
             result = await open_sequence()
             if result.outcome is OpenOutcome.OPENED:
+                # The call is live and serviceable — register it for resume
+                # BEFORE audio starts flowing, so an owner reply arriving during
+                # the very first turns already finds the handle. A call that
+                # never OPENED is never registered (no resume into a dead call).
+                if on_opened is not None:
+                    await on_opened()
                 await start_conversation()
             else:
                 # Open failed: STT never opened (the latch is still closed). Tear
@@ -260,3 +286,36 @@ class VoiceAudioRuntime:
         finally:
             # Exactly once, on OPENED, on failure, and on any raise above.
             guard.release()
+
+    async def _register_resume(self, session: AudioSession, components: CallComponents) -> None:
+        """Register this live call in the resume registry, keyed by its TRUSTED
+        (business_id, call_id) from the admitted session. The handle can ONLY
+        inject speech: it captures a queue_frames callable bound to this call's
+        pipeline task, never the task itself. No-op if the runtime has no
+        registry (the default) or the session lacks a call_id."""
+        registry = self.resume_registry
+        if registry is None or session.call_id is None:
+            return
+        from .resume_registry import ResumeHandle
+
+        task = components.pipeline_task
+
+        async def _queue_frames(frames: object) -> None:
+            await task.queue_frames(frames)  # type: ignore[attr-defined]
+
+        await registry.register(
+            ResumeHandle(
+                business_id=session.business_id,
+                call_id=session.call_id,
+                _queue_frames=_queue_frames,
+            )
+        )
+
+    async def _deregister_resume(self, session: AudioSession) -> None:
+        """Remove this call from the resume registry on teardown. Idempotent and
+        no-op without a registry / call_id. Cancels the call's timeout awaiter so
+        nothing survives the call."""
+        registry = self.resume_registry
+        if registry is None or session.call_id is None:
+            return
+        await registry.deregister(session.business_id, session.call_id)

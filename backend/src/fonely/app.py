@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
@@ -40,10 +40,14 @@ def _build_voice_audio_runtime(app: FastAPI) -> object:
     from fonely.voice.context import TrustedClock
     from fonely.voice.frame_pipeline import ResolverContext
     from fonely.voice.media_stream_types import AudioSession
+    from fonely.voice.resume_registry import ResumeRegistry
     from fonely.voice.runtime import CommandPort
     from fonely.voice.runtime_compose import make_composition_root, run_pipeline_runner
 
     session_factory = app.state.session_factory
+    # One registry per process, shared by every call this runtime handles — the
+    # object an owner-reply handler reaches to resume a specific live call.
+    resume_registry = ResumeRegistry()
 
     def _validation_factory(db: AsyncSession) -> AppointmentValidationPort:
         return InternalValidationPort(db)
@@ -70,6 +74,27 @@ def _build_voice_audio_runtime(app: FastAPI) -> object:
         )
 
     def resolver_factory(admitted: AudioSession, command_port: CommandPort) -> ResolverContext:
+        def make_ask_doctor(session: AudioSession) -> Callable[[str, str], Awaitable[None]]:
+            async def ask_doctor(question: str, patient_context: str) -> None:
+                # Escalation: the agent asked the owner. Arm the guard-(c)
+                # timeout on THIS call's resume handle so, if no owner reply
+                # comes back in time, the caller hears a graceful fallback
+                # instead of silence. Looked up by the call's TRUSTED
+                # (business_id, call_id) — the same key an owner reply resumes
+                # by. No-op if the call has no handle yet (not opened) or no
+                # call_id. Owner NOTIFICATION delivery is Dev3's durable-messaging
+                # lane; this only wires the resume-side timeout.
+                if session.call_id is None:
+                    return
+                handle = await resume_registry.get(session.business_id, session.call_id)
+                if handle is not None:
+                    handle.arm_timeout(
+                        timeout_seconds=_OWNER_REPLY_TIMEOUT_SECONDS,
+                        fallback_text=_owner_reply_fallback_line(),
+                    )
+
+            return ask_doctor
+
         return ResolverContext(
             business_id=admitted.business_id,
             session_factory=session_factory,
@@ -77,6 +102,7 @@ def _build_voice_audio_runtime(app: FastAPI) -> object:
             clock=TrustedClock.from_now(admitted.timezone),
             # Trusted call id → the gate composes a restart-stable idempotency key.
             call_id=admitted.call_id,
+            ask_doctor=make_ask_doctor(admitted),
         )
 
     def release_slot(admitted: AudioSession) -> None:
@@ -92,6 +118,11 @@ def _build_voice_audio_runtime(app: FastAPI) -> object:
         resolver_factory=resolver_factory,
         release_slot=release_slot,
         run_runner=run_pipeline_runner,
+        # The cross-call resume registry (#43): the runtime registers each live
+        # call after its open sequence succeeds and deregisters on teardown, so an
+        # out-of-band owner reply can look the call up by its trusted
+        # (business_id, call_id) and speak the answer into it.
+        resume_registry=resume_registry,
     )
     runtime.compose = make_composition_root(
         runtime,
@@ -99,6 +130,21 @@ def _build_voice_audio_runtime(app: FastAPI) -> object:
         system_prompt=_voice_system_prompt(),
     )
     return runtime
+
+
+# How long a call waits for the owner to answer an escalation before the agent
+# speaks a graceful fallback rather than leaving the caller in silence (#43
+# guard c). Bounded well under a session's max duration.
+_OWNER_REPLY_TIMEOUT_SECONDS = 45.0
+
+
+def _owner_reply_fallback_line() -> str:
+    """What the agent says if the owner never replies to an escalation in time.
+    Deliberately does not promise a slot — it hands control back gracefully."""
+    return (
+        "I'm sorry, I couldn't confirm that with the clinic just now. "
+        "Someone will call you back shortly to finish your booking."
+    )
 
 
 def _voice_system_prompt() -> str:

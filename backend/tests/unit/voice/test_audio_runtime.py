@@ -272,6 +272,71 @@ class TestRunCallOpen:
         assert len(releases) == 1  # slot still released exactly once
 
 
+class TestResumeRegistryLifecycle:
+    """#43: a call is registered for resume ONLY after its open sequence returns
+    OPENED (via the on_opened hook), and BEFORE the conversation starts. A failed
+    open never registers. Deregistration on teardown is exercised at the
+    handle_audio_session level (release finally) — here we pin the on_opened
+    ordering that guards (b)/(d) depend on."""
+
+    def _rt(self) -> VoiceAudioRuntime:
+        return VoiceAudioRuntime(
+            command_port_factory=lambda s: _Port(business_id=s.business_id),
+            resolver_factory=lambda s, p: object(),
+            release_slot=lambda s: None,
+        )
+
+    @pytest.mark.asyncio
+    async def test_on_opened_runs_after_open_before_conversation(self):
+        events: list = []
+        rt = self._rt()
+
+        async def open_sequence() -> OpenResult:
+            events.append("open")
+            return OpenResult(OpenOutcome.OPENED, stt_opened=True, content_digest="d")
+
+        async def start_conversation() -> None:
+            events.append("start_conversation")
+
+        async def on_opened() -> None:
+            events.append("register")
+
+        await rt.run_call_open(
+            _FakeAudioSession(),
+            open_sequence=open_sequence,
+            start_conversation=start_conversation,
+            teardown=lambda: _noop(),
+            on_opened=on_opened,
+        )
+        # Registered AFTER the open succeeded and BEFORE audio flows — so an owner
+        # reply during the first turns already finds the handle.
+        assert events == ["open", "register", "start_conversation"]
+
+    @pytest.mark.asyncio
+    async def test_failed_open_never_registers(self):
+        events: list = []
+        rt = self._rt()
+
+        async def open_sequence() -> OpenResult:
+            return OpenResult(OpenOutcome.NOTICE_PLAYBACK_FAILED, stt_opened=False)
+
+        async def on_opened() -> None:
+            events.append("register")
+
+        await rt.run_call_open(
+            _FakeAudioSession(),
+            open_sequence=open_sequence,
+            start_conversation=lambda: _noop(),
+            teardown=lambda: _noop(),
+            on_opened=on_opened,
+        )
+        assert "register" not in events  # a call that never opened is never resumable
+
+
+async def _noop() -> None:
+    return None
+
+
 class TestHandleAudioSession:
     """Top-level composition: handle_audio_session composes the call from the
     trusted (websocket, session, handoff) and drives run_call_open. The compose

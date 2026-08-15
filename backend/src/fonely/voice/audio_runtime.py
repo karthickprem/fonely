@@ -108,20 +108,40 @@ class VoiceAudioRuntime:
     exactly-once teardown.
 
     The dependencies are set once here, not rebuilt per call and not defaulted:
-      * ``command_port`` — the SOLE commit route's port. Injected as an instance;
-        the runtime never constructs one, so commit-count assertions observe the
-        real object.
+      * ``command_port_factory`` — builds the SOLE commit route's port PER CALL
+        from the admitted ``AudioSession``. It is a FACTORY, not a single port,
+        because ``AppointmentServiceCommandPort`` freezes ``business_id`` in its
+        ActorContext at construction (backend_ports.py) — a single app-level port
+        would bind EVERY call to ONE business, a cross-tenant commit under
+        multi-tenant. The factory takes the admitted session so the port's
+        business is ``session.business_id`` (the value admission validated and
+        wrote the calls row for), NEVER model output or caller data. Cross-tenant
+        commit is structurally impossible: the port is bound by construction to
+        the session's business.
       * ``release_slot`` — how to return this call's admission slot. Wrapped in
         an ``OnceRelease`` per call so it runs exactly once across every terminal
         path.
       * ``resolver_factory`` — builds the per-call ``ResolverContext`` for the
-        admitted session (business_id, session factory, clock). Injected so tests
-        supply a fake and the runtime stays free of DB wiring.
+        admitted session (business_id, session factory, clock), threading the
+        per-call command port. Injected so tests supply a fake and the runtime
+        stays free of DB wiring.
     """
 
-    command_port: CommandPort
+    command_port_factory: Callable[[AudioSession], CommandPort]
     resolver_factory: Callable[[AudioSession, CommandPort], ResolverContext]
     release_slot: Callable[[AudioSession], None]
+    # The concrete composition + runner, injected at CONSTRUCTION (not per call),
+    # so ``handle_audio_session`` matches the transport contract
+    # ``(websocket, session, handoff)`` exactly while tests still inject fakes —
+    # including a FAILING composer/runner — by constructing the runtime with
+    # their own ``compose``/``run_runner``. The real mount injects
+    # ``runtime_compose.composition_root`` and the real Pipecat runner. Defaulted
+    # to None so a runtime built for the resolver/release unit tests (which never
+    # call ``handle_audio_session``) needs no composer; calling
+    # ``handle_audio_session`` without one raises loudly rather than silently
+    # composing nothing.
+    compose: Callable[[WebSocket, AudioSession, AudioStreamHandoff], CallComponents] | None = None
+    run_runner: Callable[[CallComponents], Awaitable[None]] | None = None
 
     def make_release_guard(self, session: AudioSession) -> OnceRelease:
         """One exactly-once release wrapper for this call. The runtime installs
@@ -129,40 +149,71 @@ class VoiceAudioRuntime:
         terminal path; only the first call returns the slot."""
         return OnceRelease(lambda: self.release_slot(session))
 
+    def build_call_command_port(self, session: AudioSession) -> CommandPort:
+        """Build the command port for THIS call, bound to the ADMITTED session's
+        business. The port's business_id is ``session.business_id`` (validated by
+        admission), so a call admitted for business A can only ever commit under
+        A — cross-tenant commit is impossible by construction."""
+        return self.command_port_factory(session)
+
     def build_call_resolver(self, session: AudioSession) -> ResolverContext:
-        """Build the per-call resolver via the injected factory, threading the
-        INJECTED command port through — never a port built here."""
-        return self.resolver_factory(session, self.command_port)
+        """Build the per-call resolver, threading the per-call command port built
+        from the admitted session. The port is session-bound, so the resolver's
+        commit route is tenant-isolated by construction."""
+        return self.resolver_factory(session, self.build_call_command_port(session))
 
     async def handle_audio_session(
         self,
+        websocket: WebSocket,
         session: AudioSession,
         handoff: AudioStreamHandoff,
-        *,
-        build_call: Callable[[AudioSession, AudioStreamHandoff], CallComponents],
-        run_runner: Callable[[CallComponents], Awaitable[None]],
-    ) -> OpenResult:
+    ) -> None:
         """Top-level per-call flow: compose the pipeline for this admitted media
         stream, enforce the open order, run the conversation, converge teardown.
 
-        ``build_call`` composes the transport + assembled pipeline + runner from
-        the trusted ``session`` and validated ``handoff`` — returning the handles
-        this method drives (the closed input latch, the open sequence bound to
-        this call, the runner). ``run_runner`` drives the Pipecat runner to
-        completion. Both are injected so the orchestration is testable with fakes
-        and the real wiring supplies live Pipecat objects.
+        This is the PRODUCTION contract the telephony adapter calls
+        (``exotel.py`` → ``handle_audio_session(websocket, session, handoff)``).
+        The concrete composition + runner are injected at CONSTRUCTION
+        (``self.compose`` / ``self.run_runner``): ``compose`` builds the transport
+        + assembled pipeline + runner from the ``websocket`` and the trusted
+        ``session`` + validated ``handoff``, returning the handles this method
+        drives; ``run_runner`` drives the Pipecat runner to completion. Both are
+        constructor-injected so this signature stays the clean transport contract
+        while tests still supply fakes (including a failing composer/runner) by
+        constructing the runtime with their own.
 
         Ordering and teardown are delegated to ``run_call_open``: caller audio
         reaches STT only after the open sequence succeeds, and the admission slot
-        releases exactly once on every path.
+        releases exactly once on every path. Returns ``None`` — the adapter
+        ignores the result; ``run_call_open`` still returns ``OpenResult`` for
+        callers that want the outcome.
         """
-        components = build_call(session, handoff)
-        return await self.run_call_open(
-            session,
-            open_sequence=components.open_sequence,
-            start_conversation=lambda: run_runner(components),
-            teardown=components.teardown,
-        )
+        if self.compose is None or self.run_runner is None:
+            msg = (
+                "VoiceAudioRuntime.handle_audio_session requires compose and "
+                "run_runner injected at construction"
+            )
+            raise RuntimeError(msg)
+        run_runner = self.run_runner
+        # The release guard wraps COMPOSITION too, not just the open sequence:
+        # composition builds real providers + a transport and can fail (a
+        # provider won't connect, the socket won't open). If that raise escaped
+        # before run_call_open installed its own guard, the admission slot would
+        # LEAK — the call was admitted but never released. So the slot is
+        # released exactly once whether composition raises, the open fails, or
+        # the conversation runs to completion.
+        guard = self.make_release_guard(session)
+        try:
+            components = self.compose(websocket, session, handoff)
+            await self.run_call_open(
+                session,
+                open_sequence=components.open_sequence,
+                start_conversation=lambda: run_runner(components),
+                teardown=components.teardown,
+                release_guard=guard,
+            )
+        finally:
+            guard.release()
 
     async def run_call_open(
         self,
@@ -171,6 +222,7 @@ class VoiceAudioRuntime:
         open_sequence: Callable[[], Awaitable[OpenResult]],
         start_conversation: Callable[[], Awaitable[None]],
         teardown: Callable[[], Awaitable[None]],
+        release_guard: OnceRelease | None = None,
     ) -> OpenResult:
         """Drive the enforced open order, then either start the conversation or
         tear down — with the admission slot released EXACTLY once on every path.
@@ -185,13 +237,16 @@ class VoiceAudioRuntime:
           * a failed open tears the call down without starting the conversation;
           * the admission slot is released exactly once whether the open
             succeeds, fails, or the whole thing raises — via the OnceRelease
-            guard installed in the single ``finally``.
+            guard.
 
-        This is the outer skeleton ``handle_audio_session`` uses; the transport
-        and pipeline wiring supply the real ``open_sequence`` /
-        ``start_conversation`` / ``teardown`` closures.
+        ``release_guard`` lets ``handle_audio_session`` share ONE guard across
+        composition + open, so a slot is released exactly once even if
+        composition (before this method) raised. When called standalone (its own
+        tests), a guard is created here. Either way the guard is idempotent, so a
+        shared guard released here and again in the caller's ``finally`` still
+        releases the slot exactly once.
         """
-        guard = self.make_release_guard(session)
+        guard = release_guard if release_guard is not None else self.make_release_guard(session)
         try:
             result = await open_sequence()
             if result.outcome is OpenOutcome.OPENED:

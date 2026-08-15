@@ -30,11 +30,29 @@ class _FakeAudioSession:
 
 
 class _Port:
-    """A distinct command-port object; identity is what the discipline test
-    checks."""
+    """A distinct command-port object bound to ONE business. The tenant-isolation
+    test checks the port a call gets is bound to the ADMITTED session's
+    business."""
+
+    def __init__(self, business_id: int) -> None:
+        self.business_id = business_id
 
 
-def _runtime(port, *, resolver_ports: list, releases: list) -> VoiceAudioRuntime:
+def _session_bound_factory():
+    """A command_port_factory that builds a port bound to the SESSION's business —
+    the production contract (business from the admitted session, never a default).
+    Returns (factory, built) where `built` records each (session, port)."""
+    built: list = []
+
+    def factory(session):
+        port = _Port(business_id=session.business_id)
+        built.append((session, port))
+        return port
+
+    return factory, built
+
+
+def _runtime(*, resolver_ports: list, releases: list, factory=None) -> VoiceAudioRuntime:
     def resolver_factory(session, command_port):
         # Record WHICH port instance the runtime threaded into the resolver.
         resolver_ports.append(command_port)
@@ -43,46 +61,72 @@ def _runtime(port, *, resolver_ports: list, releases: list) -> VoiceAudioRuntime
     def release_slot(session):
         releases.append(session)
 
+    if factory is None:
+        factory, _ = _session_bound_factory()
+
     return VoiceAudioRuntime(
-        command_port=port,
+        command_port_factory=factory,
         resolver_factory=resolver_factory,
         release_slot=release_slot,
     )
 
 
-class TestInjectedInstanceDiscipline:
-    def test_resolver_gets_the_injected_port_instance_not_a_copy(self):
-        port = _Port()
+class TestTenantBoundCommandPort:
+    """The command port is built PER CALL from the admitted session, bound to
+    session.business_id — cross-tenant commit is impossible by construction."""
+
+    def test_port_business_comes_from_the_admitted_session(self):
+        factory, built = _session_bound_factory()
         resolver_ports: list = []
-        rt = _runtime(port, resolver_ports=resolver_ports, releases=[])
+        rt = _runtime(resolver_ports=resolver_ports, releases=[], factory=factory)
 
-        rt.build_call_resolver(_FakeAudioSession())
+        rt.build_call_resolver(_FakeAudioSession(business_id=7))
 
-        assert len(resolver_ports) == 1
-        # IDENTITY, not equality: the exact object we injected reached the
-        # resolver — the runtime built no port of its own.
-        assert resolver_ports[0] is port
+        # The factory was called with the admitted session, and the port it built
+        # is bound to THAT session's business — not a default, not model output.
+        assert len(built) == 1
+        session, port = built[0]
+        assert session.business_id == 7
+        assert port.business_id == 7
+        assert resolver_ports[0] is port  # the per-call port reached the resolver
 
-    def test_wrong_instance_would_be_caught(self):
-        # Guard against a false green: if the runtime had substituted a different
-        # port, this identity assertion would fail. Prove that by threading a
-        # DIFFERENT object and confirming `is` rejects it.
-        injected = _Port()
-        other = _Port()
+    def test_two_tenants_get_ports_bound_to_their_own_business(self):
+        # Call A (business 7) and call B (business 99) each get a port bound to
+        # THEIR admitted business — never the other's.
+        factory, built = _session_bound_factory()
         resolver_ports: list = []
-        rt = _runtime(injected, resolver_ports=resolver_ports, releases=[])
+        rt = _runtime(resolver_ports=resolver_ports, releases=[], factory=factory)
 
-        rt.build_call_resolver(_FakeAudioSession())
+        rt.build_call_resolver(_FakeAudioSession(business_id=7))
+        rt.build_call_resolver(_FakeAudioSession(business_id=99))
 
-        assert resolver_ports[0] is injected
-        assert resolver_ports[0] is not other  # a wrong instance is detectable
+        assert built[0][1].business_id == 7
+        assert built[1][1].business_id == 99
+        # Distinct port instances — no shared/leaked single port across tenants.
+        assert built[0][1] is not built[1][1]
+
+    def test_mutation_wrong_source_would_bind_wrong_business(self):
+        # Adversarial: a factory that ignored the session and used a CONSTANT
+        # business would bind call A's port to the wrong business. Prove the test
+        # is session-driven by showing a constant-source factory fails the
+        # session-derived assertion.
+        def constant_factory(session):
+            return _Port(business_id=1)  # BUG: ignores session.business_id
+
+        resolver_ports: list = []
+        rt = _runtime(resolver_ports=resolver_ports, releases=[], factory=constant_factory)
+        rt.build_call_resolver(_FakeAudioSession(business_id=7))
+
+        # A session-driven port would be business 7; the buggy constant factory
+        # produced business 1 — the assertion that catches the wrong binding.
+        assert resolver_ports[0].business_id != 7  # buggy factory IS detectable
+        assert resolver_ports[0].business_id == 1
 
 
 class TestReleaseGuardWiring:
     def test_release_guard_fires_slot_release_exactly_once(self):
-        port = _Port()
         releases: list = []
-        rt = _runtime(port, resolver_ports=[], releases=releases)
+        rt = _runtime(resolver_ports=[], releases=releases)
         session = _FakeAudioSession()
 
         guard = rt.make_release_guard(session)
@@ -94,18 +138,16 @@ class TestReleaseGuardWiring:
         assert guard.released is True
 
     def test_release_guard_not_fired_means_no_release(self):
-        port = _Port()
         releases: list = []
-        rt = _runtime(port, resolver_ports=[], releases=releases)
+        rt = _runtime(resolver_ports=[], releases=releases)
         rt.make_release_guard(_FakeAudioSession())
         # Never called → nothing released (the count is real, not constant).
         assert releases == []
 
     @pytest.mark.asyncio
     async def test_release_guard_fires_once_even_if_body_raises(self):
-        port = _Port()
         releases: list = []
-        rt = _runtime(port, resolver_ports=[], releases=releases)
+        rt = _runtime(resolver_ports=[], releases=releases)
         guard = rt.make_release_guard(_FakeAudioSession())
 
         with pytest.raises(ValueError):
@@ -134,7 +176,7 @@ class TestRunCallOpen:
             events.append("release")
 
         return VoiceAudioRuntime(
-            command_port=_Port(),
+            command_port_factory=lambda s: _Port(business_id=s.business_id),
             resolver_factory=resolver_factory,
             release_slot=release_slot,
         )
@@ -231,93 +273,125 @@ class TestRunCallOpen:
 
 
 class TestHandleAudioSession:
-    """Top-level composition: handle_audio_session builds the call components
-    from the trusted session + handoff and drives run_call_open. The runner runs
-    ONLY on OPENED; a failed open never runs the runner; release once."""
+    """Top-level composition: handle_audio_session composes the call from the
+    trusted (websocket, session, handoff) and drives run_call_open. The compose
+    and run_runner seams are injected at CONSTRUCTION (so the method signature is
+    the clean transport contract), and the proofs are unchanged: the runner runs
+    ONLY on OPENED; a failed open never runs the runner; release exactly once.
+
+    This is the exotel.py contract: handle_audio_session(websocket, session,
+    handoff) — websocket first, positional, returns None."""
 
     @dataclass
     class _Handoff:
         start: object = None
         raw_frames: tuple = ()
 
-    def _rt(self, releases: list) -> VoiceAudioRuntime:
+    def _components(self, *, outcome: OpenOutcome, stt_opened: bool, ran: list) -> object:
+        from fonely.voice.audio_runtime import CallComponents
+
+        async def open_sequence() -> OpenResult:
+            return OpenResult(outcome, stt_opened=stt_opened, content_digest="d")
+
+        async def teardown() -> None:
+            ran.append("teardown")
+
+        return CallComponents(
+            input_latch=object(),  # type: ignore[arg-type]
+            open_sequence=open_sequence,
+            teardown=teardown,
+            pipeline_task=object(),
+            runner=object(),
+        )
+
+    def _rt(
+        self,
+        *,
+        releases: list,
+        compose=None,
+        run_runner=None,
+    ) -> VoiceAudioRuntime:
         return VoiceAudioRuntime(
-            command_port=_Port(),
+            command_port_factory=lambda s: _Port(business_id=s.business_id),
             resolver_factory=lambda s, p: object(),
             release_slot=lambda s: releases.append(s),
+            compose=compose,
+            run_runner=run_runner,
         )
 
     @pytest.mark.asyncio
     async def test_opened_runs_the_runner_once(self):
         releases: list = []
-        rt = self._rt(releases)
         ran: list = []
+        composed_with: list = []
 
-        def build_call(session, handoff):
-            from fonely.voice.audio_runtime import CallComponents
-
-            async def open_sequence() -> OpenResult:
-                return OpenResult(OpenOutcome.OPENED, stt_opened=True, content_digest="d")
-
-            async def teardown() -> None:
-                ran.append("teardown")
-
-            return CallComponents(
-                input_latch=object(),  # type: ignore[arg-type]
-                open_sequence=open_sequence,
-                teardown=teardown,
-                pipeline_task=object(),
-                runner=object(),
-            )
+        def compose(websocket, session, handoff):
+            composed_with.append((websocket, session, handoff))
+            return self._components(outcome=OpenOutcome.OPENED, stt_opened=True, ran=ran)
 
         async def run_runner(components) -> None:
             ran.append("run_runner")
 
-        result = await rt.handle_audio_session(
-            _FakeAudioSession(),
-            self._Handoff(),
-            build_call=build_call,
-            run_runner=run_runner,
-        )
+        rt = self._rt(releases=releases, compose=compose, run_runner=run_runner)
 
-        assert result.outcome is OpenOutcome.OPENED
+        ws = object()
+        session = _FakeAudioSession()
+        handoff = self._Handoff()
+        # Called EXACTLY as exotel.py:516 does: (websocket, session, handoff).
+        result = await rt.handle_audio_session(ws, session, handoff)
+
+        assert result is None  # transport contract: returns None
         assert ran == ["run_runner"]  # runner ran, teardown not called
         assert len(releases) == 1
+        # compose received the websocket + the trusted session + handoff, identity
+        # threaded straight through (no re-derivation).
+        assert composed_with == [(ws, session, handoff)]
 
     @pytest.mark.asyncio
     async def test_failed_open_never_runs_the_runner(self):
         releases: list = []
-        rt = self._rt(releases)
         ran: list = []
 
-        def build_call(session, handoff):
-            from fonely.voice.audio_runtime import CallComponents
-
-            async def open_sequence() -> OpenResult:
-                return OpenResult(OpenOutcome.EVIDENCE_WRITE_FAILED, stt_opened=False)
-
-            async def teardown() -> None:
-                ran.append("teardown")
-
-            return CallComponents(
-                input_latch=object(),  # type: ignore[arg-type]
-                open_sequence=open_sequence,
-                teardown=teardown,
-                pipeline_task=object(),
-                runner=object(),
+        def compose(websocket, session, handoff):
+            return self._components(
+                outcome=OpenOutcome.EVIDENCE_WRITE_FAILED, stt_opened=False, ran=ran
             )
 
         async def run_runner(components) -> None:
             ran.append("run_runner")
 
-        result = await rt.handle_audio_session(
-            _FakeAudioSession(),
-            self._Handoff(),
-            build_call=build_call,
-            run_runner=run_runner,
-        )
+        rt = self._rt(releases=releases, compose=compose, run_runner=run_runner)
 
-        assert result.outcome is OpenOutcome.EVIDENCE_WRITE_FAILED
+        await rt.handle_audio_session(object(), _FakeAudioSession(), self._Handoff())
+
         assert "run_runner" not in ran  # runner NEVER ran on a failed open
         assert ran == ["teardown"]
         assert len(releases) == 1
+
+    @pytest.mark.asyncio
+    async def test_failing_composer_still_releases_once(self):
+        # The constructor-injection move must preserve the ability to inject a
+        # FAILING composer and observe the release-once contract still holds.
+        releases: list = []
+
+        def compose(websocket, session, handoff):
+            raise RuntimeError("composition blew up")
+
+        async def run_runner(components) -> None:
+            pass
+
+        rt = self._rt(releases=releases, compose=compose, run_runner=run_runner)
+
+        with pytest.raises(RuntimeError, match="composition blew up"):
+            await rt.handle_audio_session(object(), _FakeAudioSession(), self._Handoff())
+
+        assert len(releases) == 1  # slot released exactly once even when compose raises
+
+    @pytest.mark.asyncio
+    async def test_missing_compose_raises_loudly(self):
+        # A runtime with no composer injected must FAIL LOUD on
+        # handle_audio_session, not silently compose nothing (absence must not
+        # read as success).
+        rt = self._rt(releases=[])
+        with pytest.raises(RuntimeError, match="requires compose and run_runner"):
+            await rt.handle_audio_session(object(), _FakeAudioSession(), self._Handoff())

@@ -123,6 +123,44 @@ def _readback_confirm_missing(text: str) -> bool:
     return not any(m in low for m in _READBACK_CONFIRM_MARKERS)
 
 
+def _voice_idempotency_key(
+    *,
+    business_id: int,
+    call_id: int | None,
+    target_date: object,
+    target_time: object,
+    resource_id: int | None,
+) -> str:
+    """A RESTART-STABLE idempotency key for a voice booking-attempt.
+
+    A pure function of durable, trusted values (all from the admitted session or
+    the server-side availability, never model output): the tenant, the
+    originating call, the confirmed slot (date/time), and the captured resource.
+    Because it contains no process-memory address, the SAME booking-attempt
+    produces the SAME key across any restart / gate reconstruction — so a retried
+    confirm replays the SAME appointment instead of double-booking or being
+    falsely refused. This is what the old ``voice-{id(self)}-...`` key broke:
+    ``id(self)`` is the gate object's address, which changes on every restart.
+
+    PRIMARY form (call_id present): ``voice-b{business}-c{call}-{date}-{time}-r{resource}``.
+    Two DIFFERENT calls booking the same slot get DIFFERENT keys (correct — they
+    are distinct attempts); the SAME call retrying gets the SAME key (replay).
+
+    FALLBACK form (call_id absent — a real live path today, e.g. the lab whose
+    build_processors does not thread call_id): the call-agnostic
+    ``voice-b{business}-{date}-{time}-r{resource}``. Still deterministic and
+    restart-safe (NEVER id(self)), but COARSER: it cannot distinguish two
+    different calls booking the same slot. That is acceptable for the fallback —
+    the DB capacity constraint plus same-key/same-facts replay still prevent a
+    double-book — but the call_id-present path is the STRONGER one, and threading
+    call_id into the lab is a separate follow-up.
+    """
+    slot = f"{target_date}-{target_time}-r{resource_id}"
+    if call_id is not None:
+        return f"voice-b{business_id}-c{call_id}-{slot}"
+    return f"voice-b{business_id}-{slot}"
+
+
 @dataclass
 class ResolverContext:
     """Everything the processors need to reach the DB and the commit port.
@@ -134,6 +172,13 @@ class ResolverContext:
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]]
     command_port: CommandPort
     clock: TrustedClock
+    # The originating call, from the admitted session (same trusted source as
+    # business_id). Used to compose a RESTART-STABLE idempotency key: it is a DB
+    # row id admission wrote, not a process memory address, so a retried confirm
+    # of the same booking after a restart produces the SAME key and replays the
+    # SAME appointment. None on paths that do not thread it yet (e.g. the lab);
+    # the key falls back to a still-deterministic, call-agnostic form there.
+    call_id: int | None = None
     # async (question, patient_context) -> None
     ask_doctor: Callable[[str, str], Awaitable[None]] | None = None
 
@@ -374,7 +419,13 @@ class BookingPostLLMGate(FrameProcessor):
                     service_phrase=bc.reason or "",
                     target_date=bc.target_date,
                     target_time=bc.selected_time,
-                    idempotency_key=f"voice-{id(self)}-{bc.target_date}-{bc.selected_time}",
+                    idempotency_key=_voice_idempotency_key(
+                        business_id=self._resolver.business_id,
+                        call_id=self._resolver.call_id,
+                        target_date=bc.target_date,
+                        target_time=bc.selected_time,
+                        resource_id=bc.selected_resource_id,
+                    ),
                     # Book the dentist captured from the slot the caller selected,
                     # not a re-resolved lowest-id one (the wrong-dentist fix).
                     resource_id=bc.selected_resource_id,

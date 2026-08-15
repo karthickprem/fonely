@@ -75,6 +75,8 @@ def _build_voice_audio_runtime(app: FastAPI) -> object:
             session_factory=session_factory,
             command_port=command_port,
             clock=TrustedClock.from_now(admitted.timezone),
+            # Trusted call id → the gate composes a restart-stable idempotency key.
+            call_id=admitted.call_id,
         )
 
     def release_slot(admitted: AudioSession) -> None:

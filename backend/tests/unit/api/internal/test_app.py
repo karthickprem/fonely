@@ -23,6 +23,14 @@ def _configure(mock_app: MagicMock, mock_route: MagicMock, secret: str) -> None:
         m.internal_api_secret = secret
         m.database_url = "postgresql+asyncpg://localhost/test"
         m.readiness_timeout_seconds = 3.0
+        # Model a DEFAULT-DARK process explicitly. Without this, the attribute is
+        # an unset MagicMock — which is TRUTHY — so /health/ready's voice branch
+        # (added in #45(d)) would run against an unmounted runtime and 503,
+        # failing the DB-only readiness test. These are DB/auth tests, not voice
+        # tests; the voice-enabled readiness path is covered by
+        # test_startup_readiness.py. (Same MagicMock-truthiness trap _app_with
+        # documents below.)
+        m.voice_pipeline_enabled = False
 
 
 @pytest.fixture
@@ -67,6 +75,22 @@ async def test_liveness(client: AsyncClient) -> None:
 
 async def test_readiness_checks_database(client: AsyncClient) -> None:
     response = await client.get("/health/ready")
+    assert response.status_code == 200
+
+
+async def test_readiness_default_dark_does_not_touch_voice_gate(app) -> None:  # type: ignore[no-untyped-def]
+    """Regression for the #45(d) base-red: a settings mock that does NOT set
+    voice_pipeline_enabled must model a DEFAULT-DARK process, not accidentally
+    enable voice (an unset MagicMock attribute is truthy). /health/ready must
+    return 200 on the DB check alone and NEVER consult the voice serviceability
+    gate. We prove the gate is untouched by patching it to blow up if called."""
+    transport = ASGITransport(app=app)
+    with patch(
+        "fonely.voice.providers.resolved_voice_creds_ready",
+        side_effect=AssertionError("voice gate consulted when voice_pipeline_enabled is False"),
+    ):
+        async with AsyncClient(transport=transport, base_url="http://test") as c:
+            response = await c.get("/health/ready")
     assert response.status_code == 200
 
 

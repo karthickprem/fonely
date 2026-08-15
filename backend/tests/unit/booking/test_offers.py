@@ -13,18 +13,40 @@ from fonely.domain.booking.offers import (
     validate_selection,
 )
 
-NOW = datetime(2026, 8, 15, 4, 30, tzinfo=UTC)
+
+def _now() -> datetime:
+    """Run-relative anchor, resolved per call.
+
+    validate_selection() compares an offer's expires_at against
+    datetime.now(UTC) at RUN time. A fixed absolute NOW (this was
+    datetime(2026, 8, 15, 4, 30)) turns every offer built at NOW + a few minutes
+    into a time bomb: once wall-clock passes that expiry the offer is expired and
+    validate_selection raises 'expired' before the assertion under test — which
+    is exactly how test_valid_selection / test_invalid_token_rejected went red on
+    2026-08-15. Anchoring to now() per call makes the offer's expiry always in
+    the future relative to run time, so the tests cannot expire mid-suite no
+    matter when they run. Tests that WANT an expired offer construct an
+    explicitly past expires_at (see test_expired_rejected).
+    """
+    return datetime.now(UTC)
+
+
+# Target date is only a display/opaque string in these offers (build_offer and
+# validate_selection do not parse it against "today"), so a fixed value is safe
+# and keeps the display assertions stable.
+TARGET_DATE = "2026-08-15"
 
 
 def _raw_slots() -> list[dict[str, object]]:
+    now = _now()
     return [
         {
-            "start_at": NOW,
-            "end_at": NOW + timedelta(minutes=30),
+            "start_at": now,
+            "end_at": now + timedelta(minutes=30),
         },
         {
-            "start_at": NOW + timedelta(minutes=30),
-            "end_at": NOW + timedelta(hours=1),
+            "start_at": now + timedelta(minutes=30),
+            "end_at": now + timedelta(hours=1),
         },
     ]
 
@@ -78,10 +100,11 @@ class TestBuildOffer:
 
 class TestValidateSelection:
     def _offer(self, **overrides: object) -> AvailabilityOffer:
+        now = _now()
         slot = AvailabilitySlot(
             token="valid-token",
-            start_at_utc=NOW,
-            end_at_utc=NOW + timedelta(minutes=30),
+            start_at_utc=now,
+            end_at_utc=now + timedelta(minutes=30),
             display_date="Friday",
             display_time="10:00 AM",
             display_end_time="10:30 AM",
@@ -95,10 +118,13 @@ class TestValidateSelection:
             "service_name": "C",
             "resource_id": 1,
             "resource_name": "D",
-            "target_date": "2026-08-15",
+            "target_date": TARGET_DATE,
             "slots": (slot,),
-            "created_at": NOW,
-            "expires_at": NOW + timedelta(minutes=15),
+            "created_at": now,
+            # Comfortably in the future relative to RUN time (not a fixed clock
+            # value) so validate_selection's now()-comparison cannot see it as
+            # expired mid-suite. Tests that want expiry override this explicitly.
+            "expires_at": now + timedelta(hours=1),
         }
         defaults.update(overrides)
         return AvailabilityOffer(**defaults)
@@ -256,6 +282,7 @@ class TestBuildOfferValidation:
         assert exc.value.code == "naive_datetime"
 
     def test_end_before_start_rejected(self) -> None:
+        now = _now()
         with pytest.raises(OfferValidationError) as exc:
             build_offer(
                 business_id=1,
@@ -264,8 +291,8 @@ class TestBuildOfferValidation:
                 service_name="C",
                 resource_id=1,
                 resource_name="D",
-                target_date="2026-08-15",
-                available_slots=[{"start_at": NOW + timedelta(hours=1), "end_at": NOW}],
+                target_date=TARGET_DATE,
+                available_slots=[{"start_at": now + timedelta(hours=1), "end_at": now}],
                 business_timezone="Asia/Kolkata",
             )
         assert exc.value.code == "invalid_slot_interval"

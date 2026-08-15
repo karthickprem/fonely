@@ -68,6 +68,7 @@ def build_voice_pipeline(
     tts: Any,
     input_latch: NoticeInputLatch,
     system_prompt: str,
+    playback_observer: Any = None,
 ) -> AssembledPipeline:
     """Compose the booking pipeline. Pure: constructs and wires, runs nothing.
 
@@ -75,6 +76,11 @@ def build_voice_pipeline(
     tests pass fakes and the runtime passes the real Pipecat transport + the
     provider services from ``providers.py``. ``system_prompt`` seeds the shared
     ``LLMContext``; the injector rewrites it per turn.
+
+    ``playback_observer`` (the ``NoticePlaybackSignal``) is placed AFTER
+    ``transport_out`` when supplied, so it observes the bot-stopped-speaking
+    frame that marks real notice playback completion — the same position the lab
+    uses. Optional so existing structural tests that don't need it pass ``None``.
     """
     context = LLMContext(messages=[{"role": "system", "content": system_prompt}])
     aggregators = LLMContextAggregatorPair(context)
@@ -82,20 +88,22 @@ def build_voice_pipeline(
     injector = BookingStateInjector(resolver)
     gate = BookingPostLLMGate(injector, resolver)
 
-    pipeline = Pipeline(
-        [
-            transport_in,
-            input_latch,
-            stt,
-            aggregators.user(),
-            injector,
-            llm,
-            gate,
-            tts,
-            transport_out,
-            aggregators.assistant(),
-        ]
-    )
+    stages: list[Any] = [
+        transport_in,
+        input_latch,
+        stt,
+        aggregators.user(),
+        injector,
+        llm,
+        gate,
+        tts,
+        transport_out,
+    ]
+    if playback_observer is not None:
+        stages.append(playback_observer)
+    stages.append(aggregators.assistant())
+
+    pipeline = Pipeline(stages)
 
     return AssembledPipeline(
         pipeline=pipeline,

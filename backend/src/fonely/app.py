@@ -18,6 +18,94 @@ from fonely.core.middleware import apply_hardening
 logger = logging.getLogger("fonely.app")
 
 
+def _build_voice_audio_runtime(app: FastAPI) -> object:
+    """Construct the ONE canonical VoiceAudioRuntime for this process.
+
+    Called only when ``voice_pipeline_enabled`` is on. The command port is a
+    PER-CALL factory, never a single instance: ``AppointmentServiceCommandPort``
+    freezes ``business_id`` at construction, so a single port would bind every
+    call to one business (cross-tenant commit). The factory builds the port from
+    each admitted session's identity — ``session.business_id`` (validated by
+    admission), so a call admitted for business A can only ever commit under A.
+    """
+    from fonely.voice.audio_runtime import VoiceAudioRuntime
+    from fonely.voice.backend_ports import (
+        AppointmentServiceCommandPort,
+        build_actor_context,
+    )
+    from fonely.voice.context import TrustedClock
+    from fonely.voice.frame_pipeline import ResolverContext
+    from fonely.voice.runtime_compose import make_composition_root, run_pipeline_runner
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from fonely.api.internal.validation import InternalValidationPort
+    from fonely.domain.appointments.validation import AppointmentValidationPort
+    from fonely.voice.media_stream_types import AudioSession
+    from fonely.voice.runtime import CommandPort
+
+    session_factory = app.state.session_factory
+
+    def _validation_factory(db: AsyncSession) -> AppointmentValidationPort:
+        return InternalValidationPort(db)
+
+    def command_port_factory(admitted: AudioSession) -> CommandPort:
+        # Business / caller / call identity ALL come from the admitted session,
+        # never model output or caller-supplied data. The port is bound to
+        # admitted.business_id by construction.
+        actor = build_actor_context(
+            business_id=admitted.business_id,
+            phone=admitted.caller_phone or "",
+            session_id=str(admitted.call_id),
+        )
+        return AppointmentServiceCommandPort(
+            actor=actor,
+            session_factory=session_factory,
+            validation_factory=_validation_factory,
+            business_timezone=admitted.timezone,
+            conversation_id=str(admitted.call_id),
+        )
+
+    def resolver_factory(admitted: AudioSession, command_port: CommandPort) -> ResolverContext:
+        return ResolverContext(
+            business_id=admitted.business_id,
+            session_factory=session_factory,
+            command_port=command_port,
+            clock=TrustedClock.from_now(admitted.timezone),
+        )
+
+    def release_slot(admitted: AudioSession) -> None:
+        # Admission-slot release is the admission lane's concern; the runtime
+        # only needs a callable. With no admission-slot accounting wired here yet
+        # this is a no-op — the OnceRelease guard still proves exactly-once
+        # semantics, and real slot accounting plugs in when the admission lane
+        # exposes it. (NOT RUN: real slot accounting is admission-lane work.)
+        return None
+
+    runtime = VoiceAudioRuntime(
+        command_port_factory=command_port_factory,
+        resolver_factory=resolver_factory,
+        release_slot=release_slot,
+        run_runner=run_pipeline_runner,
+    )
+    runtime.compose = make_composition_root(
+        runtime,
+        session_factory=session_factory,
+        system_prompt=_voice_system_prompt(),
+    )
+    return runtime
+
+
+def _voice_system_prompt() -> str:
+    """The system prompt seeding the voice LLM context. Kept minimal here; the
+    BookingStateInjector rewrites the context per turn with live clinic facts."""
+    return (
+        "You are Fonely, an automated appointment-booking assistant for a dental "
+        "clinic. Speak the caller's language. Book only from confirmed "
+        "availability. Never give medical advice."
+    )
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     configure_logging(settings.log_format, settings.log_level)
@@ -44,6 +132,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.model_gateway = SarvamModelGateway(client=http_client)
     else:
         app.state.model_gateway = None
+
+    # The canonical voice runtime is mounted ONLY when voice_pipeline_enabled is
+    # on. Default OFF: exotel.py refuses an unmounted runtime with a clean 1011
+    # (absence must not read as success), so shipping dark is safe and is the
+    # default until a hosted exact-SHA call proves the path. When on, ONE
+    # VoiceAudioRuntime is constructed with the real composition root + runner.
+    if settings.voice_pipeline_enabled:
+        app.state.voice_audio_runtime = _build_voice_audio_runtime(app)
+    else:
+        app.state.voice_audio_runtime = None
 
     try:
         yield

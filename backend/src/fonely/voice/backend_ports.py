@@ -71,12 +71,19 @@ class AppointmentServiceCommandPort:
         validation_factory: ValidationFactory,
         business_timezone: str,
         conversation_id: str,
+        call_id: int | None = None,
     ) -> None:
         self._actor = actor
         self._session_factory = session_factory
         self._validation_factory = validation_factory
         self._business_timezone = business_timezone
         self._conversation_id = conversation_id
+        # The originating call, from the ADMITTED session (admission validated it
+        # and wrote the calls row). Threaded into the appointment command so the
+        # booking is provably traceable back to its call via the
+        # (business_id, call_id) FK. Never taken from a ProposeCommand's caller
+        # fields or model output — same trust discipline as business_id.
+        self._call_id = call_id
         self._booking_attempt = 0
 
     async def propose(self, cmd: ProposeCommand) -> CommandResult:
@@ -109,7 +116,7 @@ class AppointmentServiceCommandPort:
                         customer_name=cmd.customer_name or None,
                         customer_phone=self._actor.normalized_phone,
                         reason=None,
-                        call_id=None,
+                        call_id=self._call_id,
                         expires_at=expires_at,
                         idempotency_key=idempotency_key,
                     )

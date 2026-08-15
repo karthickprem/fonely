@@ -1,5 +1,6 @@
 """Serve the Pipecat SmallWebRTC runner with both demo and booking pipelines."""
 
+import contextlib
 import importlib.util
 import json
 import os
@@ -224,7 +225,7 @@ iframe{width:100%;height:100%;border:none}
 <div class="panels">
   <div class="panel">
     <div class="panel-header patient">🎤 Patient Call — Booking Pipeline (GPT-5.6 Luna + Live Clinic Context)</div>
-    <iframe src="/voice-booking"></iframe>
+    <iframe src="/voice-booking" allow="microphone"></iframe>
   </div>
   <div class="panel">
     <div class="panel-header owner">👨‍⚕️ Owner / Doctor Updates</div>
@@ -497,43 +498,58 @@ async def hf_realtime_proxy(client_ws: WebSocket):
     negotiated = getattr(upstream, "subprotocol", None) or (offered[0] if offered else None)
     await client_ws.accept(subprotocol=negotiated)
 
+    # Lifecycle is critical: the HF backend runs a SINGLE pipeline slot (pool=1),
+    # so if this relay leaks — leaving the upstream socket open after the browser
+    # goes away — that one slot stays wedged and every later connection is rejected
+    # ("all pipeline slots in use"). So when EITHER side ends, we must promptly
+    # close the OTHER and fully await the upstream close, freeing the slot at once.
     async def pump_to_upstream() -> None:
-        try:
-            while True:
-                msg = await client_ws.receive()
-                if msg["type"] == "websocket.disconnect":
-                    break
-                if (data := msg.get("bytes")) is not None:
-                    await upstream.send(data)
-                elif (text := msg.get("text")) is not None:
-                    await upstream.send(text)
-        except Exception:
-            pass
+        while True:
+            msg = await client_ws.receive()
+            if msg["type"] == "websocket.disconnect":
+                return  # browser went away → let the finally close upstream
+            if (data := msg.get("bytes")) is not None:
+                await upstream.send(data)
+            elif (text := msg.get("text")) is not None:
+                await upstream.send(text)
 
     async def pump_to_client() -> None:
-        try:
-            async for message in upstream:
-                if isinstance(message, bytes):
-                    await client_ws.send_bytes(message)
-                else:
-                    await client_ws.send_text(message)
-        except Exception:
-            pass
+        async for message in upstream:
+            if isinstance(message, bytes):
+                await client_ws.send_bytes(message)
+            else:
+                await client_ws.send_text(message)
 
+    to_up = asyncio.create_task(pump_to_upstream())
+    to_cl = asyncio.create_task(pump_to_client())
     try:
-        await asyncio.wait(
-            {asyncio.create_task(pump_to_upstream()), asyncio.create_task(pump_to_client())},
-            return_when=asyncio.FIRST_COMPLETED,
+        done, pending = await asyncio.wait(
+            {to_up, to_cl}, return_when=asyncio.FIRST_COMPLETED
         )
+        # Cancel the still-running direction and AWAIT it so no pump survives to
+        # hold either socket open (a swallowed task would leak the pipeline slot).
+        for task in pending:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        # Surface any non-cancellation error from the finished pump for the log,
+        # but never let it prevent the closes below.
+        for task in done:
+            with contextlib.suppress(Exception):
+                task.result()
     finally:
-        try:
+        # Close upstream FIRST and wait for it — this is what releases the backend
+        # pipeline slot. wait_closed() ensures the close handshake completes before
+        # we consider the slot free.
+        with contextlib.suppress(Exception):
             await upstream.close()
-        except Exception:
-            pass
-        try:
-            await client_ws.close()
-        except Exception:
-            pass
+        with contextlib.suppress(Exception):
+            await upstream.wait_closed()
+        # Then close the browser side with a normal code (safe, no secret reason).
+        with contextlib.suppress(Exception):
+            await client_ws.close(code=1000)
 
 
 COMPARISON_SHELL_HTML = """<!DOCTYPE html>

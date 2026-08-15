@@ -234,3 +234,158 @@ async def test_callback_cannot_be_created_under_another_tenant(
         b2 = await verify.scalar(count_sql, {"bid": 2})
     assert b2 == 1, "callback must be bound to the acting tenant (business 2)"
     assert b1 == 0, "no callback may leak into another tenant (business 1)"
+
+
+# --- Candidate canonicalization (#41 release blocker) --------------------------
+# The give-up call site builds attempted_candidates from the ambiguity dicts. A
+# candidate carrying a missing/blank/None name must not produce a schema-
+# violating "" (which raises inside PendingAction.create and is SWALLOWED by the
+# best-effort catch, silently dropping the durable callback). These prove the
+# real persistence path — PendingActionService.create against PostgreSQL — keeps
+# the durable record and stores only clean candidate strings.
+
+
+async def _persist_callback_directly(
+    factory: async_sessionmaker[AsyncSession],
+    actor: ActorContext,
+    raw_candidates: list,
+    conv_id: str = "canon-direct",
+) -> None:
+    """Drive the durable-persist method with an explicit candidate list, exactly
+    as the give-up call site does after canonicalization. Uses the module's own
+    _canonical_callback_candidates so the test tracks the real call path."""
+    from fonely.domain.conversation.state import ConversationContext
+    from fonely.services.conversation import _canonical_callback_candidates
+
+    async with factory() as session:
+        appt = AppointmentService(session, validation=InternalValidationPort(session))
+        conv = ConversationService(session, _mock_gateway(), appointment_service=appt)
+        ctx = ConversationContext(conversation_id=conv_id, business_id=actor.business_id)
+        await conv._persist_voice_callback(
+            ctx,
+            actor,
+            reason_code="doctor_disambiguation_exhausted",
+            attempted_candidates=_canonical_callback_candidates(raw_candidates),
+        )
+        await session.commit()
+
+
+async def _seed_business_only(session: AsyncSession, business_id: int = 1) -> None:
+    """Minimal tenant: a business + owner + whatsapp channel, enough for a
+    callback PA (and its best-effort owner notification) to persist."""
+    await session.execute(
+        text(
+            "INSERT INTO businesses "
+            "(id, name, category, primary_contact_phone, timezone, subscription) "
+            "VALUES (:bid, 'Clinic', 'dental', :phone, 'Asia/Kolkata', 'trial')"
+        ),
+        {"bid": business_id, "phone": f"+9190000000{business_id:02d}"},
+    )
+    await seed_whatsapp_channel(
+        session, business_id=business_id, phone_number_id=f"phone-{business_id}"
+    )
+    await session.execute(
+        text(
+            "INSERT INTO business_users (business_id, phone, role, is_active) "
+            "VALUES (:bid, :phone, 'owner', true)"
+        ),
+        {"bid": business_id, "phone": f"+9190000000{business_id:02d}"},
+    )
+    await session.commit()
+
+
+async def test_giveup_with_blank_candidate_still_persists_clean_callback(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A candidate missing its name would have produced "" and raised inside
+    create — swallowed, callback lost. After canonicalization the callback
+    persists with ONLY the valid names."""
+    async with pg_session_factory() as s:
+        await _seed_business_only(s)
+
+    raw = [
+        {"id": 1, "name": "Dr. Priya Kumar"},
+        {"id": 2},  # missing name -> would have been ""
+        {"id": 3, "name": None},  # -> would have been "None"
+        {"id": 4, "name": "  "},  # whitespace -> would have been kept blank
+        {"id": 5, "name": "Dr. Priya Rao"},
+    ]
+    await _persist_callback_directly(pg_session_factory, _voice_actor(), raw)
+
+    async with pg_session_factory() as verify:
+        rows = (
+            (
+                await verify.execute(
+                    select(PendingAction).where(PendingAction.action_type == "callback")
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(rows) == 1, "the durable callback must survive a blank candidate, not be dropped"
+    data = rows[0].proposed_payload["data"]
+    assert data["attempted_candidates"] == ["Dr. Priya Kumar", "Dr. Priya Rao"], (
+        "only clean, non-blank names are stored; no '' or 'None' placeholder"
+    )
+
+
+async def test_giveup_with_all_invalid_candidates_persists_empty_list(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """When EVERY candidate is unusable, the callback still persists — with an
+    empty candidate list (schema-legal), never a fabricated placeholder. Losing
+    the durable follow-up would be the worse failure."""
+    async with pg_session_factory() as s:
+        await _seed_business_only(s)
+
+    raw = [{"id": 1}, {"id": 2, "name": None}, {"id": 3, "name": "   "}, "not-a-dict", 42]
+    await _persist_callback_directly(pg_session_factory, _voice_actor(), raw)
+
+    async with pg_session_factory() as verify:
+        rows = (
+            (
+                await verify.execute(
+                    select(PendingAction).where(PendingAction.action_type == "callback")
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(rows) == 1, "callback persists even with no usable candidate names"
+    assert rows[0].proposed_payload["data"]["attempted_candidates"] == []
+
+
+async def test_old_construction_would_have_dropped_the_callback(
+    pg_session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """MUTATION PROOF against real PG: feeding _persist_voice_callback the list the
+    OLD comprehension produced (containing "") persists NOTHING — create raises on
+    the schema violation and the best-effort catch swallows it. This is the exact
+    silent-drop the fix removes; the canonicalized list (proven above) persists."""
+    async with pg_session_factory() as s:
+        await _seed_business_only(s)
+
+    from fonely.domain.conversation.state import ConversationContext
+
+    old_style_list = ["Dr. Priya Kumar", ""]  # what str(c.get("name","")) yields on a missing name
+    async with pg_session_factory() as session:
+        appt = AppointmentService(session, validation=InternalValidationPort(session))
+        conv = ConversationService(session, _mock_gateway(), appointment_service=appt)
+        ctx = ConversationContext(conversation_id="old-drop", business_id=1)
+        # No exception escapes: the give-up must never fail on a callback error.
+        await conv._persist_voice_callback(
+            ctx,
+            _voice_actor(),
+            reason_code="doctor_disambiguation_exhausted",
+            attempted_candidates=old_style_list,
+        )
+        await session.commit()
+
+    async with pg_session_factory() as verify:
+        count = await verify.scalar(
+            text("SELECT count(*) FROM pending_actions WHERE action_type='callback'")
+        )
+    assert count == 0, (
+        "baseline: the pre-fix list ('' element) is silently dropped by the "
+        "best-effort catch — proving why canonicalization is required"
+    )

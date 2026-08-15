@@ -193,6 +193,18 @@ class CallbackData(StrictModel):
     requested_at: AwareDatetime
 
 
+# The correlation-code alphabet + length, SHARED by the P1 generator (voice
+# proc) and the P2 parser (inbound worker) so the two can never drift by a
+# character — a single-char mismatch means a live code never resolves. Human-safe:
+# no 0/O, 1/I/L (the ambiguous glyphs an owner might mis-read over WhatsApp).
+# Fixed length 4: 31**4 ~= 923k combinations, ample for per-business active-wait
+# uniqueness and short to read back; the DB guess-rate-limit makes 4 chars
+# brute-force-safe. The pending_actions.correlation_code column is String(12) for
+# headroom; only this constant governs the value.
+OWNER_REPLY_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+OWNER_REPLY_CODE_LENGTH = 4
+
+
 class AwaitingOwnerReplyData(StrictModel):
     """The bounded ANSWER-EVIDENCE payload of an owner-reply-resume marker (#43).
 
@@ -230,6 +242,19 @@ class PendingAwaitingOwnerReplyEnvelope(StrictModel):
         PendingActionType.AWAITING_OWNER_REPLY
     )
     data: AwaitingOwnerReplyData
+
+
+def build_awaiting_owner_reply_payload() -> dict[str, object]:
+    """The initial (no-answer) canonical JSONB payload dict for a new marker.
+
+    P1 creates the marker with this. P2 mutates the stored dict directly (adds
+    answer fields) on resolve and MUST recompute the digest via
+    ``awaiting_owner_reply_payload_digest`` (snapshots) so the payload and digest
+    stay in lockstep — otherwise a digest-validating read raises on every answered
+    marker and the resume never fires.
+    """
+    envelope = PendingAwaitingOwnerReplyEnvelope(data=AwaitingOwnerReplyData(answer_text=None))
+    return envelope.model_dump(mode="json")
 
 
 class PendingCallbackEnvelope(StrictModel):

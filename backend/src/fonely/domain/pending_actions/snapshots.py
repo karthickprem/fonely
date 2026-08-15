@@ -59,6 +59,24 @@ def payload_digest(payload: PayloadEnvelope) -> str:
     return hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
 
 
+def awaiting_owner_reply_payload_digest(payload_dict: dict[str, object]) -> str:
+    """Digest of an owner-reply-resume marker payload from its raw JSONB dict.
+
+    #43: the marker's payload legitimately MUTATES (P2 adds the owner's answer),
+    so its ``payload_digest`` column must be recomputed on every write to stay in
+    lockstep — otherwise ``_validated_stored_payload`` raises "Stored payload
+    digest mismatch" on every answered marker and the resume never fires. Both
+    lanes call this (P1 at create, P2 at answer-persist) with the exact dict they
+    are about to store, validating it through the envelope first so a malformed
+    payload can never be digested as if valid."""
+    from fonely.domain.pending_actions.payloads import (  # local: avoid import cycle
+        PendingAwaitingOwnerReplyEnvelope,
+    )
+
+    envelope = PendingAwaitingOwnerReplyEnvelope.model_validate(payload_dict)
+    return payload_digest(envelope)
+
+
 def idempotency_matches(
     *,
     existing_action_type: str,

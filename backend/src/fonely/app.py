@@ -63,6 +63,10 @@ def _build_voice_audio_runtime(app: FastAPI) -> object:
             validation_factory=_validation_factory,
             business_timezone=admitted.timezone,
             conversation_id=str(admitted.call_id),
+            # Trusted provenance: the appointment links back to THIS admitted call
+            # via the (business_id, call_id) FK. call_id comes only from the
+            # admitted session, never model/caller data.
+            call_id=admitted.call_id,
         )
 
     def resolver_factory(admitted: AudioSession, command_port: CommandPort) -> ResolverContext:

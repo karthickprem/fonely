@@ -467,14 +467,35 @@ async def hf_realtime_proxy(client_ws: WebSocket):
 
     import websockets
 
-    await client_ws.accept()
+    # WebSocket subprotocol negotiation must be preserved across the proxy. The
+    # OpenAI Agents Realtime browser client offers subprotocols (e.g. "realtime",
+    # "openai-beta.realtime-v1", and an "openai-insecure-api-key.*" carrying its
+    # key) and expects the server to ECHO one back; if the accept carries no
+    # subprotocol, the SDK aborts the connection immediately (surfacing as an
+    # opaque Event → "[object Event]" in the UI). So: forward the client's offered
+    # subprotocols to the upstream HF backend, and echo the upstream's negotiated
+    # choice back to the browser. Fall back to the client's first offer when the
+    # backend selects none, so the SDK still sees an acknowledged subprotocol.
+    offered = [
+        p.strip()
+        for p in client_ws.headers.get("sec-websocket-protocol", "").split(",")
+        if p.strip()
+    ]
     try:
-        upstream = await websockets.connect(HF_BACKEND_WS, max_size=None)
+        upstream = await websockets.connect(
+            HF_BACKEND_WS,
+            max_size=None,
+            subprotocols=offered or None,
+        )
     except Exception as e:
-        # Backend not up (e.g. HF controller not launched). Close cleanly with a
-        # policy code so the client shows a connect error rather than hanging.
+        # Backend not up (e.g. HF controller not launched). Accept then close with
+        # a policy code so the client surfaces a real reason rather than hanging.
+        await client_ws.accept()
         await client_ws.close(code=1013, reason=f"HF backend unavailable: {type(e).__name__}")
         return
+
+    negotiated = getattr(upstream, "subprotocol", None) or (offered[0] if offered else None)
+    await client_ws.accept(subprotocol=negotiated)
 
     async def pump_to_upstream() -> None:
         try:

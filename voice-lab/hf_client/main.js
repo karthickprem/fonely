@@ -1660,10 +1660,47 @@ async function teardown() {
   if (limiterOn) void account.refresh();
 }
 
-/** @param {unknown} err */
+/**
+ * Normalise anything thrown/dispatched into a human-readable, secret-safe string.
+ * A raw DOM Event (e.g. a WebSocket error/close Event) used to stringify to the
+ * useless "[object Event]"; this pulls out the meaningful fields instead.
+ * @param {unknown} err @returns {string}
+ */
+function normalizeError(err) {
+  const redact = (s) =>
+    String(s)
+      // Never surface bearer tokens / api keys that might ride in a reason string.
+      .replace(/sk-[A-Za-z0-9_-]{8,}/g, "sk-***")
+      .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer ***")
+      .replace(/openai-insecure-api-key\.[^,\s"]+/gi, "openai-insecure-api-key.***");
+  if (err == null) return "Unknown error";
+  if (err instanceof Error) return redact(err.message || err.name || "Error");
+  // CloseEvent (has code/reason) and ErrorEvent (has message/error).
+  if (typeof CloseEvent !== "undefined" && err instanceof CloseEvent) {
+    const reason = err.reason ? `: ${err.reason}` : "";
+    return redact(`Connection closed (code ${err.code})${reason}`);
+  }
+  if (typeof ErrorEvent !== "undefined" && err instanceof ErrorEvent) {
+    return redact(err.message || (err.error && err.error.message) || "Connection error");
+  }
+  if (typeof Event !== "undefined" && err instanceof Event) {
+    // A bare Event (often a WebSocket 'error') carries no message. Report only its
+    // type — NOT target.url, which can contain query params or userinfo.
+    return redact(`Connection ${err.type} event`);
+  }
+  if (typeof err === "object") {
+    try {
+      return redact(JSON.stringify(err));
+    } catch {
+      return "Unserializable error object";
+    }
+  }
+  return redact(err);
+}
+
 async function onFatalError(err) {
   console.error("[main] fatal:", err);
-  const message = err instanceof Error ? err.message : String(err);
+  const message = normalizeError(err);
   try {
     await teardown();
   } catch (teardownError) {

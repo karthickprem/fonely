@@ -25,13 +25,28 @@ from starlette.testclient import TestClient
 
 
 async def _relay(client_ws: WebSocket, backend_ws_url: str) -> None:
-    """Same relay shape as server_webrtc.hf_realtime_proxy (kept in sync)."""
-    await client_ws.accept()
+    """Same relay shape as server_webrtc.hf_realtime_proxy (kept in sync).
+
+    Preserves WebSocket subprotocol negotiation: forwards the client's offered
+    subprotocols upstream and echoes the negotiated choice back, so a client that
+    requires an acknowledged subprotocol (the OpenAI Agents Realtime SDK) does not
+    abort the connection.
+    """
+    offered = [
+        p.strip()
+        for p in client_ws.headers.get("sec-websocket-protocol", "").split(",")
+        if p.strip()
+    ]
     try:
-        upstream = await websockets.connect(backend_ws_url, max_size=None)
+        upstream = await websockets.connect(
+            backend_ws_url, max_size=None, subprotocols=offered or None
+        )
     except Exception as e:
+        await client_ws.accept()
         await client_ws.close(code=1013, reason=f"HF backend unavailable: {type(e).__name__}")
         return
+    negotiated = getattr(upstream, "subprotocol", None) or (offered[0] if offered else None)
+    await client_ws.accept(subprotocol=negotiated)
 
     async def to_upstream() -> None:
         try:
@@ -101,8 +116,14 @@ class _EchoServer:
                 else:
                     await conn.send("echo:" + message)
 
+        def select_subprotocol(conn, subprotocols):
+            # Mimic the HF backend: echo "realtime" when offered, else none.
+            return "realtime" if "realtime" in subprotocols else None
+
         async def boot():
-            self._server = await websockets.serve(echo, "127.0.0.1", 0)
+            self._server = await websockets.serve(
+                echo, "127.0.0.1", 0, select_subprotocol=select_subprotocol
+            )
             port = self._server.sockets[0].getsockname()[1]
             self.url = f"ws://127.0.0.1:{port}"
             self._ready.set()
@@ -132,6 +153,33 @@ def test_text_and_binary_round_trip() -> None:
     assert got_bytes == b"echo:\x01\x02\x03"
 
 
+def test_offered_subprotocol_is_echoed_back() -> None:
+    # ROOT-CAUSE REGRESSION: the OpenAI Realtime SDK offers a WebSocket
+    # subprotocol ("realtime") and aborts if the server does not echo one back.
+    # The proxy must forward the offer upstream and echo the negotiated choice —
+    # previously it accepted with no subprotocol, so the SDK bailed and the UI
+    # showed "[object Event]".
+    with _EchoServer() as echo:
+        client = TestClient(_app(echo.url))
+        with client.websocket_connect("/hf-realtime", subprotocols=["realtime"]) as ws:
+            # Starlette's TestClient exposes the accepted subprotocol on the
+            # handshake response headers.
+            assert ws.accepted_subprotocol == "realtime"
+            ws.send_text("ping")
+            assert ws.receive_text() == "echo:ping"
+
+
+def test_no_subprotocol_client_still_works() -> None:
+    # A plain client that offers no subprotocol must still connect (backend echoes
+    # none), so the fix does not regress non-SDK callers.
+    with _EchoServer() as echo:
+        client = TestClient(_app(echo.url))
+        with client.websocket_connect("/hf-realtime") as ws:
+            assert ws.accepted_subprotocol in (None, "")
+            ws.send_text("ping")
+            assert ws.receive_text() == "echo:ping"
+
+
 def test_backend_down_closes_client_cleanly() -> None:
     # Point at a port with nothing listening: the proxy must close, not hang.
     app = _app("ws://127.0.0.1:1")  # port 1 = guaranteed refused
@@ -143,5 +191,7 @@ def test_backend_down_closes_client_cleanly() -> None:
 
 if __name__ == "__main__":
     test_text_and_binary_round_trip()
+    test_offered_subprotocol_is_echoed_back()
+    test_no_subprotocol_client_still_works()
     test_backend_down_closes_client_cleanly()
     print("proxy relay OK")

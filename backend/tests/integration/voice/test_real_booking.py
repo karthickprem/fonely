@@ -131,7 +131,7 @@ def _validation_factory(session):
 
 class TestRealBookingPath:
     @pytest.mark.asyncio
-    async def test_propose_confirm_commit_to_postgres(self):
+    async def test_propose_confirm_commit_to_postgres(self, voice_clinic_seed):
         """Full propose/confirm through AppointmentServiceCommandPort → PostgreSQL."""
         actor = build_actor_context(
             business_id=1,

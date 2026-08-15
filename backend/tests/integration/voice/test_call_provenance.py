@@ -161,7 +161,7 @@ async def _appointment_call_id(appointment_id: int) -> int | None:
 
 class TestCallProvenance:
     @pytest.mark.asyncio
-    async def test_committed_appointment_carries_the_admitted_call_id(self):
+    async def test_committed_appointment_carries_the_admitted_call_id(self, voice_clinic_seed):
         business_id = 1
         call_id = await _seed_calls_row(business_id)
         outcome = await _book(
@@ -176,7 +176,7 @@ class TestCallProvenance:
         assert stored == call_id  # PROVENANCE: appointment links to the admitted call
 
     @pytest.mark.asyncio
-    async def test_fk_pair_resolves_to_the_real_calls_row(self):
+    async def test_fk_pair_resolves_to_the_real_calls_row(self, voice_clinic_seed):
         # The (business_id, call_id) pair must reference the ACTUAL admitted call
         # row — provenance being REAL, not a call_id pointing at nothing/wrong biz.
         from sqlalchemy import text as sql_text
@@ -208,7 +208,7 @@ class TestCallProvenance:
         assert row[1] == business_id  # resolves to the admitted call, right business
 
     @pytest.mark.asyncio
-    async def test_confirmed_appointment_inherits_propose_time_call_id(self):
+    async def test_confirmed_appointment_inherits_propose_time_call_id(self, voice_clinic_seed):
         # The confirm path carries no call_id (works off pending_action_id); the
         # confirmed appointment inherits it from the pending action set at
         # propose. Proven, not assumed.

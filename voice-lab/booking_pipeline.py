@@ -485,6 +485,8 @@ async def run_booking_bot(transport: BaseTransport, runner_args: RunnerArguments
             from datetime import datetime
             from zoneinfo import ZoneInfo
 
+            import production_wiring
+
             from fonely.voice.notice_playback import build_notice_open_sequence
             from fonely.voice.open_order import OpenOutcome
             from fonely.voice.session_open import open_session

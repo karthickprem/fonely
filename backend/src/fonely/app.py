@@ -141,10 +141,29 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # The canonical voice runtime is mounted ONLY when voice_pipeline_enabled is
     # on. Default OFF: exotel.py refuses an unmounted runtime with a clean 1011
     # (absence must not read as success), so shipping dark is safe and is the
-    # default until a hosted exact-SHA call proves the path. When on, ONE
-    # VoiceAudioRuntime is constructed with the real composition root + runner.
+    # default until a hosted exact-SHA call proves the path.
+    #
+    # FAIL CLOSED when enabled: the composition builds providers PER CALL
+    # (lazily), so a voice-enabled process with missing/misconfigured
+    # SELECTED-provider credentials would construct a runtime that looks fine at
+    # startup and fails on the FIRST REAL CALL — silently serving dead calls.
+    # Gate on the ACTUALLY-SELECTED providers (resolved_voice_creds_ready, NOT
+    # the hardcoded credentials_ready snapshot) and RAISE if not serviceable: a
+    # raise here, before yield, means the app FAILS TO START — no silent-serving
+    # process. This whole block is INSIDE the flag branch, so a flag-OFF process
+    # is byte-for-byte unaffected (default-dark stays dark).
     if settings.voice_pipeline_enabled:
-        app.state.voice_audio_runtime = _build_voice_audio_runtime(app)
+        from fonely.voice.config import LLMConfig, STTConfig, TTSConfig
+        from fonely.voice.providers import resolved_voice_creds_ready
+
+        resolved_voice_creds_ready(STTConfig(), TTSConfig(), LLMConfig())
+        runtime = _build_voice_audio_runtime(app)
+        if runtime is None:
+            raise RuntimeError(
+                "voice_pipeline_enabled but the voice runtime is None — refusing "
+                "to start and serve silent calls"
+            )
+        app.state.voice_audio_runtime = runtime
     else:
         app.state.voice_audio_runtime = None
 
@@ -256,6 +275,20 @@ def create_app() -> FastAPI:
             async with asyncio.timeout(timeout):
                 async with engine.connect() as conn:
                     await conn.execute(text("SELECT 1"))
+            # Defense-in-depth for config drift AFTER a healthy start (creds
+            # rotated/revoked while running): a voice-ENABLED process must not
+            # report ready unless it can still serve calls — a mounted runtime
+            # AND the selected providers still configured. Startup fail-closed
+            # (lifespan) covers a broken deploy never starting; this covers a
+            # once-healthy process going unserviceable. Flag-OFF processes skip
+            # this entirely (default-dark stays ready on the DB check alone).
+            if settings.voice_pipeline_enabled:
+                from fonely.voice.config import LLMConfig, STTConfig, TTSConfig
+                from fonely.voice.providers import resolved_voice_creds_ready
+
+                if getattr(request.app.state, "voice_audio_runtime", None) is None:
+                    raise RuntimeError("voice enabled but runtime not mounted")
+                resolved_voice_creds_ready(STTConfig(), TTSConfig(), LLMConfig())
             return Response(
                 content='{"status":"ready"}',
                 media_type="application/json",

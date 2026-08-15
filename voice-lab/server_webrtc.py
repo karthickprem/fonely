@@ -2,6 +2,7 @@
 
 import importlib.util
 import json
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -36,10 +37,26 @@ async def voice_lab():
     return FileResponse(CLIENT_DIST / "index.html")
 
 
+@app.get("/voice-fonely", include_in_schema=False)
+async def voice_fonely():
+    """The existing Fonely experience: patient call (left) + owner updates (right).
+
+    Unchanged from the historical /voice-test page; relocated here so /voice-test
+    can host the two-tab Fonely-vs-HuggingFace comparison with this as tab one.
+    """
+    return HTMLResponse(SPLIT_PANEL_HTML)
+
+
 @app.get("/voice-test", include_in_schema=False)
 async def voice_test():
-    """Split-panel test: patient call (left) + owner updates (right)."""
-    return HTMLResponse(SPLIT_PANEL_HTML)
+    """Two-tab comparison shell: 'Existing Fonely' | 'Hugging Face' (R&D).
+
+    Both tabs are mounted as same-page components inside their own panes. A single
+    top-level lifecycle controller guarantees only ONE voice session is ever live:
+    switching tabs awaits full teardown (session close + mic tracks stopped + audio
+    context closed) of the outgoing pane before the incoming pane may start.
+    """
+    return HTMLResponse(COMPARISON_SHELL_HTML)
 
 
 @app.websocket("/ws/owner")
@@ -363,6 +380,236 @@ async def booking_offer(request: dict, background_tasks: BackgroundTasks):
         webrtc_connection_callback=webrtc_connection_callback,
     )
     return answer
+
+
+# ---------------------------------------------------------------------------
+# Hugging Face comparison tab (isolated R&D — Sarvam STT + Luna LLM + Cartesia
+# TTS via the pinned HF speech-to-speech realtime controller).
+#
+# ISOLATION CONTRACT:
+#   * The HF controller runs on a LOOPBACK-only port (127.0.0.1:8765); the
+#     browser NEVER sees it. All HF realtime traffic is relayed through the
+#     same-origin WebSocket /hf-realtime below, so the user only ever talks to
+#     :3000 and cannot point the client at an arbitrary host.
+#   * The HF path has NO route to the business database: this module wires only
+#     a WS byte-relay, no /api/* booking and no /ws/owner for the HF side.
+#   * Synthetic R&D only. The HF LLM may DISCUSS the booking scenario, but it has
+#     no tools, cannot mutate state, and must never claim a booking succeeded.
+# ---------------------------------------------------------------------------
+
+# Loopback address of the isolated HF realtime controller. Overridable via env
+# for a differently-bound dev instance; must stay loopback.
+HF_BACKEND_WS = os.environ.get("HF_BACKEND_WS", "ws://127.0.0.1:8765/v1/realtime")
+
+# The HF browser client (pinned demo's s2s-realtime-client.js + integrity-verified
+# @openai/agents-realtime UMD) is copied into this lab dir at cutover time.
+HF_CLIENT_DIR = LAB_DIR / "hf_client"
+if HF_CLIENT_DIR.is_dir():
+    app.mount("/hf-static", StaticFiles(directory=HF_CLIENT_DIR), name="hf-client")
+
+
+@app.get("/voice-hf", include_in_schema=False)
+async def voice_hf():
+    """Serve the HF realtime client as a self-contained component page.
+
+    The client's backend URL is the RELATIVE same-origin path /hf-realtime — no
+    host/port is user-entered and :8765 is never exposed to the browser.
+    """
+    if not (HF_CLIENT_DIR / "index.html").exists():
+        return HTMLResponse(
+            "<p style='font-family:system-ui;padding:20px;color:#f59e0b'>"
+            "HF client not staged yet (hf_client/ missing). Backend wiring is live; "
+            "the client bundle is copied in at cutover.</p>",
+            status_code=503,
+        )
+    return FileResponse(HF_CLIENT_DIR / "index.html")
+
+
+@app.websocket("/hf-realtime")
+async def hf_realtime_proxy(client_ws: WebSocket):
+    """Same-origin reverse-proxy: browser <-> isolated HF controller (loopback).
+
+    Bidirectional frame relay. The browser connects here (same origin as :3000);
+    we open a client connection to the loopback HF backend and shuttle frames both
+    ways until either side closes. This is the ONLY bridge to the HF process, so
+    the loopback port is never exposed to the network.
+    """
+    import asyncio
+
+    import websockets
+
+    await client_ws.accept()
+    try:
+        upstream = await websockets.connect(HF_BACKEND_WS, max_size=None)
+    except Exception as e:
+        # Backend not up (e.g. HF controller not launched). Close cleanly with a
+        # policy code so the client shows a connect error rather than hanging.
+        await client_ws.close(code=1013, reason=f"HF backend unavailable: {type(e).__name__}")
+        return
+
+    async def pump_to_upstream() -> None:
+        try:
+            while True:
+                msg = await client_ws.receive()
+                if msg["type"] == "websocket.disconnect":
+                    break
+                if (data := msg.get("bytes")) is not None:
+                    await upstream.send(data)
+                elif (text := msg.get("text")) is not None:
+                    await upstream.send(text)
+        except Exception:
+            pass
+
+    async def pump_to_client() -> None:
+        try:
+            async for message in upstream:
+                if isinstance(message, bytes):
+                    await client_ws.send_bytes(message)
+                else:
+                    await client_ws.send_text(message)
+        except Exception:
+            pass
+
+    try:
+        await asyncio.wait(
+            {asyncio.create_task(pump_to_upstream()), asyncio.create_task(pump_to_client())},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    finally:
+        try:
+            await upstream.close()
+        except Exception:
+            pass
+        try:
+            await client_ws.close()
+        except Exception:
+            pass
+
+
+COMPARISON_SHELL_HTML = """<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Fonely Voice — Fonely vs Hugging Face</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui;background:#0a1628;color:#e0e0e0;height:100vh;display:flex;flex-direction:column}
+.tabbar{display:flex;align-items:center;gap:4px;background:#0d2137;border-bottom:1px solid #1a3a5c;padding:0 8px}
+.tab{padding:12px 20px;font-size:0.9em;font-weight:700;color:#88a;cursor:pointer;border-bottom:3px solid transparent;background:none;border-top:none;border-left:none;border-right:none;font-family:inherit}
+.tab.active{color:#00ff88;border-bottom-color:#00ff88}
+.tab:disabled{opacity:0.5;cursor:wait}
+.badge{margin-left:auto;font-size:0.68em;color:#f59e0b;font-family:monospace;padding:4px 8px}
+.stage{flex:1;position:relative;overflow:hidden}
+.pane{position:absolute;inset:0;display:none}
+.pane.active{display:block}
+.pane iframe{width:100%;height:100%;border:none}
+#hf-note{background:#2e1a00;color:#f59e0b;padding:6px 16px;font-size:0.72em;border-bottom:1px solid #3d2800}
+#hf-mount{width:100%;height:100%}
+.switch-veil{position:absolute;inset:0;background:rgba(10,22,40,0.7);display:none;align-items:center;justify-content:center;color:#88ccff;font-size:0.9em;z-index:5}
+.switch-veil.on{display:flex}
+</style></head><body>
+<div class="tabbar">
+  <button class="tab active" id="tab-fonely" data-pane="fonely">Existing Fonely</button>
+  <button class="tab" id="tab-hf" data-pane="hf">Hugging Face</button>
+  <span class="badge" id="badge">LIVE booking · Fonely stack</span>
+</div>
+<div class="stage">
+  <div class="pane active" id="pane-fonely"></div>
+  <div class="pane" id="pane-hf">
+    <div id="hf-note">R&amp;D comparison — the LLM may discuss a booking but performs NO booking and touches NO records.</div>
+    <div id="hf-mount"></div>
+  </div>
+  <div class="switch-veil" id="veil">Switching… stopping the other session</div>
+</div>
+<script type="module">
+// Single top-level lifecycle controller. INVARIANT: at most one live voice
+// session at any time. Switching AWAITS teardown of the outgoing pane (session
+// close + mic tracks stopped + audio context closed) before starting the next.
+const FONELY_BADGE = "LIVE booking · Fonely stack";
+const HF_BADGE = "Hugging Face controller · Sarvam + Luna + Cartesia · R&D · no booking";
+
+const panes = {
+  fonely: { el: document.getElementById('pane-fonely'), tab: document.getElementById('tab-fonely') },
+  hf: { el: document.getElementById('pane-hf'), tab: document.getElementById('tab-hf') },
+};
+const badge = document.getElementById('badge');
+const veil = document.getElementById('veil');
+let active = null;      // currently live pane key
+let switching = false;  // reentrancy guard
+
+// --- Fonely pane: the existing page, wrapped as a same-origin iframe so its
+// WebRTC + owner-WS scripts stay fully encapsulated and teardown = drop frame.
+function startFonely() {
+  const f = document.createElement('iframe');
+  f.src = '/voice-fonely';
+  f.allow = 'microphone';
+  panes.fonely.el.appendChild(f);
+}
+async function stopFonely() {
+  // Removing the iframe tears down its document: getUserMedia tracks stop, the
+  // WebRTC peer connection closes, and the owner WebSocket disconnects.
+  panes.fonely.el.replaceChildren();
+  await new Promise(r => setTimeout(r, 0));
+}
+
+// --- HF pane: the pinned HF realtime client mounted as an in-page component,
+// backend routed to the same-origin /hf-realtime proxy (never :8765 directly).
+let hfClient = null;
+async function startHf() {
+  const mod = await import('/hf-static/s2s-realtime-client.js');
+  const Client = mod.default || mod.S2SRealtimeClient || mod.RealtimeClient;
+  const wsUrl = new URL('/hf-realtime', location.href);
+  wsUrl.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  hfClient = new Client({
+    transport: 'websocket',
+    directUrl: wsUrl.href,
+    mount: document.getElementById('hf-mount'),
+    instructions: window.__HF_PERSONA__ || undefined,
+  });
+  await hfClient.connect();
+}
+async function stopHf() {
+  if (hfClient) {
+    try { await hfClient.close(); } catch (e) { /* best-effort */ }
+    hfClient = null;
+  }
+  panes.hf.el.querySelector('#hf-mount')?.replaceChildren();
+}
+
+const starters = { fonely: startFonely, hf: startHf };
+const stoppers = { fonely: stopFonely, hf: stopHf };
+
+async function activate(key) {
+  if (switching || key === active) return;
+  switching = true;
+  veil.classList.add('on');
+  for (const k of Object.keys(panes)) panes[k].tab.disabled = true;
+  try {
+    // 1) AWAIT full teardown of whatever is live before anything new starts.
+    if (active) {
+      await stoppers[active]();
+      panes[active].el.classList.remove('active');
+      panes[active].tab.classList.remove('active');
+      active = null;
+    }
+    // 2) Only now activate + start the incoming pane.
+    panes[key].el.classList.add('active');
+    panes[key].tab.classList.add('active');
+    badge.textContent = key === 'hf' ? HF_BADGE : FONELY_BADGE;
+    await starters[key]();
+    active = key;
+  } finally {
+    for (const k of Object.keys(panes)) panes[k].tab.disabled = false;
+    veil.classList.remove('on');
+    switching = false;
+  }
+}
+
+for (const k of Object.keys(panes)) {
+  panes[k].tab.addEventListener('click', () => activate(k));
+}
+// Default: the existing Fonely experience (preserves today's behavior).
+activate('fonely');
+// Safety net: stop any live session if the page is being torn down.
+window.addEventListener('pagehide', () => { if (active) stoppers[active](); });
+</script></body></html>"""
 
 
 if __name__ == "__main__":

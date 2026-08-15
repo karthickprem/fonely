@@ -180,7 +180,9 @@ def _propose_cmd(*, business_id: int, call_id: int, key: str, target_date: date)
 
 class TestSemanticKeyRoutesRetryToDedup:
     @pytest.mark.asyncio
-    async def test_same_key_retry_is_recognized_as_the_same_idempotency_lineage(self):
+    async def test_same_key_retry_is_recognized_as_the_same_idempotency_lineage(
+        self, voice_clinic_seed
+    ):
         """What the KEY fix alone delivers (honestly scoped): a retried propose
         with the same semantic key is RECOGNIZED as the same idempotency key —
         routed to the dedup path, NOT creating a second independent pending

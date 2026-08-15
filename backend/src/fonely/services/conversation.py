@@ -5,6 +5,7 @@ import logging
 import re
 import time
 import uuid
+from collections.abc import Iterable, Mapping
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
@@ -227,6 +228,50 @@ def _resource_name_tokens(text: str) -> frozenset[str]:
     unnamed resource and must fail closed upstream, not silently pick one.
     """
     return frozenset(tok for tok in _tokenize(text) if tok not in _RESOURCE_TITLES)
+
+
+def _canonical_callback_candidates(candidates: Iterable[object]) -> list[str]:
+    """Canonicalize ambiguity candidates into display strings the callback payload accepts.
+
+    The give-up callback (#36/#41) carries the doctor/slot names we could not
+    disambiguate so a human can call back and finish. The raw candidates are the
+    ``_resource_ambiguous`` entries — dicts shaped ``{"id": int, "name": str}`` —
+    and a candidate may be missing its ``name``, carry ``None``, be whitespace-
+    only, or (defensively) not be a ``str`` at all. The original construction was
+    ``[str(c.get("name", "")) for c in cand]``, which is a latent bug: a missing
+    or blank name becomes ``""`` (violating ``CallbackData`` ``min_length=1`` and
+    raising inside PendingAction.create), and ``None`` becomes the literal
+    ``"None"``. Because ``_persist_voice_callback`` persists best-effort, that
+    ValidationError is swallowed and the DURABLE callback is silently dropped —
+    the exact "absence reads as success" trap the callback exists to prevent.
+
+    So extract and canonicalize here, before the payload is built, applying the
+    same bounds the schema enforces per element (each name stripped, non-blank,
+    truncated to 200 chars) and per list (at most 20, in first-seen order,
+    de-duplicated on the canonical form). A non-Mapping candidate, or one whose
+    ``name`` is missing / non-string / blank, is DROPPED — never coerced to a
+    placeholder, because a fabricated "None"/"unknown" name would mislead the
+    human who reads the worklist. An all-invalid input therefore yields ``[]``,
+    which the schema allows (the list has no ``min_length``); the caller still
+    persists the callback with an empty candidate list rather than losing the
+    follow-up.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for candidate in candidates:
+        if not isinstance(candidate, Mapping):
+            continue
+        name = candidate.get("name")
+        if not isinstance(name, str):
+            continue
+        cleaned = name.strip()[:200]
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        out.append(cleaned)
+        if len(out) >= 20:
+            break
+    return out
 
 
 def _names_a_resource(message: str) -> bool:
@@ -634,7 +679,7 @@ class ConversationService:
                         ctx,
                         actor,
                         reason_code="doctor_disambiguation_exhausted",
-                        attempted_candidates=[str(c.get("name", "")) for c in cand],
+                        attempted_candidates=_canonical_callback_candidates(cand),
                     )
                 # Terminal wording is channel-specific (CEO #33): on voice the
                 # caller is already connected, so "call the clinic" is a false

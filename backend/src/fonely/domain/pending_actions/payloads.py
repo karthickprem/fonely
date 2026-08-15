@@ -193,6 +193,45 @@ class CallbackData(StrictModel):
     requested_at: AwareDatetime
 
 
+class AwaitingOwnerReplyData(StrictModel):
+    """The bounded ANSWER-EVIDENCE payload of an owner-reply-resume marker (#43).
+
+    The marker's trusted identity — business_id, call_id, query_type,
+    correlation_code — lives on the PendingAction COLUMNS (set at escalation from
+    the trusted AudioSession), NOT here: nothing in this payload is trusted for
+    tenant isolation or call correlation. This payload carries only what the
+    inbound worker (a SEPARATE process) writes when the owner replies, so the
+    voice process can pick the answer up over PG:
+
+      * ``answer_text`` — the owner's raw availability reply, bounded. It is
+        UNTRUSTED INPUT: the voice claim loop reconciles it through the
+        availability engine into real bookable slots before speaking; it is never
+        spoken verbatim and never becomes a committed fact.
+      * ``answered_by_phone`` / ``answered_at`` — provenance of the reply, from
+        the worker's trusted claimed actor, not message content.
+      * ``answer_unused`` — set when a reply arrived but the call had already
+        ended (the terminal-turn latch suppressed a late resume); leaves a durable
+        breadcrumb a later #36 callback can seed from. Not wired to auto-seed in
+        v1.
+
+    All fields default empty: the marker is WRITTEN at escalation with no answer,
+    and the answer fields are filled in later by the worker's resolve.
+    """
+
+    answer_text: Annotated[str | None, Field(default=None, max_length=500)]
+    answered_by_phone: E164PhoneNumber | None = None
+    answered_at: AwareDatetime | None = None
+    answer_unused: bool = False
+
+
+class PendingAwaitingOwnerReplyEnvelope(StrictModel):
+    schema_version: Literal[1] = 1
+    action_type: Literal[PendingActionType.AWAITING_OWNER_REPLY] = (
+        PendingActionType.AWAITING_OWNER_REPLY
+    )
+    data: AwaitingOwnerReplyData
+
+
 class PendingCallbackEnvelope(StrictModel):
     schema_version: Literal[1] = 1
     action_type: Literal[PendingActionType.CALLBACK] = PendingActionType.CALLBACK
@@ -218,6 +257,7 @@ type PayloadEnvelope = (
     | PendingAppointmentEnvelope
     | OwnerStockUpdateEnvelope
     | PendingCallbackEnvelope
+    | PendingAwaitingOwnerReplyEnvelope
 )
 type PayloadEnvelopeAdapter = Annotated[PayloadEnvelope, Field(discriminator="action_type")]
 
@@ -226,7 +266,8 @@ _PAYLOAD_REGISTRY: dict[
     type[PendingOrderEnvelope]
     | type[PendingAppointmentEnvelope]
     | type[OwnerStockUpdateEnvelope]
-    | type[PendingCallbackEnvelope],
+    | type[PendingCallbackEnvelope]
+    | type[PendingAwaitingOwnerReplyEnvelope],
 ] = {
     (PendingActionType.ORDER, PAYLOAD_SCHEMA_VERSION): PendingOrderEnvelope,
     (PendingActionType.APPOINTMENT, PAYLOAD_SCHEMA_VERSION): PendingAppointmentEnvelope,
@@ -235,6 +276,10 @@ _PAYLOAD_REGISTRY: dict[
         PAYLOAD_SCHEMA_VERSION,
     ): OwnerStockUpdateEnvelope,
     (PendingActionType.CALLBACK, PAYLOAD_SCHEMA_VERSION): PendingCallbackEnvelope,
+    (
+        PendingActionType.AWAITING_OWNER_REPLY,
+        PAYLOAD_SCHEMA_VERSION,
+    ): PendingAwaitingOwnerReplyEnvelope,
 }
 
 

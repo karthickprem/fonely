@@ -125,6 +125,57 @@ async def test_commit_goes_through_port():
 
 
 @pytest.mark.asyncio
+async def test_captured_resource_id_commits_verbatim_no_re_resolution():
+    """#45(a): when book_appointment is given the captured resource_id (the
+    dentist of the slot the caller selected), it proposes THAT resource and does
+    NOT re-resolve via service_resource_eligibility — the wrong-dentist fix."""
+    port = _RecordingPort()
+    session = _FakeSession()  # its eligibility query would return Dr id=1
+
+    outcome = await book_appointment(
+        command_port=port,
+        session=session,
+        business_id=1,
+        service_phrase="scaling",
+        target_date=date(2026, 8, 12),
+        target_time=time(17, 0),
+        idempotency_key="voice-test-res",
+        resource_id=5,  # captured Dr B, NOT the eligibility query's lowest-id 1
+    )
+
+    assert outcome.success
+    # The proposed resource is the captured one — 5, not the re-resolved 1.
+    assert port.propose_calls[0].resource_id == 5
+    # And the lowest-id re-resolution query was NEVER run.
+    assert not any("service_resource_eligibility" in sql for sql in session.executed)
+
+
+@pytest.mark.asyncio
+async def test_absent_resource_id_falls_back_to_resolution():
+    """Defensive edge: with no captured resource_id, book_appointment falls back
+    to resolve_resource_for_service (historical behaviour). The voice path always
+    captures now, so this is the belt-and-suspenders path, not the norm."""
+    port = _RecordingPort()
+    session = _FakeSession()
+
+    outcome = await book_appointment(
+        command_port=port,
+        session=session,
+        business_id=1,
+        service_phrase="scaling",
+        target_date=date(2026, 8, 12),
+        target_time=time(17, 0),
+        idempotency_key="voice-test-fallback",
+        # resource_id omitted
+    )
+
+    assert outcome.success
+    # Fell back to the eligibility query -> resource 1.
+    assert port.propose_calls[0].resource_id == 1
+    assert any("service_resource_eligibility" in sql for sql in session.executed)
+
+
+@pytest.mark.asyncio
 async def test_unknown_service_refused_without_touching_port():
     """An unknown service must refuse BEFORE any commit attempt."""
     port = _RecordingPort()

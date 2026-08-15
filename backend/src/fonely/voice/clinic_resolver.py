@@ -324,6 +324,7 @@ async def book_appointment(
     target_date: date,
     target_time: time,
     idempotency_key: str,
+    resource_id: int | None = None,
 ) -> BookingOutcome:
     """The SINGLE function that commits a voice booking.
 
@@ -331,6 +332,15 @@ async def book_appointment(
     through the injected CommandPort. It never constructs AppointmentService
     itself — that is the port's job, and the port is the one place a commit
     is built. test_single_commit_path enforces this structurally.
+
+    ``resource_id`` is the resource (dentist) captured from the availability
+    slot the caller SELECTED. When provided, it is used verbatim — the commit
+    books exactly who was offered. When absent it falls back to
+    ``resolve_resource_for_service`` (first-eligible), the historical behaviour;
+    but the voice path always captures it now, so absence is the defensive edge,
+    not the norm. This is the wrong-dentist fix: the old path ALWAYS re-resolved
+    to the lowest-id eligible resource (``ORDER BY r.id LIMIT 1``), which could
+    book a dentist who was not even free at the selected time.
 
     Refuses (does not commit) when the service phrase matches no real service
     for this tenant, when no resource is eligible, or when the port refuses
@@ -343,9 +353,15 @@ async def book_appointment(
     if svc is None:
         return BookingOutcome(success=False, error=f"unknown_service:{service_phrase}")
 
-    res = await resolve_resource_for_service(session, business_id, svc.service_id)
-    if res is None:
-        return BookingOutcome(success=False, error=f"no_resource:{svc.name}")
+    if resource_id is not None:
+        # Book exactly the captured resource — who the caller was offered at the
+        # selected slot. No re-resolution, so no lowest-id substitution.
+        committed_resource_id = resource_id
+    else:
+        res = await resolve_resource_for_service(session, business_id, svc.service_id)
+        if res is None:
+            return BookingOutcome(success=False, error=f"no_resource:{svc.name}")
+        committed_resource_id = res.resource_id
 
     ctx = TrustedCommandContext(
         business_id=business_id,
@@ -357,7 +373,7 @@ async def book_appointment(
         ProposeCommand(
             context=ctx,
             service_id=svc.service_id,
-            resource_id=res.resource_id,
+            resource_id=committed_resource_id,
             target_date=target_date,
             target_time=target_time.strftime("%H:%M"),
             idempotency_key=idempotency_key,

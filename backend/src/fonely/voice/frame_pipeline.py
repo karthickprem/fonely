@@ -375,6 +375,9 @@ class BookingPostLLMGate(FrameProcessor):
                     target_date=bc.target_date,
                     target_time=bc.selected_time,
                     idempotency_key=f"voice-{id(self)}-{bc.target_date}-{bc.selected_time}",
+                    # Book the dentist captured from the slot the caller selected,
+                    # not a re-resolved lowest-id one (the wrong-dentist fix).
+                    resource_id=bc.selected_resource_id,
                 )
         except Exception as exc:
             logger.error("commit_error: %s", type(exc).__name__)

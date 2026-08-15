@@ -176,6 +176,14 @@ class BookingCollection:
     reason: str | None = None
     target_date: date | None = None
     selected_time: time | None = None
+    # The resource (dentist) of the availability slot the caller selected —
+    # captured at the SAME point selected_time is set, from the same matched
+    # slot in the offered availability. The commit books THIS resource, not a
+    # re-resolved lowest-id one (the wrong-dentist bug). Cleared together with
+    # selected_time so the two never desync — a resource_id without its matching
+    # time, or vice versa, would let the commit book a resource for the wrong
+    # slot.
+    selected_resource_id: int | None = None
     patient_name: str | None = None
 
     @property
@@ -206,18 +214,33 @@ class BookingCollection:
 
         if resolved_date is not None and resolved_date != self.target_date:
             self.target_date = resolved_date
+            # Time and its captured resource move together — a stale resource_id
+            # from the previous date must never survive a date change.
             self.selected_time = None
+            self.selected_resource_id = None
 
         candidate_time = extract_booking_time(caller_text)
         if candidate_time is not None and availability is not None:
-            offered = {
-                slot.start_time
-                for slot in availability.available_slots
-                if slot.status.value == "available"
-            }
+            available_slots = [
+                slot for slot in availability.available_slots if slot.status.value == "available"
+            ]
+            offered = {slot.start_time for slot in available_slots}
             selected = _match_offered_time(candidate_time, offered)
             if selected is not None:
                 self.selected_time = selected
+                # Capture the resource of the selected slot from the VALID set —
+                # only slots that are actually available at this start_time. On a
+                # same-time collision (two dentists free at once) pick the first
+                # by the availability's own order: deterministic, and by
+                # construction it can NEVER be a resource that wasn't free at that
+                # slot (the old lowest-id re-resolution could). The readback names
+                # no dentist, so "which dentist" is not something the caller
+                # specified — any available-at-that-slot resource honours what was
+                # offered ("a slot at this time for this service").
+                self.selected_resource_id = next(
+                    (slot.resource_id for slot in available_slots if slot.start_time == selected),
+                    None,
+                )
 
         if self.active and self.reason is None and _VISIT_REASON.search(normalized):
             self.reason = caller_text.strip()

@@ -283,3 +283,85 @@ class TestPrecedenceBugCase:
             assert pinged == []
         finally:
             cr.clinic_context_text = orig
+
+    @pytest.mark.asyncio
+    async def test_no_ping_on_duration_question_even_when_unconfirmed(self):
+        """#43 bug (1): a DURATION question ("how long will it take?") contains a
+        time word but is NOT an availability question — it must NOT escalate to
+        the owner, even on an unconfirmed schedule. The over-broad substring
+        classifier pinged on it; the narrowed _is_availability_question must not.
+        Covers both the English "how long" and the Tamil "எவ்வளவு நேரம் ஆகும்?"
+        that a live call surfaced."""
+        import fonely.voice.clinic_resolver as cr
+
+        orig = cr.clinic_context_text
+
+        async def fake_ctx(session, business_id):
+            return "Wednesday: No confirmed availability. The doctor has not confirmed."
+
+        cr.clinic_context_text = fake_ctx
+
+        class _NullSession:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
+        try:
+            for duration_phrase in ("how long will it take?", "எவ்வளவு நேரம் ஆகும்?"):
+                pinged = []
+
+                async def fake_ask(question, ctx, _p=pinged):
+                    _p.append(1)
+
+                injector = BookingStateInjector(
+                    ResolverContext(
+                        business_id=1,
+                        session_factory=lambda: _NullSession(),
+                        command_port=None,
+                        clock=CLOCK,
+                        ask_doctor=fake_ask,
+                    )
+                )
+                await injector._build_live_context(duration_phrase)
+                assert pinged == [], (
+                    f"duration question {duration_phrase!r} wrongly escalated to the owner"
+                )
+        finally:
+            cr.clinic_context_text = orig
+
+
+class TestAvailabilityIntentClassifier:
+    """#43 bug (1): _is_availability_question narrows the over-broad substring
+    match so a duration/impatience phrase that merely CONTAINS a time word does
+    not read as an availability request."""
+
+    def test_real_availability_questions_are_availability(self):
+        from fonely.voice.frame_pipeline import _is_availability_question
+
+        for q in (
+            "do you have any slots",
+            "what times are available",
+            "when can I come",
+            "இன்னைக்கு நேரம் இருக்கா",  # "is there time today" — a real availability ask
+        ):
+            assert _is_availability_question(q), q
+
+    def test_duration_phrases_are_not_availability(self):
+        from fonely.voice.frame_pipeline import _is_availability_question
+
+        for q in (
+            "how long will it take",
+            "how much time does it take",
+            "எவ்வளவு நேரம் ஆகும்",
+            "எத்தன நேரம் ஆகும்",
+            "evvalavu neram aagum",
+        ):
+            assert not _is_availability_question(q), q
+
+    def test_unrelated_text_is_not_availability(self):
+        from fonely.voice.frame_pipeline import _is_availability_question
+
+        assert not _is_availability_question("my name is Karthick")
+        assert not _is_availability_question("")

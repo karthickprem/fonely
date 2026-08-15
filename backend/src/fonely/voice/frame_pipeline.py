@@ -87,6 +87,34 @@ _CLOSURE_WORDS = ("no", "bye", "இல்ல", "போறேன்", "நன்�
 # whether to ping the doctor when the schedule is unconfirmed.
 _AVAILABILITY_WORDS = ("availability", "slot", "available", "time", "அவைலபிள", "நேரம்", "when")
 
+# Phrases that CONTAIN a time word ("time"/"நேரம்") but are NOT availability
+# questions: they ask HOW LONG something takes (procedure duration) or how long
+# the caller must wait. "எவ்வளவு நேரம் ஆகும்" = "how long will it take" —
+# duration/impatience, not "what slots are open". A raw substring match on
+# _AVAILABILITY_WORDS classified these as availability and escalated to the
+# owner on them — the over-broad-keyword bug a live Tamil call surfaced.
+_DURATION_PHRASES = (
+    "எவ்வளவு நேரம்",  # "how much time / how long"
+    "எத்தன நேரம்",  # colloquial "how long"
+    "how long",
+    "how much time",
+    "evvalavu neram",
+)
+
+
+def _is_availability_question(user_text: str) -> bool:
+    """True only when the caller is asking WHICH SLOTS/TIMES ARE OPEN.
+
+    Excludes duration/impatience phrasings ("how long will it take?", "எவ்வளவு
+    நேரம் ஆகும்?") that merely contain a time word — those must NOT trigger an
+    owner escalation. A caller asking availability on an unconfirmed day is the
+    only thing that should ask the owner.
+    """
+    lowered = user_text.casefold()
+    if any(phrase in lowered for phrase in _DURATION_PHRASES):
+        return False
+    return any(word.casefold() in lowered for word in _AVAILABILITY_WORDS)
+
 
 def _is_confirmation(text: str) -> bool:
     """True when the caller's turn is PURE agreement — one or more confirm
@@ -311,7 +339,7 @@ class BookingStateInjector(FrameProcessor):
             return ""
 
         unconfirmed = "No confirmed availability" in ctx_text
-        asking_availability = any(w in user_text.lower() for w in _AVAILABILITY_WORDS)
+        asking_availability = _is_availability_question(user_text)
         if unconfirmed and asking_availability and self._resolver.ask_doctor is not None:
             try:
                 await self._resolver.ask_doctor(

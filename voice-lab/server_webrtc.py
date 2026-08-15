@@ -7,7 +7,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from fastapi import BackgroundTasks, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -404,17 +404,46 @@ HF_BACKEND_WS = os.environ.get("HF_BACKEND_WS", "ws://127.0.0.1:8765/v1/realtime
 # The HF browser client (pinned demo's s2s-realtime-client.js + integrity-verified
 # @openai/agents-realtime UMD) is copied into this lab dir at cutover time.
 HF_CLIENT_DIR = LAB_DIR / "hf_client"
+
+# A read-only clinic-booking persona so the HF stack discusses the SAME scenario
+# as the Fonely tab for a fair A/B — but it books nothing and has no tools/DB.
+HF_READONLY_PERSONA = (
+    "You are a friendly dental-clinic receptionist assistant used ONLY for a voice "
+    "technology comparison. You may discuss booking a dental appointment and ask for "
+    "the service, doctor, date, time, and caller name to demonstrate the conversation. "
+    "You do NOT actually book anything, you have no tools, and you must NEVER claim an "
+    "appointment was booked, confirmed, or saved. If asked to confirm a booking, explain "
+    "this is a read-only technology demo. Keep replies short and natural."
+)
+
+
+@app.get("/hf-static/api/config", include_in_schema=False)
+async def hf_client_config(request: Request):
+    """Deploy config the HF client fetches (relative 'api/config' from /hf-static/).
+
+    Pins the client to the same-origin /hf-realtime WebSocket proxy so it never
+    sees the loopback :8765 backend and no host/port is user-entered. Registered
+    BEFORE the /hf-static StaticFiles mount so this dynamic route wins.
+    """
+    scheme = "wss" if request.url.scheme == "https" else "ws"
+    s2s_url = f"{scheme}://{request.url.netloc}/hf-realtime"
+    return {
+        "allowDirect": True,
+        "s2sUrl": s2s_url,
+        "lb": False,
+        "rtc": False,
+        "search": False,
+        "startupGreeting": "",
+    }
+
+
 if HF_CLIENT_DIR.is_dir():
-    app.mount("/hf-static", StaticFiles(directory=HF_CLIENT_DIR), name="hf-client")
+    app.mount("/hf-static", StaticFiles(directory=HF_CLIENT_DIR, html=True), name="hf-client")
 
 
 @app.get("/voice-hf", include_in_schema=False)
 async def voice_hf():
-    """Serve the HF realtime client as a self-contained component page.
-
-    The client's backend URL is the RELATIVE same-origin path /hf-realtime — no
-    host/port is user-entered and :8765 is never exposed to the browser.
-    """
+    """Serve the HF realtime client page (same-origin, backend pinned to /hf-realtime)."""
     if not (HF_CLIENT_DIR / "index.html").exists():
         return HTMLResponse(
             "<p style='font-family:system-ui;padding:20px;color:#f59e0b'>"
@@ -523,7 +552,7 @@ body{font-family:system-ui;background:#0a1628;color:#e0e0e0;height:100vh;display
 // session at any time. Switching AWAITS teardown of the outgoing pane (session
 // close + mic tracks stopped + audio context closed) before starting the next.
 const FONELY_BADGE = "LIVE booking · Fonely stack";
-const HF_BADGE = "Hugging Face controller · Sarvam + Luna + Cartesia · R&D · no booking";
+const HF_BADGE = "Hugging Face controller · Sarvam + Terra + Cartesia · R&D · no booking";
 
 const panes = {
   fonely: { el: document.getElementById('pane-fonely'), tab: document.getElementById('tab-fonely') },
@@ -551,26 +580,26 @@ async function stopFonely() {
 
 // --- HF pane: the pinned HF realtime client mounted as an in-page component,
 // backend routed to the same-origin /hf-realtime proxy (never :8765 directly).
-let hfClient = null;
+// The HF client is a complete multi-file ESM app (main.js + s2s-realtime-client
+// + worklets + UMD). Mounting it as a same-origin iframe keeps its modules, CSS,
+// AudioContext, and WebSocket fully encapsulated — materially safer than inlining
+// its bootstrap here — and lets the parent tear it down deterministically by
+// dropping the frame (which stops mic tracks + closes the socket on unload). The
+// client is pinned to the same-origin /hf-realtime proxy via /hf-static/api/config.
 async function startHf() {
-  const mod = await import('/hf-static/s2s-realtime-client.js');
-  const Client = mod.default || mod.S2SRealtimeClient || mod.RealtimeClient;
-  const wsUrl = new URL('/hf-realtime', location.href);
-  wsUrl.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  hfClient = new Client({
-    transport: 'websocket',
-    directUrl: wsUrl.href,
-    mount: document.getElementById('hf-mount'),
-    instructions: window.__HF_PERSONA__ || undefined,
-  });
-  await hfClient.connect();
+  const f = document.createElement('iframe');
+  f.src = '/hf-static/index.html';
+  f.allow = 'microphone';
+  document.getElementById('hf-mount').appendChild(f);
 }
 async function stopHf() {
-  if (hfClient) {
-    try { await hfClient.close(); } catch (e) { /* best-effort */ }
-    hfClient = null;
-  }
-  panes.hf.el.querySelector('#hf-mount')?.replaceChildren();
+  const mount = document.getElementById('hf-mount');
+  const f = mount?.querySelector('iframe');
+  // Ask the child to stop cleanly first, then destroy the frame so its document
+  // unloads (getUserMedia tracks stop, the realtime WebSocket closes).
+  try { f?.contentWindow?.postMessage({ type: 'hf-stop' }, location.origin); } catch (e) { /* ignore */ }
+  await new Promise(r => setTimeout(r, 50));
+  mount?.replaceChildren();
 }
 
 const starters = { fonely: startFonely, hf: startHf };

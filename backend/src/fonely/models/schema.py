@@ -993,6 +993,41 @@ class PendingAction(Base):
         UniqueConstraint("business_id", "idempotency_key", name="uq_pending_idempotency"),
         UniqueConstraint("business_id", "id", name="uq_pending_actions_business_id_id"),
         Index("ix_pending_actions_expiry", "status", "expires_at"),
+        # #43 owner-reply-resume marker columns (call_id/query_type/correlation_code
+        # are NULL for every other action type). The composite FK binds the
+        # marker's call to a REAL call row of the SAME business — a bare call_id FK
+        # would let a marker reference another tenant's call; (business_id, call_id)
+        # → uq_calls_business_id_id keeps the binding tenant-consistent at the
+        # schema level, reinforcing the resume trust boundary structurally.
+        ForeignKeyConstraint(
+            ["business_id", "call_id"],
+            ["calls.business_id", "calls.id"],
+            name="fk_pending_actions_business_call",
+        ),
+        # Code uniqueness: a correlation code is unique per business across ALL
+        # retained marker rows (not active-only) — a historical/expired code can
+        # never collide with a new one, and uniqueness isn't predicated on mutable
+        # status. Scoped to marker rows via the partial WHERE so other action
+        # types (with NULL correlation_code) never participate.
+        Index(
+            "uq_pending_actions_business_correlation_code",
+            "business_id",
+            "correlation_code",
+            unique=True,
+            postgresql_where=text("action_type = 'awaiting_owner_reply'"),
+        ),
+        # One active wait per (business, call, query_type): a second escalation on
+        # the same call+query cannot create a duplicate wait. Scoped to the ACTIVE
+        # (non-terminal) wait statuses, so a resolved/expired marker frees the slot
+        # for a legitimate later re-escalation on the same call.
+        Index(
+            "uq_pending_actions_one_active_wait",
+            "business_id",
+            "call_id",
+            "query_type",
+            unique=True,
+            postgresql_where=text("status IN ('awaiting_owner_reply', 'resume_requested')"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
@@ -1019,12 +1054,51 @@ class PendingAction(Base):
     commit_error_code: Mapped[str | None] = mapped_column(String(50))
     commit_error_message: Mapped[str | None] = mapped_column(String(500))
     rejection_reason_code: Mapped[str | None] = mapped_column(String(50))
+    # #43 owner-reply-resume marker fields (NULL for all other action types). The
+    # index keys promoted out of JSONB so the unique/FK invariants are typed and
+    # fail loud. The bounded owner ANSWER evidence stays in proposed_payload.
+    call_id: Mapped[int | None] = mapped_column(Integer)
+    query_type: Mapped[str | None] = mapped_column(String(40))
+    correlation_code: Mapped[str | None] = mapped_column(String(12))
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class OwnerReplyGuessAttempt(Base):
+    """Durable, tenant/owner-scoped code-guess counter for #43 owner-reply resume.
+
+    When >1 owner-reply-resume markers are active for a business, the owner picks
+    which one they're answering with a short correlation code. This table bounds
+    brute-force guessing of that code — per (business_id, owner_phone), counted in
+    PostgreSQL, NOT in process memory: a per-replica in-memory counter would give
+    an attacker N times the limit across N replicas (a false security claim). The
+    inbound-worker rate-limit (Dev3's P2) reads/increments this row in the same
+    transaction as a resolve attempt. One row per (business, owner phone); the
+    window resets when ``window_started_at`` ages past the policy window.
+    """
+
+    __tablename__ = "owner_reply_guess_attempts"
+    __table_args__ = (
+        UniqueConstraint("business_id", "owner_phone", name="uq_owner_reply_guess_business_phone"),
+        CheckConstraint("attempts >= 0", name="ck_owner_reply_guess_attempts_non_negative"),
+        CheckConstraint("max_attempts > 0", name="ck_owner_reply_guess_max_positive"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    business_id: Mapped[int] = mapped_column(ForeignKey("businesses.id"), nullable=False)
+    owner_phone: Mapped[str] = mapped_column(String(20), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="5")
+    window_started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 # =============================================================================

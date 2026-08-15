@@ -27,6 +27,7 @@ allowed sets are DERIVED FROM the enums in code below so the constraints can
 never drift from the models they mirror. Same pattern as 0019 (callback type).
 """
 
+import sqlalchemy as sa
 from alembic import context, op
 from sqlalchemy import text
 
@@ -61,11 +62,100 @@ def _in_list(column: str, values: tuple[str, ...]) -> str:
     return f"{column} IN ({joined})"
 
 
+# The ACTIVE (non-terminal) wait statuses — the partial-unique "one active wait"
+# predicate. Derived from the enum so the index WHERE clause can never drift from
+# PendingActionStatus (migration_parity asserts this alignment).
+_ACTIVE_WAIT_STATUSES = (
+    PendingActionStatus.AWAITING_OWNER_REPLY.value,
+    PendingActionStatus.RESUME_REQUESTED.value,
+)
+_ACTIVE_WAIT_WHERE = _in_list("status", _ACTIVE_WAIT_STATUSES)
+_MARKER_TYPE_WHERE = f"action_type = '{PendingActionType.AWAITING_OWNER_REPLY.value}'"
+
+_CODE_UNIQUE_INDEX = "uq_pending_actions_business_correlation_code"
+_ONE_ACTIVE_WAIT_INDEX = "uq_pending_actions_one_active_wait"
+_CALL_FK = "fk_pending_actions_business_call"
+_GUESS_TABLE = "owner_reply_guess_attempts"
+
+
 def upgrade() -> None:
+    # 1. Widen the two CHECK constraints to admit the new type + statuses.
     op.drop_constraint(_TYPE_CONSTRAINT, _TABLE, type_="check")
     op.create_check_constraint(_TYPE_CONSTRAINT, _TABLE, _in_list("action_type", _ALL_TYPES))
     op.drop_constraint(_STATUS_CONSTRAINT, _TABLE, type_="check")
     op.create_check_constraint(_STATUS_CONSTRAINT, _TABLE, _in_list("status", _ALL_STATUSES))
+
+    # 2. Promote the marker index keys to real, typed columns (NULL for every
+    #    other action type). The bounded owner ANSWER evidence stays in JSONB.
+    op.add_column(_TABLE, sa.Column("call_id", sa.Integer(), nullable=True))
+    op.add_column(_TABLE, sa.Column("query_type", sa.String(length=40), nullable=True))
+    op.add_column(_TABLE, sa.Column("correlation_code", sa.String(length=12), nullable=True))
+
+    # 3. Composite (business_id, call_id) FK → calls(business_id, id). Binds a
+    #    marker's call to a REAL call of the SAME business — a bare call_id FK
+    #    would allow a cross-tenant reference. Enforces the trust boundary in
+    #    schema.
+    op.create_foreign_key(
+        _CALL_FK,
+        _TABLE,
+        "calls",
+        ["business_id", "call_id"],
+        ["business_id", "id"],
+    )
+
+    # 4. Code uniqueness: unique per business across ALL retained marker rows
+    #    (not active-only) — a historical code can't collide with a new one.
+    #    Scoped to marker rows via the partial WHERE so other action types (NULL
+    #    correlation_code) never participate.
+    op.create_index(
+        _CODE_UNIQUE_INDEX,
+        _TABLE,
+        ["business_id", "correlation_code"],
+        unique=True,
+        postgresql_where=text(_MARKER_TYPE_WHERE),
+    )
+
+    # 5. One active wait per (business, call, query_type): a second escalation on
+    #    the same call+query can't create a duplicate wait while one is active.
+    #    Scoped to the ACTIVE wait statuses (derived from the enum, not a drifting
+    #    literal), so a resolved/expired marker frees the slot.
+    op.create_index(
+        _ONE_ACTIVE_WAIT_INDEX,
+        _TABLE,
+        ["business_id", "call_id", "query_type"],
+        unique=True,
+        postgresql_where=text(_ACTIVE_WAIT_WHERE),
+    )
+
+    # 6. Durable, tenant/owner-scoped code-guess counter (Dev3's P2 rate-limit
+    #    writes here). DB-backed, NOT process-local: a per-replica in-memory
+    #    counter would give an attacker N times the limit across N replicas. One row
+    #    per (business_id, owner_phone) accumulates guesses within a window.
+    op.create_table(
+        _GUESS_TABLE,
+        sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
+        sa.Column("business_id", sa.Integer(), sa.ForeignKey("businesses.id"), nullable=False),
+        sa.Column("owner_phone", sa.String(length=20), nullable=False),
+        sa.Column("attempts", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("max_attempts", sa.Integer(), nullable=False, server_default="5"),
+        sa.Column(
+            "window_started_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
+        sa.CheckConstraint("attempts >= 0", name="ck_owner_reply_guess_attempts_non_negative"),
+        sa.CheckConstraint("max_attempts > 0", name="ck_owner_reply_guess_max_positive"),
+        sa.UniqueConstraint(
+            "business_id", "owner_phone", name="uq_owner_reply_guess_business_phone"
+        ),
+    )
 
 
 def downgrade() -> None:
@@ -93,6 +183,17 @@ def downgrade() -> None:
                 "intent). Resolve or export those markers, delete them explicitly, "
                 "then downgrade."
             )
+
+    # Reverse of upgrade, in dependency order: guess table, indexes, FK, columns,
+    # then re-narrow the CHECKs. The fail-closed guard above already proved no
+    # marker rows remain, so dropping the marker columns/indexes is non-lossy.
+    op.drop_table(_GUESS_TABLE)
+    op.drop_index(_ONE_ACTIVE_WAIT_INDEX, table_name=_TABLE)
+    op.drop_index(_CODE_UNIQUE_INDEX, table_name=_TABLE)
+    op.drop_constraint(_CALL_FK, _TABLE, type_="foreignkey")
+    op.drop_column(_TABLE, "correlation_code")
+    op.drop_column(_TABLE, "query_type")
+    op.drop_column(_TABLE, "call_id")
 
     op.drop_constraint(_TYPE_CONSTRAINT, _TABLE, type_="check")
     op.create_check_constraint(

@@ -44,6 +44,7 @@ MIGRATION_0017 = MIGRATIONS_DIR / "0017_channel_identities_and_call_sid.py"
 MIGRATION_0018 = MIGRATIONS_DIR / "0018_dpdp_notice_evidence.py"
 MIGRATION_0019 = MIGRATIONS_DIR / "0019_pending_action_callback_type.py"
 MIGRATION_0020 = MIGRATIONS_DIR / "0020_notification_callback_requested.py"
+MIGRATION_0021 = MIGRATIONS_DIR / "0021_awaiting_owner_reply_marker.py"
 
 
 class OperationRecorder:
@@ -274,12 +275,41 @@ def _capture_upgrade() -> OperationRecorder:
         # representation mismatch, not a real drift. The constraint-value parity
         # 0019 DOES need (the migration's set equals PendingActionType) is asserted
         # directly in test_callback_constraint_matches_enum below.
+        #
+        # 0020 is likewise a CHECK-only widen (notification event type), excluded
+        # for the same reason.
+        #
+        # 0021 IS replayed: unlike 0019/0020 it adds real STRUCTURE (the marker
+        # columns call_id/query_type/correlation_code, the composite call FK, the
+        # two partial-unique indexes, and the owner_reply_guess_attempts table) —
+        # structure the ORM models and this parity check must cover. Its CHECK
+        # re-widens (action_type/status) are handled below by dropping those two
+        # literal-rendered constraints from the captured pending_actions table
+        # before comparison, exactly the POSTCOMPILE representation concern that
+        # excludes 0019/0020; the value parity of the 0021 widen is asserted
+        # directly in test_awaiting_owner_reply_constraints_match_enums.
+        (MIGRATION_0021, "fonely_migration_0021"),
     ):
         module = _load_migration(path, name)
         module.op = recorder
         if name in {"fonely_migration_0002", "fonely_migration_0004", "fonely_migration_0005"}:
             module.context = SimpleNamespace(is_offline_mode=lambda: True)
         module.upgrade()
+
+    # 0021 re-widens the pending_actions action_type/status CHECKs to LITERAL
+    # value lists, whereas the ORM renders the same enum constraints as
+    # POSTCOMPILE — the identical representation mismatch that keeps 0019/0020 out
+    # of this replay. Drop those two literal CHECKs from the captured table so the
+    # constraint-parity comparison isn't a false representation diff; their VALUE
+    # parity (the migration's set equals the enum) is asserted directly in
+    # test_awaiting_owner_reply_constraints_match_enums.
+    pending = recorder.metadata.tables["pending_actions"]
+    for constraint in list(pending.constraints):
+        if isinstance(constraint, sa.CheckConstraint) and constraint.name in {
+            "action_type",
+            "pending_action_status",
+        }:
+            pending.constraints.discard(constraint)
     return recorder
 
 
@@ -298,6 +328,14 @@ def _capture_downgrade() -> OperationRecorder:
     recorder = _capture_upgrade()
     recorder.dropped_tables.clear()
     recorder.operations.clear()
+    # 0021 downgrade drops the owner_reply_guess_attempts table (plus the marker
+    # columns/indexes/FK) — replayed here so the drops-all-tables invariant sees
+    # it. is_offline_mode=True skips the populated-row guard (this capture runs no
+    # real DB); the guard itself is proven on a live DB in the PG roundtrip test.
+    module_0021 = _load_migration(MIGRATION_0021, "fonely_migration_0021_down")
+    module_0021.op = recorder
+    module_0021.context = SimpleNamespace(is_offline_mode=lambda: True)
+    module_0021.downgrade()
     module_0018 = _load_migration(MIGRATION_0018, "fonely_migration_0018_down")
     module_0018.op = recorder
     module_0018.context = SimpleNamespace(is_offline_mode=lambda: True)
@@ -484,6 +522,14 @@ def test_migration_and_orm_column_parity() -> None:
             assert migration_default == orm_default, f"{name}.{column_name} server default"
 
 
+# The pending_actions action_type/status enum CHECKs render as literal value
+# lists in the 0021 migration but as POSTCOMPILE in the ORM (see _capture_upgrade)
+# — a representation mismatch, not a drift. They are stripped from the CAPTURED
+# side there and excluded from the ORM side here; their value parity is asserted
+# in test_awaiting_owner_reply_constraints_match_enums.
+_REPRESENTATION_MISMATCH_CHECKS = {"action_type", "pending_action_status"}
+
+
 def test_migration_and_orm_constraint_parity() -> None:
     captured = _capture_upgrade()
     for name, orm_table in Base.metadata.tables.items():
@@ -493,7 +539,12 @@ def test_migration_and_orm_constraint_parity() -> None:
             orm_table
         ), name
         assert _unique_signatures(migration_table) == _unique_signatures(orm_table), name
-        assert _check_signatures(migration_table) == _check_signatures(orm_table), name
+        orm_checks = {
+            sig
+            for sig in _check_signatures(orm_table)
+            if sig[0] not in _REPRESENTATION_MISMATCH_CHECKS
+        }
+        assert _check_signatures(migration_table) == orm_checks, name
 
 
 def test_migration_and_orm_index_parity() -> None:
@@ -528,7 +579,9 @@ def test_migration_downgrade_drops_all_application_tables() -> None:
     # Drop order is FK-sensitive, so it is pinned explicitly and every new
     # migration is expected to extend this list at the front. Unlike a table
     # count, this is not a duplicate of a fact asserted elsewhere.
-    assert recorder.dropped_tables[:9] == [
+    assert recorder.dropped_tables[:10] == [
+        # 0021 downgrade runs first in the capture (newest migration).
+        "owner_reply_guess_attempts",
         "business_channel_identities",
         "business_whatsapp_channels",
         "notification_manifests",
@@ -876,6 +929,43 @@ def test_callback_notification_constraint_matches_enum() -> None:
     assert old_values == new_values - {"callback_requested"}, (
         "0020 downgrade constraint must be the enum value set minus callback_requested"
     )
+
+
+def test_awaiting_owner_reply_constraints_match_enums() -> None:
+    """0021's two CHECK widens (action_type + status) must be DERIVED from their
+    enums, and the partial-unique-index WHERE literals must match the enum values
+    they mean — so a renamed/added enum value can never silently desync the
+    structural constraints (the absence-reads-as-success class, at the constraint
+    level).
+
+    0021's CHECK re-widens are stripped from the structural capture (they render
+    as literal lists vs the ORM's POSTCOMPILE), so the value + index-predicate
+    parity is asserted here directly against the migration module.
+    """
+    from fonely.models.enums import PendingActionStatus, PendingActionType
+
+    module = _load_migration(MIGRATION_0021, "fonely_migration_0021_parity")
+
+    # action_type widen: upgrade = all enum values; downgrade = all minus the new.
+    assert set(module._ALL_TYPES) == {m.value for m in PendingActionType}
+    assert "awaiting_owner_reply" in set(module._ALL_TYPES)
+    assert set(module._TYPES_WITHOUT_NEW) == set(module._ALL_TYPES) - {"awaiting_owner_reply"}
+
+    # status widen: upgrade = all enum values; downgrade = all minus the 3 new.
+    assert set(module._ALL_STATUSES) == {m.value for m in PendingActionStatus}
+    new_status_values = {"awaiting_owner_reply", "resume_requested", "resumed"}
+    assert new_status_values <= set(module._ALL_STATUSES)
+    assert set(module._STATUSES_WITHOUT_NEW) == set(module._ALL_STATUSES) - new_status_values
+
+    # The one-active-wait partial index predicate must be EXACTLY the two active
+    # (non-terminal) wait statuses, derived from the enum — not a drifting literal.
+    assert set(module._ACTIVE_WAIT_STATUSES) == {
+        PendingActionStatus.AWAITING_OWNER_REPLY.value,
+        PendingActionStatus.RESUME_REQUESTED.value,
+    }
+    # The code-uniqueness index predicate scopes to marker rows only.
+    expected_marker_where = f"action_type = '{PendingActionType.AWAITING_OWNER_REPLY.value}'"
+    assert expected_marker_where == module._MARKER_TYPE_WHERE
 
 
 def test_runtime_provenance_helpers_precede_and_simplify_create_trigger() -> None:

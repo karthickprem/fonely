@@ -44,6 +44,7 @@ EXPECTED_TABLES = [
     "notification_manifests",
     "business_whatsapp_channels",
     "business_channel_identities",
+    "owner_reply_guess_attempts",
 ]
 
 
@@ -247,6 +248,10 @@ class TestEnums:
             "rejected",
             "cancelled",
             "expired",
+            # #43 owner-reply-resume wait lifecycle.
+            "awaiting_owner_reply",
+            "resume_requested",
+            "resumed",
         }
         actual = {v.value for v in enums.PendingActionStatus}
         assert actual == expected

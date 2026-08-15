@@ -101,16 +101,14 @@ class NotificationService:
         self._session = session
         self._repo = NotificationRepository(session)
 
-    async def _resolve_recipients(
-        self, business_id: int, customer_phone: str, customer_name: str | None
-    ) -> list[ResolvedRecipient]:
-        patient = ResolvedRecipient(
-            recipient_type=NotificationRecipientType.PATIENT.value,
-            phone=customer_phone,
-            name=customer_name,
-            bu_id=None,
-        )
+    async def _resolve_owner_recipients(self, business_id: int) -> list[ResolvedRecipient]:
+        """Active OWNER BusinessUsers of a business, deduped by phone.
 
+        Shared by appointment notifications (owner leg) and callback
+        notifications (owner-only). Raises rather than silently produce zero
+        recipients — a business with no reachable owner cannot be notified, and
+        that must be a loud configuration error, not a dropped notification.
+        """
         owners = (
             await self._session.scalars(
                 select(BusinessUser)
@@ -128,7 +126,7 @@ class NotificationService:
                 code="no_valid_owner_recipients",
                 message=(
                     f"business_id={business_id} has no active owner recipients. "
-                    "Cannot create appointment notifications."
+                    "Cannot create owner notifications."
                 ),
             )
 
@@ -156,6 +154,18 @@ class NotificationService:
                 message=(f"business_id={business_id} has active owners but no valid phones."),
             )
 
+        return owner_recipients
+
+    async def _resolve_recipients(
+        self, business_id: int, customer_phone: str, customer_name: str | None
+    ) -> list[ResolvedRecipient]:
+        patient = ResolvedRecipient(
+            recipient_type=NotificationRecipientType.PATIENT.value,
+            phone=customer_phone,
+            name=customer_name,
+            bu_id=None,
+        )
+        owner_recipients = await self._resolve_owner_recipients(business_id)
         return [patient, *owner_recipients]
 
     async def _resolve_channel_context(self, business_id: int) -> tuple[str, str]:
@@ -559,6 +569,79 @@ class NotificationService:
             new_start_at=new_start_at,
             business_timezone=business_timezone,
         )
+
+    async def create_callback_notification(
+        self,
+        *,
+        business_id: int,
+        callback_pending_action_id: int,
+        caller_phone: str,
+        reason_code: str,
+        service_name: str | None = None,
+        target_date: str | None = None,
+        attempted_candidates: list[str] | None = None,
+    ) -> list[int]:
+        """Push an OWNER WhatsApp notification that a caller needs a call-back.
+
+        Emitted when #36 persists a callback pending action on a voice give-up.
+        Notifies the OWNER only (a callback is a follow-up the clinic owes the
+        caller, not something the caller is told), carrying the partial booking
+        facts the owner needs to complete the booking by phone.
+
+        DELIBERATELY NO APPOINTMENT MANIFEST — this is not create_*_notifications'
+        manifest path, and that is on purpose, not an oversight:
+          * A callback has NO appointment_id; the manifest machinery
+            (_create_events_with_manifest, _build_snapshot, the manifest table)
+            is appointment-scoped throughout — keyed on appointment_id, snapshot
+            carries appointment_id. Routing a callback through it would FABRICATE
+            appointment semantics for a thing that is not a booking.
+          * The manifest exists to give BOOKING notifications retention-independent
+            proof (they must outlive the appointment's 365-day retention). A
+            "call them back" nudge is not a booking and does not need booking-grade
+            evidence — the outbox row plus the worker's provider-attempt evidence
+            is the right durability level for a nudge.
+        A future dev must NOT "fix" this by manifest-wrapping callbacks — appointments
+        get manifests because they are bookings; callbacks deliberately do not.
+
+        Idempotent per (callback, owner): re-emitting for the same callback does
+        not duplicate rows. Reuses the existing owner resolution, channel-context
+        resolution, and outbox→worker→sender delivery pipeline entirely.
+        """
+        owners = await self._resolve_owner_recipients(business_id)
+        clinic_name, phone_number_id = await self._resolve_channel_context(business_id)
+
+        payload_facts: dict[str, Any] = {
+            "phone_number_id": phone_number_id,
+            "clinic_name": clinic_name,
+            "caller_phone": caller_phone,
+            "reason_code": reason_code,
+            "service_name": service_name,
+            "target_date": target_date,
+            "attempted_candidates": list(attempted_candidates or []),
+        }
+
+        event_ids: list[int] = []
+        for owner in owners:
+            key = f"callback-notify-owner-{callback_pending_action_id}-{owner.bu_id}"
+            event = await self._repo.insert_event_idempotent(
+                {
+                    "business_id": business_id,
+                    "event_type": NotificationEventType.CALLBACK_REQUESTED.value,
+                    # NOT 'appointment' — a callback references a pending_action.
+                    "entity_type": "pending_action",
+                    "entity_id": callback_pending_action_id,
+                    "recipient_type": owner.recipient_type,
+                    "recipient_phone": owner.phone,
+                    "recipient_name": owner.name,
+                    "channel": NotificationChannel.WHATSAPP.value,
+                    "payload": payload_facts,
+                    "status": NotificationStatus.PENDING.value,
+                    "idempotency_key": key,
+                }
+            )
+            if event is not None:
+                event_ids.append(event.id)
+        return event_ids
 
     async def verify_committed_notifications(
         self,

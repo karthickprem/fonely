@@ -173,6 +173,13 @@ class NotificationEventType(enum.StrEnum):
     APPOINTMENT_RESCHEDULED = "appointment_rescheduled"
     APPOINTMENT_REMINDER = "appointment_reminder"
     WHATSAPP_INBOUND_RESPONSE = "whatsapp_inbound_response"
+    # Owner-facing push when a voice caller couldn't finish booking and a callback
+    # was persisted (#36/#41). Notifies the OWNER only (a callback is a follow-up
+    # the clinic owes the caller, not something the caller is told). Unlike
+    # appointment_* events this carries NO appointment manifest — see
+    # NotificationService.create_callback_notification for why (nudge-grade
+    # durability, no appointment_id, deliberately not manifest-wrapped).
+    CALLBACK_REQUESTED = "callback_requested"
 
 
 class NotificationRecipientType(enum.StrEnum):

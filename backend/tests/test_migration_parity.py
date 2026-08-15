@@ -43,6 +43,7 @@ MIGRATION_0016 = MIGRATIONS_DIR / "0016_business_whatsapp_channels.py"
 MIGRATION_0017 = MIGRATIONS_DIR / "0017_channel_identities_and_call_sid.py"
 MIGRATION_0018 = MIGRATIONS_DIR / "0018_dpdp_notice_evidence.py"
 MIGRATION_0019 = MIGRATIONS_DIR / "0019_pending_action_callback_type.py"
+MIGRATION_0020 = MIGRATIONS_DIR / "0020_notification_callback_requested.py"
 
 
 class OperationRecorder:
@@ -849,6 +850,31 @@ def test_callback_constraint_matches_enum() -> None:
     assert "callback" in all_values
     assert without_callback == all_values - {"callback"}, (
         "0019 downgrade constraint must be the enum value set minus 'callback'"
+    )
+
+
+def test_callback_notification_constraint_matches_enum() -> None:
+    """0020's notification event_type CHECK value set must be DERIVED from
+    NotificationEventType — same drift guard as 0019, for the event-type enum.
+
+    Like 0019, 0020 re-expresses an enum constraint the ORM renders as POSTCOMPILE
+    and is not replayed in _capture_upgrade; the invariant is asserted directly:
+    upgrade includes every NotificationEventType value, downgrade includes every
+    value except callback_requested.
+    """
+    from fonely.models.enums import NotificationEventType
+
+    module = _load_migration(MIGRATION_0020, "fonely_migration_0020_parity")
+    new_values = set(module._NEW_VALUES)
+    old_values = set(module._OLD_VALUES)
+
+    assert new_values == {member.value for member in NotificationEventType}, (
+        "0020 upgrade constraint must include EXACTLY the NotificationEventType "
+        "values (derived from the enum, not a literal list) so it cannot drift"
+    )
+    assert "callback_requested" in new_values
+    assert old_values == new_values - {"callback_requested"}, (
+        "0020 downgrade constraint must be the enum value set minus callback_requested"
     )
 
 

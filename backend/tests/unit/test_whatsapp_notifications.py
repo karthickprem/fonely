@@ -118,6 +118,61 @@ class TestOwnerNotificationFormat:
         assert "Patient requested" in msg
 
 
+class TestCallbackNotificationFormat:
+    def test_full_facts_render(self) -> None:
+        sender = WhatsAppNotificationSender(MagicMock())
+        event = _mock_event(
+            event_type="callback_requested",
+            recipient_type="owner",
+            payload={
+                "caller_phone": "+919123456789",
+                "service_name": "General Consultation",
+                "target_date": "2026-08-20",
+                "attempted_candidates": ["Dr. Priya Kumar", "Dr. Priya Rao"],
+                "reason_code": "doctor_disambiguation_exhausted",
+            },
+        )
+        msg = sender._format_message(event)
+        # The owner can COMPLETE the callback from this: the number, the service,
+        # the date, and what the caller was stuck between.
+        assert "+919123456789" in msg
+        assert "General Consultation" in msg
+        assert "2026-08-20" in msg
+        assert "Dr. Priya Kumar" in msg and "Dr. Priya Rao" in msg
+        assert "call them back" in msg.lower()
+
+    def test_degrades_gracefully_when_facts_missing(self) -> None:
+        # The give-up happens when facts couldn't be resolved, so service/date/
+        # candidates may be absent. The message must still name the number and
+        # never print blank "on " / "wanted: " lines.
+        sender = WhatsAppNotificationSender(MagicMock())
+        event = _mock_event(
+            event_type="callback_requested",
+            recipient_type="owner",
+            payload={
+                "caller_phone": "+919123456789",
+                "service_name": None,
+                "target_date": None,
+                "attempted_candidates": [],
+                "reason_code": "slot_disambiguation_exhausted",
+            },
+        )
+        msg = sender._format_message(event)
+        assert "+919123456789" in msg
+        assert "They wanted" not in msg, "no blank facts line when service/date absent"
+        assert "couldn't pick between" not in msg, "no empty candidates line"
+
+    def test_missing_caller_phone_falls_back_not_blank(self) -> None:
+        sender = WhatsAppNotificationSender(MagicMock())
+        event = _mock_event(
+            event_type="callback_requested",
+            recipient_type="owner",
+            payload={"caller_phone": "", "attempted_candidates": []},
+        )
+        msg = sender._format_message(event)
+        assert "follow up with the caller" in msg.lower()
+
+
 class TestUnknownEventType:
     def test_fallback_message(self) -> None:
         sender = WhatsAppNotificationSender(MagicMock())

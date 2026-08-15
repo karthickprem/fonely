@@ -2178,10 +2178,27 @@ class ConversationService:
                 "requested_at": now.isoformat(),
             },
         }
+        # PERSIST first (the durable record), NOTIFY second (best-effort push).
+        # These are intentionally NOT one atomic unit. The callback ROW is the
+        # thing that matters — B's owner worklist surfaces it and the retention
+        # sweep bounds its PII regardless of whether the push ever fires. The
+        # notification is an enhancement on top. So:
+        #   * persist fails -> no callback, give-up proceeds (logged);
+        #   * persist succeeds, notify fails -> the callback SURVIVES and the
+        #     owner can still PULL it from the worklist (#41-B); the push is
+        #     dropped + logged. Degrading to "queryable but not pushed" (exactly
+        #     B's guarantee) is strictly better than losing the durable record to
+        #     a transient WhatsApp-channel error.
+        # Because notify runs only AFTER the callback is persisted, there is never
+        # a notified-but-unpersisted split; the only tolerated split is
+        # persisted-but-unpushed, which is a graceful degradation, not an
+        # inconsistency. Each stage is its own savepoint so a failure in one does
+        # not poison the surrounding conversation transaction.
+        result_id: int | None = None
         try:
             async with self._session.begin_nested():
                 service = PendingActionService(self._session)
-                await service.create(
+                result = await service.create(
                     CreatePendingActionCommand(
                         actor=actor,
                         action_type=PendingActionType.CALLBACK,
@@ -2199,12 +2216,43 @@ class ConversationService:
                         idempotency_key=f"callback-{ctx.conversation_id}-{reason_code}",
                     )
                 )
+                result_id = result.id
         except Exception:
             # A dropped callback must not fail the give-up, but must be visible.
             logger.warning(
                 "voice_callback_persist_failed",
                 exc_info=True,
                 extra={"business_id": actor.business_id, "reason_code": reason_code},
+            )
+            return
+
+        try:
+            from fonely.services.notifications import NotificationService
+
+            service_name = ctx.collected_facts.get("service_name")
+            async with self._session.begin_nested():
+                await NotificationService(self._session).create_callback_notification(
+                    business_id=actor.business_id,
+                    callback_pending_action_id=result_id,
+                    caller_phone=actor.normalized_phone,
+                    reason_code=reason_code,
+                    service_name=service_name if isinstance(service_name, str) else None,
+                    target_date=target_date,
+                    attempted_candidates=attempted_candidates[:20],
+                )
+        except Exception:
+            # The push failed (e.g. unconfigured WhatsApp channel). The callback
+            # ROW is already persisted and re-offerable via the owner worklist, so
+            # this degrades to "queryable but not pushed" — B's guarantee — not a
+            # lost follow-up. Loud log is the operator's signal to fix the channel.
+            logger.warning(
+                "voice_callback_notify_failed",
+                exc_info=True,
+                extra={
+                    "business_id": actor.business_id,
+                    "callback_pending_action_id": result_id,
+                    "reason_code": reason_code,
+                },
             )
 
 

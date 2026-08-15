@@ -27,9 +27,17 @@ class ProviderHealth:
 
 
 def probe_credentials() -> dict[str, str]:
-    """Report set/unset status for required provider credentials.
+    """Report set/unset status for a FIXED snapshot of provider credentials.
 
-    Never logs or returns actual values.
+    HARDCODED SNAPSHOT FOR HUMAN DIAGNOSTICS ONLY — NOT the serviceability gate.
+    It reports the same fixed quad regardless of which providers are actually
+    selected, so an operator eyeballing readiness sees a stable picture. Do NOT
+    use this (or ``credentials_ready``) to decide whether a voice-enabled process
+    should start: the LLM provider is config-SELECTED, so requiring
+    ``ANTHROPIC_API_KEY`` here is a false gate for a Luna/openai_compatible deploy
+    (fails when correctly configured, or passes when the real gateway is down).
+    Use ``resolved_voice_creds_ready`` for gating — it probes the ACTUALLY-
+    SELECTED providers. Never logs or returns actual values.
     """
     required = [
         "SARVAM_API_KEY",
@@ -50,6 +58,12 @@ def probe_credentials() -> dict[str, str]:
 
 
 def credentials_ready() -> bool:
+    """Legacy fixed-snapshot readiness — HUMAN DIAGNOSTICS ONLY, NOT a gate.
+
+    See ``probe_credentials``: this checks the hardcoded quad, which is a false
+    gate for a config-selected provider. Use ``resolved_voice_creds_ready`` to
+    gate a voice-enabled startup / readiness on the providers actually selected.
+    """
     probe = probe_credentials()
     return all(v == "SET" for v in probe.values())
 
@@ -59,6 +73,83 @@ def validate_api_key(name: str) -> str:
     if not value:
         raise RuntimeError(f"required environment variable {name} is not set")
     return value
+
+
+# The env vars each SELECTED STT/TTS provider needs, keyed on the config's
+# provider string — NOT hardcoded in the gate body. When STT/TTS become
+# config-selectable (the LLM already is), the probe follows the config
+# automatically instead of silently checking the wrong provider. An unknown
+# provider string has no entry → the gate fails closed (can't prove
+# serviceability → don't start), never a silent pass.
+_STT_PROVIDER_KEYS: dict[str, tuple[str, ...]] = {
+    "sarvam": ("SARVAM_API_KEY",),
+}
+_TTS_PROVIDER_KEYS: dict[str, tuple[str, ...]] = {
+    "cartesia": ("CARTESIA_API_KEY", "CARTESIA_VOICE_ID"),
+}
+
+
+class VoiceCredentialsError(RuntimeError):
+    """A voice-enabled process cannot prove its SELECTED providers are
+    serviceable. Raised at startup so the process FAILS CLOSED (does not start
+    and serve silent calls) rather than failing on the first real call."""
+
+
+def _selected_provider_keys(
+    provider: str, key_map: dict[str, tuple[str, ...]], *, kind: str
+) -> tuple[str, ...]:
+    keys = key_map.get(provider)
+    if keys is None:
+        # Unknown provider = can't prove serviceability = fail closed.
+        raise VoiceCredentialsError(
+            f"unknown {kind} provider {provider!r}: no credential probe defined, "
+            "cannot prove serviceability — refusing to start"
+        )
+    return keys
+
+
+def resolved_voice_creds_ready(
+    stt_config: STTConfig,
+    tts_config: TTSConfig,
+    llm_config: LLMConfig,
+    *,
+    environ: dict[str, str] | None = None,
+) -> None:
+    """The SERVICEABILITY GATE: prove the ACTUALLY-SELECTED voice providers are
+    configured, or raise ``VoiceCredentialsError`` so a voice-enabled startup /
+    readiness fails CLOSED.
+
+    Gates on the RESOLVED providers, never a fixed name:
+      * LLM — ``validate_llm_startup(llm_config)`` (resolves the selected provider
+        and checks its key-env + base_url; handles anthropic-vs-openai_compatible
+        correctly, so ANTHROPIC is checked ONLY when anthropic is selected).
+      * STT / TTS — the env vars the SELECTED provider needs, from the per-
+        provider map (unknown provider → fail closed).
+
+    This is what a voice-enabled process's startup and readiness must use — NOT
+    ``credentials_ready`` (a hardcoded snapshot, a false gate for a config-
+    selected provider). Raises on the FIRST missing thing with a specific reason;
+    returns None when everything the composition will select is present.
+    """
+    env: dict[str, str] = dict(os.environ) if environ is None else environ
+
+    # LLM: the resolved validator. It raises LLMConfigError (a RuntimeError
+    # subclass) on a missing/misconfigured selected provider.
+    from .llm_selection import validate_llm_startup
+
+    validate_llm_startup(llm_config, environ=env)
+
+    # STT + TTS: the selected provider's keys must all be set.
+    for kind, provider, key_map in (
+        ("STT", stt_config.provider, _STT_PROVIDER_KEYS),
+        ("TTS", tts_config.provider, _TTS_PROVIDER_KEYS),
+    ):
+        for name in _selected_provider_keys(provider, key_map, kind=kind):
+            if not env.get(name, ""):
+                raise VoiceCredentialsError(
+                    f"{kind} provider {provider!r} selected but {name} is unset — "
+                    "cannot serve calls, refusing to start"
+                )
 
 
 def build_stt(config: STTConfig) -> Any:

@@ -70,6 +70,33 @@ class PendingActionRepository:
         )
         return (await self._session.execute(statement)).scalar_one_or_none()
 
+    async def list_pending_by_type(
+        self,
+        business_id: int,
+        action_type: PendingActionType,
+        statuses: tuple[str, ...],
+        *,
+        limit: int = 100,
+    ) -> list[PendingAction]:
+        """Tenant-scoped list of pending actions of one type in the given
+        statuses, newest first. Tenant isolation is not optional: the
+        business_id predicate is the ONLY thing that keeps one clinic's callbacks
+        out of another's worklist, so it is always applied and never derived from
+        anything the caller supplied beyond the trusted business_id.
+        """
+        statement = (
+            select(PendingAction)
+            .where(
+                PendingAction.business_id == business_id,
+                PendingAction.action_type == action_type.value,
+                PendingAction.status.in_(statuses),
+            )
+            .order_by(PendingAction.created_at.desc(), PendingAction.id.desc())
+            .limit(limit)
+            .execution_options(populate_existing=True)
+        )
+        return list((await self._session.scalars(statement)).all())
+
     async def insert_idempotent(
         self,
         values: Mapping[str, Any],

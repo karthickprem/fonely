@@ -202,5 +202,15 @@ class ResumeRegistry:
             return False
         return await handle.resume(text)
 
+    async def local_keys(self) -> list[tuple[int, int]]:
+        """A snapshot of the (business_id, call_id) keys THIS replica currently
+        holds. The claim loop uses it to filter its marker query to calls this
+        process is actually serving — the replica-ownership boundary. A call this
+        replica does not hold is simply absent, so its RESUME_REQUESTED marker is
+        left untouched for the owning replica (never claimed here, never resolved
+        stale here)."""
+        async with self._lock:
+            return list(self._handles.keys())
+
     def active_count(self) -> int:
         return len(self._handles)

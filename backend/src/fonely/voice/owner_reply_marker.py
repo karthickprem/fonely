@@ -31,7 +31,7 @@ from fonely.models.enums import PendingActionStatus, PendingActionType
 from fonely.models.schema import PendingAction
 
 if TYPE_CHECKING:
-    from datetime import datetime
+    from datetime import date, datetime
 
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -67,6 +67,7 @@ async def write_awaiting_owner_reply_marker(
     business_id: int,
     call_id: int,
     query_type: str,
+    target_date: date,
     idempotency_key: str,
     expires_at: datetime,
     now: datetime,
@@ -104,6 +105,7 @@ async def write_awaiting_owner_reply_marker(
             call_id=call_id,
             query_type=query_type,
             correlation_code=code,
+            target_date=target_date,
             version=1,
         )
         session.add(marker)

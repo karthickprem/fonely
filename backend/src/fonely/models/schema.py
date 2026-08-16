@@ -1060,6 +1060,12 @@ class PendingAction(Base):
     call_id: Mapped[int | None] = mapped_column(Integer)
     query_type: Mapped[str | None] = mapped_column(String(40))
     correlation_code: Mapped[str | None] = mapped_column(String(12))
+    # The day the caller asked availability for, from TRUSTED call state
+    # (BookingCollection.target_date) at escalation — NOT from the owner's reply.
+    # A trusted, P1-written column (same provenance as call_id/query_type), so it
+    # lives here, not in the untrusted worker-written JSONB. P3 reconciles the
+    # owner's answer against THIS date's real availability.
+    target_date: Mapped[date | None] = mapped_column(Date)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

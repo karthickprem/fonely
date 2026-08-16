@@ -90,6 +90,10 @@ def upgrade() -> None:
     op.add_column(_TABLE, sa.Column("call_id", sa.Integer(), nullable=True))
     op.add_column(_TABLE, sa.Column("query_type", sa.String(length=40), nullable=True))
     op.add_column(_TABLE, sa.Column("correlation_code", sa.String(length=12), nullable=True))
+    # The caller's asked-about day, from trusted call state at escalation (P1
+    # writes it, P3 reconciles against it). A trusted column, not JSONB — same
+    # provenance class as call_id/query_type.
+    op.add_column(_TABLE, sa.Column("target_date", sa.Date(), nullable=True))
 
     # 3. Composite (business_id, call_id) FK → calls(business_id, id). Binds a
     #    marker's call to a REAL call of the SAME business — a bare call_id FK
@@ -191,6 +195,7 @@ def downgrade() -> None:
     op.drop_index(_ONE_ACTIVE_WAIT_INDEX, table_name=_TABLE)
     op.drop_index(_CODE_UNIQUE_INDEX, table_name=_TABLE)
     op.drop_constraint(_CALL_FK, _TABLE, type_="foreignkey")
+    op.drop_column(_TABLE, "target_date")
     op.drop_column(_TABLE, "correlation_code")
     op.drop_column(_TABLE, "query_type")
     op.drop_column(_TABLE, "call_id")

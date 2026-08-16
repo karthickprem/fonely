@@ -53,7 +53,7 @@ async def run_owner_reply_claim_loop(
     *,
     resume_registry: ResumeRegistry,
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
-    reconcile_answer: Callable[[AsyncSession, int, AwaitingOwnerReplyData], Awaitable[str]],
+    reconcile_answer: Callable[[AsyncSession, PendingAction, AwaitingOwnerReplyData], Awaitable[str]],
     poll_interval: float = _DEFAULT_POLL_INTERVAL,
     max_iterations: int | None = None,
 ) -> None:
@@ -94,7 +94,7 @@ async def _claim_tick(
     *,
     resume_registry: ResumeRegistry,
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
-    reconcile_answer: Callable[[AsyncSession, int, AwaitingOwnerReplyData], Awaitable[str]],
+    reconcile_answer: Callable[[AsyncSession, PendingAction, AwaitingOwnerReplyData], Awaitable[str]],
 ) -> int:
     """One poll: claim + resume every RESUME_REQUESTED marker for a locally-held
     call. Returns the number of calls resumed this tick (0 when idle)."""
@@ -119,7 +119,7 @@ async def _claim_and_resume(
     *,
     resume_registry: ResumeRegistry,
     session_factory: Callable[[], AbstractAsyncContextManager[AsyncSession]],
-    reconcile_answer: Callable[[AsyncSession, int, AwaitingOwnerReplyData], Awaitable[str]],
+    reconcile_answer: Callable[[AsyncSession, PendingAction, AwaitingOwnerReplyData], Awaitable[str]],
     business_id: int,
     call_id: int,
 ) -> bool:
@@ -148,7 +148,7 @@ async def _claim_and_resume(
         # Reconcile the owner's UNTRUSTED answer into real bookable slots. Done
         # BEFORE the claim CAS so a reconciliation failure doesn't burn the marker
         # (it stays RESUME_REQUESTED and is retried next tick).
-        spoken = await reconcile_answer(session, business_id, data)
+        spoken = await reconcile_answer(session, marker, data)
 
         # THE CLAIM: flip RESUME_REQUESTED -> RESUMED. Exactly one winner; a racing
         # claimer or the sweep gets None here and this replica does nothing.

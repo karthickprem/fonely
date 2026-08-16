@@ -34,8 +34,15 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from fonely.domain.pending_actions.payloads import validate_payload
-from fonely.domain.pending_actions.snapshots import canonical_payload_dict, payload_digest
+from fonely.domain.pending_actions.payloads import (
+    OWNER_REPLY_CODE_ALPHABET,
+    OWNER_REPLY_CODE_LENGTH,
+    validate_payload,
+)
+from fonely.domain.pending_actions.snapshots import (
+    awaiting_owner_reply_payload_digest,
+    canonical_payload_dict,
+)
 from fonely.models.enums import PendingActionStatus, PendingActionType
 from fonely.models.schema import PendingAction
 from fonely.repositories.owner_reply_markers import OwnerReplyMarkerRepository
@@ -44,16 +51,16 @@ from fonely.repositories.pending_actions import PendingActionRepository
 # Rolling code-guess window + bound (DB-durable per business_id, owner_phone).
 _GUESS_WINDOW = timedelta(minutes=10)
 _GUESS_MAX = 5
-# Correlation code format (Dev4 P1): human-safe uppercase alphabet, no 0/O/1/I/L.
-# We PARSE + normalize to match his generation. Parsing is STRICTLY ANCHORED to
-# avoid false positives — an English answer like "yes she is free" must NOT be
-# read as a code. A code is recognized ONLY when:
+# Correlation code format: the SHARED constants Dev4's P1 generator uses, imported
+# (never a local copy) so the parser can never drift from generation. Parsing is
+# STRICTLY ANCHORED to avoid false positives — an English answer like "yes she is
+# free" must NOT be read as a code. A code is recognized ONLY when:
 #   (a) the ENTIRE trimmed message is exactly a code token, or
-#   (b) it appears with an EXPLICIT delimiter: a leading/anywhere "code: XXXX" /
-#       "code #XXXX", or a fully bracketed "[XXXX]" token.
-# A bare code-shaped word sitting inside prose is deliberately NOT matched.
-_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
-_CODE_CHARS = rf"[{_CODE_ALPHABET}]{{4,12}}"
+#   (b) it appears with an EXPLICIT delimiter: "code: XXXX" / "code #XXXX", or a
+#       fully bracketed "[XXXX]" token.
+# A bare code-shaped word sitting inside prose is deliberately NOT matched. The
+# code is exactly OWNER_REPLY_CODE_LENGTH chars from OWNER_REPLY_CODE_ALPHABET.
+_CODE_CHARS = rf"[{OWNER_REPLY_CODE_ALPHABET}]{{{OWNER_REPLY_CODE_LENGTH}}}"
 _CODE_WHOLE_RE = re.compile(rf"^{_CODE_CHARS}$", re.IGNORECASE)
 _CODE_LABELLED_RE = re.compile(rf"\bcode\b\s*[:#]?\s*({_CODE_CHARS})\b", re.IGNORECASE)
 _CODE_BRACKETED_RE = re.compile(rf"\[\s*({_CODE_CHARS})\s*\]")
@@ -169,12 +176,16 @@ class OwnerReplyResumeService:
         reply that already flipped THIS marker gets rowcount 0 -> stale reminder,
         never a second write.
 
-        Digest integrity: mutating proposed_payload WITHOUT recomputing
-        payload_digest would leave the digest stale, and P3's validated read
-        (payload_digest(payload) == stored digest) would then reject every answered
-        marker. So we re-validate the updated envelope and write the canonical
-        payload AND its digest ATOMICALLY in the same conditional_update, using the
-        shared snapshot helpers (never a duplicate digest algorithm).
+        Digest integrity (cross-lane): mutating proposed_payload WITHOUT
+        recomputing payload_digest leaves the digest stale, and P3's validated read
+        (``_validated_stored_payload`` → digest match) would then reject EVERY
+        answered marker so the resume never fires. So the payload AND its digest
+        move ATOMICALLY in the same conditional_update. Both are derived from the
+        SAME validated envelope via the SHARED helpers Dev4 owns
+        (``canonical_payload_dict`` for the stored form, and
+        ``awaiting_owner_reply_payload_digest`` — the single digest call site both
+        lanes use, so P1-create and P2-answer can never drift). Never a duplicate
+        digest algorithm.
         """
         answer_text = self._answer_body(message_text, code)
         # Build the resolved payload on top of the marker's existing payload data.
@@ -190,15 +201,17 @@ class OwnerReplyResumeService:
         raw.setdefault("schema_version", 1)
         raw.setdefault("action_type", PendingActionType.AWAITING_OWNER_REPLY.value)
 
-        # Re-validate through the shared registry (bounds/E164 enforced here too),
-        # then derive the canonical stored form + digest from the SAME envelope.
+        # Canonical stored form from the validated envelope, and the digest from
+        # Dev4's shared helper (validates the same dict then digests) — both from
+        # the identical validated input, so stored payload and digest agree exactly
+        # with what _validated_stored_payload re-derives on read.
         envelope = validate_payload(
             PendingActionType.AWAITING_OWNER_REPLY,
             int(marker.payload_schema_version),
             raw,
         )
         canonical = canonical_payload_dict(envelope)
-        digest = payload_digest(envelope)
+        digest = awaiting_owner_reply_payload_digest(canonical)
 
         updated = await self._pending.conditional_update(
             business_id=marker.business_id,

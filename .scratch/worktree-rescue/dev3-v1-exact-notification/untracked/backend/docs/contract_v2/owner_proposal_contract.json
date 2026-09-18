@@ -1,0 +1,155 @@
+{
+  "contract_version": "v2",
+  "durable_statuses": ["pending_confirmation", "rejected", "expired", "completed"],
+  "columns": {
+    "id": {"type": "VARCHAR(36)", "pk": true},
+    "business_id": {"type": "INTEGER", "nullable": false, "fk": "businesses.id"},
+    "owner_user_id": {"type": "INTEGER", "nullable": false},
+    "invocation_id": {"type": "VARCHAR(36)", "nullable": false},
+    "family_id": {"type": "VARCHAR(64)", "nullable": false},
+    "attempt_number": {"type": "INTEGER", "nullable": false, "default": 1, "check": "> 0"},
+    "command_type": {"type": "VARCHAR(40)", "nullable": false, "check_in": ["close_clinic", "close_early", "doctor_leave"]},
+    "command_payload": {"type": "JSONB", "nullable": false},
+    "preview_snapshot": {"type": "JSONB", "nullable": false},
+    "payload_digest": {"type": "VARCHAR(64)", "nullable": false},
+    "status": {"type": "VARCHAR(30)", "nullable": false, "default": "pending_confirmation", "check_in": ["pending_confirmation", "rejected", "expired", "completed"]},
+    "result_evidence": {"type": "JSONB", "nullable": true},
+    "expected_version": {"type": "INTEGER", "nullable": false, "default": 1, "check": "> 0"},
+    "idempotency_key": {"type": "VARCHAR(200)", "nullable": false},
+    "expires_at": {"type": "TIMESTAMPTZ", "nullable": false},
+    "confirmed_at": {"type": "TIMESTAMPTZ", "nullable": true},
+    "completed_at": {"type": "TIMESTAMPTZ", "nullable": true},
+    "created_at": {"type": "TIMESTAMPTZ", "nullable": false, "default": "now()"},
+    "updated_at": {"type": "TIMESTAMPTZ", "nullable": false, "default": "now()"}
+  },
+  "constraints": {
+    "uq_invocation": {"type": "UNIQUE", "columns": ["business_id", "invocation_id"]},
+    "uq_idempotency": {"type": "UNIQUE", "columns": ["business_id", "idempotency_key"]},
+    "uq_family_attempt": {"type": "UNIQUE", "columns": ["business_id", "family_id", "attempt_number"]},
+    "uq_owner_pending": {"type": "PARTIAL_UNIQUE", "columns": ["business_id", "owner_user_id"], "where": "status = 'pending_confirmation'"},
+    "fk_business_user": {"type": "FK", "columns": ["business_id", "owner_user_id"], "references": ["business_users.business_id", "business_users.id"]}
+  },
+  "indexes": {
+    "ix_family": {"columns": ["business_id", "family_id"]},
+    "ix_pending_expiry": {"columns": ["status", "expires_at"], "where": "status = 'pending_confirmation'"}
+  },
+  "family_preimage_schemas": {
+    "doctor_leave": {
+      "required": ["family_schema", "business_id", "owner_user_id", "command_type", "target_date", "target_timezone", "resource_id", "reason"],
+      "additional_properties": false
+    },
+    "close_clinic": {
+      "required": ["family_schema", "business_id", "owner_user_id", "command_type", "target_date", "target_timezone", "reason"],
+      "additional_properties": false
+    },
+    "close_early": {
+      "required": ["family_schema", "business_id", "owner_user_id", "command_type", "target_date", "target_timezone", "close_time", "reason"],
+      "additional_properties": false
+    }
+  },
+  "digest_algorithms": {
+    "family_id": "SHA-256(canonical_json(preimage).encode('utf-8')).hexdigest()",
+    "payload_digest": "SHA-256(canonical_json({'command_payload': ..., 'preview_snapshot': ...}))",
+    "lock_key": "BLAKE2b(bytes.fromhex(family_id), key=b'fonely.owner_proposal_family.v1', digest_size=8) -> signed int64"
+  },
+  "transitions": [
+    {
+      "id": "T1", "trigger": "new invocation, no family history",
+      "from": null, "to": "pending_confirmation",
+      "operation": "INSERT",
+      "family_lock": true, "proposal_for_update": false,
+      "command_savepoint": false,
+      "completed_cas_last_in_sp": false,
+      "rollback_result": "no row",
+      "side_effects": "none",
+      "postcommit_dispatch": "none"
+    },
+    {
+      "id": "T2", "trigger": "retryable terminal exists, no winner/active",
+      "from": null, "to": "pending_confirmation",
+      "operation": "INSERT attempt MAX+1 under lock",
+      "family_lock": true, "proposal_for_update": false,
+      "command_savepoint": false,
+      "completed_cas_last_in_sp": false,
+      "rollback_result": "no row",
+      "side_effects": "none",
+      "postcommit_dispatch": "none"
+    },
+    {
+      "id": "T3", "trigger": "YES, valid, not expired",
+      "from": "pending_confirmation", "to": "completed",
+      "operation": "CAS pending→completed with mutations+evidence+outbox inside command SP",
+      "family_lock": true, "proposal_for_update": true,
+      "command_savepoint": true,
+      "completed_cas_last_in_sp": true,
+      "rollback_result": "pending_confirmation unchanged, no effects",
+      "side_effects": "schedule_exception + cancelled_appointments + notification_outbox",
+      "postcommit_dispatch": "outbox worker delivers notifications async"
+    },
+    {
+      "id": "T4", "trigger": "YES but expired",
+      "from": "pending_confirmation", "to": "expired",
+      "operation": "CAS pending→expired",
+      "family_lock": true, "proposal_for_update": true,
+      "command_savepoint": false,
+      "completed_cas_last_in_sp": false,
+      "rollback_result": "pending_confirmation unchanged",
+      "side_effects": "none",
+      "postcommit_dispatch": "none"
+    },
+    {
+      "id": "T5", "trigger": "NO (owner rejects)",
+      "from": "pending_confirmation", "to": "rejected",
+      "operation": "CAS pending→rejected",
+      "family_lock": true, "proposal_for_update": true,
+      "command_savepoint": false,
+      "completed_cas_last_in_sp": false,
+      "rollback_result": "pending_confirmation unchanged",
+      "side_effects": "none",
+      "postcommit_dispatch": "none"
+    },
+    {
+      "id": "T6", "trigger": "stale TTL on next preview",
+      "from": "pending_confirmation", "to": "expired",
+      "operation": "CAS pending→expired",
+      "family_lock": true, "proposal_for_update": true,
+      "command_savepoint": false,
+      "completed_cas_last_in_sp": false,
+      "rollback_result": "pending_confirmation unchanged",
+      "side_effects": "none",
+      "postcommit_dispatch": "none"
+    }
+  ],
+  "lookup_order": [
+    {"step": 1, "query": "completed winner", "filter": "family_id=:fid AND status='completed'", "order": "created_at ASC, id ASC", "action": "replay"},
+    {"step": 2, "query": "active pending", "filter": "family_id=:fid AND status='pending_confirmation'", "order": "created_at DESC, id DESC", "action": "expire_if_stale_else_already_pending"},
+    {"step": 3, "query": "latest terminal", "filter": "family_id=:fid AND status IN ('rejected','expired')", "order": "attempt_number DESC", "action": "retryable_new_attempt"},
+    {"step": 4, "query": "no history", "filter": null, "action": "insert_base"}
+  ],
+  "lost_ack_outcomes": {
+    "completed": "replay",
+    "pending_confirmation": "retry_confirm",
+    "rejected": "new_attempt",
+    "expired": "new_attempt"
+  },
+  "retryable_terminals": ["rejected", "expired"],
+  "migration": {
+    "table": "owner_command_proposals",
+    "downgrade_guard": "IF EXISTS (SELECT 1 FROM owner_command_proposals) THEN RAISE",
+    "legacy_policy": "legacy_unverifiable_manual",
+    "v1_discriminator": "command_payload->>'family_schema' = 'owner-command-family-v1'"
+  },
+  "test_vectors": {
+    "doctor_leave_b1": {
+      "preimage": {"family_schema": "owner-command-family-v1", "business_id": 1, "owner_user_id": 10, "command_type": "doctor_leave", "target_date": "2026-08-12", "target_timezone": "Asia/Kolkata", "resource_id": 1, "reason": "Leave"},
+      "canonical": "{\"business_id\":1,\"command_type\":\"doctor_leave\",\"family_schema\":\"owner-command-family-v1\",\"owner_user_id\":10,\"reason\":\"Leave\",\"resource_id\":1,\"target_date\":\"2026-08-12\",\"target_timezone\":\"Asia/Kolkata\"}",
+      "family_id": "bfaf524896c7d0d7ed45cc08c9c9127003565b36733f065d830e7ff6708fb508",
+      "lock_key": -4888324136777874342
+    },
+    "doctor_leave_b2": {
+      "preimage": {"family_schema": "owner-command-family-v1", "business_id": 2, "owner_user_id": 10, "command_type": "doctor_leave", "target_date": "2026-08-12", "target_timezone": "Asia/Kolkata", "resource_id": 1, "reason": "Leave"},
+      "family_id": "295c56e63b3c70511fb4c8b5db23fd1aee24bef906aec465ce55a4bcf8db9958",
+      "lock_key": -3348873486638007229
+    }
+  }
+}

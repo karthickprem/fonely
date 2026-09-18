@@ -1,0 +1,25 @@
+diff --git a/backend/src/fonely/services/owner_commands.py b/backend/src/fonely/services/owner_commands.py
+index 08a4d2b..32d49e0 100644
+--- a/backend/src/fonely/services/owner_commands.py
++++ b/backend/src/fonely/services/owner_commands.py
+@@ -561,19 +561,13 @@ class OwnerCommandService:
+         affected: list[dict[str, str]],
+         target_date: date,
+     ) -> OwnerCommandResult:
+-        from sqlalchemy import text as sa_text
+-
+         bound = {"command_payload": payload, "preview_snapshot": preview}
+         digest = self._compute_payload_digest(bound)
+         payload_digest_full = self._compute_payload_digest(payload)
+         idem_key = f"owner-v1-{business_id}-{owner.id}-{payload_digest_full[:40]}"
+         now = datetime.now(UTC)
+ 
+-        family_lock_key = _proposal_family_lock_key(business_id, payload_digest_full)
+-        await self._session.execute(
+-            sa_text("SELECT pg_advisory_xact_lock(:key)"),
+-            {"key": family_lock_key},
+-        )
++        await self._acquire_family_lock(business_id, payload_digest_full)
+ 
+         completed_existing = await self._proposals.find_completed_by_key_prefix(
+             business_id, idem_key

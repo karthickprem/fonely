@@ -1,0 +1,997 @@
+[Confidential - AMD Internal Distribution Only]
+
+                                              Everest MMD VCU Architecture Specs
+
+
+                                                        AMD Internal
+
+            1 Everest MMD Video CODEC Unit (‘VCU’) Architecture
+              Specifications
+
+
+                                                         Version 1.2
+
+
+
+
+                                      This controlled document is the property of AMD, Inc.
+                Any duplication, reproduction, or transmission to unauthorized parties without the express written
+                                              permission of AMD Inc. is prohibited.
+
+                                      Copyright © 2022-2024 AMD, Inc. All rights reserved.
+
+
+
+
+            1
+[Confidential - AMD Internal Distribution Only]
+
+                                                            Everest MMD VCU Architecture Specs
+
+
+            Contents
+
+            1     Everest MMD Video CODEC Unit (‘VCU’) Architecture Specifications.................................................. 1
+                1.1    Introduction .................................................................................................................................. 4
+                1.2    Example SoC Diagram ................................................................................................................... 5
+                1.3    Features and Requirements Summary ......................................................................................... 5
+                1.4    Open Issues ................................................................................................................................... 7
+                1.5    Features and Requirements Details .............................................................................................. 7
+                1.6    VCU Structure ............................................................................................................................. 10
+                1.7    System Block Diagram ................................................................................................................. 10
+                1.8    Interfaces .................................................................................................................................... 11
+                1.9    Operation .................................................................................................................................... 11
+                1.10   Use Models ................................................................................................................................. 12
+                1.11   Memory Bandwidth Requirements ............................................................................................ 12
+                1.12   AXI Bus Characteristics ................................................................................................................ 14
+                1.13   Expected Required Clock Speeds ................................................................................................ 14
+                1.14   Processor Requirements ............................................................................................................. 14
+                1.15   Clock Domains and Maximum Frequency Targets ...................................................................... 15
+                1.16   Audio Operation.......................................................................................................................... 15
+                1.17   VCU Performance Monitoring (PM) ............................................................................................ 15
+                1.18   VCU Power Domain ..................................................................................................................... 16
+                1.19   Memory BIST ............................................................................................................................... 16
+                1.20   VCU Disable ................................................................................................................................. 16
+                1.21   Power Supplies ............................................................................................................................ 16
+                1.22   Power-On Reset .......................................................................................................................... 16
+                1.23   Area and Power........................................................................................................................... 16
+                1.24   Other System-Level Requirements ............................................................................................. 17
+                1.25   Error Handling ............................................................................................................................. 17
+                1.26   Debug .......................................................................................................................................... 17
+                1.27   Test.............................................................................................................................................. 17
+                1.28   RAS and FUSA .............................................................................................................................. 17
+                1.29   Security ....................................................................................................................................... 18
+
+
+
+            2
+[Confidential - AMD Internal Distribution Only]
+
+                                                              Everest MMD VCU Architecture Specs
+
+
+                 1.30     SoC Integration ........................................................................................................................... 18
+                 1.31     Software ...................................................................................................................................... 18
+                 1.32     SMID ............................................................................................................................................ 18
+                 1.33     AxPROT........................................................................................................................................ 19
+                 1.34     Programming Model ................................................................................................................... 19
+                 1.35     Frame Buffer Formats ................................................................................................................. 19
+                 1.36     References .................................................................................................................................. 20
+            2      VCU Memory Subsystem Recommendations ..................................................................................... 21
+            3      Appendix ............................................................................................................................................. 21
+                 3.1      Memory Bandwidth .................................................................................................................... 21
+                 3.2      Questions to IP Vendor ............................................................................................................... 21
+                 3.3      Example of Clock Generation using DPLL.................................................................................... 22
+            Revision History
+
+                Date             Author           Version         Description
+                3/1/21           Ygal             0.4             Initial draft
+                4/30/21          Ygal             0.5             Updates per latest plans
+                6/30/21          Ygal             0.7             Updated required clock speeds, bandwidth
+                10/1/21          Ygal             1.0             Added DCI support at ~6.7% faster clock, added Vlp support, added
+                                                                  clarification re frame buffer formats, updated decoder BW, minor
+                                                                  clarifications
+                1/11/23          Ygal             1.1             - Each encoder core shall independently support 4Kp30
+                                                                       encoding
+                                                                  - VCU shall support 8Kp15 encode using single VCU instance
+                                                                  - VCU shall support 8Kp30 encode and decode using 2 instances
+                                                                       in ‘multi-instance’ mode
+                                                                  - Handling 40-bit address space limitation of the MCU
+                                                                  - Simplified clock domains
+                                                                  - Added: encoder L2 cache limitations
+                                                                  - Added VCCINT_SOC to power supplies list in 1.21
+                                                                  - Updated 1.30.5 (NPI)
+                                                                  - Updated supported frame buffer formats (1.35)
+             6/20/24      Ygal                    1.2             - Clarified encoder-decoder separation and isolation (1.5.6)
+            Glossary of Terms
+
+                Term               Description
+                VCU                Video CODEC Unit
+                GT                 Gigabit Transceiver
+                GTCC               GT clocking column
+                MMD                Multi-Media Distributed, a hard block (aka MMTile) replacing a GT quad
+                MMI                Multi-Media Integrated, a hard module adjacent to the PS
+
+
+
+            3
+[Confidential - AMD Internal Distribution Only]
+
+                                                     Everest MMD VCU Architecture Specs
+
+
+                PS                Processor System, generic term, may refer to PS, PSX, PSXL, PSXC, etc
+
+
+            1.1          Introduction
+            The Everest MMD (Multi-Media Distributed) Video CODEC Unit (‘VCU’) provides multi-standard video encoding and
+            decoding, including h.265 (HEVC) and h.264 (AVC) standards. The unit contains an encode (compress) unit and a
+            separate decode (decompress) unit and is capable of concurrent encoding and decoding at rates up to 4Kx2Kp60.
+
+            The VCU is a hardened block, containing 1 instance of a multi-core encoder IP and 1 instance of multi-core decoder
+            IP, and related logic. It shall be designed to fit within the footprint of two GTY quad modules and can replace GTY
+            quad pairs along the right edge of an Everest (Telluride) SoC device. For general details regarding MMD technology
+            refer to the Everest MMD general architecture specifications document.
+
+            The MMD VCU is part of the Telluride family of products. The MMD VCU is sometimes referred to as VCU2, to
+            distinguish it from the original Diablo (Zynq Ultrascale+) VCU.
+
+            The VCU has a direct connection to the NoC along its right edge and to the PL along its left edge.
+
+            Target process technology is 7nm.
+
+            Changes relative to Diablo VCU include
+
+                     -    Improved encoding quality
+                     -    Re-architected cores for higher efficiency and lower bandwidth
+                     -    2 encoder cores per encoder instance
+                     -    Addition of frame buffer compression
+                     -    Hardened encoder ‘L2 cache’
+                     -    Interlaced support
+                     -    4:4:4 color format support
+                     -    12 bit per color support
+
+
+
+
+            4
+[Confidential - AMD Internal Distribution Only]
+
+                                               Everest MMD VCU Architecture Specs
+
+
+            1.2       Example SoC Diagram
+            The following is an example of a device’s east side and may not represent the latest configuration in the
+            product plan. The MMD architecture relies on a new NoC extension running vertically along the right die
+            edge (aka MMD-NoC).
+
+
+
+
+                                             Figure 1-1: example SoC with an MMD-VCU instance
+
+            1.3       Features and Requirements Summary
+                  •    Multi-standard encoding support, including:
+                           o H.264 (AVC)
+                           o H.265 (HEVC)
+                  •    Multi-standard decoding support, including:
+                           o H.264 (AVC)
+                           o H.265 (HEVC)
+                           o JPEG
+                  •    1 encoder instance per VCU, capable of 4Kp60 (both UHD and DCI formats)
+                  •    The encoder shall include 2 encoding cores, each independently and concurrently capable of
+                       encoding up to 4Kp30
+                  •    1 decoder instance per VCU, capable of 4Kp60 (both UHD and DCI formats)
+                  •    The decoder shall include 1 decoding core
+                  •    Multi-stream support, up to 32 streams per encode or decode unit
+                           o Limited to max aggregate throughput of 4Kx2Kp60 minus some overhead
+                  •    Progressive support
+
+
+            5
+[Confidential - AMD Internal Distribution Only]
+
+                                              Everest MMD VCU Architecture Specs
+
+
+                •   Interlaced support (sequence adaptive field-frame (SAFF) only)
+                •   Support I, IP, and IPB encoding
+                •   Bit Depth and Chroma space:
+                         o Support Monochrome, YCbCr 4:4:4, YCbCr 4:2:2 and YCbCr 4:2:0 video formats
+                         o Support 8-bit, 10-bit and 12-bit per color plane
+                •   Support for low-latency mode
+                •   Support for slice-based ultra-low latency mode via PL interface
+                         o The encoder shall support 2 concurrent low latency streams up to 4Kp30 each, one per
+                             encoding core
+                •   Include encoder cache for reduced bandwidth
+                         o Option to use the encoder cache as g.p. memory when encoder is idle - TBD
+                •   Support optional (programmable) frame buffer compression
+                •   Include embedded micro controller unit (MCU) such as Arm, MicroBlaze or RISC-V
+                •   Expected encoder max operating speed 950MHz at ‘-2MP’
+                •   Minimum encoder clock rates per format (non-DCI 4Kp60) in MHz units:
+                         o Format AVC        HEVC
+                         o 4:2:0 540         560
+                         o 4:2:2 550         615
+                         o 4:4:4 785         890
+                •   Expected decoder max operating speed 918MHz at ‘-2MP’
+                •   Minimum decoder clock rates per format (non-DCI 4Kp60) in MHz units:
+                         o Format AVC        HEVC
+                         o 4:2:0 470         425
+                         o 4:2:2 600         550
+                         o 4:4:4 860         860
+                •   Support operation at LP, MP and HP voltage levels.
+                •   Low software overhead (a few MIPS) for slice-level management and multi-stream switching
+                •   Ability to queue tasks to eliminate dependency on CPU response time
+                •   Reference/Linux drivers
+                •   Bit accurate C model
+                •   E-Fuse option allows permanent disabling of each VCU instance independently
+                         o Disable encoder
+                         o Disable decoder
+                •   Power management:
+                         o Clock gating: when disabled, the VCU shall consume no dynamic power
+                         o Power: ability to have the VCU permanently powered up or down at the package
+                •   Performance monitoring
+                         o Measure task execution time
+                         o Measure bandwidth and AXI transaction count
+                         o Measure min, max, and average latency
+                •   No PL configuration bits, operation is register-programmable
+                •   4 AXI master ports to the NoC (4 NMUs required)
+                •   48-bit address space support
+                •   8K (7680x4320) encode/decode support
+                         o One VCU encoder instance shall support 8Kp15 encoding using both cores, each
+                             encoding a 4Kx4K tile
+                         o One VCU decoder is not required to support 8Kp15 decoding
+
+
+            6
+[Confidential - AMD Internal Distribution Only]
+
+                                                 Everest MMD VCU Architecture Specs
+
+
+                          o   In SoCs with 2 VCU instances, 8Kp30 encode and decode shall be supported using ‘multi-
+                              instance’ mode
+
+            1.4     Open Issues
+                    Issue                                  Status/Decision
+                1   Power domain                    Open TBD
+                2   DPLL jitter                     Open Need to check if design was improved
+                3   Need for a standalone           Closed Not required. For system I/O will use uncompressed tiled
+                    frame buffer compression               format
+                    module in MMD or MMI
+                4   Add TBU?                        Closed No
+                5   Interlaced display support      Closed SW issue, no HW impact to VCU
+                    issue
+
+            1.5     Features and Requirements Details
+            This section elaborates on some of the items in the features and requirements summary section.
+
+            1.5.1 IP Configuration
+            The following are the chosen Encoder and Decoder IP configurations provided by Allegro DVT.
+
+                Feature                            Encoder                          Decoder
+                IP ID                              AL-E200-E                        AL-D300-S
+                Throughput                         4Kp60                            4Kp60
+                Architecture                       Dual-core                        Single-core
+                Standards                          h.264, h.265                     h.264, h.265, JPEG
+                Color formats                      Mono, 4:2:0, 4:2:2, 4:4:4        Mono, 4:2:0, 4:2:2, 4:4:4
+                Color component depth in bits      8/10/12                          8/10/12
+                Cache                              Included (option), 1152KB        Included (standard)
+                Frame Buffer Compression           Included (option)                Included (option)
+                Max line width per core            4K                               4K
+                AXI Master ports (128-bit)         2                                2
+                Core address space                 48 bits or more                  48 bits or more
+                Microcontroller (MCU)              RISC-V, 64KB RAM                 RISC-V, 64KB RAM
+                MCU address space                  40 bits                          40 bits
+                64x64 CU support                   No                               Yes
+
+
+            1.5.2 8K Support
+            The VCU is primarily targeting 4Kx2K as its maximum video resolution. Some 8K (7680x4320) support is
+            available, with limitations and quality tradeoffs.
+
+            1.5.2.1 8K using Single VCU Instance
+            One VCU encoder instance shall support 8Kp15 encoding using both cores, each core encoding a 4Kx4K
+            tile.
+
+            One VCU decoder instance is not required to support 8Kp15 decoding.
+
+
+
+            7
+[Confidential - AMD Internal Distribution Only]
+
+                                              Everest MMD VCU Architecture Specs
+
+
+            1.5.2.2 8K using 2 VCU Instances
+            In SoCs with 2 VCU instances, 8Kp30 encode/decode shall be supported using ‘multi-instance’ mode in
+            which 2 VCU instances jointly encode/decode a single 8K stream (and produce a valid 8K bitstream) by
+            each encoding/decoding a 4Kx4K tile. An additional low speed and low signal count interface may be
+            required between the 2 VCU instances and shall be routed via PL resources.
+
+            In multi-instance mode, each VCU instance processes a 4Kx4K tile, and there is no data sharing or
+            deblocking possible along the vertical boundary between the 2 tiles. This may lead to some quality
+            degradation, or visible artifacts along this boundary if encoding bit rate is not sufficiently high.
+
+            1.5.3 Solution to MCU Address Space Limitation
+            The VCU MCUs have a limited 40-bit address space while the SoC has a 48-bit address space. To solve
+            the problem, 3 approaches are considered.
+
+            a) Expand address space by appending a 48-bit base address
+            b) Use NMU remap function to map multiple independent apertures
+            c) Use a custom designed MMU
+            Option (a) is simple but limits all MCU access to a single 1TB aperture. Option (b) relies on existing NMU
+            functionality and allows up to 32 independent apertures to be remapped. Option (c) is similar to (b) but
+            decouples the MMU from the NMU.
+
+            Option (b) is preferred. For easy implementation, the 2 MCU AXI master ports should be routed to a
+            dedicated NoC NMU, separate from the NMUs used by the encode/decode cores.
+
+            1.5.4 Physical Shape, Modularity, Reusability
+            VCU is a 2x tall MMD tile (replacing 2 GT quads). See MMD general arch specs for details.
+
+            1.5.5 Performance Requirements
+            Expected maximum processing capabilities of the VCU are summarized in the table below (HEVC).
+
+                         Speed         4kp60/1080p60 4kp60/1080p60 4kp60/1080p60
+                         [MHz]         streams 444        streams 422        streams 420
+              Encode         890             1/4              1.4 / 5.6           1.5 / 6.0
+              Decode         860             1/4              1.5 / 6.0           2.0 / 8.0
+            The numbers in the table represent best case. Several factors may degrade actual performance
+
+               - High bitrates may reduce performance
+               - DRAM bandwidth limitations
+               - Context switching overhead
+            Average and worst-case bandwidth requirements are summarized later in this document and can vary as
+            much as 2.0-10.0GB/s per 4kp60 video stream.
+
+
+
+
+            8
+[Confidential - AMD Internal Distribution Only]
+
+                                               Everest MMD VCU Architecture Specs
+
+
+            1.5.5.1 DCI Support
+            The DCI (Digital Cinema) 4K format is 4096x2160, whereas standard UHD 4K video format is 3840x2160.
+            The DCI 4K pixel rate is therefore approx. 6.7% faster than UHD 4K. The VCU shall support DCI 4K format.
+            Therefore, target frequencies are increased by 6.7%, as shown in the table below.
+
+                Module                            UHD 4K required clock rate        DCI 4K required clock rate
+                                                  [MHz]                             [MHz]
+                Encoder                           890                               950
+                Decoder                           860                               918
+
+
+            1.5.5.2 Stretch Goals
+            The following stretch goals should be evaluated for feasibility.
+
+                  -   Encoder stretch goal of 1120MHz can provide 4Kp120 encode at 4:2:0
+                         o This target is 18% higher than POR (950MHz)
+                  -   Decoder stretch goal of 940MHz can provide 4Kp120 decode at 4:2:0
+                         o This target is 2.3% higher than POR (918MHz)
+
+            1.5.5.3 Real-Time vs Non-Real-Time Operation
+            Real-time operation is characterized by a fixed encode/decode latency and the need to complete each
+            frame encode/decode within precisely one frame period (e.g. 16msec). However, there may be use
+            cases in which non-real-time operation is acceptable, meaning that both the processing time and latency
+            can be variable. In such cases, the encoder/decoder may ‘slow down’ when a worst-case frame is
+            encountered, and ‘speed up’ during typical frames.
+
+            1.5.6 Encoder-Decoder Separation and Isolation
+            Encoder and decoder are often thought of as operating together. However, there are cases in which
+            encoder and decoder operation is completely independent and associated with different and
+            independent applications. One example may be a decoder used for stored video playback while the
+            encoder is used for live video capture. It is therefore necessary to maintain encoder-decoder separation
+            and isolation.
+
+            Although sharing a physical tile, the encoder and decoder functions are completely independent and the
+            tile design shall maximize separation and isolation of these two functions, such that normal operation of
+            each function will be completely un-affected and un-interrupted by any operations and events within
+            the other function, including:
+
+                  -   Hard reset
+                  -   Soft reset
+                  -   Clock rate changes
+                  -   Clock gating
+                  -   Full or partial re-initialization
+                  -   MCU reset and initialization
+                  -   Error recovery procedures including NMU reset and re-initialization
+
+
+
+            9
+[Confidential - AMD Internal Distribution Only]
+
+                                              Everest MMD VCU Architecture Specs
+
+
+
+            1.6   VCU Structure
+            The VCU is a hardened block designed by Xilinx. It shall contain the encoder and decoder vendor IP. In
+            addition, the VCU shall contain additional modules or functions needed to meet the above requirements
+            and facilitate the interface between the vendor IP and the NoC/PL.
+
+                • AXI interconnect, register slices, async bridge(s)
+                • NMU, NSU (if not provided by the NoC)
+                • NPI
+                • Clock/power manager
+                • Performance monitors
+                • Debug and test
+            Encoder and decoder operation shall be completely independent, e.g., each may operate or be idle or
+            disabled or reset independently without affecting the other, and each shall have independent clocks.
+
+            1.7   System Block Diagram
+
+
+
+
+                                                  Figure 1-2: VCU System Block Diagram
+
+
+
+
+            10
+[Confidential - AMD Internal Distribution Only]
+
+                                               Everest MMD VCU Architecture Specs
+
+
+
+
+                                                     Figure 1-3: VCU internal details
+
+            1.8       Interfaces
+                  •    2 x 128-bit AXI master ports for encoder access to memory
+                  •    2 x 128-bit AXI master ports for decoder access to memory
+                  •    1 x 128-bit AXI slave port for external programming and possible encode cache reuse as SRAM
+                  •    AXI master port for MCU access to memory (may be merged with one of the 128-bit main AXI
+                       ports)
+                  •    Boot and initialization programming via NPI (from GTCC)
+                  •    Sync interface to the PL for slice-level low latency mode
+                  •    Clocks and resets
+                  •    Host interrupts
+                  •    Debug and test
+                  •    Multi-instance interface (for 8K using 2 VCU instances)
+
+            1.9       Operation
+
+            1.9.1 Encoder
+            Typical operation involves live video captured in frame buffers in DRAM. The encoder reads the current
+            frame along with 0, 1, or 2 additional reference frames from frame buffers for encoding. The encoded
+            bit-stream is written back to memory and is available for transmission, storage, or further processing
+            (e.g. interleaving with compressed audio and creating a transport stream). The encoder operates at the
+            slice level only. A small amount of additional work is required by the CPU to create a fully compliant
+            transport stream or program stream. The encoder includes a cache for reducing DRAM bandwidth by
+            reusing data fetched for motion estimation and other purposes.
+
+            1.9.2 Decoder
+            Operation is memory-to-memory. The decoder reads the compressed bit-stream from memory, and,
+            along with 0, 1, or 2 additional reference frames from frame buffers, decodes the current frame and
+
+
+
+            11
+[Confidential - AMD Internal Distribution Only]
+
+                                              Everest MMD VCU Architecture Specs
+
+
+            stores it in a frame buffer. The decoder operates at the slice level only. A small amount of additional
+            work is required by the CPU to de-multiplex the transport stream and create slice-level tasks for the
+            decoder. The decoded video is read for display or further processing by other entities (not part of VDEC).
+
+            1.10 Use Models
+            Typical VCU use cases include:
+
+                 •   Single stream encode/decode
+                 •   Multi-stream encode/decode at lower resolutions
+                 •   Multi- stream encode/decode at different encoding standards, e.g. h.264 and h.265
+
+            1.11 Memory Bandwidth Requirements
+
+            1.11.1 General
+            In general, max memory bandwidth requirement is increased relative to Diablo VCU due to the
+            increased amount of processing for 4:4:4 format (50% higher than 4:2:2), and increased color
+            component word size from 10 bits to 12 bits (20% increase). Frame buffer compression can help reduce
+            average bandwidth but does not help in case of worst-case frames in which compression is not effective.
+
+            1.11.2 Encoder
+            Expected max encoder bandwidth at 4Kp60 4:4:4 12bit is ~6GB/s with L2 cache enabled.
+
+            This is bandwidth required by the encoder itself. At a minimum, additional bandwidth must be reserved
+            for the raw video being written to DRAM before compression, which is about ~1GB/s per stream at
+            4Kp60 4:2:0 10-bit, or 2.2GB/s per stream at 4Kp60 4:4:4 12 bits.
+
+
+
+
+            Note: FBC is enabled on all but the input frame.
+
+
+            12
+[Confidential - AMD Internal Distribution Only]
+
+                                              Everest MMD VCU Architecture Specs
+
+
+            1.11.3 Decoder
+            Expected max decoder bandwidth at 4Kp60 4:4:4 12bit is ~10-15GB/s.
+
+            This is bandwidth required by the decoder itself. At a minimum, additional bandwidth must be reserved
+            for the decompressed video being read out for display or further processing, which is about ~1GB/s per
+            decoded stream at 4Kp60 4:2:0 10-bit, or 2.2GB/s per stream at 4Kp60 4:4:4 12 bits.
+
+
+
+
+            Note: FBC is disabled.
+
+            1.11.4 Encoder L2 Cache Limitations
+            The encoder L2 cache is sized at 1152KB, which is optimal for 4Kp60 encoding at 12 bit and 4:4:4. The
+            encoder max bandwidth is reduced by up to 33% thanks to the cache. However, in some usage scenarios
+            the L2 cache is less effective, as explained below.
+
+            1.11.4.1 Ultra-Low Latency mode
+            In this mode, each of the 2 encoder cores within one encoder instance is used to encode a separate
+            4Kp30 stream, and both cores share the L2 cache. However, the L2 cache is sized for the normal case of
+            both encoder cores sharing a single 4Kx2K stream, each encoding one half. Therefore, the L2 cache is
+            under-sized for this case, and 2 mitigation choices are available
+
+                 -   Reduce motion estimation search range to match the cache size limitation (possibly resulting in
+                     lower encoding quality)
+                 -   Keep the search range, but accept a bandwidth increase due to the lower cache hit rate
+
+
+
+
+            13
+[Confidential - AMD Internal Distribution Only]
+
+                                               Everest MMD VCU Architecture Specs
+
+
+            1.11.4.2 8K Encoding
+            Similar to the case above, when encoding 8Kx4K streams, the cache size is inadequate, and the same 2
+            mitigation choices are available
+
+            1.11.4.3 Reduced Limitations
+            The cache limitations discussed above apply to the max use case, and these limitations may be reduced
+            to a varying extent in the following cases
+
+                 -   Resolutions less than 8K/4K
+                 -   4:2:2 or 4:2:0 formats (rather than 4:4:4)
+                 -   8 bit or 10 bit rather than 12 bit (TBD)
+
+            1.12 AXI Bus Characteristics
+            The following characteristics are expected of the encoder AXI master ports.
+
+             Feature                  Description (Encoder)
+             Data bus width           128 bits
+             Typical request size     64 to 512 bytes
+             Burst type               Incrementing
+             ID width
+             Number of IDs used       small
+             Max outstanding          64, 64
+             transactions (rd, wr)
+
+            1.13 Expected Required Clock Speeds
+            The table below summarizes the expected clock speeds required for different formats. Note that actual
+            speed targets are quoted previously and are 7% higher, for DCI support.
+
+                 •   Minimum encoder clock rates per format (UHD 4Kp60) in MHz units:
+                        o Format AVC      HEVC
+                        o 4:2:0 540       560
+                        o 4:2:2 550       615
+                        o 4:4:4 785       890
+                 •   Minimum decoder clock rates per format (UHD 4Kp60) in MHz units:
+                        o Format AVC      HEVC
+                        o 4:2:0 470       425
+                        o 4:2:2 600       550
+                        o 4:4:4 860       860
+
+            1.13.1 Speed and Bitrate Limitations
+            There may be a bit rate limitation when VCU runs at low clock frequencies.
+
+            1.14 Processor Requirements
+            VCU operation requires a small amount of processor activity (~10-20MIPS) per VCU instance. Interrupt
+            response time must not be critical. The encoder is controlled by the CPU via a task list prepared in
+            advance, so the CPU response time is not in the execution critical path.
+
+
+
+            14
+[Confidential - AMD Internal Distribution Only]
+
+                                              Everest MMD VCU Architecture Specs
+
+
+            1.15 Clock Domains and Maximum Frequency Targets
+            The following clock domains may exist in the VCU.
+
+               - Encoder core
+               - Decoder core
+               - Encoder MCU
+               - Decoder MCU
+               - AXI master ports
+               - AXI slave port
+               - NPI
+            VCU performance targets (encoder/decoder) in [MHz] are summarized in the table below.
+
+               VCU Domain          “-1LP”         “-2LP”    “-1MP”        “-2MP”          “-2HP”, “-3HP”, “-2LHP”
+             VCU Core                                                     950/918
+             MCU                                                         Same as IP
+                                                                            core
+              AXI master Ports                                            950/918
+              AXI slave port          167        167            167         167                    167
+              NPI                     300        300            300         300                    300
+            Notes:
+                 - 40% of the VCU-PL interface timing budget is used by VCU, 60% is reserved for PL user logic
+                     (30/70 ratio is preferred)
+                 - Other speed grades shall follow standard pr2896 curves
+            Aside from NPI, the IP vendor may unify clock domains into a single domain. In that case only one clock
+            is required, at the specified frequency for the unified domain.
+
+            1.15.1 Clock Sources
+            Unlike in Diablo, no PLL is required. Since the VCU replaces GTY instances, it can use clocking resources
+            from the adjacent GT clocking column. These resources can provide the required clock frequencies at
+            acceptable jitter.
+
+             Clock                   Source
+             VCU core                GT clocking column DPLL
+             MCU                     GT clocking column DPLL
+             AXI master ports        GT clocking column DPLL
+             AXI slave port          NoC
+             NPI                     NPI clock from the GT clocking column
+
+
+            Note: the VCU core, MCU, and AXI clock domains may be unified into a single domain.
+
+            1.16 Audio Operation
+            The VCU provides no audio support. Audio encoding and decoding is supported on the PS application
+            processors.
+
+            1.17 VCU Performance Monitoring (PM)
+            Same as Diablo VCU.
+
+
+            15
+[Confidential - AMD Internal Distribution Only]
+
+                                              Everest MMD VCU Architecture Specs
+
+
+            1.18 VCU Power Domain
+            The VCU shall have its own dedicated VCCINT power domain, and associated power supply die micro-
+            bumps and possibly package pins. The VCU power rail may be merges with one or more device rails at
+            the package or board level.
+
+            This key decision is driven by the following requirements:
+
+                 -  Ability to run the VCU at a voltage different from the PL voltage for power/performance point
+                    reasons
+                 - Ability to power down the VCU externally when not needed
+            There will be no power gating mechanism within the VCU block. Power down can be achieved via an
+            external power regulator (if dedicated power pins exist), or by permanently tying VCU power to ground
+            in the package (e.g. derived die with ‘dark’ silicon).
+
+            1.18.1 VCU Power Rail Sharing
+            The plan of record for Telluride is to share VCU power rail with TBD at the package or the board level.
+            However, future devices containing VCU may have other sharing plans. Therefore, the VCU design shall
+            support an independent power domain, as well as isolation/clamp/levelshifting.
+
+            1.19 Memory BIST
+            Same as Diablo VCU.
+
+            1.20 VCU Disable
+            Permanent disable via 2 x E-FUSE, one for encoder and one for decoder. The cached E-FUSE values shall
+            be provided via NPI as part of the boot process. If more than one VCU instance exists, each instance
+            shall be independently programmable to be enabled or disabled. After reset, by default, VCU shall be
+            disabled until E-FUSE value is transmitted via NPI serial side channel.
+
+            1.21 Power Supplies
+            The VCU requires only VCCINT_VCU, core power. There are no analog resources, PLLs, or IOs in the VCU.
+            Note that for isolation, clamp, level shifting and POR, there will be 3 additional small power domains:
+
+                 -   VCCINT for interface to the PL and NPI
+                 -   VCCINT_BRAM for clock signals arriving from the DPLL in the GTCC
+                 -   VCCINT_SOC for interface to the NoC
+
+            1.22 Power-On Reset
+            A POR circuit is required, similar to Diablo VCU, to bring the VCU to a known, safe state before PL
+            configuration, regardless of rail power sequencing.
+
+            1.23 Area and Power
+
+            1.23.1 Area
+            Estimated size of a VCU instance is around 7.0sqmm, just below the available area of a 2x tile, which is
+            about 7.3sqmm.
+
+
+
+            16
+[Confidential - AMD Internal Distribution Only]
+
+                                               Everest MMD VCU Architecture Specs
+
+
+            Approximate area breakdown:
+
+                 -   MCU (each)      0.15sqmm (0.55Mgates, 64KB RAM)
+                 -   Encoder         4.9sqmm
+                 -   Decoder         1.1sqmm
+                 -   Misc.           0.7sqmm
+
+            1.23.2 Power
+            Target power per VCU instance is 1.5W at 890/860MHz, "-3MP", 100 DegC, FF corner, and worst-case
+            use case (max power encode/decode scenario, e.g., P or B frame, with ‘random noise’ video data).
+
+            1.24 Other System-Level Requirements
+            At the system level, the following additional functions are required
+
+               • System Time Clock
+               • Time-Stamping of incoming video
+            These functions may be implemented in software using existing resources such as system timer-
+            counters. A hardware solution (soft or hard IP) may provide improved accuracy and less software load.
+
+            1.25 Error Handling
+            Errors shall be reported via interrupts.
+
+            1.26 Debug
+            Provide support for internal microcontroller debug.
+
+            1.27 Test
+            The VCU is a standard cell block which requires test interfaces from the PL. These would be used for
+            scan and other reasons
+
+            1.27.1 Scan
+            The VCU contains multiple scan chains and a scan controller
+
+            1.27.2 Scan Clear
+            Supported. Scan clear is mainly a security requirement. Diablo VCU did not support scan clear.
+            Additional work may be required to add support.
+
+            1.27.3 Memory Repair
+            The VCU contains multiple SRAM memory instances and requires a memory BIST controller. Memory
+            repair support is required. The selection of redundant memory blocks for repair is controlled via E-FUSEs
+            in the PMC, and cached values of the E-FUSEs will be written via NPI as part of the initialization process.
+
+            1.28 RAS and FUSA
+            Reliability and functional safety requirements include:
+
+                 -   no special FUSA requirements
+
+
+
+
+            17
+[Confidential - AMD Internal Distribution Only]
+
+                                              Everest MMD VCU Architecture Specs
+
+
+            1.29 Security
+            No special security features.
+
+            1.30 SoC Integration
+
+            1.30.1 Placement and Shape
+            See MMD tile general arch specs. TBD even/odd half-FSR row limitations.
+
+            1.30.2 Memory Access Connectivity
+            All VCU memory access is done via the MMD NoC extension. There are no PL-based AXI ports.
+
+            1.30.3 Isolation, Clamp, and Level Shifters (‘ICLS’)
+            The VCU requires isolation, clamp and level shifters (ICLS). ICLS is required because the VCU has its own
+            dedicated power domain. See MMD tile general arch specs.
+
+            1.30.4 Global Signals and Chip Pervasive
+            Must comply with Everest global signals and chip-pervasive methodology.
+
+            1.30.5 NPI
+            The VCU shall take advantage and reuse NPI end points from the GT clocking columns that were
+            originally intended for GTY configuration. NPI programmable registers shall provide basic initialization
+            functionality. During normal operation, encoder programming and software driver interaction shall use
+            the NoC NSU path, not the NPI and shall use PL interrupts to the APU.
+
+            In addition to register access, the VCU can use NPI interrupts 8, 9, and 10, which are normally used by
+            the GT that the VCU replaces. Interrupts 8 and 9 are for general messages and correctable error
+            indication, and Interrupt 10 is used for non-correctable or fatal error notification. The VCU shall use the
+            NPI interrupts as part of the initialization procedure. The VCU can optionally also use these interrupts
+            for normal operation or use NoC-transported interrupts. However, the plan of record is to use PL-based
+            interrupts as done by the Diablo VCU.
+
+            1.30.6 Clocking
+            The VCU has no internal PLLs. Clocks shall be provided by DPLLs in the GTCC.
+
+            1.31 Software
+            VCU shall be supported by the existing Diablo VCU and SV60 VDU software base, with enhancements as
+            needed for new functionality.
+
+            1.32 SMID
+            All Everest masters are required to support SMID, as described in PS architecture specs. All non-PS
+            masters must have securely programmable SMID values. The design shall provide programmable SMID.
+            Care must be taken to make the SMID assignment secure and hack-resistant using mechanisms such as
+            secure accessibility only, lockable registers, etc. Additionally, the VNOC NMU has ability to mask and
+
+
+
+
+            18
+[Confidential - AMD Internal Distribution Only]
+
+                                              Everest MMD VCU Architecture Specs
+
+
+            control incoming SMID values, a feature that can also be used to facilitate secure SMID assignment for
+            VCU.
+
+            1.33 AxPROT
+            The VCU shall provide ability to program the CODEC core as well as the MCU security level, i.e., the
+            secure/nonsecure bit in AxPROT field of the AXI protocol, separately for encoder MCU and decoder
+            MCU. The MCU security level is expected to be static and shall be programmed once during boot or re-
+            initialization of a VCU instance.
+
+            1.34 Programming Model
+                 -   Boot/init via NPI
+                 -   Dynamic interaction with software driver via NoC AXI slave port
+
+            1.35 Frame Buffer Formats
+            The VCU supports 3 frame buffer formats:
+
+                 - Uncompressed raster
+                 - Uncompressed tiled (64x4 or 32x4)
+                 - Compressed tile
+            Compressed tile format is the most bandwidth-efficient format and is internally used by the encoder for
+            its reference frames.
+
+            For the encoder:
+
+                 -  Default input buffer format: uncompressed tile
+                 -  Optional input buffer format: uncompressed raster
+                        o Requires more memory bandwidth than tile if 10 or 12 bit color, due to inefficient
+                            packing of each 10/12-bit value within a 16-bit word
+            For the decoder:
+
+                 -   Default output buffer format: uncompressed tile
+                 -   Optional output buffer format: uncompressed raster
+                        o Requires a 2nd copy of the output frame to be written in raster format, at the cost of
+                             extra memory bandwidth
+
+
+            The uncompressed tile format can be used to share video between the VCU and the rest of the system.
+            Encoder input frames and decoder output frames shall be in this format. Any other system agent that
+            produces/consumes these buffers must support the VCU tile format.
+
+            The uncompressed raster format is the least efficient in memory bandwidth. 10 and 12-bit pixel color
+            components are contained in 16-bit words, leading to storage and bandwidth waste/overhead. This
+            mode can be used by the VCU, but will increase the VCU memory bandwidth requirements. On the
+            other hand, raster mode may be more easily shared by other video agents in the system.
+
+            Details of the tiled format and other buffer formats are available in a separate document.
+
+
+
+            19
+[Confidential - AMD Internal Distribution Only]
+
+                                              Everest MMD VCU Architecture Specs
+
+
+            Note that 4:2:0 and 4:2:2 formats use semi-planar buffers (one buffer for Y, one buffer for interleaved
+            Cb/Cr), while 4:4:4 format uses planar buffers (3 separate buffers for Y, Cb, Cr).
+
+            1.36 References
+            [1] Diablo VCU PDD
+            [2] Everest VDU architecture specs
+            [3] Everest MMD general architecture specs
+            [4] Telluride top level architecture specs
+
+
+
+
+            20
+[Confidential - AMD Internal Distribution Only]
+
+                                              Everest MMD VCU Architecture Specs
+
+
+
+
+                                              No specs beyond this point
+                                     The following material is informational only
+
+
+
+            2 VCU Memory Subsystem Recommendations
+            See guidelines outlined in the VDU arch specs.
+
+            3 Appendix
+            3.1   Memory Bandwidth
+            TBD
+
+            3.2   Questions to IP Vendor
+                  Q                                             A
+             1    Do the bandwidth numbers include pixel        Yes, based on packed tile
+                  packing overhead?
+             2    Does area estimate include micro-             No
+                  controller logic and SRAM for code/data?
+             3    Is Interlaced supported? Any restrictions?    Interlaced is supported for HEVC (encode/decode).
+                                                                Interlaced is supported for AVC decode with D105
+                                                                IP with some limitation (4:2:0 only).
+                                                                Interlaced support for AVC encode is planned for
+                                                                end of Q2 this year (SAFF only).
+             4    Does the decoder support cache line size      no
+                  options like the first VCU encoder did
+                  (selectable cache line size of 16, 32 or 64
+                  bytes)?
+             5    are the performance limitations at high bit   At high bitrate, like for VCU1, you can increase the
+                  rates and slow clocks speeds?                 number of frames in intermediate buffer (using -
+                                                                stack) to trade latency vs performance (bitrate
+                                                                smoothing).
+             6    What micro controller and what speed?         Plan is to use RISC-V, synchronous with respect to
+                                                                the IP engines.
+             7    Use of FBC                                    To sum up:
+                                                                    • Both encoder and decoder are using
+                                                                         compressed tile format for the REC/REF
+                                                                         loop by default.
+                                                                    • Source compression support in encoder is
+                                                                         an option to reduce bandwidth.
+                                                                    • Secondary raster output is an option to
+                                                                         ease integration, but has a cost in
+                                                                         bandwidth.
+
+
+
+
+            21
+[Confidential - AMD Internal Distribution Only]
+
+                                                Everest MMD VCU Architecture Specs
+
+
+            3.3       Example of Clock Generation using DPLL
+            The VCU core clock and MCU clock is generated by the DPLL, as described above. Below is an example
+            how clocks can be generated.
+
+                  -    Desired clock pair: 667 and 444 MHz (“-1mp”)
+                  -    The DPLL ref clock is 133.333MHz. It is the ‘DDR’ ref clock generated by the PMC, then routed
+                       via the HNOC as ‘hsr_ref_clock’, then routed up the GTCC as ‘cpm_ref_clock’ into the DPLL ref
+                       clock input
+                  -    The DPLL specs are:
+                            o Input divider range 1-123
+                            o Feedback divider range 10-400
+                            o 4 output dividers range 1-123
+                            o VCO freq range 2-4GHz
+                            o Divided ref clock min freq 10MHz
+
+
+                               Desired Freq    Inp. Div      Feedback Div     Output Div     VCO Freq       Output Freq
+             Core Clock        667             1             30               6              4000           666.667
+             MCU clock         444             1             30               9              4000           444.444
+
+
+            Note that the DPLL’s 4 outputs share the same PLL input divider, VCO, and feedback divider, so the MCU
+            clock solution can differ from the core clock solutions only by the output divider value.
+
+            Another example for 800/555 pair. This example shows that 555 cannot be achieved, the nearest is 571.
+
+                               Desired Freq    Inp. Div      Feedback Div     Output Div     VCO Freq       Output Freq
+             Core Clock        800             1             30               5              4000           800
+             MCU clock         555             1             30               7              4000           571
+
+
+            Another example for 500/333 pair.
+
+                               Desired Freq    Inp. Div      Feedback Div     Output Div     VCO Freq       Output Freq
+             Core Clock        800             1             30               8              4000           500
+             MCU clock         555             1             30               12             4000           333.333
+
+
+
+
+            22
+

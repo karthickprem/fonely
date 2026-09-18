@@ -1,0 +1,5608 @@
+
+Video Codec Unit (VCU)
+Telluride Design Implementation Document
+
+VCU DID Revision History
+Version
+ | Date
+ | Editor
+ | Version Comments
+ |
+0.5.0
+ | 06/20/2022
+ | Anurag Agrawal
+ | Initial draft
+ |
+0.9.0
+ | 10/27/2022
+ | Anurag Agrawal
+ |  |
+1.0.0
+ | 11/15/2022
+ | Anurag Agrawal
+ |
+ |
+1.1.0
+ | 02/10/2022
+ | Anurag Agrawal
+ | BPD POR implementation
+ |
+1.2.0
+ | 08/20/2023
+ | Anurag Agrawal
+ | Sysmon Implementation
+ |
+1.5.0
+ | 09/10/2023
+ | Anurag Agrawal
+ | Interrupt Tree Diagram
+DFX Arch Updates
+NPI Interrupt – Scan clear & mem clear updates
+Partial reconfiguration proposal
+Area Estimation Updates
+ |
+1.5.1
+ | 07/15/2024
+ | Abhay Galagali
+ | EDT-1069519 fix: Updated reset section.
+EDT-1072959 fix: Updated Abus Switch DPSTx2 section
+ |
+1.5.1
+ | 31/10/2025
+ | Abhay Galagali
+ | Cleaned-up TBDs.
+ |
+Open Issues
+#
+ | Status
+ | Title
+ | Description
+ | Action Item
+ | TBD
+ |
+1
+ | OpenClosed
+ | Multi core decoder
+ | In the architecture specs, it is defined that decoder has only one core. If that is the case, multi core decoder should not be used anywhere.
+ | Take this data from Ygal.
+
+Email sent.Multi-core is a general term. But the later explanation in architecture specs confirms that decoder is single core based.
+ |  |
+2
+ | OpenClosed
+ | Support I, IP, and IPB decoding
+ | In the architecture specs, nothing is mentioned about IPB decoding.
+ | Ygal: Take this data from Ygal.
+
+Email sent.Decoder must decode any stream, while encoder can pick and choose features. Decoder must support I, P and IPB decoding.
+ |  |
+3
+ | Closed
+ | APM Interface on AXI MCU Interface
+ | Should there be two APMs for 128-bit Encoder & Decoder AXI-M MCU interfaces.
+ | Have it on all AXI Interfaces.APMs are not resource intensive, so it is better to keep APMs for all AXI interfaces.
+ |  |
+4
+ | Closed
+ | VCU SLCR & Secure SLCR Registers
+ | Content for VCU SLCR.
+Feasibility and implementation of secure SLCR Registers (Optional)
+ | Secure SLCR can be used to drive the AXI PROTrot bits on AXI Interfaces. Secure SLCR can be programmed via Secure AXI M. AXI PROTProt signal does not come out from Encoder & Decoder IP.
+VDU has AXI Prot in Non-secure SLCR. Will also have AXI Prot in Non secure SLCR.
+ | VDU Register
+Details Overview
+
+Register Table
+ |
+5
+ | Closed
+ | NoC – PL Feedthrough
+ | Implementation of Bypass signals from NoC to PL.
+No buffering in VCU Domain.
+ |  |  |
+6
+ | OpenClosed
+ | BPD POR Instance
+ | BPD POR implementation with 4 power supplies
+ | Two instances of BPD POR. One instance takes 3 power supply inputs.
+ | Discussion & Finalization
+
+Populate the section
+ |
+7
+ | PendingClosed
+ | VCU Reset
+ | Clarity on VCU Reset Inputs, VCU Reset Implementation
+ | Check the VDU Reset block and its working.
+ | IO Finalization
+
+Populate the section
+ |
+8
+ | Closed
+ | Address Map
+ | VCU Address Map
+ |  | Encoder, Decoder Doc Overview
+
+Populate the section
+ |
+9
+ | Closed
+ | NPI Regs
+ | Two categories of eFuses:
+MBIST eFuse comes from NPI. The master of NPI is PMC.
+Enable/Disable eFuses comes from SSC
+ | Check the VDU NPI Registers.
+ | NPI Reset Discussion
+
+Populate the section
+ |
+10
+ | Closed
+ | NMU AXI Master Clocking
+ | Does NMU receives AXI-M clocks.
+Status: As per NoC Arch Specs, NMU will have input source clocks along with AXI M signals.
+ |  |  |
+11
+ | Closed
+ | APM Reuse
+ | APM can be reused as it is in the VDU.
+ | Need to integrate VDU APM accordingly.
+ |  |
+12
+ | ClosedOpen
+ | MBIST
+ | Number of eFuses required for memory repair
+ |  | Calculation & Discussion
+
+Populate the section
+ |
+13
+ | ClosedOpen
+ | Scan
+ | Number of scan chains required
+
+Multiple DFX controllers:
+DFX for encoder L1 blocks.
+ |  | Calculation & Discussion
+
+Populate the section
+ |
+14
+ | PendingClosed
+ | Encoder – L1, L2 synthesis
+ | Each encoder core is L1 and VCU Top is L2 Level.
+
+The flipflop count for Encoder IP is expected to be around 1.2 million after MBIST insertion. The tools would not be able to handle such a high count of flops.
+Encoder is a dual core. For each core, the flip flop count would be around 0.5 million. And the same core is instantiated twice.
+So, it seems that a core will be individual synthesized along with MBIST and its netlist would be used for the complete block synthesis.
+ |  | Populate the section
+ |
+15
+ | Pending Closed
+ | Pin list
+ | Pin list finalization
+ |  | Populate the section
+ |
+16
+ | OpeClosedn
+ | SSC Receiver
+ | SSC Receiver Implementation for eFuse Disable
+ | Which bits do we need to use for eFuse. Reach out to Ahmed Ansari.
+ |  |
+
+Table of Contents
+
+Contents
+ TOC \o "1-3" \h \z \u  HYPERLINK \l "_Toc114215558" Video Codec Unit (VCU)	 PAGEREF _Toc114215558 \h 1
+ HYPERLINK \l "_Toc114215559" VCU DID Revision History	 PAGEREF _Toc114215559 \h 2
+ HYPERLINK \l "_Toc114215560" Open Issues	 PAGEREF _Toc114215560 \h 2
+ HYPERLINK \l "_Toc114215561" 1	Table of Contents	 PAGEREF _Toc114215561 \h 5
+ HYPERLINK \l "_Toc114215562" 2	List of figures	 PAGEREF _Toc114215562 \h 6
+ HYPERLINK \l "_Toc114215563" 3	List of Tables	 PAGEREF _Toc114215563 \h 7
+ HYPERLINK \l "_Toc114215564" 4	Introduction	 PAGEREF _Toc114215564 \h 7
+ HYPERLINK \l "_Toc114215565" 4.1	Scope	 PAGEREF _Toc114215565 \h 7
+ HYPERLINK \l "_Toc114215566" 4.2	Functional Requirements	 PAGEREF _Toc114215566 \h 7
+ HYPERLINK \l "_Toc114215567" 4.3	Example SoC Device Level	 PAGEREF _Toc114215567 \h 9
+ HYPERLINK \l "_Toc114215568" 4.4	Block Diagram	 PAGEREF _Toc114215568 \h 9
+ HYPERLINK \l "_Toc114215569" 4.5	List of Definitions	 PAGEREF _Toc114215569 \h 10
+ HYPERLINK \l "_Toc114215570" 4.6	Starting References	 PAGEREF _Toc114215570 \h 11
+ HYPERLINK \l "_Toc114215571" 5	Micro-Architecture Overview	 PAGEREF _Toc114215571 \h 11
+ HYPERLINK \l "_Toc114215572" 5.1	VCU Core Top Micro-Architecture Description	 PAGEREF _Toc114215572 \h 12
+ HYPERLINK \l "_Toc114215573" 5.1.1	Block Level Description	 PAGEREF _Toc114215573 \h 12
+ HYPERLINK \l "_Toc114215574" 5.1.2	VCU Address Space	 PAGEREF _Toc114215574 \h 21
+ HYPERLINK \l "_Toc114215577" 5.1.3	Interrupt	 PAGEREF _Toc114215577 \h 21
+ HYPERLINK \l "_Toc114215578" 5.1.4	Voltage Measurement for monitoring	 PAGEREF _Toc114215578 \h 22
+ HYPERLINK \l "_Toc114215579" 5.1.5	VCU IO CHAR	 PAGEREF _Toc114215579 \h 22
+ HYPERLINK \l "_Toc114215584" 5.2	Clocking	 PAGEREF _Toc114215584 \h 22
+ HYPERLINK \l "_Toc114215643" 5.2.1	Clock frequency across speed grades	 PAGEREF _Toc114215643 \h 23
+ HYPERLINK \l "_Toc114215644" 5.2.2	Clock grouping	 PAGEREF _Toc114215644 \h 23
+ HYPERLINK \l "_Toc114215645" 5.2.3	VCU clocks from GTCC DPLL	 PAGEREF _Toc114215645 \h 23
+ HYPERLINK \l "_Toc114215649" 5.2.4	DPLL Divider values	 PAGEREF _Toc114215649 \h 24
+ HYPERLINK \l "_Toc114215663" 5.3	Power Domains	 PAGEREF _Toc114215663 \h 25
+ HYPERLINK \l "_Toc114215664" 5.3.1	List of Power Domains and Properties	 PAGEREF _Toc114215664 \h 25
+ HYPERLINK \l "_Toc114215665" 5.3.2	Power Domain Crossings	 PAGEREF _Toc114215665 \h 25
+ HYPERLINK \l "_Toc114215667" 5.3.3	Isolation and Clamping Values	 PAGEREF _Toc114215667 \h 26
+ HYPERLINK \l "_Toc114215668" 5.4	Resets	 PAGEREF _Toc114215668 \h 26
+ HYPERLINK \l "_Toc114215789" 5.4.1	Reset Domain Crossing	 PAGEREF _Toc114215789 \h 26
+ HYPERLINK \l "_Toc114215790" 5.4.2	Power on reset sequence:	 PAGEREF _Toc114215790 \h 27
+ HYPERLINK \l "_Toc114216036" 6	VCU Interface Micro-Architecture and Requirements	 PAGEREF _Toc114216036 \h 27
+ HYPERLINK \l "_Toc114216037" 6.1	Top Level Ports	 PAGEREF _Toc114216037 \h 27
+ HYPERLINK \l "_Toc114217538" 6.2	Interfaces	 PAGEREF _Toc114217538 \h 28
+ HYPERLINK \l "_Toc114217539" 6.2.1	AXI-M Interfaces	 PAGEREF _Toc114217539 \h 28
+ HYPERLINK \l "_Toc114217540" 6.2.2	APB & AXI-S Interface	 PAGEREF _Toc114217540 \h 29
+ HYPERLINK \l "_Toc114217561" 6.2.3	Security via AXI-M Interface	 PAGEREF _Toc114217561 \h 30
+ HYPERLINK \l "_Toc114217562" 6.3	Critical Signals Timing / Loading	 PAGEREF _Toc114217562 \h 31
+ HYPERLINK \l "_Toc114217563" 6.4	Port Attributes	 PAGEREF _Toc114217563 \h 31
+ HYPERLINK \l "_Toc114217564" 7	Physical Design Implementation	 PAGEREF _Toc114217564 \h 31
+ HYPERLINK \l "_Toc114217565" 7.1	Floor Plan	 PAGEREF _Toc114217565 \h 31
+ HYPERLINK \l "_Toc114217566" 7.1.1	Encoder Subsystem	 PAGEREF _Toc114217566 \h 31
+ HYPERLINK \l "_Toc114217567" 7.1.2	Decoder Subsystem	 PAGEREF _Toc114217567 \h 31
+ HYPERLINK \l "_Toc114217568" 7.1.3	VCU Area Subsystem	 PAGEREF _Toc114217568 \h 31
+ HYPERLINK \l "_Toc114217569" 	 PAGEREF _Toc114217569 \h 32
+Video Codec Unit (VCU)	1
+VCU DID Revision History	2
+Open Issues	2
+1	Table of Contents	5
+List of Tables	5
+List of Figures	5
+2	Introduction	5
+2.1	Scope	5
+2.2	Functional Requirements	5
+2.3	Example SoC Device Level	7
+2.4	Block Diagram	7
+2.5	List of Definitions	8
+2.6	Starting References	9
+3	Micro-Architecture Overview	9
+3.1	VCU Core Top Micro-Architecture Description	10
+3.1.1	Block Level Description	10
+3.1.2	VCU Address Space	26
+3.1.3	Trust zone	27
+3.1.4	Interrupt	27
+3.1.5	Voltage Measurement for monitoring	27
+3.1.6	VDU IO CHAR	28
+3.2	Clocking	28
+3.2.1	VCU clocks from GTCC DPLL	29
+3.2.2	DPLL Divider values	30
+3.2.3	DPLL reference clock	31
+3.2.4	Static Clock Gating	31
+3.2.5	Clock selection	32
+3.3	Power Domains	32
+3.3.1	List of Power Domains and Properties	32
+3.3.2	Power Domain Crossings	32
+3.3.3	Isolation and Clamp Values	33
+3.4	Resets	34
+3.4.1	Reset Domain Crossing	35
+3.4.2	Power on reset sequence:	36
+3.5	Block Timing	37
+3.5.1	Assumptions	38
+3.5.2	Dependencies: Internal and External	38
+3.5.3	Clocking	38
+3.5.4	IO Ports	41
+3.5.5	External Device Timing	42
+3.5.6	Memories	42
+3.5.7	Analog Blocks	43
+3.5.8	Resets	43
+3.5.9	Constant Signals	43
+3.5.10	False and Multicycle Paths	43
+3.5.11	Timing Survey / Questionnaires	43
+3.6	Partial Reconfiguration	43
+3.7	SEU	43
+4	VCU Interface Micro-Architecture and Requirements	44
+4.1	Top Level Ports	44
+4.1.1	VDU AXI interface – specific notes:	53
+4.2	Interfaces	54
+4.2.1	AXI4 Interfaces	54
+4.2.2	APB & AXI-S Interface	54
+4.2.3	AXI-M interface with NMU	55
+4.2.4	Security via AXI-M Interface	56
+4.3	Critical Signals Timing / Loading	57
+4.4	Port Attributes	57
+
+List of figures
+ TOC \h \z \c "Figure"  HYPERLINK \l "_Toc114073159" Figure 1: VCU Tile Placement	 PAGEREF _Toc114073159 \h 9
+ HYPERLINK \l "_Toc114073160" Figure 2: VCU Block Diagram	 PAGEREF _Toc114073160 \h 10
+ HYPERLINK \l "_Toc114073161" Figure 3: VCU Micro Arch Diagram	 PAGEREF _Toc114073161 \h 12
+ HYPERLINK \l "_Toc114073162" Figure 4: Interconnect	 PAGEREF _Toc114073162 \h 14
+ HYPERLINK \l "_Toc114073163" Figure 5: BISR Cache Integration	 PAGEREF _Toc114073163 \h 16
+ HYPERLINK \l "_Toc114073164" Figure 6: eFuse Packet Communication	 PAGEREF _Toc114073164 \h 18
+ HYPERLINK \l "_Toc114073165" Figure 7: Format of SSC Control Packet	 PAGEREF _Toc114073165 \h 18
+ HYPERLINK \l "_Toc114073166" Figure 8: VCU SSC Receiver	 PAGEREF _Toc114073166 \h 19
+ HYPERLINK \l "_Toc114073167" Figure 9: NPI Connectivity at System Level	 PAGEREF _Toc114073167 \h 21
+ HYPERLINK \l "_Toc114073168" Figure 10: DPLL Interface	 PAGEREF _Toc114073168 \h 24
+ HYPERLINK \l "_Toc114073169" Figure 11: AXI-M Interfaces	 PAGEREF _Toc114073169 \h 29
+ HYPERLINK \l "_Toc114073170" Figure 12: APB & AXI-S Interface	 PAGEREF _Toc114073170 \h 30
+Figure 1: VCU Tile Placement	9
+Figure 2: VCU Block Diagram	10
+Figure 3: VCU Micro Arch Diagram	12
+Figure 8 Format of SSC Control packet	17
+Figure 9 Block Diagram of SSC Receiver Module	18
+Figure 10 vdu_instance_id port connection at device level	19
+Figure 6 NPI Connectivity at system level	22
+Figure 7 Reset to NPI registers	26
+Figure 12 VDU Power domain	35
+Figure 13 VDU reset generation	39
+Figure 14 VDU Clock Diagram	40
+
+List of Tables
+ TOC \h \z \c "Table"  HYPERLINK \l "_Toc113986116" Table 1: Abbreviations	 PAGEREF _Toc113986116 \h 10
+ HYPERLINK \l "_Toc113986117" Table 2: Reference Documents	 PAGEREF _Toc113986117 \h 11
+ HYPERLINK \l "_Toc113986118" Table 3: VCU SSC eFuse Bits	 PAGEREF _Toc113986118 \h 20
+ HYPERLINK \l "_Toc113986119" Table 4: Enable Status vs eFuse Values	 PAGEREF _Toc113986119 \h 20
+ HYPERLINK \l "_Toc113986120" Table 5: Clocking	 PAGEREF _Toc113986120 \h 23
+ HYPERLINK \l "_Toc113986121" Table 6: Clock Frequency across speed grades	 PAGEREF _Toc113986121 \h 23
+ HYPERLINK \l "_Toc113986122" Table 7: DPLL Clock Generation Parameters	 PAGEREF _Toc113986122 \h 25
+ HYPERLINK \l "_Toc113986123" Table 8: VCU Power Rails	 PAGEREF _Toc113986123 \h 25
+ HYPERLINK \l "_Toc113986124" Table 9: Power Domains	 PAGEREF _Toc113986124 \h 26
+ HYPERLINK \l "_Toc113986125" Table 10: Encoder Reset Signals	 PAGEREF _Toc113986125 \h 26
+ HYPERLINK \l "_Toc113986126" Table 11: Decoder Reset Signals	 PAGEREF _Toc113986126 \h 26
+ HYPERLINK \l "_Toc113986127" Table 12: Top Level Ports Summary	 PAGEREF _Toc113986127 \h 28
+ HYPERLINK \l "_Toc113986128" Table 13: VCU Area Estimate	 PAGEREF _Toc113986128 \h 32
+Table 1: Abbreviations	11
+Table 2: Reference Documents	11
+Table 3 BISR cache integration	16
+Table 4 Efuse bit used based on vdu instance id value	19
+Table 5 NPI registers - VDU interface description	26
+Table 6 Clocking	30
+Table 7: List of VCU Power Rails	34
+Table 8 Power domains	34
+Table 9 VDU Resets	35
+Table 10 VDU Reset Coverage	37
+Table 11: VDU Clock Port Descriptions	41
+Table 12: VDU Internally Generated Clocks	41
+Table 13 Axi interface signals slcr driven/ tied-off in vdu design	55
+
+Introduction
+Scope
+This document provides the detailed engineering specification of Telluride Video Codec Unit for a target process technology of 7nm. The detailed specifications are based on the Everest (Telluride) MMD VCU architecture requirements.
+
+VCU supports both video compression and decompression with different rates. It supports the multiple standards including H.264 and H.265. It is a hardened block with 1 instance of multi-dual core encoder and 1 instance of multi-single core decoder.
+
+Functional Requirements
+VCU Design must meet the following requirements:
+Reference: Everest MMD VCU Arch Specs v1.0
+
+Dual core encoder and single core decoder
+Multi-standard encoding support, including:
+H.264 (AVC – Advanced Video Coding)
+H.265 (HEVC – High Efficiency Video Coding)
+Multi-standard decoding support, including:
+H.264
+H.265
+JPEG
+Multi-stream support, up to 32 streams per encoder or decoder unit
+Max throughput – 4kp60 (both UHD [Ultra HD] & DCI [Digital Camera Initiative] formats)
+Progressive support
+Interlaced support (sequence adaptive field frame (SAFF) only)
+Support I, IP, and IPB encoding
+Bit Depth and Chroma Space
+Monochrome; YCbCr 4:4:4; YCbCr 4:2:2; YCbCr 4:2:0
+Support 8 bit; 10 bit and 12 bit per color plane
+Expected encoder max operating speed 950 MHz at ‘-2MP’
+Minimum encoder clock rates per format (non-DCI 4kp60):
+Format		AVC		HEVC
+4:2:0		540		560
+4:2:2		550		615
+4:4:4		785		890
+Expected decoder max operating speed 918 MHz at ‘-2MP’
+Minimum decoder clock rates per format (non-DCI 4kp60):
+Format		AVC		HEVC
+4:2:0		470		425
+4:2:2		600		550
+4:4:4		860		860
+Support operation at MP and HP voltage levels
+Support for low latency mode
+Support for slice based ultra-low latency mode via PL interface
+Include encoder cache for reduced bandwidth
+Option to use encoder cache as g.p. memory when encoder is idle
+Support optional (programmable) frame buffer compression
+Encoder & Decoder unit include 64KB RAM RISC-V controller (options – ARM or MicroBlaze or RISC-V)
+Low software overhead (a few MIPS) for slice-level management and multi-stream switching
+Ability to queue tasks to eliminate dependency on CPU response time
+Reference/Linux drivers
+Bit accurate C model
+E-Fuse disable option allows permanent disable each VCU instance independently:
+Disable encoder
+Disable decoder
+Power management:
+Clock gating: When disabled, VCU consume no dynamic power
+Power: external power up/down support
+Performance monitoring
+Measure task execution time
+Measure bandwidth and AXI transaction count
+Measure min, max and average latency
+No PL configuration bits, operation is register-programmable
+4 AXI master ports (4 NMU), 1 AXI slave port (1 NSU) to ENoC (Extended NoC)
+48-bit address space support
+Encoder & decoder unit are completely independent
+Independent Operation
+Independent Reset
+Independent Clocks
+
+Example SoC Device Level
+VCU is planned to be integrated in Telluride device along the right edge, replacing 2 GTY Quad modules.
+
+Figure  SEQ Figure \* ARABIC 1: VCU Tile Placement
+
+Block Diagram
+The block diagram for the VCU is shown in the Figure 2. VCU replaces 2 GT tiles and full PnR of VCU is planned as there would not be any gap between 2 GTs.  The main features of VCU includes video compression and decompression. This is achieved using 1-1 instance of dual core encoder and single core decoder. The encoder captures the live video in the frame buffers. The encoder cores fetch frame from frame buffers, compresses/encodes and stores back into the memory. The decoder unit fetches the compressed frame along with reference frames from frame buffer, decompresses and stores back in the frame buffer.  The access to the DDR memory is through MMD NoC extension. Access to the memory does not involve any PL based AXI ports.  The encoder has four clock ports – IP clock, AXI clock, APB clock and MCU clock. All the four clocks will be driven from a single DPLL clock source. Similarly, a single DPLL clock source is used to drive all four clocks for Decoder.The clocks for AXI-M ports, VCU core, MCU are received from DPLL in GT Clocking Column.  The clock for AXI-S port is also received from DPLL. NMU takes VCU as master and communicates via AXI 4 -Master interface. NSU takes VCU as slave and communicates via AXI-S interface. PL is powered on and functional before VCU can be functional. For performance monitoring, AXI interfaces are monitored using APM to measure AXI transaction counts, latencylatency, and bandwidth. The VCU block have a dedicated power domain VCUINT_VCU for its core blocks. Along with it, VCU is interacting with three other power domains: VCCINT (PL), VCCINT_SOC (NoC) and VCCRAM (GTCC DPLL).  Encoder cores will be at Level 1 hierarchy and rest of VCU blocks will be at Level 2 hierarchy.
+
+Figure  SEQ Figure \* ARABIC 2: VCU Block Diagram
+
+List of Definitions
+All terminology or acronyms used in the document are compiled here for quick reference.
+Table  SEQ Table \* ARABIC 1: List of Acronyms
+Acronym
+ | Definition
+ | Description
+ |
+VCU
+ | Video Codec Unit
+ |  |
+GT
+ | Gigabit Transceiver
+ |  |
+GTCC
+ | GT Clocking Column
+ |  |
+MMD
+ | Multi-Media Distributed
+ |  |
+MMI
+ | Multi-Media Integrated
+ |  |
+BISR
+ | Built-In Self-Repair
+ |  |
+CSSD
+ | Clock Stop Scan Dump
+ |  |
+MBIST
+ | Memory Built-In Self-Test
+ |  |
+PCSR
+ | Program Control and Status Register
+ | A standard group of registers that provide global controls and status
+ |
+POR
+ | Power-On Reset
+ | Master reset to VCUVDU
+ |
+SRST
+ | System Reset
+ | Resets only the data path in VCUVDU
+ |
+TMR
+ | Triple Modular Redundancy
+ | A fault-tolerant form of modular redundancy where three systems perform a process, and the result is validated with a majority voting system to produce a single output
+ |
+Table  SEQ Table \* ARABIC 1 SEQ Table \* ARABIC 1: Abbreviations
+Starting References
+This section contains links to various reference documents needed to fully understand the operation of the VCU. All engineering documents pertaining to this block can be found on the VCU SharePoint Site.
+Table  SEQ Table \* ARABIC 2: Reference Documents
+Type
+ | Document Link
+ |
+Architecture Specifications
+ | HYPERLINK "https://amdcloud.sharepoint.com/:f:/r/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Telluride/VCU/Arch%20specs?csf=1&web=1&e=JRjFQJ" HYPERLINK "https://xilinx.sharepoint.com/sites/eng/fdst/everest/arch/Shared%20Documents/Forms/AllItems.aspx?id=%2Fsites%2Feng%2Ffdst%2Feverest%2Farch%2FShared%20Documents%2FArch%20Specs%20%28released%29%2FTelluride%2FMMD%2FEverest%5FMMD%5FVCU%5FArch%5FSpecs%5F1%2E0%2Epdf&parent=%2Fsites%2Feng%2Ffdst%2Feverest%2Farch%2FShared%20Documents%2FArch%20Specs%20%28released%29%2FTelluride%2FMMD" VCU Arch Specs
+ |
+Design Guidelines
+ | HYPERLINK "https://amdcloud.sharepoint.com/:w:/r/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Modules/PMC/Design%20for%20Security%20-%20Best%20Practices.docx?d=we30c4857e9b3433a9a125f3d656f8a3e&csf=1&web=1&e=ZnWrTK" HYPERLINK "http://xinc/ppg/processing%20solutions/everest/des_ver/Shared%20Documents/Modules/PMC/Design%20for%20Security%20-%20Best%20Practices.docx" Xilinx Security Best Practices
+ |
+Design Specifications
+ | HYPERLINK "https://amdcloud.sharepoint.com/:u:/r/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Modules/CRX%20-%20Clock%20and%20Reset/Everest_Microarch_CRX.docx.aspx?csf=1&web=1&e=5PMm9W" HYPERLINK "http://xinc/ppg/processing%20solutions/everest/des_ver/Shared%20Documents/Modules/CRX%20-%20Clock%20and%20Reset/Everest_Microarch_CRX.docx.aspx" Clock and Reset - Everest
+HYPERLINK "https://amdcloud.sharepoint.com/:w:/r/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Telluride/VCU/DFX_DID/DID_DFx_Cntrlr_Everest_V1.8.docx?d=wc66af34da8d543e8aa41fbf546cbc123&csf=1&web=1&e=6AJIpl" HYPERLINK "http://xinc/ppg/fdst/everest/Shared%20Documents/Design%20Implementation%20Documents%20(DID)/Global%20Functions/DFx_Controller/DID_DFx_Cntrlr_Everest_V1.6.docx" DFX Controller v1.8
+HYPERLINK "https://amdcloud.sharepoint.com/:f:/r/sites/eng/fdst/everest/arch/Shared%20Documents/Arch%20Specs%20(released)/Global%20Functions/NPI%20Protocol%20Interface?csf=1&web=1&e=fhqlNs" HYPERLINK "http://xinc/ppg/fdst/everest/arch/Shared%20Documents/Arch%20Specs%20(released)/Global%20Functions/NPI%20Protocol%20Interface/NPI%20Protocol%20Interface.docx" NPI Protocol Interface
+ |
+VCU Register Database
+ |  HYPERLINK "http://zynq_design:8070/" XRDB
+ |
+Encoder + MCU
+ | HYPERLINK "https://amdcloud.sharepoint.com/:f:/r/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Telluride/VCU/Encoder%20Specs?csf=1&web=1&e=yULcr7" HYPERLINK "https://xilinx.sharepoint.com/:b:/r/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Modules/VCU/Encoder%20Specs/encoder_specification.pdf?csf=1&web=1&e=ZFTUEd" VCU Encoder Specification RISC – V Specs specs link(TBD)
+ |
+Decoder + MCU
+ | HYPERLINK "https://amdcloud.sharepoint.com/:f:/r/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Telluride/VCU/Decoder%20Specs?csf=1&web=1&e=mMNTtd" HYPERLINK "https://xilinx.sharepoint.com/:b:/r/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Modules/VCU/Decoder%20Specs/decoder_specification.pdf?csf=1&web=1&e=QTh1Df" VCU Decoder Specification
+ |
+VCU SharePoint Site
+ | HYPERLINK "https://amdcloud.sharepoint.com/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Forms/AllItems.aspx?csf=1&web=1&e=mMNTtd&cid=2ec6423c%2D4e59%2D43bd%2Da20c%2Db3cb0c6ac378&FolderCTID=0x01200092C892F5C917B94B995531284930DCFB&id=%2Fsites%2Feng%2Fprocessing%20solutions%2Feverest%2Fdes%5Fver%2FShared%20Documents%2FTelluride%2FVCU&viewid=322bce65%2D67e9%2D46e3%2Db2c4%2Dbf6c90fd38df" HYPERLINK "https://xilinx.sharepoint.com/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Forms/AllItems.aspx?viewpath=%2Fsites%2Feng%2Fprocessing%20solutions%2Feverest%2Fdes%5Fver%2FShared%20Documents&id=%2Fsites%2Feng%2Fprocessing%20solutions%2Feverest%2Fdes%5Fver%2FShared%20Documents%2FModules%2FVCU&viewid=91de6db4%2D103f%2D4b10%2Db83c%2D17bac09a38fa" VCU Design & Verification
+ |
+Everest Configuration and Reconfiguration Spec
+ | HYPERLINK "https://amdcloud.sharepoint.com/:f:/r/sites/eng/fdst/everest/arch/Shared%20Documents/Arch%20Specs%20(released)/Global%20Functions/Configuration%20and%20Reconfiguration?csf=1&web=1&e=jvBlH3" HYPERLINK "https://xilinx.sharepoint.com/:b:/r/sites/eng/fdst/everest/arch/Shared%20Documents/Arch%20Specs%20(released)/Global%20Functions/Configuration%20and%20Reconfiguration/Everest_Configuration_and_Reconfiguration_Spec_2_0.pdf?csf=1&web=1&e=3LPWYE" lEverest Configuration and Reconfigurationink
+ |
+Everest Chip Pervasive Features Spec
+ | HYPERLINK "https://amdcloud.sharepoint.com/sites/eng/fdst/everest/arch/Restricted%20Documents/Forms/AllItems.aspx?newTargetListUrl=https%3A%2F%2Famdcloud%2Esharepoint%2Ecom%2Fsites%2Feng%2Ffdst%2Feverest%2Farch%2FRestricted%20Documents&id=%2Fsites%2Feng%2Ffdst%2Feverest%2Farch%2FRestricted%20Documents%2FBlock%20Specs%2FCPF&viewid=e9a9ed64%2Dc6aa%2D4e51%2D9f5d%2D596f2c6d7cf5" HYPERLINK "http://xinc/ppg/fdst/everest/arch/Restricted%20Documents/Block%20Specs/CPF/Everest%20Chip%20Pervasive%20Features%20Spec%20-%20v1.65-NR.docx" Chip Pervasive spec
+ |
+Xilinx BISR cache
+ | HYPERLINK "https://amdcloud.sharepoint.com/:f:/r/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Modules/PMC/XLNX_BISR_CACHE?csf=1&web=1&e=TvYOJQ" HYPERLINK "https://xilinx.sharepoint.com/:w:/r/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Modules/PMC/XLNX_BISR_CACHE/Everest_MicroArch_BISR_CACHE.docx?d=w0f6f01d49c4448a49775706abfa42253&csf=1" Xilinx BISR Cache
+ |
+NPI Arch Spec
+ | HYPERLINK "https://amdcloud.sharepoint.com/sites/eng/fdst/everest/arch/Shared%20Documents/Arch%20Specs%20(released)/Global%20Functions/NPI%20Protocol%20Interface/NPI_Arch_Spec_v1.1.pdf" HYPERLINK "https://xilinx.sharepoint.com/sites/eng/fdst/everest/arch/Shared%20Documents/Arch%20Specs%20(released)/Global%20Functions/NPI%20Protocol%20Interface/NPI_Arch_Spec_v1.1.pdf" NPI Arch spec
+ |
+Table  SEQ Table \* ARABIC 2 SEQ Table \* ARABIC 2: Reference Documents
+Micro-Architecture Overview
+This section describes the top-level micro-architecture of the VCU. The implementation of some sub-modules covered in separate specifications mentioned in Table 2. This document describes the high-level functionality of the sub-modules with a focus on how they are interconnected or integrated and work together.
+VCU Core Top Micro-Architecture Description
+
+Figure  SEQ Figure \* ARABIC 3: VCU Micro Arch Diagram
+
+RTL Hierarchy
+The RTL Hierarchy for the VCU is:
+
+Block Level Description
+Encoder Subsystem
+VCU comprises one instance of dual core encoder to process at pixel levels. The RISC-V controller interfaced with the encoder handles the higher levels of encoder process, above the slice data level. The IP reads the current frame along with additional reference frames from frame buffers, encodes it and again writes back into the memory via 128-bit AXI-M interface. It includes a cache for reducing DRAM bandwidth by reusing data fetched for motion estimation and other purposes. It uses L1 and L2 caches in form of RAMs and are internal. The caches are not available for external use.
+
+Encoder cores are synthesized separately at L1 level and the rest of IP logic including MCU, interfaces is synthesized at L2 Level. Because of size, Encoder + MCU cannot be fitted in a single physical partition. As per architecture specs, it takes an area of around 4.9 sqmm on SoC and MCU unit takes an area of 0.15 sqmm. It supports 4k x 2k @60fps for both UHD & DCI formats.  It supports H.264 (Advanced Video Coding) and H.265 (High Efficiency Video Coding) standards.
+
+NoC NSU can reset the Encoder IP using the RESET register through APB interface via interconnect. The RESET register provides combination of reset bits to reset specific units/cores.
+
+Encoder IP is disabled by disabling the clock based on SSC output eFuse Disable signals. The e-Fuse bits would be coming from PMC, VCU2 receives the 64-bit packet over SSC channel and decodes it to generate eFuse Disable signals.
+
+ Encoder subsystem comprises:
+Two cores: The Encoder IP uses two cores for pixel level processing. It compresses the data as per the requested standards and color formats. It processes the low-level commands which are either stored in hardware registers or a list of such commands stored in the external memory.
+
+RISC-V MCU:  The encoder parameters are controlled by MCU and configured using a register map through an internal peripheral bus. The high-level commands for video encoding are processed by MCU and MCU generates slice/tile level commands to Encoder cores. The 64-bit RISC MCU have:
+128-bit AXI-4 Interface, 40-bit addressing
+RV64IMAFDC instruction set
+5 stages pipeline
+Icache/Dcache: 32KB
+Branch Prediction (16KB)
+MMU 128 entries
+FPU single and double precision
+JTAG Debug interface
+AXI-M Interface: Cores and MCU uses 128-bit AXI master interface with NoC NMU to store or fetch the data from the DDR Memory.
+APB-S Interface: The Encoder IP provides 32-bit APB-S interface to configure encoder parameters, start processing and get results.
+jTAG JTAG Interface: JTAG interface for MCU debug. The debug ports will be accessed through PL and there will be a logic in PL which would be handling MCU debug with JTAG signals.
+
+Clock Gating: The Decoder IP supports automatic hardware clock gating at low level (handled by RTL Synthesis) and at decoder core level. The GATED_CLOCK register allows controlling the internal clock signal generation. The IP provides a hardware-controlled gated clock in which the clock gating is based on the command start and completion events.
+GATED_CLOCK Register [1:0]
+ | Action
+ |
+00
+ | Passes hardware-controlled gated clock
+ |
+01
+ | Passes internal clock
+ |
+1x
+ | Disable the clock
+ |
+
+Reference link: HYPERLINK "https://xilinx.sharepoint.com/:f:/r/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Modules/VCU/Encoder%20Specs?csf=1&web=1&e=QEEjvD"Encoder Specs
+
+Caches
+There are L1 and L2 caches in the Encoder IP.
+ENC CORE L2 Cache
+The L2 cache RAMs are in the ENC_alg_core_rams design module:
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(1024)) U_RAM_17_2048X384X0 (alg_ram_if_17_2048x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(1024)) U_RAM_18_2048X384X0 (alg_ram_if_18_2048x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(1024)) U_RAM_19_2048X384X0 (alg_ram_if_19_2048x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(1024)) U_RAM_20_2048X384X0 (alg_ram_if_20_2048x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(1024)) U_RAM_21_2048X384X0 (alg_ram_if_21_2048x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(1024)) U_RAM_22_2048X384X0 (alg_ram_if_22_2048x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(1024)) U_RAM_23_2048X384X0 (alg_ram_if_23_2048x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(1024)) U_RAM_24_2048X384X0 (alg_ram_if_24_2048x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(1024)) U_RAM_25_2048X384X0 (alg_ram_if_25_2048x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(1024)) U_RAM_26_2048X384X0 (alg_ram_if_26_2048x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(1024)) U_RAM_27_2048X384X0 (alg_ram_if_27_2048x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(1024)) U_RAM_28_2048X384X0 (alg_ram_if_28_2048x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(1024)) U_RAM_29_2048X384X0 (alg_ram_if_29_2048x384x0);
+The size of L2 Cache is 1.21875 MB.
+ENC CORE L1 Cache
+
+The L1 cache RAMs are in the ENC_alg_core_rams design module:
+
+Luma:
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(128)) U_RAM_39_128X384X0 (alg_ram_if_39_128x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(128)) U_RAM_38_128X384X0 (alg_ram_if_38_128x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(128)) U_RAM_40_128X384X0 (alg_ram_if_40_128x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(128)) U_RAM_41_128X384X0 (alg_ram_if_41_128x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(128)) U_RAM_42_128X384X0 (alg_ram_if_42_128x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(128)) U_RAM_43_128X384X0 (alg_ram_if_43_128x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(128)) U_RAM_44_128X384X0 (alg_ram_if_44_128x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(128)) U_RAM_45_128X384X0 (alg_ram_if_45_128x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(128)) U_RAM_46_128X384X0 (alg_ram_if_46_128x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(128)) U_RAM_47_128X384X0 (alg_ram_if_47_128x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(128)) U_RAM_48_128X384X0 (alg_ram_if_48_128x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(128)) U_RAM_49_128X384X0 (alg_ram_if_49_128x384x0);
+
+The size of Lunar L1 Cache is 72 KB.
+
+Chroma:
+
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(256)) U_RAM_50_256X384X0 (alg_ram_if_50_256x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(256)) U_RAM_51_256X384X0 (alg_ram_if_51_256x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(256)) U_RAM_52_256X384X0 (alg_ram_if_52_256x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(256)) U_RAM_53_256X384X0 (alg_ram_if_53_256x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(256)) U_RAM_54_256X384X0 (alg_ram_if_54_256x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(256)) U_RAM_55_256X384X0 (alg_ram_if_55_256x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(256)) U_RAM_56_256X384X0 (alg_ram_if_56_256x384x0);
+ENC_alg_ram #( .DATA_WIDTH(384), .NUM_WORD(256)) U_RAM_57_256X384X0 (alg_ram_if_57_256x384x0);
+The size of Chroma L1 Cache is 96 KB. And the total size of L1 Cache is 168KB.
+
+ENC MCU Cache
+
+The MCU RAMs are located in the ENC_alg_vcu_enc_interfaces design:
+ram_dcache_data ENC_al_ram_byteen_if #(.DATA, .ADDR, .BYTEEN) alg_ram_worden_if_9_1024x64x1[0:3]
+ram_dcache_tags ENC_al_ram_byteen_if #(.DATA, .ADDR, .BYTEEN) alg_ram_worden_if_13_64x58x1[0:3]
+ram_dcache_dirty ENC_al_ram_byteen_if #(.DATA, .ADDR, .BYTEEN) alg_ram_worden_if_8_128x8x1
+ram_icache_bht ENC_al_ram_byteen_if #(.DATA, .ADDR, .BYTEEN) alg_ram_worden_if_2_1024x16x1
+ram_icache_tags ENC_al_ram_byteen_if #(.DATA, .ADDR, .BYTEEN) alg_ram_worden_if_3_256x59x1
+ram_icache_data ENC_al_ram_byteen_if #(.DATA, .ADDR, .BYTEEN) alg_ram_worden_if_4_2048x32x1[0:3]
+ram_jtlb_tags ENC_al_ram_byteen_if #(.DATA, .ADDR, .BYTEEN) alg_ram_worden_if_0_64x98x1
+ram_jtlb_data ENC_al_ram_byteen_if #(.DATA, .ADDR, .BYTEEN) alg_ram_worden_if_1_64x88x1
+
+The size of MCU Data Cache is 8.578125 KB. The size of MCU Instruction Cache is 11.84375 KB. And the size of MCU Cache used for address translation is 1.453125.
+The total size of MCU Cache is 21.875 KB.
+
+Reference link: HYPERLINK "https://xilinx.sharepoint.com/:f:/r/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Modules/VCU/Encoder%20Specs?csf=1&web=1&e=QEEjvD"Encoder Specs
+Decoder Subsystem
+VCU comprises one instance of single core decoder to process at pixel levels. The RISC-V controller interfaced with the decoder handles the higher levels of decoder process, above the slice data level. The IP reads the data from DDR memory, decodes it and again writes back into the memory via 128-bit AXI-M interface. It takes an area of around 1.1 sqmm on SoC and MCU unit takes an area of 0.15 sqmm. It supports 4k x 2k @60fps for both UHD & DCI formats.  It supports H.264, H.265 and JPEG compress standards. NoC NSU can reset the Decoder IP using the RESET register through APB interface via interconnect. The RESET register provides combination of reset bits to reset specific units/cores. There is an option to disable Decoder independently using the clock gating in VCU2_CORE.
+Decoder subsystem comprises:
+
+Decoder subsystem comprises:
+Core: The Decoder IP uses a core for pixel level processing. It decodes the data according to configured standards and color formats. It processes the low-level commands which are either stored in hardware registers or a list of such commands stored in the external memory.
+RISC-V MCU:  The decoder parameters are controlled by MCU and configured using a register map through an internal peripheral bus. The high-level commands for video decoding are processed by MCU and MCU generates slice/tile level commands to Decoder core. The 64-bit RISC MCU have:
+128-bit AXI-4 Interface, 40-bit addressing
+RV64IMAFDC instruction set
+5 stages pipeline
+Icache/Dcache: 32KB
+Branch Prediction (16KB)
+MMU 128 entries
+FPU single and double precision
+JTAG Debug interface
+AXI-M Interface: Cores and MCU uses 128-bit AXI master interface with NoC NMU to store or fetch the data from the DDR Memory.
+APB-S Interface: The Decoder IP provides 32-bit APB-S interface to configure encoder parameters, start processing and get results.
+JTAG Interface: JTAG interface for MCU debug. The debug ports will be accessed through PL and there will be a logic in PL which would be handling MCU debug with JTAG signals. The MCU debug logic should be built in PL, and it is not a part of RTL.
+Clock Gating: The Decoder IP supports automatic hardware clock gating at low level (handled by RTL Synthesis) and at decoder core level. The GATED_CLOCK register allows controlling the internal clock signal generation. The IP provides a hardware-controlled gated clock in which the clock gating is based on the command start and completion events.
+GATED_CLOCK Register [1:0]
+ | Action
+ |
+00
+ | Passes hardware-controlled clock
+ |
+01
+ | Passes internal clock
+ |
+1x
+ | Disable the clock
+ |
+
+Core
+RISC-V MCU
+AXI-M Interface
+APB-S Interface
+jTAG Interface
+Reference link: Decoder Specs
+Caches
+DEC MCU Cache
+
+The MCU RAMs are in the DEC_alg_vcu_enc_interfaces design:
+ram_dcache_data  DEC_al_ram_byteen_if #(.DATA(64), .ADDR(10), .BYTEEN(64)) alg_ram_worden_if_9_1024x64x1[0:3]
+ram_dcache_tags  DEC_al_ram_byteen_if #(.DATA(58), .ADDR(6), .BYTEEN(58)) alg_ram_worden_if_13_64x58x1[0:3]
+ram_dcache_dirty DEC_al_ram_byteen_if #(.DATA(8), .ADDR(7), .BYTEEN(8)) alg_ram_worden_if_8_128x8x1
+ram_icache_bht   DEC_al_ram_byteen_if #(.DATA(16), .ADDR(10), .BYTEEN(16)) alg_ram_worden_if_2_1024x16x1
+ram_icache_tags  DEC_al_ram_byteen_if #(.DATA(60), .ADDR(8), .BYTEEN(60)) alg_ram_worden_if_3_256x59x1
+ram_icache_data  DEC_al_ram_byteen_if #(.DATA(32), .ADDR(11), .BYTEEN(32)) alg_ram_worden_if_4_2048x32x1[0:3]
+ram_jtlb_tags 	 DEC_al_ram_byteen_if #(.DATA(98), .ADDR(6), .BYTEEN(98)) alg_ram_worden_if_0_64x98x0
+ram_jtlb_data 	 DEC_al_ram_byteen_if #(.DATA(88), .ADDR(6), .BYTEEN(88)) alg_ram_worden_if_1_64x88x1
+
+The size of MCU Data Cache is 8.578125 KB. The size of MCU Instruction Cache is 11.84375 KB. And the size of MCU Cache used for address translation is 1.453125.
+The total size of MCU Cache is 21.875 KB.
+
+Decoder Cache
+
+There is a small single cache in the decoder:
+DEC_al_ram_if #(.DATA(32 * 12), .ADDR(2+7)) alg_ram_if_52_512x384x0(rstn_mod[3'b010], clk_mod[3'b010]);
+
+The size of the cache is 24 KB.
+Interconnect
+For the external programming of encoder & decoder cores, interconnect connects NSU with AXI-S interface and cores with APB interface. Interconnect takes care of the data conversion from AXI-S interface to APB interface. Interconnect also handles the asynchronous clock crossings for the APB and AXI Clocks. Interconnect also provides communication between VCU SLCR with APB interface and NSU with AXI-S interface. The clock for AXI-S interface would be of 167 MHz frequency. The clock for APB interface to encoder would be max 950 MHz and the clock for APB interface to decoder would be max 918 MHz. The clock for APB interface to VCU SLCR would be 167 MHz, same as the AXI Slave clock. VCU would be configured with 128-bit wide AXI Slave Interface. The physical data width is fixed to 128 bits, but AXI-S may have narrow transactions like 32-bit transaction or 64-bit transaction. The interconnect will translate the 128-bit data on AXI-S interface to streams of 32-bit data on APB3 interface. Interconnect provides support for narrow transfer and also 128-bit data width can be used along with the strobe.
+As AXI interface supports fixed bursts but APB interface does not. And SLVERR is an expected response when the master supports Fixed, and the Slave does NOT support Fixed. Generating a Slave error is the only way Arteris produces a legitimate response to a FIXED transaction is if the Master NIU supports but the Slave NIU does not support. https://jira.xilinx.com/browse/EDT-1056613
+The base address from NSU to interconnect is 0xE8000000. In case of multiple VCU Tiles, NoC Remap Registers are used in NMU to remap the address for the other VCU tiles. Here, we need to Program one to 0xE8000000 and the other to base address of other VCU Tile (for example 0xE81000000).  Also, please note that we need to give the correct destination ID of the NSU of the corresponding VCU tile while doing remap register configuration.
+
+The intent file for the interconnect is at  HYPERLINK "https://amdcloud.sharepoint.com/:x:/r/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Telluride/VCU/VCU%20Interconnect/VCU_interconnect_intent.xlsx?d=w05c22dd00c434e39bdf53595e62b12e3&csf=1&web=1&e=O3ebP0" vcu2_interconnect.xlsx HYPERLINK "https://xilinx.sharepoint.com/:x:/r/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Telluride/VCU/VCU%20Interconnect/VCU_interconnect_intent.xlsx?d=w5edfaa66a07f447e85df3d42408f84ba&csf=1&web=1&e=QkP4WR" VCU_interconnect_intent.xlsx
+
+Figure  SEQ Figure \* ARABIC 4: Interconnect
+
+APM
+VCU performance monitor will allow the customer/user to assess system level behavior in a non-invasive way and without burdening the design with additional soft IP. AXI performance monitor (APM) is used to monitor the AXI bus. There are five four APM instances of APMplanned, two of them are on 128-bit AXI-M core interface - one for encoder and one for decoder. The third instance is on AXI-S interface. The other two instances for 128-bit AXI-M MCU interface - one for encoder and one for decoder. Everest APM requirements are same as Alto APM, per interface. The details about APM is mentioned in VCU APM requirement spec. APMs will be reused as it is in SV60 VDU.
+AXI register slices
+Register slices may be added for timing closure for AXI-M & AXI-S interfaces. TBD.
+SLCR Registers
+ For VCU top configuration which includes APM registers, EMA settings for memories , DPLL control registers etc. SLCR Registers are created by first creating a SW programmable register spreadsheet and then running the AMD Xilinx developed script. The SLCR registers will be used to drive AxPROT, cache, region bits for AXI interfaces. There would be no SLCR registers for TMR and Lock bit. To store the version details, SLCR would have version register.
+Encoder core control registers
+Decoder core control registers
+NPI registers
+For full set of register details, refer to VCU register specs –   HYPERLINK "http://zynq_design:8070/" http://zynq_design:8070/
+The ODS for the SLCR Registers is at the location:
+$RTL_ROOT/vcu2_v1_7t/vcu2_slcr_regs/regspecs/vcu2_slcr.ods (TBD)
+
+NoC Feedthrough Logic
+There are scan signals which are required for the NoC cores interfacing with VCU. These signals (115MHz max frequency) do not need pipelining and require feedthroughs via VCU. There would be 40 scan signals which need pass through. Out of them, there would be 5 scan control signals. When the signal is coming/going from VCU to NoC, the naming convention for ports would be starting with noc_vcu2_*, vcu2_noc_*. Similarly, when the signal is coming/going from VCU to PL, the naming convention for ports would be starting with pl_vcu2_*, vcu2_pl_*. These signals during isolation are clamped to 1. The signal details are:
+
+/////////////// NOC - VCU /////////////////////////////
+output vcu2_noc_scan_clk_n,
+output vcu2_noc_scan_mode_rst_n,
+output vcu2_noc_scan_en_n,
+output vcu2_noc_scan_edt_updt_n,
+output vcu2_noc_scan_cssd_trig_n,
+output [12-1:0] vcu2_noc_scan_chnl_out,
+output [12-2:0] vcu2_noc_scan_chnl_mask_out,
+input [12-1:0] noc_vcu2_scan_chnl_in,
+input [4:0] noc_vcu2_spare,
+output [4:0] vcu2_noc_spare,
+
+////////////////  VCU - PL /////////////////////////////
+input pl_vcu2_scan_clk_n,
+input pl_vcu2_scan_mode_rst_n,
+input pl_vcu2_scan_en_n,
+input pl_vcu2_scan_edt_updt_n,
+input pl_vcu2_scan_cssd_trig_n,
+input [12-1:0]  pl_vcu2_scan_chnl_out,
+input [12-2:0] pl_vcu2_scan_chnl_mask_out,
+output [12-1:0]  vcu2_pl_scan_chnl_in,
+
+output [4:0] vcu2_pl_spare,
+input [4:0] pl_vcu2_spare
+
+Number of scan signals: 40 (Does not include any spare port)
+Port names and connectivity RTL (preferably with naming connections - pl_vcu_* , vcu_pl_* ; vcu_noc_*,noc_vcu_*)
+
+5 Scan control signals (part of scan interface: $RTL_ROOT/noc2_v1_7t/interface/noc2_scan_cntl_if.sv): if_vcu_noc2_scan_cntl_out + scan channels: vcu_noc2_scan_chnl_out [11:0], vcu_noc2_scan_chnl_mask_out [10:0], noc2_vcu_scan_chnl_in[11:0]
+Constraints: Should include input/output delays with NOC/PL budgets with respect to virtual clock (Hoping they are all feedthrough’s).
+Skew check constraints – min and max delays for all feedthroughs (As these are DFX scan signals, all constraints can be handled from dfx_constraints.tcl which comes from DFX team)
+Default values of signals during isolation (preferably UPF): Clamped to 1 (Fabric Signals)
+Any custom INT_MAP requirements: scan_clk_n on clock pin, scan_mode_rst_n on reset/control pin, and rest on data pins
+
+DFX/MBIST
+DFX architecture specifications is at DFX_ARCH_SPEC
+All scan and test functions for VCU are implemented through DFX 1.9 IP. The instance would be broken into two parts:
+Main Part
+Satellite part The VCU design will have L1 and L2 hierarchy. The encoder IP uses 1Mn+ flipflops, it is decided to split the encoder IP. The encoder IP consists of two cores and each core uses around 0.5Mn + flipflops. It is planned that core will be separately synthesized at L1 Level and there will be two instantiations of the same L1 block in the encoder IP. Also, the Decoder IP is synthesized at L1 level and all other logic like interconnect, SLCR, Reset, SSC and all other glue logic is synthesized at L2 level.
+So, DFX will be added at L1 level and L2 level.  So, there will be two DFX instances for the two encoder cores.
+
+Also, for VCU, the NPI Regs module is in PL domain and will be functional before VCU power supply is up. So, at L2 level, DFX instance will be partitioned into two modules. The clock satellite module for npi_ref_clk will be moved into PL domain and the rest of the DFX IP would be in VCU Domain.
+There will be a total of 4 DFX controllers planned for the following blocks:
+Block
+ | Level
+ |
+Encoder Core 0
+ | L1
+ |
+Encoder Core 1
+ | L1
+ |
+Decoder IP
+ | L1
+ |
+VCU2_INT_WRAP
+ | L2
+ |
+More details to be added. (To do)
+
+Memory DocumentManifest:  HYPERLINK "https://xilinx.sharepoint.com/:x:/r/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Telluride/VCU/VCU%20Memory%20List/VCU2_Memory_Manifest1.xlsx?d=w45ff0259a5b642a59a3aa2cad19a3832&csf=1&web=1&e=ptoSpZ" VCU2_Memory_Manifest1.xlsx
+
+ TBD
+BPD_POR
+
+Clock Connectivity
+
+The clock to the SSC module is not dfx controlled. The SSC module operates on POR from PMC. Hence the SSC module is excluded from scan chain.
+To cover the NPI flops into scan chain, the clock for the npi registers module is taken from the dfx controller clock satellite module output.
+
+IJTAG Network
+
+IJTAG (IEEE 1687) is an extension to (IEEE 1149.1) that is used to manage the configuration, operation and collection of data from a device. IJTAG uses the TAP controller in PMC and creates a network for control and status access of various block-level instruments (DFX features).
+For VCU2, IJTAG access is from the GT. There are four VCU2 DFX controllers and they are in VCCINT_VCU Domain. In order not to break the IJTAG chain to other blocks, when the VCU power is OFF, a power gated SIB is used in PL domain.
+The select_dr, ijtag_tdi and ijtag_tdi signals of the DFX controller are connected through the SIB. The remaining IJTAG interface signals are connected directly from the IJTAG mux to the DFX controller as shown in below figure.
+Two repeaters are added on the return paths “jtag_tdi_return_ext”,”jtag_tdo_return_ext “ respectively to help timing closure in physical design. i.e 1 Repeater before the SIB and 1 Repeater after SIB  on return paths as shown in figure.
+Two repeaters are added on the return paths “jtag_tdi_ext”,”jtag_tdo_ext “ respectively to help timing closure in physical design. i.e 1 Repeater before the SIB and 1 Repeater after SIB  on return paths as shown in figure.
+IJTAG Network Connections
+The generic IJTAG Network Diagram is shown below:
+
+The IJTAG Network for VCU2 is:
+
+DFX Macros
+
+Scan clear and Mem clear
+To wipeout the register data, DFX controller uses the existing scan infrastructure and does scan based initialization.
+NPI registers are used for scan clear and mem clear.
+Setting scan_clear_trigger and mem_clear_trigger bits in PCSR, scan clear and mem clear operations are triggered in DFX controller.
+The scan_clear_trigger and mem_clear_trigger is implemented as TMR register in VCU2 NPI PCSR.
+Done and Pass status comes from DFX controller.
+scan_clear_clock (from PMC) based memory clear is done in VCU2, hence the parameter MCLKMEMCLR of the DFX Controller is set to 1.
+
+Scan clear Connections
+
+Mem clear Connections
+MEMCLEAR is preferred to be done on functional clocks to speed up the process. For VCU2, RAMs are functionally operated on PL/DPLL/NOC clocks. Since this is a dependency on external block, so the suggestion is to use NPI clock which is expected to be available from the time POR is released.
+https://jira.xilinx.com/browse/EDT-1059821
+https://jira.xilinx.com/browse/EDT-1059821
+
+CSSD Trigger connections
+CSSD (Clock Stop Scan/State Dump) is a logic failure analysis (LFA) method that captures the internal state of the device upon stopping the clocks when the trigger condition becomes active and then shifting the captured state through scan shifting.
+As part of the debug using CSSD, vcu2_core has 2 external triggers in total that go to the VCU DFX controller. The 2 triggers come from PL. The CSSD clock counter width is chosen to be of 48-bits which is default.
+
+Scan Interface
+
+Scan exceptions
+Files are checked in to ICM.
+Paths:
+$RTL_ROOT/vcu2_v1_7t/vcu2_core/doc/vcu2_scan_exceptions_list.txt
+$RTL_ROOT/vcu2_v1_7t/vcu2_core/doc/ vcu2_scan_safe_signals_list.txt
+DFX Scan parameters
+
+MBIST/BISR Insertion
+At L1 level
+vcu2_enc_core_top: 268 RAMs
+vcu2_dec_top: 120 RAMs
+At L2 level
+vcu2_core: 17 RAMs
+MBIST insertion at L2 level with L1 level TSDBs.
+VCU2 has only one BISR-C at vcu2_int_wrap (L2) level.
+There is BISR Interface at L1 and L2 levels.
+Only the repairable memories will have BISR interface.
+BISR Pins at L1 Level:
+dfx_bisr_si
+dfx_bisr_se
+dfx_bisr_clk
+dfx_bisr_rst
+dfx_bisr_so
+
+BISR Connections
+
+BISR Architecture
+
+BPD_PORBPD POR – Battery Power Domain power-on reset
+
+BPD POR (Battery Power Domain power-on reset) IP is used to monitor voltages
+PL supply (VCCINT)
+VCU supply (VCCINT_VCU)
+RAM supply (VCCRAM)
+NoC supply (VCC_SOC)
+It generates power-on-reset after
+PL supply is up
+VCU supply is up
+RAM supply is up
+NoC supply is up
+PL_POR_B is released
+The POR IP is also used for generation of isolation control signals. A PCSR (Programming Control & Status Register) is used to remove isolation using software control through NPI accessaccess.
+One instance of POR IP is will be in PL power domain and the second instance is in VCU Domain. PL power is always ON for VCU
+POR IP receives active LOW POR from PMC
+Note: The in-house developedexisting BPD POR IP takes three power inputs only to generate POR. In that case,So, to monitor 4 voltages, need two instances of the IP is planned to use to generate power-on-reset.and then need to combine two POR outputs using a gate.
+
+Instance-1:
+
+This instance generates the PoR reset to VCU2. It also generates isolation control o/p for functional and DFX signals between VCU  PL power domains and between RAM  VCU power domain.
+
+Instance-2:
+
+The first instance is in PL domain, and it monitors PL, VCU and RAM power domains. It generates the isolation control outputs for DFX signals between VCU  PL power domains. It also generates isolation control outputs for functional signals between RAM  VCU power domain. The first instance also generates the hardware isolation control outputs for functional signals between VCU  PL power domains.
+The hardware isolation control output hw_iso_pl_vcu2_n is used to take the following PL signals to VCU Domain:
+vcu2_por_rst_int_n (reset output from BPD POR Instance 1)
+ctrl_iso_3_vcu2_noc (s/w isolation control from NPI Regs)
+ctrl_iso_4_vcu2_noc_dfx (s/w isolation control from NPI Regs)
+output of AND gate whose inputs are hw_iso_vcu2_pl_n (from BPD POR Instance 1) and ctrl_iso_1_vcu2_pl (s/w isolation control from NPI Regs)
+The second instance is in VCU domain, and it monitors VCU, SOC and RAM power domains. It generates the isolation control output for functional and DFX signals between VCU2  NOC power domains.
+The hardware isolation control output hw_iso_vcu2_pl_n is used to take the following VCU signals to PL Domain:
+vcu2_por_rst_n (reset output from BPD POR Instance 2)
+This instance generates the PoR reset to VCU2. It also generates isolation control o/p for functional and DFX signals between VCU  PL power domains and between RAM  VCU power domain.
+This instance generates the isolation control o/p for the signals between VCU2  NOC power domains for the NOC DFX feed-through signals.Clamping Values for isolation cells:
+ELS1 & ELS4 & ELS5 -> 1’b0
+ELS2 & ELS 3 -> 1’b1
+The power on reset sequence should be:
+PL supply, VCU2 power supply, RAM supply, NoC supply is turned ON. There is no requirement on sequence to turn on the powers.
+PMC releases POR pin (PMC_PoR_b)
+The first instance of BPD POR IP kicks off to monitor PL, VCU2 and RAM power supplies. Once all powers are detected, the first instance releases POR reset (vcu2_por_rst_int_n), which is sent to second instance of BPD POR.
+The reset (vcu2_por_rst_int_n) is taken to second instance of BPD POR through ELS1.
+ELS1 is clamped to 0.
+The control for ELS1 is from the first instance of BPD POR (HW Based, no SW dependency – NPI).
+First instance of BPD POR asserts the control signal hw_iso_pl_vcu2_n (0-> 1).
+The second instance of BPD POR IP kicks off to monitor SoC, VCU2 and RAM power supplies. Once all powers are detected, the second instance releases POR reset (vcu2_por_rst_n).
+The reset vcu2_por_rst_n is level shifted (ELS 4) to PL domain and then sent to PMC readback supply status via NPI Slave Registers.
+The control for ELS4 is from the first instance of BPD POR (HW Based, no SW dependency – NPI).
+First instance of BPD POR asserts the control signal hw_iso_vcu2_pl_n (0-> 1).
+PMC polls for the power status, and de-assert IPOR register after power ramp is complete.
+Release of IPOR releases reset on isolation control signals in PCSR.
+PMC de-assert isolation control registers in PCSR
+ctrl_iso_0_mmd_pl_dfx (1 ->  0)
+ctrl_iso_1_mmd_pl (1 ->  0)
+ctrl_iso_2_mmd_ram (1 ->  0)
+ctrl_iso_3_mmd_noc (1 ->  0)
+ctrl_iso_4_mmd_noc_dfx (1 ->  0)
+MMD-PL Isolation control ctrl_iso_1_mmd_pl releases isolation between VCU2 and PL domains (Outside BPD POR Instances)
+Iso_pl_vcu2_n is generated by ANDing the signals hw_iso_pl_vcu2_n & ctrl_iso_1_mmd_pl.
+iso_vcu2_pl_n is generated by taking Iso_pl_vcu2_n through ELS5.
+The control for ELS5 is from the first instance of BPD POR (HW Based, no SW dependency – NPI).
+First instance of BPD POR asserts the control signal hw_iso_pl_vcu2_n (0-> 1).
+
+The control isolations MMD-NOC and MMD-NOC DFX are taken through ELS2 and ELS3 respectively for the second instance of BPD POR.
+The control for ELS2 & ELS3 is from the first instance of BPD POR (HW Based, no SW dependency – NPI).
+First instance of BPD POR asserts the control signal hw_iso_pl_vcu2_n (0-> 1).
+
+More details about BPD POR proposals is at  HYPERLINK "https://amdcloud.sharepoint.com/:w:/r/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Telluride/VCU/BPD_POR_Proposal/BPD%20POR%20Proposal.docx?d=wc6cfed8f4d2f40c7a959b3195e8498ce&csf=1&web=1&e=1utm3R" BPD POR Proposal.docx
+
+The table below gives details of all the isolation control signals generated using these two instances:
+
+Isolation
+Control
+ | Description
+ | PoR IP O/p
+Power
+Domain
+ | Destination
+Power
+Domain
+ | Isolation Control Reg
+ |
+iso_ctrl_pl_vcu2_dfx_n
+ | Isolation control on the DFX signals going from PL to VCU domain. This will be removed when the PL, VCU and RAM power are up
+Releases these signals:
+- scan_clear_clock
+- scan_clear_trigger
+ | PL
+ | VCU
+ | CTL_0
+ |
+iso_ctrl_vcu2_pl_dfx_n
+ | Isolation control on the DFX signals going from VCU to PL domain. This will be removed when the PL, VCU and RAM power are up
+Releases these signals:
+- scan_clear_done
+- scan_clear_pass
+- scan_done_interrupt
+ | PL
+ | PL
+ |
+ |
+iso_ctrl_pl_vcu2_n
+ | Isolation control on signals going from PL to VCU domain. This will be removed when PL, VCU and RAM power are up.
+ | PL
+ | VCU
+ | CTL_1
+ |
+iso_ctrl_vcu2_pl_n
+ | Isolation control on signals going from VCU to PL domain. This will be removed when VCU and RAM power are up.
+ | PL
+ | PL
+ |
+ |
+iso_rctl_ram_vcu2_n
+ | Isolation control on signals going from RAM domain to VCU domain. This will be removed when VCU and RAM power are up.
+ | PL
+ | RAM
+ | CTL_2
+ |
+iIso__ctrl_vcu2_noc_n
+ | Isolation control on signals going from VCU to NOC domain. This will be removed when NOC, VCU, PL and RAM power are up.
+ | PL
+ | SOC
+ | CTL_3
+ |
+iso_noc_vcu2_nctrl_noc_vcu
+ | Isolation control on signals going from NOC to VCU domain. This will be removed when NOC, VCU, PL and RAM power are up.
+ | PL
+ | VCU
+ |
+ |
+iso_ctrl_noc_vcu2__noc_dfx_n
+ | Isolation control on the feed-through DFX NOC signals. This will be removed when the NOC and VCU power are up
+ | PL
+ | VCU
+ | CTL_4
+ |
+iso_ctrl_vcu2_noc__noc_dfx_n
+ | Isolation control on the feed-through DFX NOC signals. This will be removed when the NOC and VCU power are up
+ | PL
+ | SOC
+ |
+ |
+
+Possible options for BPD POR in case of four power supplies:
+Two instances of the IP and combine the two generated POR outputs using a gate to give a final POR output.
+Single instance of IP
+Reset is asserted only (design is active) when all power domains are detected and PMC_POR is high
+
+Combination of PMC_POR and SSC go into VCU reset
+Then level shifter and then reset_n goes to VCU block
+
+Can we do the BPD_POR with the existing IP system?
+Only with three power supplies?
+
+If we have BPD_POR inside the VCU …  then we do not need to detect PL because VCU power comes after PL
+But in this case, if PL is on and VCU is not on, then any issues?
+Some issues might be in NPI Block?
+
+POR IP is responsible for generation of control signals.
+Are there any signals which goes from VCU to PL
+For signals going from PL to VCU
+Are there any signals that need to be pass even VCU is disabled
+For NPI register write, isolation might be needed from VCU to PL
+No isolation is needed right, because VCU power comes after PL
+
+In case of NoC to VCU and VCU to NoC:
+Isolation is needed
+
+Can we ignore VCC_RAM
+
+Performance Monitoring
+AXI Performance Monitors (APM)s are used to monitor the transaction counts and latency on AXI interfaces. They are also used to measure the task execution time and the bandwidth. APMs will be reused as it is in VDU.
+BISR Cache Integration
+Xilinx BISR (Built in Self Repair) cache is used to store BISR cache data. For details on BISR cache module, refer to  HYPERLINK "https://xilinx.sharepoint.com/:w:/r/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Modules/PMC/XLNX_BISR_CACHE/Everest_MicroArch_BISR_CACHE.docx?d=w0f6f01d49c4448a49775706abfa42253&csf=1" Xilinx BISR Cache Spec.
+This module in conjunction with Tessent BISR controller to perform memory repair.
+Memory repair is done after POR.  BISR cache is not scan controlled. Hence the clock, reset and data to the module are not scan controlled.
+BISR trigger does not need to be synchronized because MBISR controller has a synchronizer internally.
+?
+Figure  SEQ Figure \* ARABIC 5: BISR Cache Integration
+
+BISR Cache Diagram (TBD)
+For BISR cache integration in VCU, refer to below table:
+Table  SEQ Table \* ARABIC 3 SEQ Table \* ARABIC 3 BISR cache integration
+Port
+ | Width
+ | Comment
+ |
+Clock
+ | 1
+ | BISR clock. The clock frequency is half of the scan_clear_clock (aka mclk from PMC). BISR clock is not scan controlled. Flop based divider is implemented on mclk.
+ |
+Reset
+ | 1
+ | VCU power on reset, synchronized to BISR clock domain. Not scan controlled.
+ |
+BISR TEST DATA
+ | 256
+ | Used during repair. This is driven to NPI registers from BISR cache. Synchronizer is not required on this.
+ |
+BISR DATA
+ | 256
+ | Memory repair data. Synchronizer is not required on this.
+ |
+bisr_cache_clear
+ | 1
+ | From NPI register to Xilinx BISR cache. This need not be synchronized.
+ |
+repair_trigger
+ | 1
+ | NPI register bit to MBISR controller. This is to trigger BISR repair. Synchronizer is not required on this, because MBISR controller has a sync cell.
+ |
+BISR_ADDR_SIZE
+ | 8
+ |
+ |
+BISR_DATA_SIZE
+ | 256
+ |
+ |
+
+BISR data width calculation
+BISR repair is required for all memories which are of size > 16k bits. This is a requirement in Everest.
+
+Total number of repairable memory instances in VDU VCU = 86 (Todo) (TBD)
+BISR data width = 256.
+Max width among above = 260
+Number of bits required to address each bank = log2(130) = 8
+BISR repair register size per bank = Num of address bits + Number of control bits
+= 8 + 1 = 9
+Total length of BISR chain = 2*9*86 = 1548
+Zero count bits = log2(BISR chain length) = log21548 = 11 (after rounding)
+Now,
+"NumberOfFuses = (NumberOfRepairs * BISRRegSize + ((NumberOfRepairs +1) * (ZeroCounterBits+1))
+where number of repairs = 2 (As per TSMC guideline for every 5Mbits of memory, we need 1 repair. VDU has 5.2Mbits of memory and hence requires 2 bits of repair)
+Number of Fuses = 2*9+(2+1)*(11+1) = 18+3*12 = 54
+The repair signature for VCU is long, and based on feedback from MBIST, the new BISR data width is 256	(TBD).
+SSC
+The RTL for the SSC receiver in VCU is used from Clifden. The information on the use of the SSC is in the RFAMS (a.k.a. Clifden) arch spec in section 6.1.5 (p.33).
+HYPERLINK "http://xinc/ppg/fdst/everest/arch/Shared%20Documents/Forms/AllItems.aspx?RootFolder=%2Fppg%2Ffdst%2Feverest%2Farch%2FShared%20Documents%2FArch%20Specs%20%28released%29&FolderCTID=0x012000A132CF643A5F82409D52C011C4EC1884&View=%7b580667E1-C53D-4E85-838B-6E99D87C77EA%7d"Everest Arch Specs -> HYPERLINK "http://xinc/ppg/fdst/everest/arch/Shared%20Documents/Forms/AllItems.aspx?RootFolder=%2Fppg%2Ffdst%2Feverest%2Farch%2FShared%20Documents%2FArch%20Specs%20%28released%29%2FRFAMS&InitialTabId=Ribbon%2EDocument&VisibilityContext=WSSTabPersistence"RFAMS -> HYPERLINK "http://xinc/ppg/fdst/everest/arch/Shared%20Documents/Arch%20Specs%20(released)/RFAMS/Everest_RFAMS_Arch_Spec_v1.0.pdf"Everest_RFAMS_Arch_Spec_v1.0.pdf
+
+SysMon sideband channel (SSC) is used for eFuse disable of VCU. The transfer of secure e-fuse data from the PMC to the VCU cores is done using the SSC (SysMon Side Channel), a serial ring used to connect satellite SysMon instances around the chip. It was designed exclusively for the SysMon, however because it is the only private chip-wide bus, it may be repurposed prior to fabric startup to transfer the secure e-fuse values.
+
+VCU will instantiate an “SSC receiver” circuit to observe the traffic on the SSC during fabric configuration and capture the e-fuse data from special packet types. These are unique packets that are only generated by the root SysMon for this purpose. The SSC receiver should be an observer only on the SSC to avoid interfering with the SysMon operation.
+
+The e-fuse value in the PMC, assigned to VCU, is hard-wired from the e-fuse block to the root SysMon and the e-fuse values can be write-protected by Xilinx during manufacturing test. The root SysMon contains a state machine, triggered by SW / firmware, that generates special SSC packets using the e-fuse data. The trigger from SW prompts the root SysMon to create 4 consecutive 32-bit packets, each having a capacity to transfer 16-bits of payload, and to launch these packets onto the PL SSC ring. Only the triggering is SW controlled, the contents of the packets are hard wired and cannot be altered. There is no connection within the root SysMon between the AXI switch, or any other interface, and the SSC interface.
+
+The root SysMon also contains some circuitry to receive and verify the secure e-fuse packets when they arrive back around the SSC ring. This circuitry can set interrupts to flag missing or corrupted packets or other unexpected behavior, however it is not a part for the system security.
+
+The SSC control packets used to send the secure e-fuse data are formatted as follows:
+
+Figure  SEQ Figure \* ARABIC 8 Format of SSC Control packet
+
+Control Packet [3:0] = 4’h4 indicates that the packet is a control type
+Satellite ID [5:0] = address of a satellite; A value of 6’h3f indicates a broadcast message
+Control Payload [21:0] = payload
+Control Payload [20]                – secure bit (1 – secure)
+Control Payload [19:18]          – word index
+Control Payload [15:0]            –  eFuse data
+Control Payload [21], [17:16] - unused
+
+The block diagram below shows the VCU SSC receiver
+
+Figure  SEQ Figure \* ARABIC 9 Block Diagram of SSC Receiver Module
+
+The fabric global signals “en_glob” and “ghigh_b” are used to indicate when the entire fabric is being configured prior to startup and must be tapped from the fabric side of the GTCC (GT clocking column). The “ghigh_b”==0 indicates the fabric is being configured and “en_glob==1” ensures that the configuration is global and not a local partial-reconfiguration. The “data[1:0]” and “mrkr” SSC signals are provided by the satellite SysMon tile in the GTCC and the “npi_ref_clock” is provided with the NPI protocol interface from the NPI switch.
+Doubt: what mrkr_r  and data_r[1:0] signals does?
+Notes :
+The SSC receiver block is reset with VDU_POR.
+The entire SSC receiver block is in VCCINT_PL power domain.
+The RCLK COE will supply the combined signal ssc_efuse_en = en_glob & ~ghigh_b. SSC receiver uses this bit to validate SSC packets received, only during PL configuration
+By Default, the VCU IP is disabled. VDU can be enabled only when valid SSC packets are received from sysmon channel with efuse bit value of “0”. This means, until a valid efuse data is received, VCU will be disabled. An efuse value of ‘0’ should be sent to enable VCU.
+The SSC receiver must receive all 4 secure e-fuse packets from the PMC
+Designed for 64-bit e-fuse value (although only 48 bits are used). This requires 4 packets to be transmitted from PMC. (32 bits size of one packet ? – 16 bits at a time ) (what all information does a packet contain?)
+VDU Instance ID[1:0] Port  is used to determine Instance number on the device and Efuse bit is selected based on the instance number. refer table 6&7 below
+In our case, we need one bit for instance id.
+Instance ID 	 	Block
+0			Encoder
+1 			Decoder
+2286000301975
+Figure  SEQ Figure \* ARABIC 10 vdu_instance_id port connection at device level
+
+Based on the Blown e-fuse value, decoder and encoder would be disabled (either the subsystem will be in reset or clock gating)
+Out of the 48 bits received from efuse, the MSB bit i.e bit [47:44] are used to determine whether particular VDU instance needs to be disabled or brought out of reset. refer 6&7 table below
+Packet Size ?
+Two packets are sufficient?
+Here, four packets for four vdu tiles may be
+Efuse Bit
+1 -> Disable
+0 -> Enable
+
+EFuse bit
+ | Used by
+ | Comment
+ |
+EFuse []
+ | Decoder
+ | Set this bit to 0 to enable Decoder
+ |
+EFuse []
+ | Encoder
+ | Set this bit to 0 to enable Encoder
+ |
+
+Table 6: EFuse Bit
+
+Efuse bit
+ | Used by (instance name)
+ | Comment
+ |
+Efuse[44]
+ | VDU0 (bottom most)
+ | Set this bit to 0 to enable VDU0
+ |
+Efuse[45]
+ | VDU1
+ | Set this bit to 0 to enable VDU1
+ |
+Efuse[46]
+ | VDU2
+ | Set this bit to 0 to enable VDU2
+ |
+Efuse[47]
+ | VDU3(top most)
+ | Set this bit to 0 to enable VDU3
+ |
+Table  SEQ Table \* ARABIC 4 SEQ Table \* ARABIC 6 Efuse bit used based on vdu instance id value
+
+EFuse Value
+ | Instance Enabled
+ |
+00
+ | Encoder, Decoder
+ |
+01
+ | Encoder
+ |
+10
+ | Decoder
+ |
+11
+ | None
+ |
+Table 7: Enable Status vs eFuse values
+Efuse Values[47:44]
+ | VDU instances enabled
+ | Vdu_instance_id[1:0] of enabled VDUs
+ |
+0000
+ | VDU0, VDU1,
+VDU2, VDU3
+ | 2’b00,2’b01,2’b10,2’b11
+ |
+1110
+ | VDU0
+ | 2’b00
+ |
+1100
+ | VDU0, VDU1
+ | 2’b00,2’b01
+ |
+1111
+ | None
+ | --
+ |
+
+Observe the SSC only while ssc_efuse_en is asserted (en_glob==1 & ghigh_b==0) . Once the fabric is configured, the enable will de-assert and the receiver will no longer respond to the SSC inputs
+The receiver looks for secure e-fuse packets with broadcast address only
+All other packet types are silently ignored
+Valid packets must have
+control header
+broadcast address
+secure (SEC) bit 20 set
+expected 2-bit word index
+E-fuse words are expected in order from most to least significant
+ Out of order words clear the valid flag and raise an “efuse_error” interrupt
+SSC marker corruption checks in the SSC receiver are the same as in SysMon root.
+Marker corruption invalidates an SSC packet and raises the efuse_error interrupt
+The secure eFuse SSC packets can be sent more than once by the root and may be received more than once by the receiver, however the outgoing valid flag is not asserted until “locked” whereupon further reception is disabled. The eFuse outputs are not considered valid and may not be used unless the valid flag is asserted
+The outgoing valid flag is asserted only if all words have been received in the expected order AND the lock(out) / ssc_efuse_en is de-asserted.
+Once locked out, the SSC receiver state can only be cleared through the por_pl_b from PMC.
+SSC packets can be interleaved with any other type of packet from SYSMON Root. But when the control and broadcast address match, Secure must be set and word index has to be correctly decrementing with each packet. If this is violated, an error will be generated
+
+2314940021NOTE: IPOR has to be released to start ssc efuse packets transfer, otherwise No efuse Error, valid interrupts can be captured by Interrupt status register.
+
+0NOTE: IPOR has to be released to start ssc efuse packets transfer, otherwise No efuse Error, valid interrupts can be captured by Interrupt status register.
+
+00NOTE: SSC receiver works on PL power. When there is PL power cycle, Efuse data has to be sent again otherwise VCU will be in disabled state.
+
+0NOTE: SSC receiver works on PL power. When there is PL power cycle, Efuse data has to be sent again otherwise VCU will be in disabled state.
+
+left44238NOTE: eFUSE error interrupt is mainly used by SW to understand that VCU eFuse transmission errored out (kind of debug). No specific ISR expected. SW has to resend eFUSE data, if error occurred . or interrupt is mainly used by SW to understand that VDU eFUSE transmission errored out (kind of debug). No specific ISR expected. SW has to resend eFUSE data, if error occurred.
+
+00NOTE: eFUSE error interrupt is mainly used by SW to understand that VCU eFuse transmission errored out (kind of debug). No specific ISR expected. SW has to resend eFUSE data, if error occurred . or interrupt is mainly used by SW to understand that VDU eFUSE transmission errored out (kind of debug). No specific ISR expected. SW has to resend eFUSE data, if error occurred.
+
+SSC Programming Sequence
+
+For exact sequence refer to section 3.4.2 Power on reset sequence.
+The sequence of events for successful transfer of the secure e-fuse data are:
+VCCINT_SOC is powered up and the NPI is operational
+VCCINT_PL is powered up but before the fabric configuration is completed
+PMC Firmware would trigger the transmission of the secure e-fuse from the root SysMon
+Fabric completes configuration and starts up
+On detecting ssc_efuse_en==0 the SSC receiver gates off the SSC inputs and validates the SSC e-fuse packets received (if any)
+SSC receiver asserts the “valid” flag provided 4 correctly sequenced and formatted SCC control packets have been received with secure bit
+The ‘efuse_valid’ and ‘efuse_error’ would be routed back as interrupts to PMC on NPI
+The ‘efuse_disable_ip’ is stored as status bit in NPI
+
+VCU Requirement for secure eFuse data transmission
+VCCINT_PL should be powered before fabric configuration is completed
+PMC firmware should trigger the transmission of secure eFuse data only after the VCCINT_PL are up
+Before fabric configuration is completed, the PMC firmware should complete the transmission of secure eFuse data to VCU on SSC
+During PL configuration, SSC channel should not be shared for any other purposes
+
+NPI
+Interface Description
+VCU supports NPI Slave for programming scan clear, MBIST clear, BISR control and status. Also, NPI PCSR bits will be supported for the global functions. NPI is controlled from PMC and connects to VCU through GTCC. NPI Registers logic will be placed in PL domain as NPI configuration will start before VCU is active. All VCU required interface signals will be connected through level shifters and isolation cells.
+
+Figure  SEQ Figure \* ARABIC 9: NPI Connectivity at System Level
+NPI Interface
+Refer to below table for description of NPI interface signals to the VCU2_CORE block (NPI_S_VCU in above figure). All these are on PL power domain. The NPI registers logic (VCU_NPI_SLAVE in above figure) is in PL domain itself. There are no level shifters on these signals.
+
+Signal Name
+ | Clock
+ | Width
+ | Direction
+ | Level shifter
+ | Comment
+ |
+npi_ref_clk
+ |
+ | 1
+ | I
+ | None
+ | From GTCC, hard connection to VCU
+ |
+paddr
+ | npi_ref_clk
+ | 16
+ | I
+ | None
+ |
+ |
+penable
+ | npi_ref_clk
+ | 1
+ | I
+ | None
+ |
+ |
+pwrite
+ | npi_ref_clk
+ | 1
+ | I
+ | None
+ |
+ |
+paccept
+ | npi_ref_clk
+ | 1
+ | O
+ | None
+ |
+ |
+presponse
+ | npi_ref_clk
+ | 1
+ | O
+ | None
+ |
+ |
+pwdata
+ | npi_ref_clk
+ | 32
+ | I
+ | None
+ |
+ |
+interface_ready
+ | npi_ref_clk
+ | 1
+ | O
+ | None
+ |
+ |
+prdata
+ | npi_ref_clk
+ | 32
+ | O
+ | None
+ |
+ |
+pslverr
+ | npi_ref_clk
+ | 1
+ | O
+ | None
+ |
+ |
+interrupt
+ | npi_ref_clk
+ | 20
+ | O
+ | None
+ |
+ |
+preset_n
+ | npi_ref_clk
+ | 1
+ | I
+ | None
+ |
+ |
+addr_size
+ | npi_ref_clk
+ | 3
+ | O
+ | None
+ | This output is driven at VCCINT_SOC.  Value = 2(indicates 128kB).
+ |
+por_pl_b
+ | Async
+ | 1
+ | I
+ | None
+ | POR reset to VCU from PMC
+ |
+Table  SEQ Table \* ARABIC 5: NPI Interface for VCU
+NPI registers for VCU
+NPI is used for
+BISR cache Clear (to BISR cache) and BISR trigger (to MBISR controller).
+Scan clear
+Mem clear
+Power supply status
+Reset
+VCU doesn’t have any NPI configuration registers
+Below are the NPI register categories:
+PCSR
+LOCK
+STATUS
+MASK
+CONTROL
+BISR CACHE
+CACHE DATA
+TEST DATA
+Interrupt
+MASK
+STATUS
+ENABLE
+DISABLE
+OFFSET
+TRIGGER
+ECO registers
+ECO_reg_1
+ECO_reg_2
+ECO_reg_3
+
+Signal Name
+ | NPI register
+ | Reset
+ | Width
+ | Comment
+ |
+NPI registers for SCAN and MBIST
+ |
+scan_clear_trigger
+ | PCR
+ | POR
+ | 1
+ | To initiate scan clear. No synchronizer is required on this since DFX IP has sync cell internally
+ |
+mem_clear_trigger
+ | PCR
+ | POR
+ | 1
+ | To initiate Memory clear. No synchronizer is required on this since DFX IP has sync cell internally
+ |
+Scan_clear_done
+ | PSR
+ | POR
+ | 1
+ |
+ |
+Scan_clear_pass
+ | PSR
+ | POR
+ | 1
+ |
+ |
+mem_clear_done
+ | PSR
+ | POR
+ | 1
+ |
+ |
+mem_clear_pass
+ | PSR
+ | POR
+ | 1
+ |
+ |
+NPI registers for BISR
+ |
+bisr_cache_clear
+ | PCR
+ | POR
+ | 1bit
+ | To clear BISR cache
+ |
+bisr_repair_trigger
+ | PCR
+ | POR
+ | 1bit
+ | To initiate BISR repair
+ |
+bisr_done
+ | PSR
+ | POR
+ | 1bit
+ |
+ |
+bisr_pass
+ | PSR
+ | POR
+ | 1bit
+ |
+ |
+BISR DATA
+ | BISR_DATA_REG
+ | POR
+ | 256bits
+ | For BISR repair cache DATA
+ |
+TEST DATA
+ | BISR_TEST_DATA
+ | POR
+ | 256bits
+ | Used during BISR repair
+ |
+NPI registers for Power and reset
+ |
+INITSTATE
+ | PCR
+ | POR
+ | 1bit
+ | For issuing reset to VDU.
+ |
+IPOR
+ | PCR
+ | POR_PL
+ | 1bit
+ | To issue internal power on reset. Refer to Chip Pervasive Spec for more details about internal POR
+ |
+PWR SUPPLY STATUS
+ | PSR
+ | -
+ | 1bit
+ | Indicates VDU supply is ready. This bit is required for PLM
+ |
+Isolation control
+ | PCR
+ | POR
+ | 3bits
+ | For PMC to control isolation gasket removal. Until PMC writes to these registers, VDU isolation is not removed
+ |
+EFuse Disable Status
+ | PSR
+ | -
+ | 1bit
+ |
+ |
+Table  SEQ Table \* ARABIC 6: NPI Registers
+
+Interface Description
+
+VCU supports NPI slave for programming, scan clear, MBIST clear, BISR control and status. Apart from these, NPI PCSR bits are supported for global functions. Detailed list is provided in the NPI registers section of this specifications.
+NPI is controlled from PMC and connects to VCU through GTCC.
+NPI registers logic is planned in VCU_CORE module (above VCU_ATOM module. Refer to VCU hierarchy section for details). All VCU required NPI interface signals are connected through level shifters and isolation cells.
+
+NPI Registers
+
+Figure  SEQ Figure \* ARABIC 6 NPI Connectivity at system level
+NPI Interface
+Refer to below table for description of NPI interface signals to the VCU_CORE block (NPI_S_VDU in above figure). Here, all signals are in PL power domain and NPI registers logic (VCU_NPI_SLAVE in above figure) is also in PL domain itself. No level shifters are needed on this logic.
+Signal Name
+ | Clock
+ | Width
+ | Direction
+ | Level shifter
+ | Comment
+ |
+npi_ref_clk
+ |
+ | 1
+ | I
+ | None
+ | From GTCC, hard connection to VCU
+ |
+paddr
+ | npi_ref_clk
+ | 16
+ | I
+ | None
+ | From GTCC, hard connection to VCU
+ |
+penable
+ | npi_ref_clk
+ | 1
+ | I
+ | None
+ | From GTCC, hard connection to VCU
+ |
+pwrite
+ | npi_ref_clk
+ | 1
+ | I
+ | None
+ | From GTCC, hard connection to VCU
+ |
+paccept
+ | npi_ref_clk
+ | 1
+ | O
+ | None
+ | From GTCC, hard connection to VCU
+ |
+presponse
+ | npi_ref_clk
+ | 1
+ | O
+ | None
+ | From GTCC, hard connection to VCU
+ |
+pwdata
+ | npi_ref_clk
+ | 32
+ | I
+ | None
+ | From GTCC, hard connection to VCU
+ |
+interface_ready
+ | npi_ref_clk
+ | 1
+ | O
+ | None
+ | From GTCC, hard connection to VCU
+ |
+prdata
+ | npi_ref_clk
+ | 32
+ | O
+ | None
+ | From GTCC, hard connection to VCU
+ |
+pslverr
+ | npi_ref_clk
+ | 1
+ | O
+ | None
+ | From GTCC, hard connection to VCU
+ |
+interrupt
+ | npi_ref_clk
+ | 20
+ | O
+ | None
+ | From GTCC, hard connection to VCU
+ |
+preset_n
+ | npi_ref_clk
+ | 1
+ | I
+ | None
+ | From GTCC, hard connection to VCU
+ |
+addr_size
+ | npi_ref_clk
+ | 3
+ | O
+ | None
+ | This output is driven at VCCINT_SOC.
+Value = 2 (indicates 128kB). This output is driven using npi_opt_1 power signal from GTCC. Recommendation is to connect these bits to required value (3’b010) at VCU integration level.
+
+Now, direct assignment is also possible as VCU involves VCC_NOC supply.
+ |
+por_pl_b
+ | Async
+ | 1
+ | I
+ | None
+ | POR reset to VCU from PMC
+ |
+sys_rst1_n
+ | Async
+ | 1
+ | I
+ | None
+ | Slave reset from PMC to VCU
+ |
+sys_rst2_n
+ | Async
+ | 1
+ | I
+ | None
+ | Slave reset from PMC to VCU
+ |
+sys_rst3_n
+ | Async
+ | 1
+ | I
+ | None
+ | Slave reset from PMC to VCU
+ |
+slv_clk
+ | -
+ | 1
+ | O
+ | None
+ | npi_ref_clk from VCU back to NPI Endpoint.
+ |
+coe_id
+ | Async
+ | 5
+ | O
+ | None
+ | Not required. Obsolete.
+ |
+npi_opt_1
+ | Async
+ | 1
+ | I
+ | None
+ | This input is used to drive addr_size at VCCINT_SOC. This is not used anywhere in design except to drive addr_size. This should not be buffered in VCU.
+
+The use of this input signal can be eliminated.
+ |
+Table 8 NPI Interface for VDU CORE
+ADDR_SIZE: This has to be driven at VCCINT_SOC.
+Option 1:  An input npi_opt_1 is driven to VCU at VCCINT_SOC power which is used as metal tied off to addr_size. Since SOC supply is not used, these outputs should NOT be used to drive VNPI directly. Recommendation is to connect these bits to required value (3’b010) at VCU integration level. Bit [1] should be driven with npi_opt_1 and bits[2,0] should be connected to GND or Logic 0 with TIECELL in SOC domain. Refer to EDT -  HYPERLINK "https://jira.xilinx.com/browse/EDT-1010078" https://jira.xilinx.com/browse/EDT-1010078
+NOTE: VCCINT_VDU is connected to VCCINT_SOC at package level, but VDU was designed to work in independent power domain, so above paragraph is still valid.
+Option 2: Drive the addr_size signal in VCCINT_SOC domain.
+
+Npi_opt1 is not required in VCU. We have VCCINT_SOC power domain. (To be reviewed)
+
+The NPI block in VCU_CORE level is shown below:
+
+Level shifters are included on all signals between vcu_npi_wrapper and the VCU_CORE_TOP.
+NPI registers for VDU
+Refer to below table for description of signals to the VCU_CORE_TOP block (NPI_REGS_VDU in above figure). All these are on PL power domain. There are shifted to VCU power domain.
+NPI is used for
+BISR cache clear (to BISR cache) and BISR trigger (to MBISR controller)
+Scan clear
+Mem clear
+Power supply status
+Reset
+VCU doesn’t have any NPI configuration registers
+Below table lists the NPI register categories
+PCSR (Program Control & Status Register)
+LOCK
+STATUS
+MASK
+CONTROL
+BISR CACHE
+CACHE DATA
+TEST DATA
+Interrupt
+MASK
+STATUS
+ENABLE
+DISABLE
+OFFSET
+TRIGGER
+ECO registers
+ECO_reg_1
+ECO_reg_2
+ECO_reg_3
+
+NPI register bits required below:
+
+Signal Name
+ | NPI register
+ | Reset
+ | Width
+ | Comment
+ |
+NPI registers for SCAN and MBIST
+ |
+scan_clear_trigger
+ | PCR
+ | POR
+ | 1
+ | To initiate scan clear. No synchronizer is required on this since DFX IP has sync cell internally
+ |
+mem_clear_trigger
+ | PCR
+ | POR
+ | 1
+ | To initiate Memory clear. No synchronizer is required on this since DFX IP has sync cell internally
+ |
+Scan_clear_done
+ | PSR
+ | POR
+ | 1
+ |
+ |
+Scan_clear_pass
+ | PSR
+ | POR
+ | 1
+ |
+ |
+mem_clear_done
+ | PSR
+ | POR
+ | 1
+ |
+ |
+mem_clear_pass
+ | PSR
+ | POR
+ | 1
+ |
+ |
+NPI registers for BISR
+ |
+bisr_cache_clear
+ | PCR
+ | POR
+ | 1bit
+ | To clear BISR cache
+ |
+bisr_repair_trigger
+ | PCR
+ | POR
+ | 1bit
+ | To initiate BISR repair
+ |
+bisr_done
+ | PSR
+ | POR
+ | 1bit
+ |
+ |
+bisr_pass
+ | PSR
+ | POR
+ | 1bit
+ |
+ |
+BISR DATA
+ | BISR_DATA_REG
+ | POR
+ | 256bits (TBD)
+ | For BISR repair cache DATA
+ |
+TEST DATA
+ | BISR_TEST_DATA
+ | POR
+ | 256bits (TBD)
+ | Used during BISR repair
+ |
+NPI registers for Power and reset
+ |
+INITSTATE
+ | PCR
+ | POR
+ | 1bit
+ | For issuing reset to VDU.
+ |
+IPOR
+ | PCR
+ | POR_PL
+ | 1bit
+ | To issue internal power on reset. Refer to Chip Pervasive Spec for more details about internal POR
+ |
+PWR SUPPLY STATUS
+ | PSR
+ | -
+ | 1bit
+ | Indicates VDU supply is ready. This bit is required for PLM
+ |
+Isolation control
+ | PCR
+ | POR
+ | 3bits (TBD)
+ | For PMC to control isolation gasket removal. Until PMC writes to these registers, VDU isolation is not removed
+ |
+EFuse Disable Status
+ | PSR
+ | -
+ | 1bit
+ |
+ |
+Table  SEQ Table \* ARABIC 5 SEQ Table \* ARABIC 5 NPI registers - VDU interface description
+
+NPI Registers File
+Refer to below table for description of the NPI registers. Full list of register can be found in VDU ODS.
+
+ODS File Path: $SW_ROOT/vdu_7t_n1/registers/vdu_npi.ods (Update the Path) (To do)
+NPI Reset
+
+Below diagram shows the various resets to NPI registers:
+
+Figure  SEQ Figure \* ARABIC 7 Reset to NPI registers
+
+Below table shows NPI list of registers with its corresponding reset:
+PCSR MASK and control
+ |
+PCOMPLETE, GATEREG, ODISABLE, HOLDSTATE, FABRICEN, STARTCAL, SCAN_CLEAR_TRIGGER, APBEN, DISNPICLK, PWRDN, SYS_RST_MASK, MEM_CLEAR_TRIGGER, SLVERREN, TEST_SAFE, iso_1_vdu_pl, iso_2_vdu_pl, iso_1_vdu_ram, BISR_TEST_CLR, BISR_TRIGGER
+ | slv_por_rst_n
+ |
+INITSTATE, TRISTATE
+ | slv_sys_rst_n
+ |
+PCSRLOCK
+ | pmc_por_rst_b
+ |
+ISR
+ | slv_scan_por_rst_n
+ |
+IMR
+ | slv_rst_n = scan controlled and !initstate
+ |
+VDU_IPOR
+ | pmc_por_rst_b
+ |
+IOR
+ | slv_scan_por_rst_n
+ |
+BISR_CACHE_DATA*
+ | slv_por_rst_n
+ |
+ITR
+ | No reset (not flopped)
+ |
+IER
+ | No reset (not flopped)
+ |
+IDR
+ | No reset (not flopped)
+ |
+PCSR Status#
+ | Status bit (not flopped) No reset
+ |
+ECO_REG_1
+ | slv_por_rst_n
+ |
+ECO_REG_2
+ | Pmc_por_rst_b
+ |
+ECO_REG_3
+ | slv_rst_n
+ |
+
+# Includes PCSR LOCK status, SCAN_CLEAR_DONE, SCAN_CLEAR_PASS, MEM_CLEAR_DONE, MEM_CLEAR_PASS, BISR_DONE, BISR_PASS, VDU_PWR_SUPPLY, VDU_SSC_EFUSE_DISABLE.
+For full list of register bits, refer to ODS.
+NPI Clock
+NPI interface works at NPI clock from PMC at 300MHz
+The clock input is driven back to NPI Endpoint, through GTCC.
+All the inputs and outputs in VCU are timed with respect to the loopback clock(slv_clk) in picture below
+NPI Endpoint considers slv_clk and npi_ref_clk as asynchronous and handles the signals crossing between the two-clock domain asynchronously.
+
+NPI Programming Sequence
+After POR, check interface_ready signal, pwr_supply status (vdu_npi_pcsr_status[26]) . If both are “1”,then interface is up for programming.
+Unlock the NPI registers by programming 0xf9e8d7c6 value into vdu_npi_pcsr_lock register.
+Write vdu_npi_pcsr_mask[30]  bit as “1” and de-assert pcsr_control[30](vdu_ipor)
+Write MASK registers 0xFFFFFFFF and program pcsr_control register values and other registers as required.
+Remove isolation (PCSR.control bits [23:21])
+INITSTATE to be de-asserted, once the clocks are stable
+Lock the NPI registers after programming by writing any value (other than unlock code) into Lock register.
+Read the values to make sure the values written are registered.
+NPI Scan Controllability
+
+PCSR are not scan controlled. These are not part of scan chain. PCSR will, however receive controlled clock, same as other NPI flops.
+This means, when scan clear is enabled, PCSR will receive scan clear clock. Similarly, PCSR is clocked by scan clock during stuck at mode scan testing.
+Other flops in NPI are scan controlled – for both clock and reset
+This is because, NPI RTL module supports only one clock
+Only requirement we should ensure is, during scan clear operation PCSR bits will not be modified in the design. The interface ready could get de-asserted, PMC should retry access.
+PMC will trigger scan clear, then wait for enough time for the scan clear to be done before polling for scan done and pass. There should not be any accesses during this time.
+
+MCU Debug
+The MCU debug logic should be built in PL Soft Logic, and it is not a part of RTL.
+
+DFX Connections
+
+Global Functions Implementation
+System Monitoring
+Use of SSC for e-Fuse Distribution
+The RTL for the SSC receiver in VCU is used from Clifden. The information on the use of the SSC is in the RFAMS (a.k.a. Clifden) arch spec in section 6.1.5 (p.33).
+HYPERLINK "http://xinc/ppg/fdst/everest/arch/Shared%20Documents/Forms/AllItems.aspx?RootFolder=%2Fppg%2Ffdst%2Feverest%2Farch%2FShared%20Documents%2FArch%20Specs%20%28released%29&FolderCTID=0x012000A132CF643A5F82409D52C011C4EC1884&View=%7b580667E1-C53D-4E85-838B-6E99D87C77EA%7d"Everest Arch Specs -> HYPERLINK "http://xinc/ppg/fdst/everest/arch/Shared%20Documents/Forms/AllItems.aspx?RootFolder=%2Fppg%2Ffdst%2Feverest%2Farch%2FShared%20Documents%2FArch%20Specs%20%28released%29%2FRFAMS&InitialTabId=Ribbon%2EDocument&VisibilityContext=WSSTabPersistence"RFAMS -> HYPERLINK "http://xinc/ppg/fdst/everest/arch/Shared%20Documents/Arch%20Specs%20(released)/RFAMS/Everest_RFAMS_Arch_Spec_v1.0.pdf"Everest_RFAMS_Arch_Spec_v1.0.pdf
+
+SysMon sideband channel (SSC) is used for eFuse enable/disable of VCU. The transfer of secure e-fuse data from the PMC to the VCU cores is done using the SSC (SysMon Side Channel), a serial ring used to connect satellite SysMon instances around the chip. It was designed exclusively for the SysMon, however because it is the only private chip-wide bus, it may be repurposed prior to fabric startup to transfer the secure e-fuse values.
+
+VCU will instantiate an “SSC receiver” circuit to observe the traffic on the SSC during fabric configuration and capture the e-fuse data from special packet types. These are unique packets that are only generated by the root SysMon for this purpose. The SSC receiver should be an observer only on the SSC to avoid interfering with the SysMon operation.
+
+The e-fuse value in the PMC, assigned to VCU, is hard-wired from the e-fuse block to the root SysMon and the e-fuse values can be write-protected by Xilinx during manufacturing test. The root SysMon contains a state machine, triggered by SW / firmware, that generates special SSC packets using the e-fuse data. The trigger from SW prompts the root SysMon to create 4 consecutive 32-bit packets, each having a capacity to transfer 16-bits of payload, and to launch these packets onto the PL SSC ring. Only the triggering is SW controlled, the contents of the packets are hard wired and cannot be altered. There is no connection within the root SysMon between the AXI switch, or any other interface, and the SSC interface.
+
+The root SysMon also contains some circuitry to receive and verify the secure e-fuse packets when they arrive back around the SSC ring. This circuitry can set interrupts to flag missing or corrupted packets or other unexpected behavior, however it is not a part for the system security.
+
+Figure  SEQ Figure \* ARABIC 6: eFuse Packet Communication
+
+The SSC control packets used to send the secure e-fuse data are formatted as follows:
+
+Figure  SEQ Figure \* ARABIC 7: Format of SSC Control Packet
+
+Control Packet [3:0] = 4’h4 indicates that the packet is a control type
+Satellite ID [5:0] = address of a satellite; A value of 6’h3f indicates a broadcast message
+Control Payload [21:0] = payload
+Control Payload [20]                – secure bit (1 – secure)
+Control Payload [19:18]          – word index
+Control Payload [15:0]            – eFuse data
+Control Payload [21], [17:16] - unused
+
+The block diagram below shows the VCU SSC receiver:
+
+Figure  SEQ Figure \* ARABIC 8: VCU SSC Receiver
+The fabric global signals “en_glob” and “ghigh_b” are used to indicate when the entire fabric is being configured prior to startup and must be tapped from the fabric side of the GTCC (GT clocking column). The “ghigh_b” ==0 indicates the fabric is being configured and “en_glob==1” ensures that the configuration is global and not a local partial reconfiguration. The “data [1:0]” and “mrkr” SSC signals are provided by the satellite SysMon tile in the GTCC and the “npi_ref_clock” is provided with the NPI protocol interface from the NPI switch. The SSC receiver will be like VDU SSC Receiver block.
+Notes
+The entire SSC receiver block is in VCCINT (PL) power domain.
+The RCLK COE will supply the combined signal ssc_efuse_en = en_glob & ~ghigh_b. SSC receiver uses this bit to validate SSC packets received, only during PL configuration
+By Default, the VCU IP is disabled. VCU can be enabled only when valid SSC packets are received from SysMon channel with eFuse bit value of “0”. This means, until a valid eFuse data is received, VCU will be disabled. An eFuse value of ‘0’ should be sent to enable VCU.
+Designed for 64-bit e-fuse value (although for Everest device, 48 bits are available. 16 bits are reserved). This requires 4 packets to be transmitted from PMC.
+There could be maximum two instances of VCU. For a VCU instance, two eFuses are needed. Hence, total 4 eFuses needed per SoC device.
+It is proposed to use [40:37] bits for VCU eFuse bits.
+VCU Instance ID port is used to determine Instance number on the device and eFuse bit is selected based on the instance number.
+Instance ID 	 	Block
+      0		VCU0
+      1 		VCU1
+Based on the Blown e-fuse value, decoder and encoder would be disabled
+Out of the 48 bits received from eFuse, [40:37] are used to determine whether encoder or decoder needs to be disabled or brought out of reset.
+The decision would be taken as per eFuse Bit as: [need to check with Renuka]
+1 -> Disable
+0 -> Enable
+
+EFuse bit
+ | Used by
+ | Comment
+ |
+EFuse [37]
+ | VCU0 Encoder
+ | Set this bit to 0 to enable Encoder
+ |
+EFuse [38]
+ | VCU0 Decoder
+ | Set this bit to 0 to enable Decoder
+ |
+EFuse [39]
+ | VCU1 Encoder
+ | Set this bit to 0 to enable Encoder
+ |
+EFuse [40]
+ | VCU1 Decoder
+ | Set this bit to 0 to enable Decoder
+ |
+
+Table  SEQ Table \* ARABIC 3: VCU SSC eFuse Bits
+
+EFuse Value
+ | Instance Enabled
+ |
+00
+ | Encoder, Decoder
+ |
+01
+ | Encoder
+ |
+10
+ | Decoder
+ |
+11
+ | None
+ |
+
+Table  SEQ Table \* ARABIC 4: Enable Status vs eFuse Values for one VCU Instance
+
+Observe the SSC only while ssc_efuse_en is asserted (en_glob==1 & ghigh_b==0) . Once the fabric is configured, the enable will de-assert and the receiver will no longer respond to the SSC inputs
+The receiver looks for secure e-fuse packets with broadcast address only
+All other packet types are silently ignored
+Valid packets must have
+control header
+broadcast address
+secure (SEC) bit 20 set
+expected 2-bit word index
+E-fuse words are expected in order from most to least significant
+Out of order words clear the valid flag and raise an “efuse_error” interrupt
+SSC marker corruption checks in the SSC receiver are the same as in SysMon root.
+Marker corruption invalidates an SSC packet and also raises the efuse_error interrupt
+The secure eFuse SSC packets can be sent more than once by the root and may be received more than once by the receiver; however, the outgoing valid flag is not asserted until “locked” whereupon further reception is disabled. The eFuse outputs are not considered valid and may not be used unless the valid flag is asserted
+The outgoing valid flag is asserted only if all words have been received in the expected order and the lock(out) / ssc_efuse_en is de-asserted.
+Once locked out, the SSC receiver state can only be cleared through the por_pl_b from PMC.
+SSC packets can be interleaved with any other type of packet from SYSMON Root. But when the control and broadcast address match, Secure has to be set and word index has to be correctly decrementing with each packet. If this is violated, an error will be generated.
+Note 1: IPOR must be released to start SSC eFuse packet transfer, otherwise No eFuse Error, valid interrupts can be captured by Interrupt status register.
+Note 2: SSC receiver works on PL power. When there is PL power cycle, eFuse data has to be sent again otherwise VCU will be in disabled state.
+Note 3: eFuse error interrupt is mainly used by SW to understand that VCU eFuse transmission errored out (kind of debug). No specific ISR expected. SW must resend eFuse data, if error occurred.
+
+SSC Programming Sequence
+
+The sequence of events for successful transfer of the secure e-fuse data are:
+VCCINT_SOC is powered up and the NPI is operational
+VCCINT (PL) is powered up but before the fabric configuration is completed
+PMC Firmware would trigger the transmission of the secure e-fuse from the root SysMon
+Fabric completes configuration and starts up
+On detecting ssc_efuse_en==0 the SSC receiver gates off the SSC inputs and validates the SSC e-fuse packets received (if any)
+SSC receiver asserts the “valid” flag provided 4 correctly sequenced and formatted SCC control packets have been received with secure bit
+The efuse_valid and efuse_error would be routed back as interrupts to PMC on NPI
+The efuse_disable_ip is stored as status bit in NPI
+VCU Requirement for secure eFuse data transmission
+
+VCCINT should be powered before fabric configuration is completed
+PMC firmware should trigger the transmission of secure efuse data only after the VCCINT is up
+Before fabric configuration is completed, the PMC firmware should complete the transmission of secure eFuse data to VCU on SSC
+During PL configuration, SSC channel should not be shared for any other purposes
+Voltage Measurement
+VCU2 is required to provide a feature for voltage measurement (of VCU2 supply). The SysMon for the voltage measurement (ams_abus_switch_DPSTx2) is in VCU2. It supports the measurement of two power supplies – package supply & to monitor irdrop of same power supply on Metal5. VCU2 block provides an ams_sense_if & ams_abus_ctrl_if pins for supporting voltage measurement.  The signals come from GTCC -> misc -> VCU2.
+
+Figure  SEQ Figure \* ARABIC 10: Abus integration
+More details about integration and routing can be found at
+
+The system monitor (SysMon) is a sophisticated Analog to Digital converter which is used to monitor voltage and temperature from the different sections of the chip. It comprises of a root SysMon in PMC and multiple satellite units. These satellites units send the collected information to root SysMon which then takes an action based on the monitored results.
+For VCU, we have one abus switch. The satellite unit outside of VCU2 captures the data from the abus switch in VCU2 and share the information with root SysMon in PMC.
+Abus Switch DPSTx2
+The analog switch (ams_abus_switch_DPSTx2) is a standard abus double switch. Each half switch allowing for the connection of one sense differential pair to the abus. The switch cell provided comprises of the two differential switches, the two associated control blocks and the associated level shifters.
+
+Figure  SEQ Figure \* ARABIC 11: ams_abus_switch_DPSTx2
+The abus switch “ams_abus_switch_DPSTx2” can receive sense point data from up to 2 supply points and send the information through the abus interface. A high-level block diagram of an instance of the switch is shown below:
+
+Figure  SEQ Figure \* ARABIC 12: ams_abus_switch_DPSTx2 pins
+ams_abus_ctrl is an interface module which constitutes two interfaces, inner and outer. Scan data outbound (sdo) and Scan data return (sdr) are the ports used to traverse across different blocks to perform voltage measurements using an analog switch ams_abus_switch_DPSTX2. More details about SysMon can be found at Everest SysMon DID.
+In general, if there are multiple analog switches, they are connected in daisy chain as shown below:
+
+Figure 13: daisy chain of abus switches
+Here, when the token passes through a switch, it initially monitors all the sense0 points. As it reaches the last switch in the chain, the token is routed back into the switch and this time all the sense1 points of the switches are monitored one after the other. Finally, the token is received back by the satellite, and this completes the current cycle of monitoring all the sense points corresponding to this abus channel.
+In VCU2, we have one abus switch and it monitors two sense points. The switch receives sense point data from the package and irdrop on Metal 5.
+The ams_abus_switch_DPSTx2 supports voltage measurement using supply sense and abus.  The switch is instantiated to ease timing closure on the ABUS chain and provide several supply voltage sample points.  The ams_abus_switch_DPSTx2 has the following interfaces or signals:
+Interface/Signal Names
+ | Interface Type
+ | Power Domain
+ |
+iambus
+ | ams_sense_if
+ | AUX
+ |
+i_if_sense0
+ | ams_sense_if
+ | VCU
+ |
+i_if_sense1
+ | ams_sense_if
+ | VCU
+ |
+if_abus_ctrl_term_inner
+ | ams_abus_ctrl_if
+ | VCU
+ |
+if_abus_ctrl_term_outer
+ | ams_abus_ctrl_if
+ | VCU
+ |
+vcu2_psuph_por_b
+ |  | AUX
+ |
+NOTE for physical design team: The AMS switch in vcu2_int_wrap should be placed where IR drop is expected to be the worst or close to middle of vcu2_block.
+Supply sense
+The sense block is instantiated inside the modules where the voltage or temperature needs to be monitored. The sense points (output from this block) are then connected to the abus switch which directs the data to the SysMon satellite. PD team does the necessary connections for connecting this block to actual voltage and temperature points.
+In vcu2_int_wrap, the following modules are instantiated:
+supply_sense_int_irdrop_m5
+supply_sense_int_pkg
+Switch instantiation
+The AMS Abus switch is instantiated in VCU2 as shown below:
+
+Figure 14: ABUS Switch Instantiation
+vcu2_ams_abus_ctrl_if comes from PL power domain. Level shifter is added to the interface before it enters vcu2_int_wrap module. And vcu2_ams_sense_abus_if & vcu2_psuph_por_b are from AUX power domain.
+EDT-1072959 updates:
+Reify simulation issues assertion that there is a floating signal in AMS DPSTx2 switch. The signal (psush_por_b) is used to control an isolation cell present inside the AMS DPSTx2 switch. PMC releases the existing isolation control (psuph_por_b) after PL and AUX supplies are UP. It does check for the VCU supply to be UP before releasing this isolation control. Because of this there will be instantaneous contention current during Power-UP and Power-Down.
+Reify simulation assertions are triggered only when the simulation is run with vccint_vcu supply is OFF and vccint_aux supply is ON. Not seen in simulations in which both these supplies are ON. This is caused because of release of isolation to the switch before VCU power supply is available.
+To fix this, use the PL-VCU2 isolation control signal equivalent, generated by the VCU2 BPD PoR instance, for isolation control inside of AMS ABUS Switch, instead of existing top-level input (psuph_por_b). An Analog OR gate in AUX power domain to pass iso_vcu2_pl_n.
+
+Figure: Existing implementation
+
+Figure: Fix Schematic
+
+Partial Configuration
+VCU2 is not required to anything extra to support PR.
+When the PL region connected to VCU2 is undergoing PR, PMC would shut down VCU. After PR is complete, VCU would be reinitialized.
+Expectation is VCU will gracefully start working after being reinitialized.
+ VCU Address Space
+VCU AXI slave should be able to receive PS/other addresses correctly. To achieve this, interconnect which drives the address to VCU is expected to drive the correct decoded address bits to VCU AXI Slave. Encoder & Decoder uses AXI-M interface to read and write data from DDR memory. AXI-M interface supports 64-bit address but as VCU has a support of 48 bit address. So, VCU will not take care of the upper 16 bits. The sample address set used by VCU is at  HYPERLINK "https://amdcloud.sharepoint.com/:x:/r/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Telluride/VCU/VCU2_Address_Map.xlsx?d=we661ab54b65448708d431327d984e4c7&csf=1&web=1&e=X6umZg" VCU2_Address_Map.xlsx:
+
+NoC NSU Address  à
+ | "64:48"
+ | "47:22"
+ | “21:20”
+ | "19:0"
+ | Slaves
+ |
+
+ | 0
+ | 0
+ | "00"
+ | APB SLCR address
+ | VCU2 SLCR
+ |
+
+ | 0
+ | 0
+ | "01"
+ | APB DEC address
+ | Allegro Decoder IP Address Space
+ |
+
+ | 0
+ | 0
+ | "10"
+ | APB ENC address
+ | Allegro Encoder IP Address Space
+ |
+
+Base address  - Ygal - EDT – Srini-high priority
+
+48- bit address space support
+
+Encoder Registers : $RTL_ROOT/vcu2_v1_7t/vcu2_core_top/vendor_ip/vcu2_encoder_regspecs/regspecs/ (0x00200_0000 to 0x00000x002F_FFFF) – 1M 64K
+APB – 20-bit address support
+Decoder Registers: $RTL_ROOT/vcu2_v1_7t/vcu2_core_top/vendor_ip/vcu2_decoder_regspecs/regspecs/ (0x001001_0000 to 0x001001_FFFF) – 1M64K
+APB – 20-bit address support
+SLCR RegistersBase address:  (0x0000_0000 to 0x000F_FFFF) – 1M $RTL_ROOT/vcu2_v1_7t/vcu2_slcr_regs/regspecs/vcu2_slcr.ods (4K)
+NPI Registers: $SW_ROOT/vcu2_7t_n1/registers/vcu2_npi.ods
+SRAM Address
+
+Interconnect
+GPV Registers (Interconnect – MERB/SERB)
+IMM Slave Registers
+MCU RAM (64kB)
+
+Encoder AXI M:
+
+Data width – 128 bits
+Typical request size – 64 to 512 bytes
+Burst type – incrementing
+ID width –
+Number of ID used – small
+Max outstanding transactions – 64, 64 (rd, wr)
+XRDB Link: HYPERLINK "http://zynq"http://zynq_design:8070/#mod___VCU2_SLCR
+Note: Slave errors are not supported on the dec and enc APB address space. Please find the details at: HYPERLINK "https://tickets.allegrodvt.com/issues/4714" \t "_blank"https://tickets.allegrodvt.com/issues/4714
+
+Trust zone
+TBD
+Interrupt
+A list of interrupts available for VCU is:
+NPI Interrupt
+NoC transported interrupt
+PL based Interrupt
+VCU replaces GT and NPI interrupts 8, 9 and 10 are available to use. Interrupts 8 and 9 are for general messages and correctable error indication. Interrupt 10 is for non-correctable or fatal error notification. NPI interrupts are used for VCU initialization. Interrupt response time is not critical.
+The use of PL based interrupts is possible but as a last resort like as in Diablo VCU.User interrupts are feedthrough for NMU/NSU and they get forwarded to the NPI network. They are level sensitive and are synchronized to the NPI clock once they reach NPI. Please note that this is a 4 bit wide bus. Unused interrupt pins can be tied to 0.
+There could be substantial latency in servicing these interrupts due to how the NoC interrupts are ganged together in every device.  For an immediate response from the interrupt handler, NoC transported interrupts may not be the best choice of interrupts to use.  So, PL interrupts are planned for the VCU.
+Hence, VCU supports:
+NPI Interrupt
+PL based Interrupt
+NPI Interrupt
+
+The uncorrectable interrupt (interrupt bit 10 of NPI Interrupts) is set immediately after scan clear/memclear is triggered. This cannot be masked. The interrupt will be self-cleared in VCU after successful completion of scanclear/memclear. SW has to clear the corresponding ISR bit in PMC. In other words, VCU2 NPI interrupt 10 (GT_NCR) will be asserted as soon as mem_clear_trigger or scan_clear_trigger is set and remains high until mem_clear_done or scan_clear_done is 0. This interrupt 10 during scan clear and mem clear is not maskable.
+However, if SC/MC fails, the interrupt will remain asserted and ISR will be updated to indicate the same.
+All NPI Non-correctable interrupts are sent only on 1 interrupt line(vcu2_npi_interrupt [10]) to PMC.
+Remaining 2 interrupt lines(vcu2_npi_interrupt [8:9]) are masked by default.
+For the non-correctable interrupt line, DFX unexpected activation lines are masked by default. This decision has been taken with respect to all other blocks like psxl, psxc and mmi.
+The reset for Interrupt mask registers is dependent on INITSTATE
+NPI Interrupts default values are 0.
+Scan clear & mem clear interrupt gets asserted only on the interrupt line when that functionality is triggered representing failure throughout operation and gets de-asserted (by hardware) once the operation is done and pass.
+NPI interface control signals are scan safe. (Can't issue a WR/RD command while scan clear is in progress).
+IOR register is scan safe to avoid the interrupt pin toggling.
+Requirements:
+Interrupt should be asserted while SC/MC is triggered and de-assert on successful SC/MC, after SC PASS. PMC sees no interrupt if SC/MC is successful.
+Interrupt to be self-cleared by VCU2 if SC/MC is successful.
+Interrupt outputs lines to NPI/PMC should not toggle during Scan Clear
+Mask the general messages and correctable interrupts at reset.
+Note:
+If SC/MC passes, PMC ISR will see the interrupt and software will clear the corresponding bit in PMC. VCU ISR will not see the interrupt.
+If SC/MC fails, PMC ISR and VCU ISR will see the interrupt. This interrupt can be masked using IMR registers. SW should clear VCU ISR first and then PMC ISR.
+
+PL Interrupt
+The PL interrupt tree diagram for PL is shown below:
+
+pl_vcu2_spare_out [4] is the overall IRQ signal. It is OR of vcu2_enc_pintreq, vcu2_dec_pintreq and SLCR IRQs.
+
+The following IRQ signals, generated by the IP, are also exposed to the PL:
+vcu2_enc_pintbus [31:0]
+vcu2_enc_pintreq
+vcu2_dec_pintbus [31:0]
+vcu2_dec_pintreq
+vcu2_enc_pintreq is the OR of all the bits of vcu2_enc_pintbus.
+vcu2_dec_pintreq is the OR of all the bits of vcu2_dec_pintbus.
+
+vcu2_dec_pintbus[17:4], vcu2_dec_pintbus[29:19], vcu2_enc_pintbus[29:4] are not used by IP.
+
+https://tickets.allegrodvt.com/issues/4285
+https://tickets.allegrodvt.com/issues/4858
+https://jira.xilinx.com/browse/EDT-1069146
+
+VCDU IO CHAR
+IO char is needed for timing characterization of VCU-PL interface. As we do not have any high speed functional interfaces going to PL and we do not need an IO Char logic for Telluride VCU.
+ In previous generations of VCU we had AXI ports going to PL. However, in the newer VCU we have only Reset, JTAG, Scan coming from PL and hence we don’t need an IO char logic for new VCU (vcu2)
+
+Clocking
+Below table lists the clocks required for VCU:
+Table  SEQ Table \* ARABIC 6 SEQ Table \* ARABIC 7 Clocking
+Domain
+ | Max freq [MHz]
+ | Source
+ | Description
+ |
+Encodersubsystem
+- Core clock
+- MCU clock
+- AXI Master port
+- APB clock
+ | 950
+ | GTCC DPLL/
+PL (debug only)
+ | Video Encoder IP clock from Gigabit Transceiver Clocking Column.
+The same clock will be used for MCU controller interfaced with encoder cores.
+Encoder/MCU sends AXI-Master transactions on the same clock.
+APB Slave Interface uses the same clock to configure parameters, start processing and get results.
+PL clock is debug option only. Max Core clock frequency from PL can be 950 MHz.
+The performance targets are for “-2MP” speed grade.
+
+ |
+Decoder subsystem
+- Core clock
+- MCU clock
+- AXI Master port
+- APB clock
+ | 918
+ | GTCC DPLL/ PL (debug only)
+ | Video Decoder IP clock from Gigabit Transceiver Clocking Column.
+The same clock will be used for MCU controller interfaced with decoder cores.
+Decoder/MCU sends AXI-Master transactions on the same clock.
+APB Slave Interface uses the same clock to configure parameters, start processing and get results.
+PL clock is debug option only. Max Core clock frequency from PL can be 950 MHz.
+The performance targets are for “-2MP” speed grade.
+ |
+AXI Slave Port
+ | 167
+ | NoCGTCC DPLL
+ | Clock for programming interface, readingreading, or writing registers or memory
+ |
+JTAG clock (MCU Debug)
+ | 100/300
+ | PL
+ |
+ |
+NPI Reference Clock
+ | 300
+ | GTCC
+ | NPI Clock from GT clocking column
+ |
+Scan Clear Clock
+ | 11515
+ | PLPMC (TBD)
+ | Scan clear clock from PMC (2 setComes from PMC
+ |
+iJTAG clock
+ | 100
+ | GT/VCU
+ |
+ |
+Scan clock
+ | 100
+ | PL
+ | Scan clock from PL
+ |
+BISR clock
+ | 57.5
+ | InternalInternal
+ | Internally generated, div/2 of scan clear clockInternally generated, divide by 2 of scan clear clock
+ |
+*this is best possible value from DPLL. Refer to DPLL divider settings for more information
+
+Table  SEQ Table \* ARABIC 5: Clocking
+
+Table 8 Clock Frequency across speed grades
+
+Domain
+ | “-1LP”
+ | “-2LP”
+ |  “-1MP”
+ | “-2MP”
+ | “-2HP”, “-3HP”, “-2LHP”
+ |
+Encoder Subsystem
+ |
+ |
+ |
+ | 950
+ |
+ |
+Decoder Subsystem
+ |
+ |
+ |
+ | 918
+ |
+ |
+
+ |
+ |
+ |
+ |
+ |
+ |
+
+ |
+ |
+ |
+ |
+ |
+ |
+AXI slave port
+ | 167
+ | 167
+ | 167
+ | 167
+ | 167
+ |
+APB Slave port
+ |
+ |
+ |
+ | 167
+ | 167
+ |
+NPI
+ | 300
+ | 300
+ | 300
+ | 300
+ | 300
+ |
+*this is best possible value from DPLL. Refer to DPLL divider settings for more information
+*other speed grades shall follow standard pr2896 curves
+Clock Diagram
+
+Clock frequency across speed grades
+
+Domain
+ |  “-1MP”
+ | “-2MP”
+ | “-2HP”
+ |
+Encoder Subsystem
+‘vcu2_enc_clk’
+ | 912
+ | 950
+ | 1121
+ |
+Decoder Subsystem
+‘vcu2_dec_clk’
+ | 881.28
+ | 918
+ | 1083.24
+ |
+AXI slave port
+‘vcu2_axi_slave_clk’
+ | 167
+ | 167
+ | 167
+ |
+NPI
+‘vcu2_npi_clk’
+ | 300
+ | 300
+ | 300
+ |
+*this is best possible value from DPLL. Refer to DPLL divider settings for more information
+*other speed grades shall follow standard pr2896 curves
+
+The PR-2896 clock frequency table is at HYPERLINK "https://amdcloud.sharepoint.com/:x:/r/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Telluride/VCU/Clocking/PR-2896%20freq%20for%20VCU2%20ISP2.xlsx?d=w86733aa4cd0d49b2ad98d6d4f1de9064&csf=1&web=1&e=0dxzeL" HYPERLINK "https://xilinx.sharepoint.com/:x:/r/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Telluride/VCU/Clocking/PR-2896%20freq%20for%20VCU2%20ISP2.xlsx?d=w95556700a1f640268dfaba60efe4bc2d&csf=1&web=1&e=3PbWNu" PR-2896 freq for VCU2 ISP2.xlsx
+Table  SEQ Table \* ARABIC 6: Clock Frequency across speed grades
+The actual speed targets are quoted above and are 7% higher, for DCI support. The minimum encoder clock rates for different formats (non-DCI/UHD 4Kp60):
+Format
+ | AVC
+ | HEVC
+ |
+4:2:0
+ | 540
+ | 560
+ |
+4:2:2
+ | 550
+ | 615
+ |
+4:4:4
+ | 785
+ | 890
+ |
+
+The minimum decoder clock rates for different formats (non-DCI/UHD 4Kp60):
+Format
+ | AVC
+ | HEVC
+ |
+4:2:0
+ | 470
+ | 425
+ |
+4:2:2
+ | 600
+ | 550
+ |
+4:4:4
+ | 860
+ | 860
+ |
+HYPERLINK "https://jira.xilinx.com/browse/EDT-1077095"EDT-1077095: Note that LP corner is not supported for Telluride T50 device – it’s not part of PD sign-off. VCU2 block will have to re-opened for PD sign-off if any future device requires LP corner support.
+Clock grouping
+All the clocks listed in Table 5 are asynchronous to each other except the scan clear clock and BISR clock. BISR clock will be an internally generated clock from scan clear clock. Scan clock cannot be merged with any clock. Also, if timings can meet, will try to give same max frequency to both encoder and decoder IP.
+VCU clocks from GTCC DPLL
+DPLL provides 2 clocks per tile and as VCU takes 2 tile space, VCU can have 4 clocks from DPLL. TThree clocks are required to be driven to VCU fromcoming from DPLL in GTCC:”
+Clocks required from DPLL are:
+Encoder Clock source:
+VCU Encoder core clock (upto 950 MHz)
+VCU Encoder MCU clock (upto 950 MHz)
+VCU Encoder AXI M clock (upto 950 MHz)
+Decoder Clock
+AXI Slave Port
+VCU Decoder core clock (upto 918 MHz)
+
+VCU Decoder MCU clock (upto 918 MHz)
+VCU Decoder AXI M clock (upto 918 MHz)
+How many DPLL in GTCC provides above clocks?
+Vivado wrapper for VCU should handle programming of DPLL to get required clocks. This The programming is of registers would be static. How to achieve it?
+Registers for the clock dividers Clock divider register is for these clocks will be in DPLL of GTCC. However, APU or other PS master which is used for VCU programming should have access to DPLL APB address space, so that the clock divider programming required for VCU can be programmed in DPLL APB registers. DPLL then provides required clocks to VCU.
+
+Figure  SEQ Figure \* ARABIC 10: DPLL Interface
+How many registers are required? For one clock, two registers – one for divider and one for multiplier?
+Registers are 32 bit wide?
+What value will be written to these registers?
+
+BUFG_GT’s input (that’s typically connected to GT in GT FSR) are tied off to GND in VDU FSR because VDU has no test clock output.
+VDU has no external clock pads like GT’s REFCLK.
+VDU has no clock output that connects to GCLK.
+Without the GT’s, customer can only drive the BUFG_GTs from the DPLL outputs.  The BUFG_GTs do have one test only input from fabric.
+
+Notes:
+1DPLL(per FSR) provides clocks to 2 VDU tiles. Each VDU requires two clocks from DPLL.
+2DPLL APB slave interface to be programmed by same software as VDU. This is required to configure divider and multiplier registers to generate required frequencies.
+ Similar diagram with one DPLL interface with VCU
+DPLL Divider values
+The VCU encoder and , decoder and AXI slave clocks are generated by the DPLL. Note that the DPLL’s 4 outputs share the same PLL input divider, VCO, and feedback divider. Out of these 4 outputs, only 2 of them are available to the MMD Tile. , sSo, any two clocks from a DPLL can differ only by the output divider value. DPLL specs are:
+
+Input divider range (I): 1-123
+Feedback divider range (M.F): 10-400
+4 output dividers range (O): 1-123
+VCO frequency range: 2-4 GHz
+Divided reference clock minimum frequency: 10 MHz
+
+DPLL specs can be found here:   HYPERLINK "https://xilinx.sharepoint.com/sites/eng/fdst/everest/_layouts/15/Doc.aspx?sourcedoc=%7b441633B0-A61E-49C6-9E69-DDCA9861E1C1%7d&file=Everest_DID_DPLL_v2p1.docx&action=default&mobileredirect=true&cid=4fa21171-ee04-40b8-840a-9847f0d39bd5" liEverest DID DPLLnk
+
+VCO Frequency and MF Divider values
+DPLL output is created from the Voltage Controlled Oscillator (VCO) within the DPLL. The VCO operating frequency can be determined by using the following relationship:
+fvco = frefclk x M.F/ I
+fclkout = fvco / O
+where M.F corresponds to the fractional feedback divide value, with M being the integer part and F the fractional modulus, and O corresponds to the value of output divide. F is ignored when PLL is in integer divide mode with fractional SDM disabled.
+The proposal is to use(only) If only Integer feedback divisor value is used to PLL so thatthe jitter performance is better. The jitter performance will degrade if we use fractional divisor value is used to generate the VCO frequency.
+The DPLL reference clock is 133.33 MHz.  (To be reviewed). It is the ‘DDR’ reference clock generated by PMC, then routed via HNoC as ‘hsr_ref_clk’, then routed up the GTCC as ‘cpm_ref_clock’ into the DPLL ref clock input.
+Each DPLL has 2 outputs that share the same VCO frequency but different output dividers.  So, for VCU you have 2 DPLLs that can have 2 independent VCO frequencies, and 4 derived clocks. The sample values for the DPLL registers can be: Below are the M,F,O values  needs to be programmed with  frefclk = 100 MHz to get encoder core (950 MHz) and decoder core (918 MHz) clock frequencies.
+Speed grade
+ | M
+ | VCO freqF
+ | Decoder frequencyI
+ | VCODecoder divider (O)
+ | OEncoder frequency
+ | Encoder divider (O)Frequency
+ |
+2MP
+ | 285
+ | 0
+ | 10
+ | 38003799.905
+ | 4
+ | 949.97650
+ |
+2MP
+ | 358
+ | 0
+ | 13
+ | 3671.7032
+ | 4
+ | 917.9258
+ |
+2MP
+ | 358
+ | 0
+ | 13
+ | 36723671.703
+ | 22
+ | 166.8957
+ |
+“-1MP”
+ | 36
+
+ | 3600
+ | 514.286
+ | 7
+ | 720
+ | 5
+ |
+“-2MP”
+ | 40
+ | 4000
+ | 571.429
+ | 7
+ | 800
+ | 5
+ |
+Table  SEQ Table \* ARABIC 7: DPLL Clock Generation Parameters
+DPLL reference clock
+
+Frequency of the DPLL reference clock should be 100MHz. This is to meet DPLL Jitter spec of +/-10% period jitter which is acceptable for VCU. The DPLL is used in band2. Refer to below EDT:
+ HYPERLINK "http://jira.xilinx.com/browse/EDT-1009833" http://jira.xilinx.com/browse/EDT-1009833
+The reference clock for the DPLL can be driven from PS-PL rclk[3:0] or alternately from rclk[4]  HYPERLINK "https://xilinx.sharepoint.com/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Modules/VDU/RE_%20question%20re%20PS%20to%20PL%20clocks%20for%20VDU.msg" https://xilinx.sharepoint.com/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Modules/VDU/RE_%20question%20re%20PS%20to%20PL%20clocks%20for%20VDU.msg
+Static Clock Gating
+VCU core clock, AXI clock can be gated by SW to optimize power consumption.
+AXI Slave clock cannot be gated.
+NPI clock cannot be gated.
+
+Clock selection
+The select line for below mux =0 (selects clock from GTCC) by default
+In At-speed scan mode, GTCC clocks are selected. This ensures at-speed scan is performed using GTCC clock, and not dependent on PL clock
+PL select option is debug-only option. It is a Xilinx-private option
+
+Power Domains
+This section describes the power domains present in the VCU. Target power per VCU instance is 1.5W at 890/860MHz,   "-3MP", 100 DegC, FF corner, and worst-case use case (max power encode/decode scenario, e.g., P or B frame, with ‘random noise’ video data).
+List of Power Domains and Properties
+The VCU is mostly on a single power domain. However, there is a part of design which is on PL power. VCU might have some sharing plans. Therefore, VCUVCU should support an independent power domain, as well as isolation/clamp/level shifting.
+
+Table  SEQ Table \* ARABIC 7 SEQ Table \* ARABIC 9: List of VCU Power Rails
+Power Rail
+ | Vmin
+ | Vtyp
+ | Vmax
+ | Description
+ |
+VCCINT_VCU
+ | 0.7V ±3%
+ | 0.85V ±3%
+ | 0.9V ±3%
+ | Power supply for vcu_int_wrapVCU Core Blocks. This should be connected to VCCINT_SOC at package level.
+ |
+VCCINT_PL
+ | 0.7V ±3%
+ | 0.85V ±3%
+ | 0.9V ±3%
+ | This is the PL domain. It is only used for some of VCU above vcu_int_wrap blocks - BPD POR, Reset, SSC, level shifters, and NPI. (See Figure 3-1)
+ |
+VCC_RAM
+ |
+ |
+ |
+ | This is for the clocks received from DPLL in GTCC
+ |
+VCC_SOCNoC
+ |
+ |
+ |
+ | NoC domain. Signals from NMU & NSU comes through level shifters to VCU.
+ |
+Table  SEQ Table \* ARABIC 8: VCU Power Rails
+Power Domain Crossings
+The VCU to PL power domain crossings will require level shifters and isolation. VCU will generate isolation control signals based on power monitor BPD_POR.
+Table  SEQ Table \* ARABIC 8 SEQ Table \* ARABIC 10 Power domains
+Domain
+ | Logic in the domain
+ | Comment
+ |
+PL power
+ | NPI, SSC, Reset, BPD_POR
+ | Around 5% of logic is on PL Domain – includes reset, SSC, NPI and BPD POR
+ |
+VCU
+ | VCU_INT_WRAP block containingContains Encoder, Decoder, MCU, AXI Lite, AXI Interconnect, APMInterconnect, VCU_SLCR, APM
+ | VCU main power supply. Most of the design is in VCU.
+ |
+RAM
+ | Clocks from GTCC
+ | No logic – only isolation cells
+ |
+SOC
+ | if.addr_size[2:0] – NPI interface addr_size. Fixed at value 0x2
+npi_opt_1 – Input. Used to tie addr_size
+ | GTCC needs this to be driven in SOC domain. VCU doesn’t have SOC supply, an input from GTCC which is on SOC domain is looped back to addr_size.
+ |
+VCC_AUX
+ | BPD_POR vcc_aux input
+ | VCU doesn’t have any logic in AUX power. This is required because the POR IP needs VCCAUX as one of monitoring supplies. For now we are using POR IP which is same as ME POR, once we replace the same, AUX supply is not required
+ |
+VCC_NoCSOC
+ | AXI Interface from NMU & NSU
+ | No logic – only isolation cells
+ |
+Table  SEQ Table \* ARABIC 9: Power Domains
+
+Isolation and Clamping Values
+Figure  SEQ Figure \* ARABIC 12 VDU Power domain
+
+Ready Signals of AXI interfaces are clamped to 0. When the block is powered off, there will be no data communication.
+Valid Signals of AXI interfaces are proposed to clamp with bit ‘0’ (represents no valid data if one block is powered down)
+Reset signals are proposed to clamp with asserted state values (reset is in asserted State when PL power down)
+Unused signals of AXI interfaces are proposed to tie with constants. Clamp value of these signals matches the tied values.
+Isolation and Clamp Values
+Ready Signals of AXI interfaces are clamped to ‘1’ as per ARM recommendation (ARM doesn’t want the interconnects to freeze if the data is sent to a powered down block)
+Valid Signals of AXI interfaces are clamped to ‘0’ (represents no valid data if one block is powered down)
+Recommended Clamp Value for all PL-VDU power domain crossing signals is ‘1’
+Reset  signals like pl_vdu_raw_rst_n, pl_vdu_scan_mode_rst_n_ext  are clamped to ‘0’  (reset is in asserted State when PL power down)
+Few signals like user bits of AXI interfaces  are tied to constants. Clamp value of these signals matches the tied values. Refer to   HYPERLINK \l "_Toc23270077" Table 16 Axi interface ports tied-off in vdu design
+Resets
+Below table lists the internal and external resets to VCU.
+
+Figure  SEQ Figure \* ARABIC 11: VCU Reset Generation
+EDT-1069519 Updates:
+Arch spec requirement is to have ability to individually reset the Encoder (ENC) and Decoder (DEC) cores (incl the RISC-V MCU contained within the cores). This was missed in the current implementation in which the VCU2 tile has only one source for HW reset (From PL) which will reset the entire VCU2 tile. As a result, failure/hang condition in either ENC or DEC cores will affect both and will require full VCU2 tile reset. The encoder and decoder functions are completely independent – normal operation of each function will be completely un-affected and un-interrupted by any operations and events within the other function. Thus, we need separate resets for encoder and decoder cores respectively.
+Fix is to have two additional HW reset sources. Spare input pins from PL will be repurposed and combined with the reset to encoder and decoder blocks. Updates in RED in Figure 11.
+These resets need be asserted only when the Encoder/Decoder cores experience a hang type situation or end up in an un-recoverable error states and asserting hard reset is the only way to recover. These resets can be kept in de-asserted state during initialization and in normal operations.
+
+Signal Name
+ | Description
+ | Comment
+ | Reachability
+ |
+External Resets
+ |
+pl_vcu2_raw_rst_n
+ | Reset from PL
+ | Serves as a reset to VCU Block
+ | Does not reset DFX, SSC and BISR. Resets SLCR, Interconnect, Decoder, Encoder, APMs for Encoder & Decoder.
+ |
+pl_vcu2_spare_in[56]
+(ENC RAW RST)
+ | Encoder core reset input from PL.
+ | Serves as reset to Encoder core logic in both L1 and L2.
+ |  |
+pl_vcu2_spare_in[11]
+(DEC RAW RST)
+ | Decoder core reset input from PL.
+ | Serves as reset to Decoder core logic.
+ |  |
+pmc_por_rst_b
+ | Active LOW POR reset from PMC
+ | Serves as reset to the VCU block through POR IP and NPI IPOR register
+ | Resets whole block.
+ |
+Internal Resets
+ |
+efuse_dis_enc
+ | From SSC receiver to indicate whether eFuse is blown
+ | Serves as reset to either Encoder IP.
+ | Does not reset SSC. Resets ENC_ALG_VCU_INTERFACES, VCU2_ENC_CORE and encoder APMs. Resets interconnect and SLCR if efuse_dis_dec is asserted.
+ |
+efuse_dis_dec
+ | From SSC receiver to indicate whether eFuse is blown
+ | Serves as reset to either Decoder IP.
+ | Doesn’t reset SSC. Resets VCU2_DEC_TOP and decoder APMs. Resets interconnect and SLCR if efuse_dis_enc is asserted.
+ |
+IPOR
+ | PCSR power-on-reset
+ | PMC writes to this register over NPI to assert/de-assert power-on-reset to VCU2
+ | Doesn’t reset SSC and NPI Regs (PoR).
+ |
+INITSTATE
+ | PCSR reset
+ | From PMC, to reset VCU2
+ | Does not reset DFX, BISR, SSC and NPI Regs.
+ |
+
+Table  SEQ Table \* ARABIC 10: VCU2 Resets
+VCU2 reset (pl_vcu2_raw_rst_n) must be released only after all the clocks are up and stable. This ensures that the logic doesn’t get a glitch on clocks.
+Reset block in VCU2 combines all these resets and generates resets all the internal logic blocks. table lists resets to different logic blocks and their sources, clock domains, Power domains etc.
+
+Reset Domain Crossings
+Below are the resets and the blocks that are impacted by each of the reset.
+pPmc_por_reset                    	 		SSC/BISR/SLCR/DFX/NPI Regs (PoR)/ NPI Slave Regs/VCU2_Interconnect/VCU2_DEC/VCU2_ENC/DFX/ENC_APM/DEC_APM
+IPOR                                     			BISR/SLCR/DFX/ NPI Slave Regs/Interconnect/DEC/ENC/DFX/ENC_APM/DEC_APMBISR/DFX/VDU_INT_WRAP
+Efuse_ENC_Disable		SLCR/Interconnect/ENC/ENC_APM
+Efuse_DEC_Disable                       	      	 SLCR/Interconnect/ENC/ENC_APMVDU_INT_WRAP
+pl_vcu2du_raw_rst_n                    SLCR/Interconnect/DEC/ENC/ ENC_APM/DEC_APM           	VDU_INT_WRAP
+pl_vcu2_spare_in[56]               Encoder core and MCU
+pl_vcu2_spare_in[11]               Decoder core and MCU
+INITSTATE                                               	VDU_INT_WRAP
+SLCR/Interconnect/DEC/ENC/ ENC_APM/DEC_APM
+
+RDC issues and sequences
+ |
+Sequence
+ | Reason
+ | Possible Error
+ |
+PMC should start reading registers only after IPOR is released
+ | NPI read data registers can be out of reset when IPOR is asserted.
+ | IPOR is not released so rdata is not valid
+ |
+PMC should read IMR only after INITSTATE is released
+ | IMR Is on INITSTATE
+ | IMR doesn’t reflect intended values
+ |
+NPI interface reset should be de-asserted before reading any regs
+ | All these regs rd/wr data are on INTFRESET. NPI INTF_RST to PCSR/IMR/ISR and BISR
+ | Read Data might be incorrect.
+ |
+POR is asserted, INTF reset may not be asserted. However, PMC should not access the block when POR is asserted
+ | All internal POR flops to intf flops (prot_lock_err and rdata)
+ | por-pl-B TO intf reset
+ |
+After POR, INTF reset be toggled
+ |
+ | Slave error can be asserted with PoR reset is asserted, it should be cleared with NPI reset subsequently.
+ |
+
+Details (TBD)
+Power on reset Sequence
+
+For definition of each reset, please refer to table above.
+PL supply, VCU2 power supply, RAM supply, NoC Supply is turned ON. There is no requirement on sequence
+PMC releases PoR pin to VCU2 (pmc_por_rst_b)
+POR IP kicks off to monitor VCU2, PL, RAM and NoC supplies. Once all powers are detected, the IP releases POR reset, which is sent to PMC readback supply status.
+PMC polls for the power status, and de-asserts IPOR register after power ramp is complete
+At this step, Power on Reset to VCU2 is released (through logic gates).
+Send VCU2 enable information through eFuse
+PMC removes isolation gasket controls through PCSR bits
+INITSTATE to be de-asserted, once the clocks are stable
+It has to be ensured that the reset to VCU2 (pl_vcu2_raw_rst_n) is removed only after the clocks are stable
+The soft resets from PMC are not used in VCU2.
+
+The following could be PLM CDO sequence for VCU2:
+VCU2, PL, RAM and SoC power domains are turned ON (in any sequence as per chip)
+pmc_por_rst_b is released.
+NPI interface reset vcu2_npi_preset_n is released.
+VCU2 Power supply status is polled.
+PMC releases IPOR
+EDT-1066811: After IPOR is released, enable the functional clock:
+Write VCU2_NPI_0. VCU2_NPI_ECO_REG_2 [2:0] = 3'b010
+E-fuse is sent over SSC. This should be only after release of IPOR, but any time before PL configuration is complete. Usually, PMC sends eFuse data over SSC after all house cleaning operations (scanclear, memclear, bisr).
+DFX isolation gasket (ctrl_iso_0_mmd_pl_dfx, ctrl_iso_4_mmd_noc_dfx) are released. <eFuse valid not yet generated; still scan clear and mem clear can be performed since DFX and BSIR are not reset by eFuse. >
+Scan clear is triggered.
+Wait 20us
+scan clear done is polled.
+If scan clear fails,  scan clear done interrupt remain asserted until SW clears.
+BISR eFuse is transferred.
+BISR repair is triggered.
+BISR is done.
+HYPERLINK "https://jira.xilinx.com/browse/EDT-1066811"EDT-1066811: Memory clear operations will be done with NPI clock. Before mem-clear is triggered, disable the functional clock, and switch over to NPI clock by following this sequence:
+Write VCU2_NPI_0. VCU2_NPI_ECO_REG_2 [1] = 1’b0 (Disable ICG-2 on FUNC clock)
+Write VCU2_NPI_0. VCU2_NPI_ECO_REG_2 [2] = 1’b1 (Mem-clear trigger to clk-mux asserted)
+Write VCU2_NPI_0. VCU2_NPI_ECO_REG_2 [0] = 1’b1 (Enable ICG-1 on NPI clock)
+mem clear is triggered
+mem clear done is polled.
+<pl configuration complete>
+< No dependency on pl_vcu2_raw_rst_n >
+(MEMCLEAR operation is performed using NPI clock)
+HYPERLINK "https://jira.xilinx.com/browse/EDT-1066811"EDT-1066811: After mem-clear is complete, disable the NPI clock and switch back to functional clock by following this sequence:
+Write VCU2_NPI_0. VCU2_NPI_ECO_REG_2 [0] = 1’b0 (Disable ICG-1 on NPI clock)
+Write VCU2_NPI_0. VCU2_NPI_ECO_REG_2 [2] = 1’b0 (Mem-clear trigger to clk-mux de-asserted)
+Write VCU2_NPI_0. VCU2_NPI_ECO_REG_2 [1] = 1’b1 (Enable ICG-2 on FUNC clock)
+If mem clear fails, mem_clear_done interrupt remain asserted until SW clears
+e-fuse valid is polled; check there are no eFuse error and check SSC fuse disable status.  Only if encoder or decoder is enabled, proceed further. If both encoder and decoder are disabled, no register access should be done as SLCR and interconnect would be in reset.
+Release func isolation gaskets (ctrl_iso_1_mmd_pl, ctrl_iso_3_mmd_noc). The isolation gasket (ctrl_iso_2_mmd_ram) is released for clocks coming from GTCC DPLL.
+Release INITSTATE (to be done once all the clocks are stable)
+If the block is disabled using eFuse, PMC should write to IMR Registers to mask the interrupts. This will mask the scan clear and mem clear interrupts on the interrupt line 8 and 9. On the interrupt line 10, the interrupts generated during scan clear fail and mem clear fail will be masked.
+The uncorrectable interrupt (interrupt bit 10 of NPI Interrupts) is set immediately after scan clear/memclear is triggered. This cannot be masked. The interrupt will be self-cleared in VCU after successful completion of scanclear/memclear. SW has to clear the corresponding ISR bit in PMC.
+
+The following is the pre-config sequence for VCU2, which will be executed by PLM based on the VCU2 pre-config CDO:
+
+Assumptions:
+VCU2, PL, RAM and SoC power domains are turned ON (in any sequence as per chip)
+pmc_por_rst_b is released
+NPI interface reset vcu2_npi_preset_n is released
+VCU2 Power supply status is polled: Check for VCU2_NPI_0.MMD_NPI_PCSR_STATUS.MMD_PWR_SUPPLY == 1
+Unlock VCU2_NPI_0 PCSR:  Write unlock code 32'hF9E8D7C6 to VCU2_NPI_0.NPI_PCSR_LOCK
+PMC de-asserts IPOR:
+VCU2_NPI_0.MMD_NPI_PCSR_MASK.MMD_IPOR = 1
+VCU2_NPI_0.MMD_NPI_PCSR_CONTROL.MMD_IPOR = 0
+EDT-1066811: After IPOR is released, enable the functional clock:
+VCU2_NPI_0. VCU2_NPI_ECO_REG_2 [2:0] = 3'b010
+Secure Efuse transfer. This should be only after release of IPOR, but any time before PL configuration is complete.
+Poll for VCU2_NPI_0.MMD_NPI_PCSR_STATUS.SSC_EFUSE_VALID_STATUS == 1
+If status is not 1, flag error and halt process.
+
+Assumption here is Step-6 is a concurrent to all the steps which follow it. i.e.., SW is not stuck at this state polling for Efuse valid status to be set (as Efuse transfer can happen at any time and that should not inhibit Steps-7 and beyond). Need to confirm this with S/W team.
+
+DFX isolation is disabled:
+VCU2_NPI_0.MMD_NPI_PCSR_MASK.ctrl_iso_0_mmd_pl_dfx = 1
+VCU2_NPI_0.MMD_NPI_PCSR_CONTROL.ctrl_iso_0_mmd_pl_dfx = 0
+VCU2_NPI_0.MMD_NPI_PCSR_MASK.ctrl_iso_4_mmd_noc_dfx = 1
+VCU2_NPI_0.MMD_NPI_PCSR_CONTROL.ctrl_iso_4_mmd_noc_dfx = 0
+Assert scan clear trigger controls:
+VCU2_NPI_0.MMD_NPI_PCSR_MASK.SCAN_CLEAR_TRIGGER_<3:0> = 0xf
+VCU2_NPI_0.MMD_NPI_PCSR_CONTROL.SCAN_CLEAR_TRIGGER_<3:0> = 0xf
+Wait 20µs
+Poll for VCU2_NPI_0.MMD_NPI_PCSR_STATUS.SCAN_CLEAR_DONE_<3:0> == 0xf and check if VCU2_NPI_0.MMD_NPI_PCSR_STATUS.SCAN_CLEAR_PASS_<3:0> == 0xf.  If VCU2_NPI_0.MMD_NPI_PCSR_STATUS.SCAN_CLEAR_PASS_<3:0> is not 0xf, halt the process and report error.
+Transfer data from PMC BISR Efuse cache to VCU2 BISR Fuse Cache register (starting offset is 0x104 –  verify in xregdb)
+Note that this is a standard function and should not require new code.
+BISR repair is triggered:
+VCU2_NPI_0.MMD_NPI_PCSR_MASK.BISR_TRIGGER = 1
+VCU2_NPI_0.MMD_NPI_PCSR_CONTROL.BISR_TRIGGER = 1
+Poll for BISR done.  Check that VCU2_NPI_0.MMD_NPI_PCSR_STATUS.BISR_DONE ==1 and VCU2_NPI_0.MMD_NPI_PCSR_STATUS.BISR_PASS == 1
+EDT-1066811: Memory clear operations will be done with NPI clock. Before mem-clear is triggered, disable the functional clock, and switch over to NPI clock by following this sequence:
+VCU2_NPI_0. VCU2_NPI_ECO_REG_2 [1] = 1’b0
+VCU2_NPI_0. VCU2_NPI_ECO_REG_2 [2] = 1’b1
+VCU2_NPI_0. VCU2_NPI_ECO_REG_2 [0] = 1’b1
+Mem clear is triggered:
+Set VCU2_NPI_0.MMD_NPI_PCSR_MASK.MEM_CLEAR_TRIGGER_<3:0> = 0xf
+Set VCU2_NPI_0.MMD_NPI_PCSR_CONTROL.MEM_CLEAR_TRIGGER_<3:0> = 0xf
+Wait [Need value] µs
+Verify correct mem clear completion:
+VCU2_NPI_0.MMD_NPI_PCSR_MASK.MEM_CLEAR_DONE_<3:0> = 0xf and VCU2_NPI_0.MMD_NPI_PCSR_MASK.MEM_CLEAR_PASS_<3:0> = 0xf
+EDT-1066811: After mem-clear is complete, disable the NPI clock and switch back to functional clock by following this sequence:
+VCU2_NPI_0. VCU2_NPI_ECO_REG_2 [0] = 1’b0
+VCU2_NPI_0. VCU2_NPI_ECO_REG_2 [2] = 1’b0
+VCU2_NPI_0. VCU2_NPI_ECO_REG_2 [1] = 1’b1
+If MEM_CLEAR_PASS_<3:0> is not 0xf, flag error and halt process.
+
+Any interrupts triggered by disabled VCU instances should be cleared by PLM.  Note that this may never be required, since disabled instances may be removed from the PLM topology CDO - in which case there will be no pre-config operations run on them.
+
+The following is the startup sequence for VCU2.  This will be generated by write_device_image (WDI) and inserted as part of the rnpi CDO in the PDI.  These steps occur after PL and NoC have been configured and are operational (VCU2 is dependent on clocks from PL and communication through NoC).
+
+Disable functional isolation:
+VCU2_NPI_0.MMD_NPI_PCSR_MASK.ctrl_iso_1_mmd_pl = 1
+VCU2_NPI_0.MMD_NPI_PCSR_MASK.ctrl_iso_3_mmd_noc = 1
+VCU2_NPI_0.MMD_NPI_PCSR_MASK.ctrl_iso_2_mmd_ram = 1
+VCU2_NPI_0.MMD_NPI_PCSR_CONTROL.ctrl_iso_1_mmd_pl = 0
+VCU2_NPI_0.MMD_NPI_PCSR_CONTROL.ctrl_iso_3_mmd_noc = 0
+VCU2_NPI_0.MMD_NPI_PCSR_CONTROL.ctrl_iso_2_mmd_ram = 0
+De-assert INITSTATE:
+VCU2_NPI_0.MMD_NPI_PCSR_MASK.INITSTATE = 1
+VCU2_NPI_0.MMD_NPI_PCSR_CONTROL.INITSTATE = 0
+Assert PCOMPLETE:
+VCU2_NPI_0.MMD_NPI_PCSR_MASK.PCOMPLETE = 1
+VCU2_NPI_0.MMD_NPI_PCSR_CONTROL.PCOMPLETE = 0
+
+Further required operations are handled by the VCU driver through NoC.
+
+Table  SEQ Table \* ARABIC 9 SEQ Table \* ARABIC 11 VDU Resets
+Signal Name
+ | Description
+ | Comment
+ |
+ |
+External Resets
+ |
+ |
+pl_vcu_raw_rst_n
+ | Reset from PL
+ | Serves as reset to the VCU block.
+ | Doesn’t reset DFX, SSC and BISR. Resets VCU_INT_WRAP
+ |
+por_pl_b
+ | Active LOW POR reset from PMC
+ | Serves as reset to the VDU block through POR IP and NPI IPOR register
+ | Resets whole block
+ |
+sys_rst1_n
+ | Soft reset from PMC
+ | TBD
+ |
+ |
+sys_rst2_n
+ | Soft reset from PMC
+ | TBD
+ |
+ |
+sys_rst3_n
+ | Soft reset from PMC
+ | TBD
+ |
+ |
+Internal Reset
+ |
+ |
+eFuse disable
+ | From SSC receiver to indicate whether eFuse is blown or not
+ | Serves as reset to the Encoder or Decoder block.
+
+The other option might be the clock gating to the encoder & Decoder block.
+ | Doesn’t reset SSC. Resets either encoder or decoder or both.
+ |
+IPOR
+ | PCSR power-on-reset
+ | PMC writes to this register over NPI to assert/de-assert power-on-reset to VDU
+ | Doesn’t reset SSC. Resets BISR, DFX and VDU_INT_WRAP
+ |
+INITSTATE
+ | PCSR reset
+ | From PMC, to reset VDU
+ | Doesn’t reset DFX, BISR and SSC. Resets VDU_INT_WRAP
+ |
+
+VDU reset has to be released only after all the clocks are up and stable. This ensures that the logic doesn’t get a glitch on clocks, because of async isolation control.
+VDU receives clocks from PL domain which are isolated by asynchronous isolation control signals. In order to avoid glitches on the clocks, the reset to the block has to be released only after all the clocks are up and stable.
+Reset block in VDU combines all these resets and generates resets all the internal logic blocks. The generated reset is level shifted to VCCINT_VDU and then used as reset to VDU. Below table lists resets to different logic blocks and their sources, clock domains, Power domains etc
+
+Block
+ | Clock
+ | Reset Type
+ | Power Domain
+ | PMC POR
+ | POR IP Output
+ | IPOR
+ | pl_vdu_raw_rst_n
+ | eFuse Disable
+ | INITSTATE
+ |
+SSC receiver
+ | NPI clock
+ | POR
+ | PL
+ |
+ |
+ |
+ |
+ |
+ |
+ |
+BISR cache
+ | BISR clock (=scan clear clk/2)
+ | POR
+ | VDU
+ |
+ |
+ |
+ |
+ |
+ |
+ |
+VDU DFX IP
+ | iJTAG clock
+ | DFX
+ | VDU
+ |
+ |
+ |
+ |
+ |
+ |
+ |
+VDU
+ | scan controlled and synchronized to clock
+ | Functional
+ | VDU
+ |
+ |
+ |
+ |
+ |
+ |
+ |
+NPI Slave
+ | NPI clock
+ | Refer to section “3.1.12.4 NPI reset” for reset description for each register
+ |
+Table  SEQ Table \* ARABIC 10 SEQ Table \* ARABIC 12 VDU Reset Coverage
+
+Reset Domain Crossing
+Below are the resets and the blocks that are impacted by each of the reset.
+por_pl_b                     SSC/BISR/DFX/VDU_INT_WTAP
+IPOR                                     BISR/DFX/VDU_INT_WRAP
+efuseDisable                       	      VDU_INT_WRAP
+pl_vdu_raw_rst_n                                VDU_INT_WRAP
+INITSTATE                                               VDU_INT_WRAP
+RDC issues - and sequecnes
+ |
+Sequence
+ | Reason
+ | Possible Error
+ |
+PMC should start reading registers only after IPOR is released
+ | NPI read data registers can be out of reset when IPOR is asserted.
+ | IPOR is not released so rdata is not valid
+ |
+PMC should read IMR only after INITSTATE is released
+ | IMR Is on INITSTATE
+ | IMR doesn’t reflect intended values
+ |
+NPI interface reset should be deasserted before reading any regs
+ | All these regs rd/wr data are on INTFRESET. NPI INTF_RST to PCSR/IMR/ISR and BISR
+ | Read Data might be incorrect.
+ |
+POR is asserted, INTF reset may not be asserted. However, PMC should not access the block when POR is asserted
+ | All internal POR flops to intf flops (prot_lock_err and rdata)
+ | por-pl-B TO intf reset
+ |
+After POR, INTF reset be toggled
+ |
+ | Slave error can be asserted with PoR reset is asserted, it should be cleared with NPI reset subsequently.
+ |
+
+Power on reset sequence:
+
+For definition of each reset, please refer to table above.
+PL supply, VDU power supply, RAM supply is turned ON. There is no requirement on sequence
+PMC releases por pin to VDU (por_pl_b)
+POR IP kicks off to monitor VDU, PL, and RAM supplies. Once all powers are detected, the IP releases POR reset, which is sent to PMC readback supply status.
+PMC polls for the power status, and deasserts IPOR register after power ramp is complete
+At this step, Power on Reset to VDU is released (through AND gate).
+Send VDU enable information through eFUSE
+PMC removes isolation gasket controls through PCSR bits
+INITSTATE to be deasserted, once the clocks are stable
+It has to be ensured that the reset to VDU is removed only after the clocks are stable
+The soft resets from PMC are not used in VDU.
+
+The following could be PLM CDO sequence for VDU:
+<VDU, PL and RAM power domains ON (in any sequence as per chip)>
+<PL_POR_B reset released>
+<NPI Interface reset_n released>
+Poll VDU power supply status
+Release IPOR
+<efuse sent over SSC>  this should be only after release of IPOR, but any time before PL configuration is complete.usually PMC sends efuse data over SSC after all house cleaning operations(scanclear,memclear,bisr).
+Release DFX isolation gasket (iso_2)
+<efuse valid not yet generated; still scanclear and memclear can be performed since DFX and BSIR are not reset by efuse. >
+Scanclear trigger
+Wait 20us
+Poll for scan clear done
+BISR efuse transfer
+BISR repair trigger
+BISR done
+memclear trigger
+Poll for memclear done
+<pl configuration complete>
+< No dependency on pl_vdu_raw_rst_n >
+(MEMCLEAR operation performed using MCLK)
+
+Poll efuse valid; check there are no efuse error and VDU_SSC_EFUSE_DISABLE status. Only if VDU is enabled proceed further
+Release func isolation gasket (iso_1),
+Release INITSTATE (to be done once all the clocks are stable)
+
+Figure  SEQ Figure \* ARABIC 13 VDU reset generation
+
+Block Timing
+This section describes the SDC development for the VDU. It is intended to provide the following:
+All primary clocks in VDU are asynchronous to each other
+All generated clocks are synchronous to master clocks
+PL and GTCC decoder core and MCU clocks are logically exclusive
+All chip pervasive features are on NPI clock.
+Refer to the clock definition xls for details on clocks and their relationship
+$RTL_ROOT/vdu_7t_n1/constraints/tcl_fx/vdu_core/vdu_clocks.xlsm
+Assumptions
+None identified.
+Dependencies: Internal and External
+None identified.
+Clocking
+This section describes the clock constraints and guidance on physical design for the clock tree in the VDU.
+Clock Diagram
+The VDU clock diagram is shown in below figure. This shows all the clocks defined in the VDU using the names from the constraints file. It also shows how the clocks are distributed in the logic. The full clock diagram Visio file can be found  HYPERLINK "https://xilinx.sharepoint.com/:u:/r/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Modules/VDU/clk_rst_vdu.vsdx?d=w1c68effe284d434d8d9eddb3c321022e&csf=1&web=1" here.
+
+Figure  SEQ Figure \* ARABIC 14 VDU Clock Diagram
+
+Functional Clock List
+Refer to Section 3.2 for full clocks list.
+To create the constraints the external clocks are defined on the input port. Below table lists all of the clock ports on the VDU.
+Table  SEQ Table \* ARABIC 11 SEQ Table \* ARABIC 13: VDU Clock Port Descriptions
+S.No
+ | Clock Name
+ | Port wrt top
+ | Source
+ | Direction
+ | Description
+ |
+1
+ | pl_vdu_axi_dec_clk
+ | pl_vdu_axi_dec_clk
+ | PL
+ | In
+ | PL AXI data path clock used for clocking 128-bit AXI-M interface
+ |
+2
+ | pl_vdu_axi_mcu_clk
+ | pl_vdu_axi_mcu_clk
+ | PL
+ | In
+ | MCU AXI-M Interface clock from PL
+ |
+3
+ | pl_vdu_mcu_vdec_debug_clk
+ | pl_vdu_mcu_vdec_debug_clk
+ | PL
+ | In
+ | MCU debug clock from PL used for debugger
+ |
+5
+ | pl_vdu_axi_lite_clk
+ | pl_vdu_axi_lite_clk
+ | PL
+ | In
+ | AXI lite interface clock, for core configuration
+ |
+6
+ | gtcc_vdu_core_clk
+ | gtcc_vdu_core_clk
+ | DPLL
+ | In
+ | Decoder core clock
+ |
+7
+ | gtcc_vdu_mcu_clk
+ | gtcc_vdu_mcu_clk
+ | DPLL
+ | In
+ | MCU core clock
+ |
+8
+ | pl_vdu_core_clk
+ | pl_vdu_core_clk
+ | PL
+ | In
+ | Decoder core clock, from PL. Used for debug
+ |
+9
+ | pl_vdu_mcu_clk
+ | pl_vdu_mcu_clk
+ | PL
+ | In
+ | MCU core clock, from PL. Used for debug
+ |
+12
+ | pl_vdu_scan_clk_n_ext
+ | pl_vdu_scan_clk_n_ext
+ | PL
+ | In
+ | SCAN clock from PL
+ |
+13
+ | pmc_vdu_mclk
+ | pmc_vdu_mclk
+ | PMC
+ | In
+ | Scan clear clock from PMC
+ |
+14
+ | gt_vdu_clock_dr
+ | gt_vdu_clock_dr
+ | PMC
+ | In
+ | iJTAG clock for DFX
+ |
+15
+ | npi_ref_clk
+ | npi_ref_clk
+ | PMC
+ | In
+ | NPI reference clock
+ |
+
+The VDU also has internally generated clocks which is used for BISR.  REF _Ref8649310 \h Below table shows all the internally generated clocks.
+Table  SEQ Table \* ARABIC 12 SEQ Table \* ARABIC 14: VDU Internally Generated Clocks
+#
+ | Internal Generated Clock Name
+ | Generation Point
+ | Master Clock
+ | Description
+ |
+
+ | gen_vdu_bisr_clk
+ | ssss_pl_vdu_scan_clear_clk_div2_ff/vdu_bisr_clk /uuuu_ff/Q
+ | vdu_bisr_clk
+ | BISR clock for vdu_bisr_cache logic
+ |
+
+ | pl_vdu_dec_core_div_clk
+ | Ivdu_atom_X1Y0_R0/Ivdu_core_top/i_vdu_iso_wrap/i_vdu_int_wrap/i_clk_rst_vdu/i_clk_ctrl_div_vdu_vdu_dec_core_pl_clk/uuuu_out_clk_scan/uuuu/Z
+ | pl_vdu_core_clk
+ | Core clock at the divider output(divider value =1)
+ |
+
+ | gtcc_vdu_dec_core_div_clk
+ | Ivdu_atom_X1Y0_R0/Ivdu_core_top/i_vdu_iso_wrap/i_vdu_int_wrap/i_clk_rst_vdu/i_clk_ctrl_div_vdu_gtcc_dec_core_clk/uuuu_out_clk_scan/uuuu/Z
+ | gtcc_vdu_core_clk
+ | Core clock at the divider output(divider value =1)
+ |
+
+ | pl_vdu_dec_mcu_div_clk
+ | Ivdu_atom_X1Y0_R0/Ivdu_core_top/i_vdu_iso_wrap/i_vdu_int_wrap/i_clk_rst_vdu/i_clk_ctrl_div_vdu_vdu_dec_mcu_pl_clk/uuuu_out_clk_scan/uuuu/Z
+ | pl_vdu_mcu_clk
+ | MCU clock at the divider output(divider value =1)
+ |
+
+ | gtcc_vdu_dec_mcu_div_clk
+ | Ivdu_atom_X1Y0_R0/Ivdu_core_top/i_vdu_iso_wrap/i_vdu_int_wrap/i_clk_rst_vdu/i_clk_ctrl_div_vdu_gtcc_dec_mcu_clk/uuuu_out_clk_scan/uuuu/Z
+ | gtcc_vdu_mcu_clk
+ | MCU clock at the divider output(divider value =1)
+ |
+
+ | vdu_gt_clock_dr_clk
+ | vdu_gt_clock_dr
+ | gt_vdu_clock_dr
+ | Clock dr output to next VDU tile/GT
+ |
+
+Clocks SDC Spreadsheet: $RTL_ROOT/vdu_7t_n1/constraints/tcl_fx/vdu_core_top/vdu_clocks.xlsm
+Notes:
+All clocks are ASYNC to each other except the generated clocks
+PL and GTCC clocks are logically exclusive
+Clock Latency, Balancing, and Skew
+Virtual Clocks
+Clock Tree Cells
+There is no synthesized logic on the clock tree. All are RTL instantiated uuuu cells.
+Clock Steering and Clock Reduction
+No stop_propagation on clocks in VDU. There are two generated clocks at the configuration clock GFM output. Since we have a generated_clock for each input clock to the GFM, there are no clocks (except the master_clock) being stopped by these generated_clocks. No clocks have multiple frequencies in the same speed grade.
+Special Clock Constraints
+None identified.
+IO Ports
+This section describes the timing of top-level IO ports. All IO Ports can be found in the VDU pinlist excel.
+$RTL_ROOT/vdu_7t_n1/vdu_core/doc/vdu_pinlist.xlsx
+Internal Device Timing
+AXI Interface
+There are three PL AXI interfaces in VDU. For all the three below is timing:
+PL-VDU AXI Interface:
+Setup requirement: 70% PL, 30% VDU
+Hold requirement
+Input ports: 0 PS
+Output ports: 0ps
+PL <-> VDU-MCU-DEBUG
+Setup requirement: 70% PL, 30% VDU
+Hold requirement
+Input ports: 0 PS
+Output ports: 0ps
+PL <-> VDU 32 AXI4 Lite
+Setup requirement: 70% PL, 30% VDU
+Hold requirement
+Input ports: 0 PS
+Output ports: 0ps
+VDU IO char
+Setup requirement: 50% PL, 50% VDU
+Hold requirement
+Input ports: 0 PS
+Output ports: 0ps
+VDU NPI
+Setup requirement: 50% Outside VDU(to NPI switch), 50% VDU
+Hold requirement
+Input ports: 0 PS
+Output ports: 0ps
+
+Other Internal Interface IO Timing
+The IJTAG interface will use the same global constraint file that the PS/PMC/CPM used (FX.jtag.io_cons.tcl). The clock names will have to be updated for use on the VDU, but the IO ports are expected to remain the same. For the rest of the IO ports, a flat 67% of clock period is used for external paths with 0ns used for min delay. This is auto-created by the Excite flow.
+External Device Timing
+The VDU doesn’t have any external interfaces.
+Memories
+List of memories used in VDU can be found  HYPERLINK "http://xinc/ppg/processing%20solutions/everest/des_ver/_layouts/xlviewer.aspx?id=/ppg/processing%20solutions/everest/des_ver/Shared%20Documents/Modules/VDU/VDU_Memory.xlsx&Source=http%3A%2F%2Fxinc%2Fppg%2Fprocessing%2520solutions%2Feverest%2Fdes%5Fver%2FSitePages%2FHome%2Easpx%3FRootFolder%3D%252Fppg%252Fprocessing%2520solutions%252Feverest%252Fdes%255Fver%252FShared%2520Documents%252FModules%252FVDU%26FolderCTID%3D0x0120005BBA9D60C81CF64688CAC4E9275CD17F%26View%3D%7BC98ABC01%2D9F07%2D4DC5%2DB307%2DAFAA579A7170%7D%26InitialTabId%3DRibbon%252ERead%26VisibilityContext%3DWSSTabPersistence&DefaultItemOpen=1&DefaultItemOpen=1" here. Totally there are 135 distinct memories accounting to around 5Mbits. Out of these, 86 RAMs are repairable. There are no ROMs.  As per TSMC guideline, any memory of size > 16k bits should be repairable which is adhered to for VDU. All VDU memories are timing critical
+These are memory instances with SRAM type. One is in each decoder.
+VDU_RAM_SRSPHD_2176_160_M4_FB4_FS2_LP_WM0_R1_B1_P0 \i_vdu_int_wrap/i_alg_vdu_dec_top/I_DECODE_TOP/g_CORES_0_/I_CORE_DECODE/u_ram_core/alg_ram_2102x160_0/TSMC_7FP_2102x160/u_alg_ram_2102x160/i_ram  (
+VDU_RAM_SRSPHD_2176_160_M4_FB4_FS2_LP_WM0_R1_B1_P0 \i_vdu_int_wrap/i_alg_vdu_dec_top/I_DECODE_TOP/g_CORES_1_/I_CORE_DECODE/u_ram_core/alg_ram_2102x160_0/TSMC_7FP_2102x160/u_alg_ram_2102x160/i_ram  (
+
+Rest of the memories are all either 1P or 2P RF and can be identified from the names.
+Analog Blocks
+POR IP is analog IPs
+Resets
+Constant Signals
+False and Multicycle Paths
+
+Timing Survey / Questionnaires
+
+Partial Reconfiguration
+During a Partial Reconfiguration(PR) event, there cannot be modification to add/remove any of decoder interfaces within a VDU instance. However, out of 4 VDU instances, PR should be able to bring up/down entire VDU instances.
+
+SEU
+
+An introduction to SEU can be seen below referred from SEU/SEE Arch spec.
+ HYPERLINK "https://xilinx.sharepoint.com/:w:/r/sites/eng/fdst/everest/arch/_layouts/15/Doc.aspx?sourcedoc=%7BA165F63D-BA1D-45B7-9188-33742CEA5733%7D&file=Everest_SEU_SEE_Arch_Specs_v2.0_040920.docx&wdLOR=cDDDF169C-9B33-475B-A01E-39977BEB9D6A&action=default&mobileredirect=true" https://xilinx.sharepoint.com/:w:/r/sites/eng/fdst/everest/arch/_layouts/15/Doc.aspx?sourcedoc=%7BA165F63D-BA1D-45B7-9188-33742CEA5733%7D&file=Everest_SEU_SEE_Arch_Specs_v2.0_040920.docx&wdLOR=cDDDF169C-9B33-475B-A01E-39977BEB9D6A&action=default&mobileredirect=true
+As Xilinx progresses down the process nodes to deliver products with increasing features/capabilities, the configuration RAM (CRAM) density is significantly increasing. Xilinx has done a good job of keeping the FIT/Mbit for the CRAM flat or made it slightly better with advanced technology nodes. But with increasing densities, the Mbits of CRAM in the devices grow at the same rate, resulting in FIT rates of the device exceeding our customer’s system level FIT budget. 6T CRAMs are susceptible to Single-Event Upsets (SEUs) caused by cosmic particles in the form of Neutrons or secondary Alpha particles from the impurities in packaging material or interaction of the device with boron 10 (10B).
+The best mitigation for SEU errors from Neutrons is to make the circuit components of FPGAs, particularly all the critical config. RAM (CRAM), block RAM (BRAM) and IO, GT registers as robust as possible. The logic registers are robust and have a low FIT (FIT = Failure in Time = 1 failure in billion device operating hours). SRAM in the form of BRAM is protected by ECC, but CRAM bit flips cannot be protected by an algorithm since any change in state changes the functionality of the device that could result in system malfunction. Hence the major focus from SEU mitigation point of view is on reducing FIT/Mb of CRAM by an order of magnitude.
+RAMs
+
+VDU reuses Allegro Decoder Core from 16 nm VCU. SEU of RAMs are handled by system level mitigation techniques that are summarized below. The reason for these mitigation factor arises, since VDU decoder cores have no ECC implementation inherently.
+There are two types of RAMs used in VDU – control and data RAMs.
+An error in data RAM can corrupt one or more decoded frames. However, H.264/H.265 video decoding support transfer of IDR/GDR frames. I-frames are also periodically transmitted. These frames are used to refresh reference frame and thus stop propagation of errors across multiple frames. This makes the error not perceivable and hence can be recovered. The time interval at which an I-frame is transmitted is dependent on application. For ex, if for every 60 frames one I-frame can be transmitted.
+An error in control RAM can corrupt decoded frame, similar to error in data RAM. Additionally, an error in control RAM can sometimes stall decode channel. A watchdog timer is implemented in decoder which can trigger an interrupt upon timeout to detect IP stall. SW can reset the channel (or multiple channels) upon detecting IP lock.
+FFs
+NPI registers are used in VDU for scan clear, memory clean and bisr operations.  They have no role when decoder is operational.
+NPI registers are implemented as triple redundant (TMR) to protect from SEU/error events. All other flops are transitory and need not have any SEU protection.
+Encoder Internal Resets
+The encoder IP has 4 reset input signals:
+Signal Name
+ | Description
+ |
+rstn
+ | IP active low reset
+ |
+arstn
+ | AXI active low reset
+ |
+prstn
+ | APB reset; Reset for resetting the APB Register Space
+ |
+mrstn
+ | MCU Reset; Reset to RISC-V MCU IP
+ |
+Table  SEQ Table \* ARABIC 11: Encoder Reset Signals
+All the resets should be asserted at least for two clock cycles and should be asserted before any access is performed through APB at power up. The IP combines an asynchronous reset input with a soft reset signal to generate a single clock cycle reset output.
+
+Decoder Internal Resets
+The decoder IP has 4 reset input signals:
+Signal Name
+ | Description
+ |
+rstn
+ | IP active low reset
+ |
+arstn
+ | AXI active low reset
+ |
+prstn
+ | APB active low reset
+ |
+mrstn
+ | MCU active low reset
+ |
+Table  SEQ Table \* ARABIC 12: Decoder Reset Signals
+All the resets should be asserted at least for two clock cycles and should be asserted before any access is performed through APB at power up. The IP combines an asynchronous reset input with a soft reset signal to generate a single clock cycle reset output.
+
+VCU Interface Micro-Architecture and Requirements
+This section describes the top-level micro-architecture for the VCU. The focus is on top-level interfaces, critical signal timing, and any port attributes.
+Top Level Ports
+All VCU top-level pins are listed in the $RTL_ROOT/vdu_7t_n1/vdu_core/doc/vdu_pinlist.xlsx
+AllThe VCU top-level pin s are listed in the $RTL_ROOT/vcu2_v1_7t/vcu2_core_top/doc/vcu2_core_top_pinlist.xlsxlist is at  HYPERLINK "https://xilinx.sharepoint.com/:x:/r/sites/eng/processing%20solutions/everest/des_ver/Shared%20Documents/Modules/VCU/Pinlist/VCU_top_level_pinlist.xlsx?d=wad6878001a0f43d3bb19aadd030b87bd&csf=1&web=1&e=LN14QA" VCU_top_level_pinlist.xlsx
+Below is the summary of ports.
+Interface
+ | Clock source
+ | Fmax(Fmax (MHz)
+ | notesNotes
+ |
+AXI -M 128-bit Encoder Core
+ | DPLL
+ | 950
+ | The AXI-M interface is used to fetch and store the data from/to the memory via NoC NMU.
+
+The same AXI interface is shared among the two cores.
+
+The interface uses
+
+Clock: Eencoder AXI clock coming from GTCC DPLL.
+ |
+AXI -M 128-bit Decoder Core
+ | DPLL
+ | 918
+ | The AXI-M interface is used to fetch and store the data from/to the memory via NoC NMU.
+
+The interface uses decoder AXI clock coming from GTCC DPLL.Clock: Decoder AXI clock
+ |
+AXI-M 128-bit Encoder MCU
+ | DPLL
+ | 950
+ | The AXI-M interface is with MCU and used to fetch and store the data from/to the memory via NoC NMU.
+
+The interface uses encoder AXI clock coming from GTCC DPLL.Clock: Encoder AXI clock
+ |
+AXI-M 128-bit Decoder MCU
+ | DPLL
+ | 918
+ | The AXI-M interface is with MCU and used to fetch and store the data from/to the memory via NoC NMU.
+
+The interface uses decoder AXI clock coming from GTCC DPLL.Clock: Decoder AXI clock
+ |
+AXI-S 128-bit
+ | DPLL
+ | 167
+ | The AXI-S interface is used for the configuration of core parameters for encoder & decoder and for register access.
+
+The parameter configuration will be through NSU.
+
+The interface uses AXI Slave clock coming from GTCC DPLL.Includes AXI Slave Clock
+ |
+VCU Reset
+ | PL
+ | Async
+ |  |
+IO Char
+ |
+ |
+ |
+ |
+Scan
+ | PL
+ | 100
+ | Includes scan clock
+ |
+
+ |
+ |
+ | Accessing of decoder core and SLCR registers?
+
+AXI-Slave Interface?
+ |
+SSC
+ | NPI
+ | 300
+ | PMC SysMon Root
+ |
+GTCC clocks
+ | DPLL
+ | Encoder:
+950 MHz
+Decoder:
+918 MHz
+
+AXI Slave:
+167 MHz
+ | For encoder, all the following clocks will be driven through a single clock source:Encoder:
+Enc IP clock
+APB clock
+
+MCU Clock
+AXI clock
+
+For decoder, all the following clocks will be driven through a single clock source:
+
+Decoder:
+
+Dec IP clock
+APB clock
+
+MCU Clock
+AXI clock
+
+ |
+Scan clear clock
+ |  |  | Dedicated clocks for chip pervasive features
+ |
+NPI
+ | NPI
+ | 300
+ | NPI Interface incl NPI clock
+ |
+Voltage Measurement ams_sense
+ | -
+ | -
+ | For voltage measurement (ABUS Switch)
+ |
+DFX
+ | DFX Scan clock
+ | 100
+ | iJTAG Interface from above or below GT quadIncludes DFX Pins connected to both top and bottom VDU/GT
+ |
+Misc
+ | -
+ |
+ | NPI opt_1 for NPI Addr size; NPI slave clock output
+ |
+POR reset
+ | PMC
+ | Async
+ | POR input from PMC
+ |
+Spare Ports
+ | -
+ | -
+ | 128 input bits, 128 output bits for every partition
+ |
+Table  SEQ Table \* ARABIC 13: Top Level Ports Summary
+
+Full list of each of the interface is below.
+Name
+ | Pins
+ | Direction
+ | Comment
+ | Connection
+ |
+Clocks And Reset
+ |
+pl_vdu_axi_dec_clk
+ | 1
+ | I
+ |
+ |
+ |
+pl_vdu_axi_mcu_clk
+ | 1
+ | I
+ |
+ |
+ |
+pl_vdu_mcu_vdec_debug_clk
+ | 1
+ | I
+ |
+ |
+ |
+pl_vdu_mcu_vdec_debug_update
+ | 1
+ | I
+ |
+ |
+ |
+pl_vdu_axi_lite_clk
+ | 1
+ | I
+ |
+ |
+ |
+pl_vdu_core_clk
+ | 1
+ | I
+ |
+ |
+ |
+pl_vdu_mcu_clk
+ | 1
+ | I
+ |
+ |
+ |
+pl_vdu_scan_clk_n_ext
+ | 1
+ | I
+ |
+ |
+ |
+gtcc_vdu_core_clk
+ | 1
+ | I
+ |
+ |
+ |
+gtcc_vdu_mcu_clk
+ | 1
+ | I
+ |
+ |
+ |
+pmc_vdu_mclk
+ | 1
+ | I
+ |
+ |
+ |
+gt_vdu_clock_dr
+ | 1
+ | I
+ |
+ |
+ |
+npi_ref_clk
+ | 1
+ | I
+ |
+ |
+ |
+pl_vdu_raw_rst_n
+ | 1
+ | I
+ |
+ |
+ |
+
+ |
+ |
+ |
+ |
+ |
+PL AXI DEC0
+ |
+Aruser
+ | 18
+ | O
+ |
+ |
+ |
+Awuser
+ | 18
+ | O
+ |
+ |
+ |
+Awid
+ | 16
+ | O
+ |
+ |
+ |
+Awaddr
+ | 64
+ | O
+ |
+ |
+ |
+Awlen
+ | 8
+ | O
+ |
+ |
+ |
+Awsize
+ | 3
+ | O
+ |
+ |
+ |
+Awburst
+ | 2
+ | O
+ |
+ |
+ |
+Awlock
+ | 1
+ | O
+ |
+ |
+ |
+Awcache
+ | 4
+ | O
+ |
+ |
+ |
+Awprot
+ | 3
+ | O
+ |
+ |
+ |
+Awvalid
+ | 1
+ | O
+ |
+ |
+ |
+Awregion
+ | 4
+ | O
+ |
+ |
+ |
+Awready
+ | 1
+ | I
+ |
+ |
+ |
+Wuser
+ | 17
+ | O
+ |
+ |
+ |
+Wid
+ | 16
+ | O
+ |
+ |
+ |
+Wdata
+ | 128
+ | O
+ |
+ |
+ |
+Wstrb
+ | 16
+ | O
+ |
+ |
+ |
+Wlast
+ | 1
+ | O
+ |
+ |
+ |
+Wvalid
+ | 1
+ | O
+ |
+ |
+ |
+Wready
+ | 1
+ | I
+ |
+ |
+ |
+Bid
+ | 16
+ | I
+ |
+ |
+ |
+Bresp
+ | 2
+ | I
+ |
+ |
+ |
+Buser
+ | 16
+ | I
+ |
+ |
+ |
+Bvalid
+ | 1
+ | I
+ |
+ |
+ |
+Bready
+ | 1
+ | O
+ |
+ |
+ |
+Arid
+ | 16
+ | O
+ |
+ |
+ |
+Araddr
+ | 64
+ | O
+ |
+ |
+ |
+Arlen
+ | 8
+ | O
+ |
+ |
+ |
+Arsize
+ | 3
+ | O
+ |
+ |
+ |
+airburst
+ | 2
+ | O
+ |
+ |
+ |
+Arlock
+ | 1
+ | O
+ |
+ |
+ |
+Arcache
+ | 4
+ | O
+ |
+ |
+ |
+Arprot
+ | 3
+ | O
+ |
+ |
+ |
+Arvalid
+ | 1
+ | O
+ |
+ |
+ |
+Arregion
+ | 4
+ | O
+ |
+ |
+ |
+Arready
+ | 1
+ | I
+ |
+ |
+ |
+Rid
+ | 16
+ | I
+ |
+ |
+ |
+Ruser
+ | 17
+ | I
+ |
+ |
+ |
+Rdata
+ | 128
+ | I
+ |
+ |
+ |
+Rresp
+ | 2
+ | I
+ |
+ |
+ |
+Rlast
+ | 1
+ | I
+ |
+ |
+ |
+Rvalid
+ | 1
+ | I
+ |
+ |
+ |
+Rready
+ | 1
+ | O
+ |
+ |
+ |
+Awqos
+ | 4
+ | O
+ |
+ |
+ |
+Arqos
+ | 4
+ | O
+ |
+ |
+ |
+PL AXI DEC1
+ |
+Aruser
+ | 18
+ | O
+ |
+ |
+ |
+Awuser
+ | 18
+ | O
+ |
+ |
+ |
+Awid
+ | 16
+ | O
+ |
+ |
+ |
+Awaddr
+ | 64
+ | O
+ |
+ |
+ |
+Awlen
+ | 8
+ | O
+ |
+ |
+ |
+Awsize
+ | 3
+ | O
+ |
+ |
+ |
+Awburst
+ | 2
+ | O
+ |
+ |
+ |
+Awlock
+ | 1
+ | O
+ |
+ |
+ |
+Awcache
+ | 4
+ | O
+ |
+ |
+ |
+Awprot
+ | 3
+ | O
+ |
+ |
+ |
+Awvalid
+ | 1
+ | O
+ |
+ |
+ |
+Awregion
+ | 4
+ | O
+ |
+ |
+ |
+Awready
+ | 1
+ | I
+ |
+ |
+ |
+Wuser
+ | 17
+ | O
+ |
+ |
+ |
+Wid
+ | 16
+ | O
+ |
+ |
+ |
+Wdata
+ | 128
+ | O
+ |
+ |
+ |
+Wstrb
+ | 16
+ | O
+ |
+ |
+ |
+Wlast
+ | 1
+ | O
+ |
+ |
+ |
+Wvalid
+ | 1
+ | O
+ |
+ |
+ |
+Wready
+ | 1
+ | I
+ |
+ |
+ |
+Bid
+ | 16
+ | I
+ |
+ |
+ |
+Bresp
+ | 2
+ | I
+ |
+ |
+ |
+Buser
+ | 16
+ | I
+ |
+ |
+ |
+Bvalid
+ | 1
+ | I
+ |
+ |
+ |
+Bready
+ | 1
+ | O
+ |
+ |
+ |
+Arid
+ | 16
+ | O
+ |
+ |
+ |
+Araddr
+ | 64
+ | O
+ |
+ |
+ |
+Arlen
+ | 8
+ | O
+ |
+ |
+ |
+Arsize
+ | 3
+ | O
+ |
+ |
+ |
+airburst
+ | 2
+ | O
+ |
+ |
+ |
+Arlock
+ | 1
+ | O
+ |
+ |
+ |
+Arcache
+ | 4
+ | O
+ |
+ |
+ |
+Arprot
+ | 3
+ | O
+ |
+ |
+ |
+Arvalid
+ | 1
+ | O
+ |
+ |
+ |
+Arregion
+ | 4
+ | O
+ |
+ |
+ |
+Arready
+ | 1
+ | I
+ |
+ |
+ |
+Rid
+ | 16
+ | I
+ |
+ |
+ |
+Ruser
+ | 17
+ | I
+ |
+ |
+ |
+Rdata
+ | 128
+ | I
+ |
+ |
+ |
+Rresp
+ | 2
+ | I
+ |
+ |
+ |
+Rlast
+ | 1
+ | I
+ |
+ |
+ |
+Rvalid
+ | 1
+ | I
+ |
+ |
+ |
+Rready
+ | 1
+ | O
+ |
+ |
+ |
+Awqos
+ | 4
+ | O
+ |
+ |
+ |
+Arqos
+ | 4
+ | O
+ |
+ |
+ |
+MCU AXI
+ |
+Awuser
+ | 16
+ | O
+ |
+ |
+ |
+Awid
+ | 16
+ | O
+ |
+ |
+ |
+Awaddr
+ | 64
+ | O
+ |
+ |
+ |
+Awregion
+ | 4
+ | O
+ |
+ |
+ |
+Awlen
+ | 8
+ | O
+ |
+ |
+ |
+Awsize
+ | 3
+ | O
+ |
+ |
+ |
+Awburst
+ | 2
+ | O
+ |
+ |
+ |
+Awlock
+ | 1
+ | O
+ |
+ |
+ |
+Awcache
+ | 4
+ | O
+ |
+ |
+ |
+Awprot
+ | 3
+ | O
+ |
+ |
+ |
+Awvalid
+ | 1
+ | O
+ |
+ |
+ |
+Awready
+ | 1
+ | I
+ |
+ |
+ |
+Wuser
+ | 16
+ | O
+ |
+ |
+ |
+Wid
+ | 16
+ | O
+ |
+ |
+ |
+Wdata
+ | 32
+ | O
+ |
+ |
+ |
+Wstrb
+ | 4
+ | O
+ |
+ |
+ |
+Wlast
+ | 1
+ | O
+ |
+ |
+ |
+Wvalid
+ | 1
+ | O
+ |
+ |
+ |
+Wready
+ | 1
+ | I
+ |
+ |
+ |
+Bid
+ | 16
+ | I
+ |
+ |
+ |
+Buser
+ | 16
+ | I
+ |
+ |
+ |
+Bresp
+ | 2
+ | I
+ |
+ |
+ |
+Bvalid
+ | 1
+ | I
+ |
+ |
+ |
+Bready
+ | 1
+ | O
+ |
+ |
+ |
+Aruser
+ | 16
+ | O
+ |
+ |
+ |
+Arid
+ | 16
+ | O
+ |
+ |
+ |
+Araddr
+ | 64
+ | O
+ |
+ |
+ |
+Arlen
+ | 8
+ | O
+ |
+ |
+ |
+Arsize
+ | 3
+ | O
+ |
+ |
+ |
+airburst
+ | 2
+ | O
+ |
+ |
+ |
+Arlock
+ | 1
+ | O
+ |
+ |
+ |
+Arcache
+ | 4
+ | O
+ |
+ |
+ |
+Arprot
+ | 3
+ | O
+ |
+ |
+ |
+Arregion
+ | 4
+ | O
+ |
+ |
+ |
+Arvalid
+ | 1
+ | O
+ |
+ |
+ |
+Arready
+ | 1
+ | I
+ |
+ |
+ |
+Rid
+ | 16
+ | I
+ |
+ |
+ |
+Ruser
+ | 16
+ | I
+ |
+ |
+ |
+Rdata
+ | 32
+ | I
+ |
+ |
+ |
+Rresp
+ | 2
+ | I
+ |
+ |
+ |
+Rlast
+ | 1
+ | I
+ |
+ |
+ |
+Rvalid
+ | 1
+ | I
+ |
+ |
+ |
+Rready
+ | 1
+ | O
+ |
+ |
+ |
+Awqos
+ | 4
+ | O
+ |
+ |
+ |
+Arqos
+ | 4
+ | O
+ |
+ |
+ |
+MCU Debug
+ |
+pl_vdu_mcu_vdec_debug_clk
+ | 1
+ | C
+ |
+ |
+ |
+pl_vdu_mcu_vdec_debug_sys_rst
+ | 1
+ | I
+ |
+ |
+ |
+pl_vdu_mcu_vdec_debug_rst
+ | 1
+ | I
+ |
+ |
+ |
+pl_vdu_mcu_vdec_debug_capture
+ | 1
+ | I
+ |
+ |
+ |
+pl_vdu_mcu_vdec_debug_reg_en
+ | 8
+ | I
+ |
+ |
+ |
+pl_vdu_mcu_vdec_debug_shift
+ | 1
+ | I
+ |
+ |
+ |
+pl_vdu_mcu_vdec_debug_tdi
+ | 1
+ | I
+ |
+ |
+ |
+vdu_pl_mcu_vdec_debug_tdo
+ | 1
+ | O
+ |
+ |
+ |
+pl_vdu_mcu_vdec_debug_update
+ | 1
+ | C
+ |
+ |
+ |
+AXI Lite Interface
+ |
+Awaddr
+ | 32
+ | I
+ |
+ |
+ |
+Awprot
+ | 3
+ | I
+ |
+ |
+ |
+Awvalid
+ | 1
+ | I
+ |
+ |
+ |
+Awready
+ | 1
+ | O
+ |
+ |
+ |
+Wdata
+ | 32
+ | I
+ |
+ |
+ |
+Wstrb
+ | 4
+ | I
+ |
+ |
+ |
+Wvalid
+ | 1
+ | I
+ |
+ |
+ |
+Wready
+ | 1
+ | O
+ |
+ |
+ |
+Bresp
+ | 2
+ | O
+ |
+ |
+ |
+Bvalid
+ | 1
+ | O
+ |
+ |
+ |
+Bready
+ | 1
+ | I
+ |
+ |
+ |
+Araddr
+ | 32
+ | I
+ |
+ |
+ |
+Arprot
+ | 3
+ | I
+ |
+ |
+ |
+Arvalid
+ | 1
+ | I
+ |
+ |
+ |
+Arready
+ | 1
+ | O
+ |
+ |
+ |
+Rdata
+ | 32
+ | O
+ |
+ |
+ |
+Rresp
+ | 2
+ | O
+ |
+ |
+ |
+Rvalid
+ | 1
+ | O
+ |
+ |
+ |
+Rready
+ | 1
+ | I
+ |
+ |
+ |
+Misc PL Interface
+ |
+
+ |
+ |
+ | This is unused in design
+ |
+ |
+vdu_pl_pwr_supply_status_lvlsh_pl
+ | 1
+ | O
+ |  indicates PL, VDU, AUX supplies are UP, gasket is released with pcsr iso ctrl 1 is set
+ |
+ |
+vdu_pl_por_status_lvlsh_pl
+ | 1
+ | O
+ | indicates PL, VDU , AUX supplies are UP, pmc_por_b is released
+ |
+ |
+vdu_pl_core_status_clk_pll
+ | 1
+ | O
+ | Vdu_dec_core_clk  Clock is  seen on this port
+ |
+ |
+vdu_pl_mcu_status_clk_pll
+ | 1
+ | O
+ | Vdu_dec_mcu_clk is seen on this port
+ |
+ |
+iso_1_vdu_pl
+ | 1
+ | O
+ | Isolation control for PL/VDU signals.
+ |
+ |
+iso_2_vdu_pl
+ | 1
+ | O
+ | This is the isolation gasket release control for scan related signals which include scan clear trigger, scan clear clock,scan clear done and scan clear pass.This is required because DFX controller for VDU is in PL domain, and all the above signals are in VDU power domain
+ |
+ |
+pl_vdu_iochar_mcu_axi_data_in
+ | 1
+ | I
+ |
+ |
+ |
+pl_vdu_iochar_dec_axi0_data_in
+ | 1
+ | I
+ |
+ |
+ |
+pl_vdu_iochar_dec_axi1_data_in
+ | 1
+ | I
+ |
+ |
+ |
+pl_vdu_iochar_data_in_sel_n
+ | 1
+ | I
+ |
+ |
+ |
+vdu_pl_iochar_mcu_axi_data_out
+ | 1
+ | O
+ |
+ |
+ |
+vdu_pl_iochar_dec_axi0_data_out
+ | 1
+ | O
+ |
+ |
+ |
+vdu_pl_iochar_dec_axi1_data_out
+ | 1
+ | O
+ |
+ |
+ |
+VDU Scan Interface
+ |
+pl_vdu_scan_clk_n_ext
+ | 1
+ | C
+ |
+ |
+ |
+pl_vdu_scan_en_n_ext
+ | 1
+ | I
+ |
+ |
+ |
+pl_vdu_scan_mode_rst_n_ext
+ | 1
+ | I
+ |
+ |
+ |
+pl_vdu_scan_edt_updt_n_ext
+ | 1
+ | I
+ |
+ |
+ |
+pl_vdu_scan_chnl_in_ext_top
+ | 6
+ | I
+ |
+ |
+ |
+vdu_pl_scan_chnl_out_ext_top
+ | 6
+ | O
+ |
+ |
+ |
+pl_vdu_scan_cntrl_chnl_in_ext_top
+ | 1
+ | I
+ |
+ |
+ |
+vdu_pl_scan_cntrl_chnl_out_ext_top
+ | 1
+ | O
+ |
+ |
+ |
+pl_vdu_cssd_trig_n
+ | 2
+ | I
+ |
+ |
+ |
+VDU DFX Interface
+ |
+gt_vdu_update_dr
+ | 1
+ | I
+ |
+ |
+ |
+gt_vdu_shift_dr
+ | 1
+ | I
+ |
+ |
+ |
+gt_vdu_capture_dr
+ | 1
+ | I
+ |
+ |
+ |
+gt_vdu_reset_tap_b
+ | 1
+ | I
+ |
+ |
+ |
+gt_vdu_select_dr
+ | 1
+ | I
+ |
+ |
+ |
+gt_vdu_ijtag_tdi_ext
+ | 1
+ | I
+ |
+ |
+ |
+gt_vdu_ijtag_tdi_return_ext
+ | 1
+ | I
+ |
+ |
+ |
+vdu_gt_ijtag_tdo_ext
+ | 1
+ | O
+ |
+ |
+ |
+vdu_gt_ijtag_tdo_return_ext
+ | 1
+ | O
+ |
+ |
+ |
+vdu_gt_clock_dr
+ | 1
+ | O
+ |
+ |
+ |
+vdu_gt_update_dr
+ | 1
+ | O
+ |
+ |
+ |
+vdu_gt_shift_dr
+ | 1
+ | O
+ |
+ |
+ |
+vdu_gt_capture_dr
+ | 1
+ | O
+ |
+ |
+ |
+vdu_gt_reset_tap_b
+ | 1
+ | O
+ |
+ |
+ |
+vdu_gt_select_dr
+ | 1
+ | O
+ |
+ |
+ |
+NPI Interface
+ |
+Paddr
+ | 16
+ | I
+ |
+ |
+ |
+Penable
+ | 1
+ | I
+ |
+ |
+ |
+Pwrite
+ | 1
+ | I
+ |
+ |
+ |
+Paccept
+ | 1
+ | O
+ |
+ |
+ |
+Presponse
+ | 1
+ | O
+ |
+ |
+ |
+Pwdata
+ | 32
+ | I
+ |
+ |
+ |
+interface_ready
+ | 1
+ | O
+ |
+ |
+ |
+Prdata
+ | 32
+ | O
+ |
+ |
+ |
+Pslverr
+ | 1
+ | O
+ |
+ |
+ |
+Interrupt
+ | 20
+ | O
+ |
+ |
+ |
+preset_n
+ | 1
+ | I
+ |
+ |
+ |
+addr_size
+ | 3
+ | O
+ |
+ |
+ |
+por_pl_b
+ | 1
+ | I
+ |
+ |
+ |
+npi_opt_1
+ | 1
+ | I
+ |
+ |
+ |
+slv_clk
+ | 1
+ | O
+ |
+ |
+ |
+Voltage Measurement Interface
+ |
+supply_sense_p
+ | 2
+ | O
+ |
+ |
+ |
+Supply_sense_n
+ | 2
+ | O
+ |
+ |
+ |
+SSC Interface
+ |
+mrkr_r
+ | 1
+ | I
+ |
+ |
+ |
+data_r
+ | 2
+ | I
+ |
+ |
+ |
+ssc_efuse_en
+ | 1
+ | I
+ |
+ |
+ |
+
+VDU AXI interface – specific notes:
+VDU has following interface Signals which are not driven by the Vendor IP. These interface signals will be driven thru SLCR or tied-off based on system level decision. Since we are driving thru SLCR, they can be changed by system SW application, if needed.
+Interface
+ | Signals
+ | Drive thru SLCR
+ | Default value/Comments
+ |
+
+Decoder AXI interfaces
+ | USER        : aruser awuser, wuser,
+LOCK        : awlock, arlock,
+REGION   : arregion, awregion,
+ID             : wid, [15:4]awid, [15:4]arid,
+ADDR      : [63:44] awaddr,[63:44]araddr
+PROT       : awport[2],awprot[0],arprot[2],arprot[0]
+
+ | No
+ | Tie-off value=0
+ |
+
+ | STROBE   : wstrb
+ | No
+ | Tie-off value =1
+ |
+
+ | AxCache
+ | Yes
+ | 4’b0010 (Normal Non-cacheable Non-bufferable)
+ |
+
+ | AxProt[1]
+ | Yes
+ | Only 1 out of 3 pins driven from SLCR. *PROT[1].default = 0x1
+ |
+
+ | AxQos
+ | Yes
+ | 4’b1011
+ |
+MCU AXI interface
+ | USER        : awuser, wuser, aruser
+ADDR       : [63:44] awaddr,[63:44]araddr,
+ID              : wid, [15:3] awid,[15:3]arid,
+REGION   : awregion, ,arregion
+ | No
+ | Tie-off Value=0
+ |
+Table  SEQ Table \* ARABIC 13 SEQ Table \* ARABIC 16 Axi interface signals slcr driven/ tied-off in vdu design
+
+Interfaces
+AXI-M4 Interfaces
+A standard AXI master interfaces areis mainly used to read and write data to DDR Memory via NoC NMU. The AXI-M interface runs at 950 MHz for encoder and at 918 MHz for decoder. The clocks are same as the operating clock frequencies of encoder and decoder. The data width is 128 bits. Here, VCU acts as master and NMU acts as slave. One instance of VCU has 4 AXI-M interfaces with NMUs which are shared as:
+2 Encoder Cores - AXI-M Interface
+Encoder MCU - AXI-M Interface
+1 Decoder Core - AXI-M Interface
+Decoder MCU - AXI-M Interface
+
+Figure  SEQ Figure \* ARABIC 11: AXI-M Interfaces
+
+For AXI-M Interface, the signal flow would be as:
+AXI-M Write Datapath is output to interfaceinterface, and it considers VCU as a master (VCU -> NMU)
+AXI-M Read Datapath is input to interface (NMU -> VCU)
+AXI-M Write/Read Address paths are output to interface (VCU -> NMU)
+AXI-M Write Response is input to interface (NMU -> NSU)
+AXI-M interface from NMU might have reg slices/pipes for timing control
+SLCR generates PPROT signals to be driven on master interfaces
+Note:
+AXI-M interface from NSU might have reg slices/pipes for timing control (TBD)
+ AXI Slave Interface is used to configure the core parameters, start processing, get status and results via interconnect. It is also used to use encoder cache as SRAM. AXI S interface is used to write SLCR registers.
+APB & AXI-S Interface
+The APB interface is used for the configuration of core parameters for encoder & decoder and also for register access. The data from NSU through an AXI4 Slave Interface is converted on APB3 interface and reaches to encoder, decoder and VCU_SLCR registers. NSU acts as a master unit and VCU acts as a slave unit to transfer the data through AXI-S interface.  The data on AXI interface is 128 bits wide and for APB interface, the data width is 32 bits.
+The interconnect takes care of the data conversion from AXI to APB interface. The AXI Slave port would operate at a frequency of 167 MHz while the clock for APB interface is same as the clock for encoder & decoder. The minimum/maximum clock rates for the encoder are 540 and 950 MHz. And the minimum/maximum clock rates for the decoder are 470 MHz and 918 MHz.  The interconnect needs to be configured considering these frequencies.
+
+Figure  SEQ Figure \* ARABIC 12: APB & AXI-S Interface
+
+For AXI-S Interface, the signal flow would be as:
+AXI-S Write Datapath is input to interfaceinterface, and it considers VCU as a slave (NSU -> VCU)
+AXI-S Read Datapath is output to interface (VCU -> NSU)
+AXI-S Write/Read Address paths are input to interface (NSU -> VCU)
+AXI-S Write Response is output to interface (VCU -> NSU)
+
+Note:
+AXI-S interface from NSU might have reg slices/pipes for timing control (TBD)
+SLCR also generates PPROT signals for security reasons (TBD)
+AXI-M interface with NMU
+The AXI-M interface runs at 950 MHz for encoder and at 918 MHz for decoder. The clocks are same as the operating clock frequencies of encoder and decoder. The data width is 128 bits. Here, VCU acts as master and NMU acts as slave. One instance of VCU has 4 AXI-M interfaces with NMUs which are shared as:
+2 Encoder Cores - AXI-M Interface
+Encoder MCU - AXI-M Interface
+1 Decoder Core - AXI-M Interface
+Decoder MCU - AXI-M Interface
+
+For AXI-M Interface, the signal flow would be as:
+AXI-M Write Datapath is output to interface and it considers VCU as a master (VCU -> NMU)
+AXI-M Read Datapath is input to interface (NMU -> VCU)
+AXI-M Write/Read Address paths are output to interface (VCU -> NMU)
+AXI-M Write Response is input to interface (NMU -> NSU)
+Note:
+AXI-M interface from NSU might have reg slices/pipes for timing control (TBD)
+
+Security via AXI-M Interface
+VCU programs CODEC core as well as MCU security level, i.e.i.e., secure/non-secure bit in AxPROT field of AXI protocol, separately for encoder, decoder and MCU. MCU is programmed only once during the boot or reinitialization of VCU instance.
+Doubt: PROT bit is programmable through any master or only secure master ?
+
+System Management ID (SMID) is used by SMMU, XMMU, XPPU, and IPI to identify the source of a transaction to ensure it has authority to access the destination. VCU provides programmable SMID values and should make SMID assignment secure & hack-resistant using mechanisms such as secure accessibility, lockable registers etc. VCUetc. VCU NMU masks and control incoming SMID values to facilitate secure SMID assignment.
+ Critical Signals Timing / Loading
+Timing Critical paths can exist in Allegro ENC/DEC IP. Vendor does not share this info. PD was able to close timing
+Description goes here
+Port Attributes
+NA
+Physical Design Implementation
+
+Floor Plan
+
+Floor Plan Diagram
+
+Requirements for clocking
+The GTCC has one DPLL per 1x tile and each DPLL has 2 outputs that share the same VCO frequency but different output dividers (each DPLL has 4 such outputs but only 2 of them are available to the MMD tile)
+So, for VCU you have 2 DPLLs that can have 2 independent VCO frequencies, and 4 derived clocks. In mapping or connection of clocks we must make sure that encoder and decoder clocks aren’t mapped to outputs of same DLL from GTCC. The same DPLL cannot provide the required frequencies for both the encoder and decoder at same time.
+
+Area Estimates
+Excite Area Estimates
+vcu2_enc_core_top
+Count
+ | Metric
+ | Source
+ | Value
+ |
+1
+ | Synthesisstdcellarea
+ | Extracted
+ | 5,19,215
+ |
+2
+ | NumberofFF
+ | Extracted
+ | 5,62,868
+ |
+3
+ | Numberofmemoryinstances
+ | Extracted
+ | 268
+ |
+4
+ | HasDFXcontrollerinserted?
+ | Extracted
+ | Yes
+ |
+5
+ | HasMBISTinserted?
+ | Extracted
+ | Yes
+ |
+6
+ | DFXcontrollerarea
+ | Computed
+ | 0
+ |
+7
+ | MBISTArea
+ | Computed
+ | 0
+ |
+8
+ | Physicalonlymargin
+ | UserInput
+ | 2%
+ |
+9
+ | Physicalonlyarea
+ | Computed
+ | 10,384
+ |
+10
+ | Estimatedsynthesisstdcellarea
+ | Computed
+ | 5,29,599
+ |
+Count
+ | Metric
+ | Source
+ | Value
+ |
+1
+ | SYN2PNRgrowth
+ | UserInput
+ | 10%
+ |
+2
+ | PendingRTLlogicgrowth
+ | UserInput
+ | 0%
+ |
+3
+ | Stdcellareagrowth
+ | Computed
+ | 52,960
+ |
+4
+ | StdcellareapostSYN2PNRgrowth
+ | Computed
+ | 5,82,559
+ |
+Count
+ | Metric
+ | Source
+ | Value
+ |
+1
+ | Stdcellutilization
+ | UserInput
+ | 0.5
+ |
+2
+ | Headercellmargin(pwrgating)
+ | UserInput
+ | 2%
+ |
+3
+ | Headercellmarginarea
+ | Computed
+ | 23,302
+ |
+4
+ | Stdcellareapostutilization
+ | Computed
+ | 11,88,421
+ |
+Count
+ | Metric
+ | Source
+ | Value
+ |
+1
+ | Memorycellarea
+ | Extracted
+ | 10,49,034
+ |
+2
+ | Macrocellarea
+ | Extracted
+ | 144.61
+ |
+3
+ | Pendingmemory/macrogrowth
+ | UserInput
+ | 0%
+ |
+4
+ | Pendingmemory/macroareagrowth
+ | Computed
+ | 0
+ |
+5
+ | Memory/MacroUtilization
+ | UserInput
+ | 80%
+ |
+6
+ | TotalMacro/Memoryarea
+ | Computed
+ | 13,11,473
+ |
+Count
+ | Metric
+ | Source
+ | Value
+ |
+1
+ | Totalestimatedarea
+ | Computed
+ | 24,99,894
+ |
+vcu2_dec_top
+Count
+ | Metric
+ | Source
+ | Value
+ |
+1
+ | Synthesisstdcellarea
+ | Extracted
+ | 2,14,440
+ |
+2
+ | NumberofFF
+ | Extracted
+ | 3,04,145
+ |
+3
+ | Numberofmemoryinstances
+ | Extracted
+ | 120
+ |
+4
+ | HasDFXcontrollerinserted?
+ | Extracted
+ | Yes
+ |
+5
+ | HasMBISTinserted?
+ | Extracted
+ | Yes
+ |
+6
+ | DFXcontrollerarea
+ | Computed
+ | 0
+ |
+7
+ | MBISTArea
+ | Computed
+ | 0
+ |
+8
+ | Physicalonlymargin
+ | UserInput
+ | 2%
+ |
+9
+ | Physicalonlyarea
+ | Computed
+ | 4,289
+ |
+10
+ | Estimatedsynthesisstdcellarea
+ | Computed
+ | 2,18,729
+ |
+Count
+ | Metric
+ | Source
+ | Value
+ |
+1
+ | SYN2PNRgrowth
+ | UserInput
+ | 10%
+ |
+2
+ | PendingRTLlogicgrowth
+ | UserInput
+ | 0%
+ |
+3
+ | Stdcellareagrowth
+ | Computed
+ | 21,873
+ |
+4
+ | StdcellareapostSYN2PNRgrowth
+ | Computed
+ | 2,40,602
+ |
+Count
+ | Metric
+ | Source
+ | Value
+ |
+1
+ | Stdcellutilization
+ | UserInput
+ | 0.5
+ |
+2
+ | Headercellmargin(pwrgating)
+ | UserInput
+ | 2%
+ |
+3
+ | Headercellmarginarea
+ | Computed
+ | 9,624
+ |
+4
+ | Stdcellareapostutilization
+ | Computed
+ | 4,90,829
+ |
+Count
+ | Metric
+ | Source
+ | Value
+ |
+1
+ | Memorycellarea
+ | Extracted
+ | 5,78,398
+ |
+2
+ | Macrocellarea
+ | Extracted
+ | 144.61
+ |
+3
+ | Pendingmemory/macrogrowth
+ | UserInput
+ | 0%
+ |
+4
+ | Pendingmemory/macroareagrowth
+ | Computed
+ | 0
+ |
+5
+ | Memory/MacroUtilization
+ | UserInput
+ | 80%
+ |
+6
+ | TotalMacro/Memoryarea
+ | Computed
+ | 7,23,179
+ |
+Count
+ | Metric
+ | Source
+ | Value
+ |
+1
+ | Totalestimatedarea
+ | Computed
+ | 12,14,007
+ |
+vcu2_core
+Count
+ | Metric
+ | Source
+ | Value
+ |
+1
+ | Synthesisstdcellarea
+ | Extracted
+ | 54,154
+ |
+2
+ | NumberofFF
+ | Extracted
+ | 86,971
+ |
+3
+ | Numberofmemoryinstances
+ | Extracted
+ | 17
+ |
+4
+ | HasDFXcontrollerinserted?
+ | Extracted
+ | Yes
+ |
+5
+ | HasMBISTinserted?
+ | Extracted
+ | Yes
+ |
+6
+ | DFXcontrollerarea
+ | Computed
+ | 0
+ |
+7
+ | MBISTArea
+ | Computed
+ | 0
+ |
+8
+ | Physicalonlymargin
+ | UserInput
+ | 2%
+ |
+9
+ | Physicalonlyarea
+ | Computed
+ | 1,083
+ |
+10
+ | Estimatedsynthesisstdcellarea
+ | Computed
+ | 55,237
+ |
+Count
+ | Metric
+ | Source
+ | Value
+ |
+1
+ | SYN2PNRgrowth
+ | UserInput
+ | 10%
+ |
+2
+ | PendingRTLlogicgrowth
+ | UserInput
+ | 0%
+ |
+3
+ | Stdcellareagrowth
+ | Computed
+ | 5,524
+ |
+4
+ | StdcellareapostSYN2PNRgrowth
+ | Computed
+ | 60,760
+ |
+Count
+ | Metric
+ | Source
+ | Value
+ |
+1
+ | Stdcellutilization
+ | UserInput
+ | 0.5
+ |
+2
+ | Headercellmargin(pwrgating)
+ | UserInput
+ | 2%
+ |
+3
+ | Headercellmarginarea
+ | Computed
+ | 2,430
+ |
+4
+ | Stdcellareapostutilization
+ | Computed
+ | 1,23,951
+ |
+Count
+ | Metric
+ | Source
+ | Value
+ |
+1
+ | Memorycellarea
+ | Extracted
+ | 59,980
+ |
+2
+ | Macrocellarea
+ | Extracted
+ | 13,725
+ |
+3
+ | Pendingmemory/macrogrowth
+ | UserInput
+ | 0%
+ |
+4
+ | Pendingmemory/macroareagrowth
+ | Computed
+ | 0
+ |
+5
+ | Memory/MacroUtilization
+ | UserInput
+ | 80%
+ |
+6
+ | TotalMacro/Memoryarea
+ | Computed
+ | 92,131
+ |
+Count
+ | Metric
+ | Source
+ | Value
+ |
+1
+ | Totalestimatedarea
+ | Computed
+ | 2,16,082
+ |
+
+Total Area
+Block
+ | Area
+ | Instances
+ | Total Area
+ |
+vcu2_core
+ | 2,16,082
+ | 1
+ | 2,16,082
+ |
+vcu2_dec_top
+ | 12,14,007
+ | 1
+ | 12,14,007
+ |
+vcu2_enc_core_top
+ | 24,99,894
+ | 2
+ | 49,99,798
+ |
+Grand Total
+ |
+ |
+ | 64,29,887
+ |
+
+Review
+VCU DID Review 16/09/2022
+
+Minutes:
+VCU is 2 * 1/2 FSR height. What is FSR height.
+Encoder and decoder have independent resets. [Arch specs Requirement] [How it will happen]
+Check that IP has software resets, soft reset from VCU SLCR
+GTCC gives two set of signals. Each set is with respect to 1 tile. Should we terminate GTCC signals inside VCU or outside VCU?
+scan clear clock
+Would there be any gap between two GTs? Can we do the full PnR for VCU? Ask shiva - Shiva Prasad Vadla?
+Ask allegro to add reg slices in the IP?
+Show the DPLL partitions in the block diagram
+Encoder cores show VCU domain
+Add PL clock for debug – Clocks are added for Encoder IP and Decoder IP, AXI-Slave
+Add cache on MCU
+Check if we need to support trust zone
+Remove APMs on AXI-S interface
+For L1, show DFX PATH from PL
+Flop count information in DFX not in block descriptions, no area information in the description except floor plan
+MCU debug logic in PL should be built. (Whom to ask). It is not a part of RTL. Need to clearly mention in DID.
+Add all standards what encoder & decoder supports in their block description
+MCU specs - add details from the Allegro Docs
+Block name should be Interconnect not CDC
+How the 128 data format from AXI-S would be? Whom to ask? - only 32 bit data - location of 32 bit data.
+No TMR, No Lock bit in SLCR Registers.
+Table for the AXI unused signals. Their tie-off values.
+Signal names should have vcu2 - NoC feedthrough
+Reason to keep NPI module in VCU Domain
+Clock gating inside the encoder and decoder - when we are disabling. What is the IP sw-clkg-disable reset value
+Can we have clock gating outside the encoder/decoder
+Software clock gating inside IP
+Version details in SLCR Register
+Details on NoC transported interrupt
+Frequency on jTAG clock
+If timings can meet, try to give same max frequency to encoder/decoder
+Need to get pr2896 spreadsheet and interpolate frequencies
+DPLL reference frequency - 133.33 MHz (Need to confirm)
+
+VCU DID Review 09/11/2022
+
+Minutes:
+Update the block diagram – clock multiplexing; L1 blocks
+Number of DFX controllers and table to show their instances
+Truth table to explain clock gating support provided by the Encoder and Decoder IP
+Configuration of eFuse enable and disable settings
+Clock gating in VCU2 to disable Encoder or Decoder
+Bugs in VDU regarding NPI interface

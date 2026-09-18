@@ -1,0 +1,3 @@
+?? backend/src/fonely/voice/CONTRACT_V4_SELFCHECK.md
+?? backend/src/fonely/voice/CONTRACT_V52_SELFCHECK.md
+?? evals/reports/tier-b/

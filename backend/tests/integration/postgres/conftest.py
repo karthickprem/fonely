@@ -88,7 +88,11 @@ async def pg_engine(
     postgres_database_url: str,
     migrated_postgres: None,
 ) -> AsyncGenerator[AsyncEngine, None]:
-    engine = create_async_engine(postgres_database_url, pool_pre_ping=True)
+    engine = create_async_engine(
+        postgres_database_url,
+        pool_pre_ping=True,
+        connect_args={"prepared_statement_cache_size": 0},
+    )
     yield engine
     await engine.dispose()
 
@@ -126,7 +130,7 @@ async def clean_database(
                     "TRUNCATE TABLE whatsapp_delivery_attempts, "
                     "whatsapp_inbound_events, business_daily_context, "
                     "conversation_turns, conversations, "
-                    "notification_outbox, "
+                    "owner_command_proposals, notification_outbox, "
                     "business_configuration_commits, business_onboarding_drafts, "
                     "owner_audit_log, appointment_commits, resource_allocations, "
                     "appointments, service_resource_eligibility, inventory_operations, "
